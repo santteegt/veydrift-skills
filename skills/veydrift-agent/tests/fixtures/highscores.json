@@ -1,0 +1,1098 @@
+{
+  "generatedAt": "2026-08-12T05:02:08.515Z",
+  "durationMs": 186,
+  "formula": {
+    "pointsDivisor": "1000",
+    "target": "Contract-parity player score plus classic non-lifeform category breakdowns: economy, research points, research levels, current military points, current fleet points, ship count, and defense points.",
+    "summary": "Veydrift Score uses the contract-parity totalUserScore formula: technology levels, owned planets, building levels, current ships, and current defenses. Category breakdowns still use completed canonical owned state: planet and moon buildings as economy, research globally, current military, current fleet, and current defenses.",
+    "excludedCategories": [
+      "Military built, military destroyed, military lost, and honor rankings are intentionally excluded until Veydrift exposes per-wallet historical combat and honor ledgers."
+    ]
+  },
+  "pagination": {
+    "page": 1,
+    "pageSize": 50,
+    "totalEntries": 79,
+    "totalPages": 2,
+    "hasPreviousPage": false,
+    "hasNextPage": true
+  },
+  "currentPlayer": null,
+  "rankings": {
+    "total": [
+      {
+        "wallet": "0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1",
+        "homePlanetId": "23",
+        "planetCount": 9,
+        "totalUserScore": "69637",
+        "score": {
+          "total": "53584",
+          "economy": "36059",
+          "research": "10188",
+          "researchLevels": "95",
+          "military": "7337",
+          "fleet": "6384",
+          "fleetCount": "396",
+          "defense": "953"
+        },
+        "alliance": {
+          "allianceId": "1",
+          "tag": "CERBERUS",
+          "name": "Cerberus"
+        },
+        "attackProtection": null,
+        "displayName": "The Illusive Man",
+        "homePlanet": {
+          "planetId": "23",
+          "name": "Majestic 12",
+          "coordinates": {
+            "galaxy": 2,
+            "system": 477,
+            "position": 7
+          },
+          "archetype": "cold-tundra",
+          "hasMoon": true,
+          "moon": {
+            "exists": true,
+            "resources": {
+              "metal": "0",
+              "crystal": "0",
+              "deuterium": "48"
+            },
+            "resourcesAsOfNow": {
+              "metal": "0",
+              "crystal": "0",
+              "deuterium": "48"
+            }
+          },
+          "stationedDefenderForecastTimeline": [],
+          "stationedDefenderTimelineComplete": false,
+          "tactical": {
+            "currentResources": {
+              "metal": "45589",
+              "crystal": "62028",
+              "deuterium": "90369"
+            },
+            "raidableResources": {
+              "metal": "22794",
+              "crystal": "31014",
+              "deuterium": "45184"
+            },
+            "raidableResourceTotal": "98992",
+            "grossResourceTotal": "197986",
+            "productionPerHour": {
+              "metal": "6179",
+              "crystal": "3108",
+              "deuterium": "147"
+            },
+            "storageCaps": {
+              "metal": "1590000",
+              "crystal": "865000",
+              "deuterium": "470000"
+            },
+            "ships": {
+              "count": 34,
+              "power": "122000",
+              "units": [
+                {
+                  "id": 0,
+                  "count": 4,
+                  "power": "16000"
+                },
+                {
+                  "id": 4,
+                  "count": 3,
+                  "power": "36000"
+                },
+                {
+                  "id": 9,
+                  "count": 26,
+                  "power": "65000"
+                },
+                {
+                  "id": 15,
+                  "count": 1,
+                  "power": "5000"
+                }
+              ]
+            },
+            "defenses": {
+              "count": 38,
+              "power": "440000",
+              "units": [
+                {
+                  "id": 0,
+                  "count": 5,
+                  "power": "10000"
+                },
+                {
+                  "id": 1,
+                  "count": 13,
+                  "power": "26000"
+                },
+                {
+                  "id": 2,
+                  "count": 10,
+                  "power": "80000"
+                },
+                {
+                  "id": 3,
+                  "count": 1,
+                  "power": "20000"
+                },
+                {
+                  "id": 4,
+                  "count": 8,
+                  "power": "296000"
+                },
+                {
+                  "id": 5,
+                  "count": 1,
+                  "power": "8000"
+                }
+              ]
+            },
+            "combatShips": {
+              "count": 7,
+              "power": "52000",
+              "units": [
+                {
+                  "id": 0,
+                  "count": 4,
+                  "power": "16000"
+                },
+                {
+                  "id": 4,
+                  "count": 3,
+                  "power": "36000"
+                }
+              ]
+            },
+            "combatTechLevels": {
+              "weapons": 8,
+              "shielding": 9,
+              "armor": 9
+            },
+            "combatPower": "492000"
+          }
+        },
+        "planets": [
+          {
+            "planetId": "23",
+            "name": "Majestic 12",
+            "coordinates": {
+              "galaxy": 2,
+              "system": 477,
+              "position": 7
+            },
+            "archetype": "cold-tundra",
+            "hasMoon": true,
+            "moon": {
+              "exists": true,
+              "resources": {
+                "metal": "0",
+                "crystal": "0",
+                "deuterium": "48"
+              },
+              "resourcesAsOfNow": {
+                "metal": "0",
+                "crystal": "0",
+                "deuterium": "48"
+              }
+            },
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "45589",
+                "crystal": "62028",
+                "deuterium": "90369"
+              },
+              "raidableResources": {
+                "metal": "22794",
+                "crystal": "31014",
+                "deuterium": "45184"
+              },
+              "raidableResourceTotal": "98992",
+              "grossResourceTotal": "197986",
+              "productionPerHour": {
+                "metal": "6179",
+                "crystal": "3108",
+                "deuterium": "147"
+              },
+              "storageCaps": {
+                "metal": "1590000",
+                "crystal": "865000",
+                "deuterium": "470000"
+              },
+              "ships": {
+                "count": 34,
+                "power": "122000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 4,
+                    "power": "16000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 3,
+                    "power": "36000"
+                  },
+                  {
+                    "id": 9,
+                    "count": 26,
+                    "power": "65000"
+                  },
+                  {
+                    "id": 15,
+                    "count": 1,
+                    "power": "5000"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 38,
+                "power": "440000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 5,
+                    "power": "10000"
+                  },
+                  {
+                    "id": 1,
+                    "count": 13,
+                    "power": "26000"
+                  },
+                  {
+                    "id": 2,
+                    "count": 10,
+                    "power": "80000"
+                  },
+                  {
+                    "id": 3,
+                    "count": 1,
+                    "power": "20000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 8,
+                    "power": "296000"
+                  },
+                  {
+                    "id": 5,
+                    "count": 1,
+                    "power": "8000"
+                  }
+                ]
+              },
+              "combatShips": {
+                "count": 7,
+                "power": "52000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 4,
+                    "power": "16000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 3,
+                    "power": "36000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "492000"
+            }
+          },
+          {
+            "planetId": "148",
+            "name": "Cronos",
+            "coordinates": {
+              "galaxy": 2,
+              "system": 478,
+              "position": 15
+            },
+            "archetype": "frozen-ice",
+            "hasMoon": false,
+            "moon": null,
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "158287",
+                "crystal": "74259",
+                "deuterium": "361156"
+              },
+              "raidableResources": {
+                "metal": "79143",
+                "crystal": "37129",
+                "deuterium": "180578"
+              },
+              "raidableResourceTotal": "296850",
+              "grossResourceTotal": "593702",
+              "productionPerHour": {
+                "metal": "3343",
+                "crystal": "1918",
+                "deuterium": "1235"
+              },
+              "storageCaps": {
+                "metal": "470000",
+                "crystal": "255000",
+                "deuterium": "470000"
+              },
+              "ships": {
+                "count": 37,
+                "power": "162000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 2,
+                    "power": "8000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 7,
+                    "power": "84000"
+                  },
+                  {
+                    "id": 9,
+                    "count": 28,
+                    "power": "70000"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 22,
+                "power": "174000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 10,
+                    "power": "20000"
+                  },
+                  {
+                    "id": 2,
+                    "count": 10,
+                    "power": "80000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 2,
+                    "power": "74000"
+                  }
+                ]
+              },
+              "combatShips": {
+                "count": 9,
+                "power": "92000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 2,
+                    "power": "8000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 7,
+                    "power": "84000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "266000"
+            }
+          },
+          {
+            "planetId": "184",
+            "name": "Sanctuary",
+            "coordinates": {
+              "galaxy": 2,
+              "system": 477,
+              "position": 3
+            },
+            "archetype": "scorching-molten",
+            "hasMoon": false,
+            "moon": null,
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "39530",
+                "crystal": "23875",
+                "deuterium": "1281"
+              },
+              "raidableResources": {
+                "metal": "19765",
+                "crystal": "11937",
+                "deuterium": "640"
+              },
+              "raidableResourceTotal": "32342",
+              "grossResourceTotal": "64686",
+              "productionPerHour": {
+                "metal": "5372",
+                "crystal": "3108",
+                "deuterium": "0"
+              },
+              "storageCaps": {
+                "metal": "470000",
+                "crystal": "255000",
+                "deuterium": "20000"
+              },
+              "ships": {
+                "count": 30,
+                "power": "122500",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 5,
+                    "power": "60000"
+                  },
+                  {
+                    "id": 9,
+                    "count": 25,
+                    "power": "62500"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 23,
+                "power": "193000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 9,
+                    "power": "18000"
+                  },
+                  {
+                    "id": 1,
+                    "count": 4,
+                    "power": "8000"
+                  },
+                  {
+                    "id": 2,
+                    "count": 7,
+                    "power": "56000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 3,
+                    "power": "111000"
+                  }
+                ]
+              },
+              "combatShips": {
+                "count": 5,
+                "power": "60000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 5,
+                    "power": "60000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "253000"
+            }
+          },
+          {
+            "planetId": "186",
+            "name": "Lazarus",
+            "coordinates": {
+              "galaxy": 2,
+              "system": 477,
+              "position": 8
+            },
+            "archetype": "temperate-ocean",
+            "hasMoon": false,
+            "moon": null,
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "41264",
+                "crystal": "23873",
+                "deuterium": "3104"
+              },
+              "raidableResources": {
+                "metal": "20632",
+                "crystal": "11936",
+                "deuterium": "1552"
+              },
+              "raidableResourceTotal": "34120",
+              "grossResourceTotal": "68241",
+              "productionPerHour": {
+                "metal": "5372",
+                "crystal": "3108",
+                "deuterium": "48"
+              },
+              "storageCaps": {
+                "metal": "470000",
+                "crystal": "255000",
+                "deuterium": "10000"
+              },
+              "ships": {
+                "count": 40,
+                "power": "157000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 6,
+                    "power": "72000"
+                  },
+                  {
+                    "id": 9,
+                    "count": 34,
+                    "power": "85000"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 10,
+                "power": "114000",
+                "units": [
+                  {
+                    "id": 1,
+                    "count": 4,
+                    "power": "8000"
+                  },
+                  {
+                    "id": 2,
+                    "count": 4,
+                    "power": "32000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 2,
+                    "power": "74000"
+                  }
+                ]
+              },
+              "combatShips": {
+                "count": 6,
+                "power": "72000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 6,
+                    "power": "72000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "186000"
+            }
+          },
+          {
+            "planetId": "298",
+            "name": "Nepheron",
+            "coordinates": {
+              "galaxy": 6,
+              "system": 6,
+              "position": 14
+            },
+            "archetype": "frozen-ice",
+            "hasMoon": false,
+            "moon": null,
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "5955",
+                "crystal": "3495",
+                "deuterium": "267888"
+              },
+              "raidableResources": {
+                "metal": "2977",
+                "crystal": "1747",
+                "deuterium": "133944"
+              },
+              "raidableResourceTotal": "138668",
+              "grossResourceTotal": "277338",
+              "productionPerHour": {
+                "metal": "0",
+                "crystal": "0",
+                "deuterium": "1733"
+              },
+              "storageCaps": {
+                "metal": "10000",
+                "crystal": "10000",
+                "deuterium": "470000"
+              },
+              "ships": {
+                "count": 77,
+                "power": "4961000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 3,
+                    "power": "12000"
+                  },
+                  {
+                    "id": 2,
+                    "count": 3,
+                    "power": "54000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 10,
+                    "power": "120000"
+                  },
+                  {
+                    "id": 7,
+                    "count": 35,
+                    "power": "2100000"
+                  },
+                  {
+                    "id": 8,
+                    "count": 5,
+                    "power": "450000"
+                  },
+                  {
+                    "id": 10,
+                    "count": 11,
+                    "power": "1375000"
+                  },
+                  {
+                    "id": 12,
+                    "count": 10,
+                    "power": "850000"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 11,
+                "power": "22000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 11,
+                    "power": "22000"
+                  }
+                ]
+              },
+              "combatShips": {
+                "count": 77,
+                "power": "4961000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 3,
+                    "power": "12000"
+                  },
+                  {
+                    "id": 2,
+                    "count": 3,
+                    "power": "54000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 10,
+                    "power": "120000"
+                  },
+                  {
+                    "id": 7,
+                    "count": 35,
+                    "power": "2100000"
+                  },
+                  {
+                    "id": 8,
+                    "count": 5,
+                    "power": "450000"
+                  },
+                  {
+                    "id": 10,
+                    "count": 11,
+                    "power": "1375000"
+                  },
+                  {
+                    "id": 12,
+                    "count": 10,
+                    "power": "850000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "4983000"
+            }
+          },
+          {
+            "planetId": "578",
+            "name": "Barn",
+            "coordinates": {
+              "galaxy": 2,
+              "system": 477,
+              "position": 6
+            },
+            "archetype": "lush-temperate",
+            "hasMoon": false,
+            "moon": null,
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "39530",
+                "crystal": "20662",
+                "deuterium": "7754"
+              },
+              "raidableResources": {
+                "metal": "19765",
+                "crystal": "10331",
+                "deuterium": "3877"
+              },
+              "raidableResourceTotal": "33973",
+              "grossResourceTotal": "67946",
+              "productionPerHour": {
+                "metal": "5372",
+                "crystal": "2690",
+                "deuterium": "41"
+              },
+              "storageCaps": {
+                "metal": "865000",
+                "crystal": "470000",
+                "deuterium": "20000"
+              },
+              "ships": {
+                "count": 17,
+                "power": "90000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 5,
+                    "power": "60000"
+                  },
+                  {
+                    "id": 9,
+                    "count": 12,
+                    "power": "30000"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 0,
+                "power": "0",
+                "units": []
+              },
+              "combatShips": {
+                "count": 5,
+                "power": "60000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 5,
+                    "power": "60000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "60000"
+            }
+          },
+          {
+            "planetId": "579",
+            "name": "Minuteman",
+            "coordinates": {
+              "galaxy": 2,
+              "system": 477,
+              "position": 15
+            },
+            "archetype": "frozen-ice",
+            "hasMoon": false,
+            "moon": null,
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "23453",
+                "crystal": "36307",
+                "deuterium": "79178"
+              },
+              "raidableResources": {
+                "metal": "11726",
+                "crystal": "18153",
+                "deuterium": "39589"
+              },
+              "raidableResourceTotal": "69468",
+              "grossResourceTotal": "138938",
+              "productionPerHour": {
+                "metal": "3002",
+                "crystal": "2001",
+                "deuterium": "1259"
+              },
+              "storageCaps": {
+                "metal": "255000",
+                "crystal": "140000",
+                "deuterium": "140000"
+              },
+              "ships": {
+                "count": 39,
+                "power": "274000",
+                "units": [
+                  {
+                    "id": 2,
+                    "count": 3,
+                    "power": "54000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 5,
+                    "power": "60000"
+                  },
+                  {
+                    "id": 9,
+                    "count": 30,
+                    "power": "75000"
+                  },
+                  {
+                    "id": 12,
+                    "count": 1,
+                    "power": "85000"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 0,
+                "power": "0",
+                "units": []
+              },
+              "combatShips": {
+                "count": 9,
+                "power": "199000",
+                "units": [
+                  {
+                    "id": 2,
+                    "count": 3,
+                    "power": "54000"
+                  },
+                  {
+                    "id": 4,
+                    "count": 5,
+                    "power": "60000"
+                  },
+                  {
+                    "id": 12,
+                    "count": 1,
+                    "power": "85000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "199000"
+            }
+          },
+          {
+            "planetId": "615",
+            "name": "Binthu",
+            "coordinates": {
+              "galaxy": 2,
+              "system": 477,
+              "position": 1
+            },
+            "archetype": "scorching-molten",
+            "hasMoon": false,
+            "moon": null,
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "99592",
+                "crystal": "46972",
+                "deuterium": "5529"
+              },
+              "raidableResources": {
+                "metal": "49796",
+                "crystal": "23486",
+                "deuterium": "2764"
+              },
+              "raidableResourceTotal": "76046",
+              "grossResourceTotal": "152093",
+              "productionPerHour": {
+                "metal": "5372",
+                "crystal": "3108",
+                "deuterium": "0"
+              },
+              "storageCaps": {
+                "metal": "1590000",
+                "crystal": "470000",
+                "deuterium": "20000"
+              },
+              "ships": {
+                "count": 36,
+                "power": "195000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 5,
+                    "power": "60000"
+                  },
+                  {
+                    "id": 7,
+                    "count": 1,
+                    "power": "60000"
+                  },
+                  {
+                    "id": 9,
+                    "count": 30,
+                    "power": "75000"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 0,
+                "power": "0",
+                "units": []
+              },
+              "combatShips": {
+                "count": 6,
+                "power": "120000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 5,
+                    "power": "60000"
+                  },
+                  {
+                    "id": 7,
+                    "count": 1,
+                    "power": "60000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "120000"
+            }
+          },
+          {
+            "planetId": "634",
+            "name": "Aite",
+            "coordinates": {
+              "galaxy": 2,
+              "system": 477,
+              "position": 2
+            },
+            "archetype": "scorching-molten",
+            "hasMoon": false,
+            "moon": null,
+            "stationedDefenderForecastTimeline": [],
+            "stationedDefenderTimelineComplete": false,
+            "tactical": {
+              "currentResources": {
+                "metal": "145239",
+                "crystal": "19267",
+                "deuterium": "5134"
+              },
+              "raidableResources": {
+                "metal": "72619",
+                "crystal": "9633",
+                "deuterium": "2567"
+              },
+              "raidableResourceTotal": "84819",
+              "grossResourceTotal": "169640",
+              "productionPerHour": {
+                "metal": "6178",
+                "crystal": "2690",
+                "deuterium": "0"
+              },
+              "storageCaps": {
+                "metal": "1590000",
+                "crystal": "255000",
+                "deuterium": "10000"
+              },
+              "ships": {
+                "count": 86,
+                "power": "301000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 3,
+                    "power": "36000"
+                  },
+                  {
+                    "id": 7,
+                    "count": 1,
+                    "power": "60000"
+                  },
+                  {
+                    "id": 9,
+                    "count": 82,
+                    "power": "205000"
+                  }
+                ]
+              },
+              "defenses": {
+                "count": 5,
+                "power": "10000",
+                "units": [
+                  {
+                    "id": 0,
+                    "count": 5,
+                    "power": "10000"
+                  }
+                ]
+              },
+              "combatShips": {
+                "count": 4,
+                "power": "96000",
+                "units": [
+                  {
+                    "id": 4,
+                    "count": 3,
+                    "power": "36000"
+                  },
+                  {
+                    "id": 7,
+                    "count": 1,
+                    "power": "60000"
+                  }
+                ]
+              },
+              "combatTechLevels": {
+                "weapons": 8,
+                "shielding": 9,
+                "armor": 9
+              },
+              "combatPower": "106000"
+            }
+          }
+        ],
+        "rank": 1
+      }
+    ]
+  },
+  "source": "contract-state-indexer"
+}

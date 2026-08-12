@@ -1,0 +1,57 @@
+{
+  "allianceContractAddress": "0x0E5a6210482B15780cf5Ec036107031dcA702001",
+  "apiUrl": "https://api.veydrift.com",
+  "backend": {
+    "build": {
+      "deploymentAbiHash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+      "deploymentCommit": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+      "deploymentTimestamp": "2026-07-28T17:56:35.000Z",
+      "gitSha": "84e468f6371ef844b4aa8293921737d569d0486a",
+      "gitShaSource": "VEYDRIFT_BUILD_ARTIFACT"
+    },
+    "worker": {
+      "count": 10,
+      "defaultMaxWorkerCount": 2,
+      "index": 3,
+      "role": "reader"
+    }
+  },
+  "burningChicken": {
+    "burnContractAddress": "0x84EEA2bE67b17698B0E09B57eEEdA47aa921BbF0",
+    "burnSelector": "0x6364233d",
+    "nftContractAddress": "0x84EEA2bE67b17698B0E09B57eEEdA47aa921BbF0",
+    "rpcUrl": "https://mainnet.base.org"
+  },
+  "chainId": 8453,
+  "contractAddress": "0xf397910F005151b09644228573a4353818D3755d",
+  "featureSupport": {
+    "allianceConfigured": true,
+    "chickenBurnConfigured": true,
+    "gameConfigured": true,
+    "highscoresEndpoint": true,
+    "migrationConfigured": true,
+    "moonConfigured": true,
+    "randomnessConfigured": true,
+    "referralsConfigured": true,
+    "researchEndpoint": true,
+    "resourceTokensConfigured": true,
+    "settlementConfigured": true
+  },
+  "gameContractAddress": "0xf397910F005151b09644228573a4353818D3755d",
+  "graphqlUrl": "https://api.veydrift.com/graphql",
+  "migrationContractAddress": "0x33A56B6f6354D32Edeef43baECC3C94a316bf7d3",
+  "moonContractAddress": "0x4935f1E0024F1Ea07877a583F89A51BF3d91Cf5C",
+  "network": "Base",
+  "randomnessEngineAddress": "0xdc7d3388bfb07E2cC8DD3Be265d7C1182D34d069",
+  "referralSignerAddress": "0xCA105d70136fFfa7bf4ED5fFf0Bc6909F985273D",
+  "referralStartPriceWei": "12000000000000000",
+  "referralSystemAddress": "0x3246Df19Fa850E27eAC5292232aC2a51bbB7b835",
+  "paidAllianceInviteAddress": "0xD11be3728Ab28A1Ccd14C99cD4034115Fb22EF49",
+  "paidAllianceInviteSignerAddress": "0x45efFEF7dbef46D960479ac5893af3f11F23c46c",
+  "resourceTokenAddresses": {
+    "crystal": "0xC6881a2C4C50E28AdCaC4D5577cD8e211E806B76",
+    "deuterium": "0x5A6027DE1C7E52B4b1AD0c13c3eC3Ad5FCb481e2",
+    "metal": "0x91A4f8A9D05F21E010dc1eE0B17Ab644D433cB41"
+  },
+  "rpcProvider": "unknown"
+}

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Veydrift — Player &amp; Agent Briefing</title>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 28px 24px 60px;
+  background: #fbfbfa; color: #1a1a19;
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+}
+.wrap { max-width: 900px; margin: 0 auto; }
+h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.02em; }
+h2 { font-size: 18px; margin: 34px 0 10px; letter-spacing: -0.01em; padding-bottom: 6px; border-bottom: 1px solid #e5e3df; }
+h3 { font-size: 14px; margin: 20px 0 6px; text-transform: uppercase; letter-spacing: 0.06em; color: #6b6862; }
+p { margin: 8px 0; }
+.sub { color: #6b6862; margin: 0 0 18px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.88em; background: #f0efec; padding: 1px 5px; border-radius: 4px; }
+pre { background: #f7f6f3; border: 1px solid #e5e3df; border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.55; }
+pre code { background: none; padding: 0; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0 4px; font-size: 13.5px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid #eae8e4; vertical-align: top; }
+th { font-weight: 600; color: #6b6862; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 10px; margin: 14px 0; }
+.card { background: #fff; border: 1px solid #e5e3df; border-radius: 10px; padding: 12px 14px; }
+.card .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #8a867e; }
+.card .v { font-size: 19px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.card .n { font-size: 12px; color: #8a867e; margin-top: 2px; }
+.note { border-left: 3px solid #c9773b; background: #fdf6f0; padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 14px; }
+.warn { border-left-color: #b3453a; background: #fdf1ef; }
+.ok { border-left-color: #4a7c59; background: #f1f7f2; }
+ol, ul { margin: 8px 0; padding-left: 22px; }
+li { margin: 5px 0; }
+.pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 20px; background: #eceae5; color: #5c5952; font-weight: 600; letter-spacing: 0.03em; }
+.flow { display: grid; gap: 8px; margin: 14px 0; }
+.step { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; background: #fff; border: 1px solid #e5e3df; border-radius: 10px; padding: 11px 14px; }
+.step .i { width: 26px; height: 26px; border-radius: 50%; background: #1a1a19; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.step b { display: block; font-size: 14px; }
+.step span { font-size: 13px; color: #625f59; }
+.mono-sm { font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; }
+hr { border: 0; border-top: 1px solid #e5e3df; margin: 30px 0; }
+.foot { color: #8a867e; font-size: 12.5px; margin-top: 30px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Veydrift — Player &amp; Agent Briefing</h1>
+<p class="sub">Onchain OGame on Base mainnet. Prepared for <span class="mono-sm">0x224a…fa0f</span> · home planet <b>7:181:14</b> (id 664).</p>
+
+<h2>1. The game in one screen</h2>
+
+<p>You own a planet. Mines produce Metal, Crystal and Deuterium every hour. You spend those on buildings, research, ships and defenses. Ships fly <i>missions</i> to other coordinates to raid, transport, harvest debris or colonize. <b>Every meaningful action is a Base transaction</b> — there is no off-chain game server that owns your state.</p>
+
+<div class="cards">
+  <div class="card"><div class="k">Chain</div><div class="v">Base</div><div class="n">chainId 8453</div></div>
+  <div class="card"><div class="k">Game contract</div><div class="v">0xf397…755d</div><div class="n">UUPS proxy</div></div>
+  <div class="card"><div class="k">Read API</div><div class="v">api.veydrift.com</div><div class="n">SQLite event index</div></div>
+  <div class="card"><div class="k">Status</div><div class="v">Open alpha</div><div class="n">since 2026-05-29</div></div>
+</div>
+
+<h3>The three loops</h3>
+<table>
+<tr><th>Loop</th><th>Cadence</th><th>What it is</th></tr>
+<tr><td><b>Economy</b></td><td>Hours</td><td>Main build queue — one job at a time per body. Mines → energy → Robotics → Lab/Shipyard.</td></tr>
+<tr><td><b>Research</b></td><td>Hours–days</td><td>Separate queue, one per <i>player</i> (not per planet). Levels apply to every planet you own.</td></tr>
+<tr><td><b>Fleet</b></td><td>Minutes–hours</td><td>Missions. Limited by fleet slots (Computer Technology), fuel, and cargo.</td></tr>
+</table>
+<p>These run in parallel. A well-managed planet always has all three occupied — that is exactly the kind of bookkeeping you hand to an agent.</p>
+
+<h3>Rules that bite beginners</h3>
+<ul>
+<li><b>Fuel comes out of cargo.</b> <code>available cargo = total ship cargo − mission fuel</code>. Load a raid to 100% and it launches with zero loot capacity.</li>
+<li><b>Energy is not a resource you hold.</b> If <code>produced &lt; required</code>, every mine is scaled down by <code>produced/required</code>. Under-powered mines are the #1 early mistake.</li>
+<li><b>Confirmed ≠ indexed.</b> The wallet receipt can land before the backend index catches up. Never chain a dependent action off a displayed balance that hasn't been re-indexed.</li>
+<li><b>Score protection.</b> Under 50,000 score you can only fight within a 1.5× score gap. 50k–499,999 → 10×. 500k+ → no score gate. A 24h bashing window also caps repeat hits on the same target.</li>
+<li><b>Stuck missions.</b> If a mission sits in <span class="pill">Resolving</span> for 60s, a permissionless <b>Resolve</b> button appears — anyone can push it. <span class="pill">Awaiting randomness</span> is different and must wait.</li>
+</ul>
+
+<h2>2. Your planet, specifically</h2>
+
+<div class="cards">
+  <div class="card"><div class="k">Coordinates</div><div class="v">7:181:14</div><div class="n">planet id 664</div></div>
+  <div class="card"><div class="k">Fields</div><div class="v">174</div><div class="n">total building levels</div></div>
+  <div class="card"><div class="k">Max temp</div><div class="v">−111 °C</div><div class="n">frozen-ice class</div></div>
+  <div class="card"><div class="k">Deuterium</div><div class="v">1.502×</div><div class="n">15,020 bps</div></div>
+</div>
+
+<div class="note ok"><b>You drew a deuterium planet.</b> <code>deut mult = 12,800 − 20 × maxTemp = 12,800 − 20(−111) = 15,020 bps</code>. That is roughly the top of the range — cold planets are the best deuterium producers in the game. Deuterium is fleet fuel and gates Hyperspace-tier research, so this planet is worth leaning into rather than treating as a generic starter.</div>
+
+<div class="note warn"><b>Solar Satellites are near-useless here.</b> <code>energy/sat = clamp(trunc((maxTemp + 140) / 6), 1, 65) = trunc(29/6) = <b>4</b></code>. A hot planet gets ~34. Do not build satellites on 7:181:14 — use Solar Plant early and Fusion Reactor later. (Fusion burns deuterium production as upkeep, which you can afford here and most players can't.)<br><span style="font-size:13px;color:#8a5a34">Confirmed by the game itself: <code>/infrastructure</code> reports <code>solarSatelliteEnergy: "4"</code> for this planet.</span></div>
+
+<h3>Raw hourly output by mine level, on this planet</h3>
+<table>
+<tr><th class="num">Lvl</th><th class="num">Metal /h</th><th class="num">Crystal /h</th><th class="num">Deut /h</th><th class="num">Energy needed<br>(M+C+D mines)</th><th class="num">Solar Plant lvl<br>output</th></tr>
+<tr><td class="num">1</td><td class="num">33</td><td class="num">22</td><td class="num">16</td><td class="num">44</td><td class="num">22</td></tr>
+<tr><td class="num">3</td><td class="num">119</td><td class="num">79</td><td class="num">58</td><td class="num">157</td><td class="num">79</td></tr>
+<tr><td class="num">5</td><td class="num">241</td><td class="num">161</td><td class="num">120</td><td class="num">321</td><td class="num">161</td></tr>
+<tr><td class="num">7</td><td class="num">409</td><td class="num">272</td><td class="num">204</td><td class="num">544</td><td class="num">272</td></tr>
+<tr><td class="num">10</td><td class="num">778</td><td class="num">518</td><td class="num">389</td><td class="num">1,036</td><td class="num">518</td></tr>
+<tr><td class="num">12</td><td class="num">1,129</td><td class="num">753</td><td class="num">564</td><td class="num">1,506</td><td class="num">753</td></tr>
+</table>
+<p style="font-size:13px;color:#6b6862">Energy column assumes all three mines at that same level. Solar Plant output uses the same <code>scaledLevel(20, L)</code> curve, so it lags a growing three-mine demand: mines at 3 need Solar 5, mines at 5 need Solar 8, mines at 7 need Solar 11. <b>The gap widens — check the arithmetic before each mine upgrade instead of using a fixed level offset.</b> Raw values exclude Crawlers, Fusion upkeep and energy scaling.</p>
+
+<h3>Suggested first 48 hours</h3>
+<ol>
+<li>Metal Mine → 4, Crystal Mine → 3, interleaved with Solar Plant → 4. Never let energy go negative.</li>
+<li><b>Deuterium Synthesizer → 3–4 early</b> (unusual advice, justified by the 1.502× bonus here) and push Solar to 6–7 to carry it.</li>
+<li>Robotics Factory 2 — it divides every later build time, so it pays for itself fast.</li>
+<li>Research Lab 1 → Energy Technology 1 → Combustion Drive 1–2 → Computer Technology 1 (fleet slots).</li>
+<li>Shipyard 2 → a handful of Small Cargos. Cargo, not fighters: early value comes from moving resources and looting undefended inactives, not from combat.</li>
+<li>A couple of Rocket Launchers so you aren't a free farm.</li>
+</ol>
+<p style="font-size:13px;color:#6b6862">The docs publish <code>cost = base × factor<sup>level</sup></code> but never the per-building factor. You don't need it — <code>GET /wallet/{addr}/infrastructure</code> returns the live cost at your current level for every building. Same for research and ships.</p>
+
+<h3>The neighbourhood, and the universe</h3>
+<p>System <b>7:181</b> has ten planet slots and exactly one is occupied: yours. One slot (<code>7:181:8</code>) carries a <i>quantum-unstable</i> migration reservation and is not free to take. Quiet system — good for growing undisturbed, poor for nearby targets.</p>
+
+<div class="cards">
+  <div class="card"><div class="k">Planets in game</div><div class="v">195</div><div class="n">+4/day</div></div>
+  <div class="card"><div class="k">Moons</div><div class="v">85</div><div class="n">only 2 from combat</div></div>
+  <div class="card"><div class="k">Debris fields</div><div class="v">2</div><div class="n">in the entire universe</div></div>
+  <div class="card"><div class="k">Your fleet slots</div><div class="v">1</div><div class="n">base, before Computer Tech</div></div>
+</div>
+
+<div class="note"><b>This universe is small and almost entirely peaceful.</b> Two debris fields across ~195 planets means combat is essentially not happening. And 85 moons against only 2 moon-chance reports means nearly every moon was <i>bought</i> by burning a Burning Chicken NFT, not won in battle. Strategic read: <b>economy compounds, raiding does not</b> — there is little to farm, score protection is the binding constraint at your size, and in a community this small the reputational cost of aggression is real. Build.</div>
+
+<h2>3. Plugging in an agent</h2>
+
+<p>Veydrift is unusually agent-friendly: public on-chain state, a free read API, and no anti-bot layer. There is <b>no official Veydrift MCP server or bot API</b> — you build the integration yourself out of three pieces. The read layer is richer than the docs suggest, so the ABI is only needed to <i>write</i>.</p>
+
+<div class="flow">
+  <div class="step"><div class="i">1</div><div><b>Read — HTTP API</b><span>Free, no key, no auth. Beyond the documented routes there are four <b>undocumented</b> ones that carry the real payload: <code>/wallet/:addr/infrastructure</code> (building levels, live costs, energy balance, production/hr, storage caps, raidable resources), <code>/research</code>, <code>/shipyard</code> (incl. fleet slots) and <code>/missions</code>. An agent can plan the entire economy from these alone.</span></div></div>
+  <div class="step"><div class="i">2</div><div><b>Verify — Base RPC</b><span>Optional for planning, since the API returns live costs. Still worth an <code>eth_call</code> before large or irreversible spends, and for anything the API doesn't expose (defenses, battle reports). Compare <code>latestIndexedBlock</code> against the chain head to detect lag.</span></div></div>
+  <div class="step"><div class="i">3</div><div><b>Write — signed transactions</b><span>The agent holds a key and calls the game proxy <span class="mono-sm">0xf397910F005151b09644228573a4353818D3755d</span>. Wait for the receipt, <i>then</i> poll until the index reflects it, before issuing any dependent action.</span></div></div>
+</div>
+
+<h3>The loop the agent should run</h3>
+<pre><code>every 10 minutes:
+  health = GET /health          # gate on ok===true && readiness.ready===true
+                                # nulls in chainSync/indexer are NOT errors — see below
+  infra  = GET /wallet/&lt;addr&gt;/infrastructure   # levels, live costs, energyBalance
+  tech   = GET /wallet/&lt;addr&gt;/research
+  yard   = GET /wallet/&lt;addr&gt;/shipyard
+
+  if building queue empty     -> next build, only if produced &gt;= required energy
+  if research queue empty     -> next research
+  if mission "Resolving" 60s+ -> submit permissionless resolve
+
+  for each submitted tx:
+     await receipt -> poll index until state changes -> only then continue</code></pre>
+
+<div class="note warn"><b>Gotcha that will stop a naive agent dead.</b> The backend runs a worker pool where only worker 0 does chain sync; reads land on replicas. So <code>/health</code> legitimately returns <code>null</code> for <code>chainSync</code>, <code>indexer</code>, <code>rpc</code> and most of <code>readiness</code>. Those nulls are <b>not</b> an outage — gate on <code>ok</code> and <code>readiness.ready</code> only. Richer telemetry lives in the <code>indexer</code> block on the wallet routes. Likewise, <code>lastReconciledBlock</code> trails <code>latestIndexedBlock</code> by over 1.5M blocks by design; full reconciliation is a manual operator job. Judge freshness by <code>indexedState: "healthy"</code>, not by that gap.</div>
+
+<h3>Autonomy tiers — pick deliberately</h3>
+<table>
+<tr><th>Tier</th><th>Agent does</th><th>Risk</th></tr>
+<tr><td><b>Advisor</b></td><td>Reads only, tells you what to click.</td><td>None. Good first week.</td></tr>
+<tr><td><b>Economy bot</b></td><td>Signs builds and research only. Never launches fleets.</td><td>Low — worst case it wastes resources on your own planet.</td></tr>
+<tr><td><b>Full operator</b></td><td>Also launches raids, transports, harvests.</td><td>Real. A bad raid loses your fleet; a bad target trips bashing rules.</td></tr>
+</table>
+
+<div class="note warn"><b>A fully autonomous signer means a hot private key on a machine.</b> Use a <b>dedicated burner wallet</b> that holds the planet and nothing else, funded with a small amount of ETH for gas. Never give an agent the key to a wallet holding assets you care about — and note that on Veydrift the burner <i>is</i> the account, so treat losing it as losing the planet.</div>
+
+<h2>4. What the agent cannot do for you</h2>
+<ul>
+<li><b>Judge diplomacy.</b> Alliances, ACS, and who not to poke are social calls.</li>
+<li><b>Absorb combat variance.</b> Rapidfire is a per-shot continue-chance chain, not a guaranteed multiplier — an agent that treats factor <code>R</code> as "<code>R</code> shots" will consistently over-estimate its own attacks.</li>
+<li><b>Beat the index.</b> If the backend is lagging, the correct behaviour is to wait, not to act on a stale balance.</li>
+<li><b>Trust the docs blindly.</b> They omit a whole ship (Pathfinder, id 14), call the Dreadstar a "Deathstar" in the rapidfire tables, and describe a Base <i>Sepolia</i> deployment in the README while the live game is on mainnet. Verify against <code>/runtime-config</code> and the live catalogs.</li>
+</ul>
+<p style="font-size:13px;color:#6b6862">Verified constants worth pinning: <b>universe speed = 1</b> (so every duration formula in the docs works as written), base fleet slots = 1, base storage cap = 10,000 per resource. Full ID maps for buildings, technologies and ships are in <code>NOTES.md</code>.</p>
+
+<hr>
+<p class="foot">Sources: veydrift.com/docs.md · github.com/Borodutch/veydrift · live reads from api.veydrift.com, 2026-08-07 and 2026-08-11. Planet snapshot at read time: 1,000 metal, 1,000 crystal, 0 deuterium, all queues empty. Companion files: <code>veydrift-agent-resources.md</code>, <code>veydrift-agent-prompt.md</code>, <code>NOTES.md</code>.</p>
+
+</div>
+</body>
+</html>

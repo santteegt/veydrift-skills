@@ -1,0 +1,17 @@
+{
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "homePlanetId": "664",
+  "building": null,
+  "defense": null,
+  "ship": null,
+  "research": null,
+  "detail": "player queues loaded from DB-indexed contract state.",
+  "stale": false,
+  "indexer": {
+    "indexedState": "healthy",
+    "safeToServeIndexedState": true,
+    "latestIndexedBlock": "49860796",
+    "indexedPlanets": 200
+  },
+  "source": "contract-state-indexer"
+}

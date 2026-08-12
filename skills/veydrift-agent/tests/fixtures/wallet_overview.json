@@ -1,0 +1,207 @@
+{
+  "settlement": {
+    "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+    "hasFirstPlanet": true,
+    "homePlanetId": "664",
+    "planet": {
+      "eventName": "PlanetStarted",
+      "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+      "blockNumber": "49666196",
+      "planetId": "664",
+      "owner": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+      "name": null,
+      "galaxy": 7,
+      "system": 181,
+      "position": 14,
+      "fields": 174,
+      "temperature": -111,
+      "metalMultiplierBps": 10000,
+      "crystalMultiplierBps": 10000,
+      "deuteriumMultiplierBps": 15020,
+      "lastSettledAt": "1786121739",
+      "resources": {
+        "metal": "1000",
+        "crystal": "1000",
+        "deuterium": "0"
+      },
+      "logIndex": "0x4",
+      "resourcesAsOfNow": {
+        "metal": "1000",
+        "crystal": "1000",
+        "deuterium": "0"
+      },
+      "resourceSnapshot": {
+        "planetId": "664",
+        "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+        "blockNumber": "49666196",
+        "logIndex": "0x4",
+        "lastSettledAt": "1786121739",
+        "resources": {
+          "metal": "1000",
+          "crystal": "1000",
+          "deuterium": "0"
+        }
+      }
+    },
+    "contractKind": "game",
+    "player": {
+      "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+      "displayName": "D@f7pUnK",
+      "description": null,
+      "fallbackName": "0x224a...fa0f",
+      "updatedAt": "2026-08-07T17:47:37.826Z"
+    }
+  },
+  "planetsResponse": {
+    "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+    "homePlanetId": "664",
+    "queues": {
+      "research": null
+    },
+    "planets": [
+      {
+        "eventName": "PlanetStarted",
+        "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+        "blockNumber": "49666196",
+        "planetId": "664",
+        "owner": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        "name": null,
+        "galaxy": 7,
+        "system": 181,
+        "position": 14,
+        "fields": 174,
+        "temperature": -111,
+        "metalMultiplierBps": 10000,
+        "crystalMultiplierBps": 10000,
+        "deuteriumMultiplierBps": 15020,
+        "lastSettledAt": "1786121739",
+        "resources": {
+          "metal": "1000",
+          "crystal": "1000",
+          "deuterium": "0"
+        },
+        "logIndex": "0x4",
+        "bodyKind": "planet",
+        "coordinates": "7:181:14",
+        "isHomePlanet": true,
+        "fieldsUsed": 0,
+        "fieldsCapacity": 174,
+        "keyLevels": {
+          "metalMine": 0,
+          "crystalMine": 0,
+          "deuteriumSynthesizer": 0,
+          "solarPlant": 0,
+          "roboticsFactory": 0,
+          "shipyard": 0,
+          "researchLab": 0,
+          "terraformer": 0
+        },
+        "queues": {
+          "building": null,
+          "defense": null,
+          "ship": null
+        },
+        "moon": null,
+        "resourcesAsOfNow": {
+          "metal": "1000",
+          "crystal": "1000",
+          "deuterium": "0"
+        },
+        "resourceSnapshot": {
+          "planetId": "664",
+          "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+          "blockNumber": "49666196",
+          "logIndex": "0x4",
+          "lastSettledAt": "1786121739",
+          "resources": {
+            "metal": "1000",
+            "crystal": "1000",
+            "deuterium": "0"
+          }
+        },
+        "tactical": {
+          "currentResources": {
+            "metal": "1000",
+            "crystal": "1000",
+            "deuterium": "0"
+          },
+          "raidableResources": {
+            "metal": "500",
+            "crystal": "500",
+            "deuterium": "0"
+          },
+          "raidableResourceTotal": "1000",
+          "grossResourceTotal": "2000",
+          "productionPerHour": {
+            "metal": "0",
+            "crystal": "0",
+            "deuterium": "0"
+          },
+          "storageCaps": {
+            "metal": "10000",
+            "crystal": "10000",
+            "deuterium": "10000"
+          },
+          "ships": {
+            "count": 0,
+            "power": "0",
+            "units": []
+          },
+          "defenses": {
+            "count": 0,
+            "power": "0",
+            "units": []
+          },
+          "combatShips": {
+            "count": 0,
+            "power": "0",
+            "units": []
+          },
+          "combatTechLevels": {
+            "weapons": 0,
+            "shielding": 0,
+            "armor": 0
+          },
+          "combatPower": "0"
+        }
+      }
+    ],
+    "player": {
+      "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+      "displayName": "D@f7pUnK",
+      "description": null,
+      "fallbackName": "0x224a...fa0f",
+      "updatedAt": "2026-08-07T17:47:37.826Z"
+    }
+  },
+  "queues": {
+    "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+    "homePlanetId": "664",
+    "building": null,
+    "defense": null,
+    "ship": null,
+    "research": null
+  },
+  "fleetVisibility": {
+    "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+    "homePlanetId": "664",
+    "incoming": [],
+    "outgoing": [],
+    "returning": [],
+    "joinableAttacks": [],
+    "completedMissions": [],
+    "battleReports": [],
+    "indexedRevision": "251942:64057",
+    "indexedBlock": "49860796",
+    "generatedAt": "2026-08-12T05:02:46.178Z"
+  },
+  "detail": "overview snapshot loaded from DB-indexed contract state.",
+  "stale": false,
+  "indexer": {
+    "indexedState": "healthy",
+    "safeToServeIndexedState": true,
+    "latestIndexedBlock": "49860796",
+    "indexedPlanets": 200
+  },
+  "source": "contract-state-indexer"
+}

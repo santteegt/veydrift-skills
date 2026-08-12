@@ -1,0 +1,77 @@
+{
+  "ok": true,
+  "service": "veydrift-backend",
+  "configured": true,
+  "backend": {
+    "build": {
+      "deploymentAbiHash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+      "deploymentCommit": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+      "deploymentTimestamp": "2026-07-28T17:56:35.000Z",
+      "gitSha": "84e468f6371ef844b4aa8293921737d569d0486a",
+      "gitShaSource": "VEYDRIFT_BUILD_ARTIFACT"
+    },
+    "worker": {
+      "count": 10,
+      "defaultMaxWorkerCount": 2,
+      "index": 3,
+      "role": "reader"
+    }
+  },
+  "chain": {
+    "allianceContractConfigured": true,
+    "chainId": 8453,
+    "deploymentMode": "production",
+    "gameContractConfigured": true,
+    "hasRpcUrl": true,
+    "moonContractConfigured": true,
+    "migrationContractConfigured": true,
+    "missionResolutionEnabled": true,
+    "missionResolverConfigured": true,
+    "randomnessEngineConfigured": true,
+    "randomnessCommitterConfigured": true,
+    "referralSignerConfigured": true,
+    "referralIndexFromBlock": "48735699",
+    "paidAllianceInviteIndexFromBlock": "49640197",
+    "resourceTokensConfigured": {
+      "crystal": true,
+      "deuterium": true,
+      "metal": true
+    },
+    "rpcSource": "custom-url",
+    "rpcFallbackConfigured": false,
+    "rpcFallbackCount": 0,
+    "wsRpcSource": "custom-url",
+    "hasWsRpcUrl": true,
+    "resourceTokenAddressesConfigured": true,
+    "settlementContractConfigured": true,
+    "settlementStartPriceConfigured": true,
+    "indexFromBlock": "48295091",
+    "logChunkSpan": "90000",
+    "qaSyntheticStationedDefenders": false
+  },
+  "readiness": {
+    "ready": true,
+    "degraded": false,
+    "degradationReasons": [],
+    "configurationReady": true,
+    "chainSyncConnected": null,
+    "subscribedToHeads": null,
+    "subscribedToLogs": null,
+    "indexedState": null,
+    "safeToServeIndexedState": null,
+    "missionResolutionStatus": null,
+    "rpcUnfinishedRequests": 0,
+    "rpcOldestUnfinishedRequestAgeMs": null,
+    "rpcUnfinishedRequestGrowthDetected": false
+  },
+  "chainSync": null,
+  "missionResolution": null,
+  "randomnessCommitter": null,
+  "indexer": null,
+  "rpc": null,
+  "randomnessReadiness": {
+    "ready": true,
+    "reasons": [],
+    "updatedAt": "2026-08-12T05:01:59.768Z"
+  }
+}

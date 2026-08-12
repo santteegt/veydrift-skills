@@ -1,0 +1,180 @@
+{
+  "taken_at": "2026-08-12T00:20:00Z",
+  "wallet": "0x9999999999999999999999999999999999999999",
+  "health_ok": true,
+  "indexed_state": "healthy",
+  "safe_to_serve_indexed_state": true,
+  "latest_indexed_block": 1,
+  "deployment_abi_hash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+  "eth_balance_wei": null,
+  "technologies": [
+    {
+      "id": 0,
+      "level": 5,
+      "cost": {
+        "metal": "0",
+        "crystal": "800",
+        "deuterium": "400"
+      },
+      "duration_seconds": 411,
+      "name": "Energy Technology"
+    }
+  ],
+  "research_lab_level": 6,
+  "research_queue": null,
+  "fleet_slots_active": 0,
+  "fleet_slots_limit": 1,
+  "planets": [
+    {
+      "planet_id": 900001,
+      "coordinates": "3:50:7",
+      "name": "Synthetic Hot Test Planet",
+      "archetype": "scorching-molten",
+      "temperature": 40,
+      "fields_used": 90,
+      "fields_total": 200,
+      "metal_multiplier_bps": 10000,
+      "crystal_multiplier_bps": 10000,
+      "deuterium_multiplier_bps": 12000,
+      "resources": {
+        "metal": 50000,
+        "crystal": 30000,
+        "deuterium": 10000
+      },
+      "resources_as_of_now": {
+        "metal": 50000,
+        "crystal": 30000,
+        "deuterium": 10000
+      },
+      "storage_caps": {
+        "metal": 5355000,
+        "crystal": 5355000,
+        "deuterium": 5355000
+      },
+      "production_per_hour": {
+        "metal": 1200,
+        "crystal": 800,
+        "deuterium": 400
+      },
+      "raidable_resources": null,
+      "protected_resources": null,
+      "energy": {
+        "produced": 1253,
+        "required": 1253,
+        "scale_bps": 10000,
+        "solar_satellite_energy": 30
+      },
+      "buildings": [
+        {
+          "id": 0,
+          "level": 11,
+          "cost": {
+            "metal": "5189",
+            "crystal": "1297",
+            "deuterium": "0"
+          },
+          "duration_seconds": 849,
+          "name": "Metal Mine"
+        },
+        {
+          "id": 1,
+          "level": 11,
+          "cost": {
+            "metal": "8444",
+            "crystal": "4222",
+            "deuterium": "0"
+          },
+          "duration_seconds": 1658,
+          "name": "Crystal Mine"
+        },
+        {
+          "id": 2,
+          "level": 11,
+          "cost": {
+            "metal": "19461",
+            "crystal": "6487",
+            "deuterium": "0"
+          },
+          "duration_seconds": 3396,
+          "name": "Deuterium Synthesizer"
+        },
+        {
+          "id": 3,
+          "level": 15,
+          "cost": {
+            "metal": "32842",
+            "crystal": "13136",
+            "deuterium": "0"
+          },
+          "duration_seconds": 6018,
+          "name": "Solar Plant"
+        },
+        {
+          "id": 4,
+          "level": 10,
+          "cost": {
+            "metal": "0",
+            "crystal": "0",
+            "deuterium": "0"
+          },
+          "duration_seconds": 1,
+          "name": "Robotics Factory"
+        },
+        {
+          "id": 5,
+          "level": 8,
+          "cost": {
+            "metal": "0",
+            "crystal": "0",
+            "deuterium": "0"
+          },
+          "duration_seconds": 1,
+          "name": "Shipyard"
+        },
+        {
+          "id": 6,
+          "level": 6,
+          "cost": {
+            "metal": "0",
+            "crystal": "0",
+            "deuterium": "0"
+          },
+          "duration_seconds": 1,
+          "name": "Research Lab"
+        },
+        {
+          "id": 10,
+          "level": 0,
+          "cost": {
+            "metal": "900",
+            "crystal": "360",
+            "deuterium": "180"
+          },
+          "duration_seconds": 164,
+          "name": "Fusion Reactor"
+        }
+      ],
+      "ships": [
+        {
+          "id": 9,
+          "count": 0,
+          "cost": {
+            "metal": "0",
+            "crystal": "2000",
+            "deuterium": "500"
+          },
+          "duration_seconds": 320,
+          "name": "Solar Satellite"
+        }
+      ],
+      "defenses": [],
+      "queues": {
+        "building": null,
+        "research": null,
+        "ship": null,
+        "defense": null
+      }
+    }
+  ],
+  "incoming_fleets": []
+}

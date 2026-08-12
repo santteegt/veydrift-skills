@@ -1,0 +1,194 @@
+{
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "homePlanetId": "664",
+  "planetId": "664",
+  "researchAvailable": true,
+  "unavailableReason": "research loaded from DB-indexed contract state.",
+  "resources": {
+    "metal": "1000",
+    "crystal": "1000",
+    "deuterium": "0"
+  },
+  "resourcesAsOfNow": {
+    "metal": "1000",
+    "crystal": "1000",
+    "deuterium": "0"
+  },
+  "resourceSnapshot": {
+    "planetId": "664",
+    "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+    "blockNumber": "49666196",
+    "logIndex": "0x4",
+    "lastSettledAt": "1786121739",
+    "resources": {
+      "metal": "1000",
+      "crystal": "1000",
+      "deuterium": "0"
+    }
+  },
+  "researchLabLevel": 0,
+  "researchNetworkLabLevels": [],
+  "technologyLevels": {},
+  "technologies": [
+    {
+      "id": 0,
+      "level": 0,
+      "cost": {
+        "metal": "0",
+        "crystal": "800",
+        "deuterium": "400"
+      },
+      "durationSeconds": 2880
+    },
+    {
+      "id": 1,
+      "level": 0,
+      "cost": {
+        "metal": "200",
+        "crystal": "100",
+        "deuterium": "0"
+      },
+      "durationSeconds": 1080
+    },
+    {
+      "id": 2,
+      "level": 0,
+      "cost": {
+        "metal": "1000",
+        "crystal": "300",
+        "deuterium": "100"
+      },
+      "durationSeconds": 4680
+    },
+    {
+      "id": 3,
+      "level": 0,
+      "cost": {
+        "metal": "400",
+        "crystal": "0",
+        "deuterium": "600"
+      },
+      "durationSeconds": 1440
+    },
+    {
+      "id": 4,
+      "level": 0,
+      "cost": {
+        "metal": "0",
+        "crystal": "400",
+        "deuterium": "600"
+      },
+      "durationSeconds": 1440
+    },
+    {
+      "id": 5,
+      "level": 0,
+      "cost": {
+        "metal": "800",
+        "crystal": "200",
+        "deuterium": "0"
+      },
+      "durationSeconds": 3600
+    },
+    {
+      "id": 6,
+      "level": 0,
+      "cost": {
+        "metal": "200",
+        "crystal": "600",
+        "deuterium": "0"
+      },
+      "durationSeconds": 2880
+    },
+    {
+      "id": 7,
+      "level": 0,
+      "cost": {
+        "metal": "1000",
+        "crystal": "0",
+        "deuterium": "0"
+      },
+      "durationSeconds": 3600
+    },
+    {
+      "id": 8,
+      "level": 0,
+      "cost": {
+        "metal": "0",
+        "crystal": "4000",
+        "deuterium": "2000"
+      },
+      "durationSeconds": 14400
+    },
+    {
+      "id": 9,
+      "level": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "4000",
+        "deuterium": "600"
+      },
+      "durationSeconds": 21600
+    },
+    {
+      "id": 10,
+      "level": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "20000",
+        "deuterium": "6000"
+      },
+      "durationSeconds": 108000
+    },
+    {
+      "id": 11,
+      "level": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "4000",
+        "deuterium": "1000"
+      },
+      "durationSeconds": 21600
+    },
+    {
+      "id": 12,
+      "level": 0,
+      "cost": {
+        "metal": "4000",
+        "crystal": "8000",
+        "deuterium": "4000"
+      },
+      "durationSeconds": 43200
+    },
+    {
+      "id": 13,
+      "level": 0,
+      "cost": {
+        "metal": "240000",
+        "crystal": "400000",
+        "deuterium": "160000"
+      },
+      "durationSeconds": 2304000
+    },
+    {
+      "id": 14,
+      "level": 0,
+      "cost": {
+        "metal": "0",
+        "crystal": "0",
+        "deuterium": "0"
+      },
+      "durationSeconds": 1
+    }
+  ],
+  "queue": null,
+  "detail": "research loaded from DB-indexed contract state.",
+  "stale": false,
+  "indexer": {
+    "indexedState": "healthy",
+    "safeToServeIndexedState": true,
+    "latestIndexedBlock": "49860796",
+    "indexedPlanets": 200
+  },
+  "source": "contract-state-indexer"
+}

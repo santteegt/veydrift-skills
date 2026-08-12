@@ -1,0 +1,7588 @@
+{
+  "abi": [
+    {
+      "type": "constructor",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "firstPlanetSettlementModule",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "gameplayModule",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "planetManagementModule",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "attackProtectionModule",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "colonizationModule",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "defenseHoldModule",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "stateMigrationModule",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "fallback",
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "ATTACK_BATTLE_DOMAIN",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "BATTLE_MAX_ROUNDS",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "BPS",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "DEFAULT_START_PRICE",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "FIRST_PLANET_DOMAIN",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "FLEET_RECALL_COST_BPS",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "FLEET_RECALL_CUTOFF_SECONDS",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "FLEET_UNIVERSE_SPEED",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MARKET_WITHDRAWAL_DELAY",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_BUILDING_ID",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_DEFENSE_ID",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_GALAXY",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_LEVEL",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_POSITION",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_RESOURCE_ID",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_SHIP_ID",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_SYSTEM",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MAX_TECHNOLOGY_ID",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MIN_FLEET_TRAVEL_SECONDS",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "MIN_QUEUE_SECONDS",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "PLANET_SEED_DOMAIN",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "QUEUE_UNIVERSE_SPEED",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "RAID_LOOT_BPS",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "RAID_PROTECTED_STORAGE_BPS",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "RIFT_EXTRACTION_DELAY",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "abandonPlanet",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "activeBuildingConstruction",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.BuildingConstruction",
+          "components": [
+            {
+              "name": "active",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "building",
+              "type": "uint8",
+              "internalType": "enum Building"
+            },
+            {
+              "name": "targetLevel",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "readyAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "cost",
+              "type": "tuple",
+              "internalType": "struct VeydriftGameStorage.Resources",
+              "components": [
+                {
+                  "name": "metal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "crystal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "deuterium",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "activeFleetMissionCount",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "attackProtectionStatus",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum VeydriftGameStorage.AttackBlockReason"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "buildingConstructions",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "active",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "building",
+          "type": "uint8",
+          "internalType": "enum Building"
+        },
+        {
+          "name": "targetLevel",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "cost",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "buildingLevel",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "building",
+          "type": "uint8",
+          "internalType": "enum Building"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "buildingUpgradeCost",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "building",
+          "type": "uint8",
+          "internalType": "enum Building"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "clearMoonState",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "collectResources",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "completeAttackTargetSnapshotQueues",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "cutoffAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "completeFleetMissionReturn",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "coordinateKey",
+      "inputs": [
+        {
+          "name": "galaxy",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "system",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "position",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "debrisField",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "",
+          "type": "uint128",
+          "internalType": "uint128"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "defenseCost",
+      "inputs": [
+        {
+          "name": "defense",
+          "type": "uint8",
+          "internalType": "enum Defense"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "pure"
+    },
+    {
+      "type": "function",
+      "name": "defenseCount",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "defense",
+          "type": "uint8",
+          "internalType": "enum Defense"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "defenseQueue",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.DefenseQueue",
+          "components": [
+            {
+              "name": "active",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "defense",
+              "type": "uint8",
+              "internalType": "enum Defense"
+            },
+            {
+              "name": "quantity",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "readyAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "cost",
+              "type": "tuple",
+              "internalType": "struct VeydriftGameStorage.Resources",
+              "components": [
+                {
+                  "name": "metal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "crystal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "deuterium",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "defenseQueueBacklog",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple[]",
+          "internalType": "struct VeydriftGameStorage.DefenseQueue[]",
+          "components": [
+            {
+              "name": "active",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "defense",
+              "type": "uint8",
+              "internalType": "enum Defense"
+            },
+            {
+              "name": "quantity",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "readyAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "cost",
+              "type": "tuple",
+              "internalType": "struct VeydriftGameStorage.Resources",
+              "components": [
+                {
+                  "name": "metal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "crystal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "deuterium",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "defenseQueues",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "active",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "defense",
+          "type": "uint8",
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "quantity",
+          "type": "uint32",
+          "internalType": "uint32"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "cost",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "depositMarketResource",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "",
+          "type": "uint128",
+          "internalType": "uint128"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "depositResourceReserves",
+      "inputs": [
+        {
+          "name": "amount",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "energyBalance",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "producedEnergy",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "requiredEnergy",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "energyScaleBps",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "finishBuildingUpgrade",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "finishDefenseProduction",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "finishMarketResourceWithdrawal",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "finishResearch",
+      "inputs": [],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "finishShipProduction",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "firstPlanetOf",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "settledPlanet",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.FirstPlanet",
+          "components": [
+            {
+              "name": "galaxy",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "system",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "position",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "fields",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "temperature",
+              "type": "int16",
+              "internalType": "int16"
+            },
+            {
+              "name": "settledAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "settledBlock",
+              "type": "uint64",
+              "internalType": "uint64"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "fleetMission",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "status",
+          "type": "uint8",
+          "internalType": "enum VeydriftGameStorage.FleetMissionStatus"
+        },
+        {
+          "name": "missionType",
+          "type": "uint8",
+          "internalType": "enum VeydriftGameStorage.FleetMissionType"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "targetPlanetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "departureAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "arrivalAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "returnAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "fuelCost",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "cargo",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "randomnessRequestId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "grantMoonResources",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "hasFirstPlanet",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "homePlanetOf",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "importMigratedState",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "bytes",
+          "internalType": "bytes"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "importMigratedStateWithReferral",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "bytes",
+          "internalType": "bytes"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "initialize",
+      "inputs": [
+        {
+          "name": "admin",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "isCoordinateAvailable",
+      "inputs": [
+        {
+          "name": "galaxy",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "system",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "position",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "joinAttackMission",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "launchAttackMission",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.LootRatio",
+          "components": [
+            {
+              "name": "metalBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "crystalBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "deuteriumBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            }
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "launchBodyFleetMission",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum VeydriftGameStorage.FleetMissionType"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "launchDefenseHold",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "launchFleetMission",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum VeydriftGameStorage.FleetMissionType"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "launchFleetMission",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum VeydriftGameStorage.FleetMissionType"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "launchInterplanetaryMissileAttack",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "lockedWithdrawalResources",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "maxPlanets",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "maxRaidLoot",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "moonResources",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "moonShipCount",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "ship",
+          "type": "uint8",
+          "internalType": "enum Ship"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "moveMoonGateShips",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "nextFleetId",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "nextPlanetId",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "occupiedCoordinates",
+      "inputs": [
+        {
+          "name": "coordinateKey",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "occupied",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "owner",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "planet",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Planet",
+          "components": [
+            {
+              "name": "owner",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "galaxy",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "system",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "position",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "fields",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "temperature",
+              "type": "int16",
+              "internalType": "int16"
+            },
+            {
+              "name": "metalMultiplierBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "crystalMultiplierBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "deuteriumMultiplierBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "lastSettledAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "resources",
+              "type": "tuple",
+              "internalType": "struct VeydriftGameStorage.Resources",
+              "components": [
+                {
+                  "name": "metal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "crystal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "deuterium",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "planetCountOf",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "planetNames",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "name",
+          "type": "string",
+          "internalType": "string"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "planetSeed",
+      "inputs": [
+        {
+          "name": "galaxy",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "system",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "position",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "previewFirstPlanet",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "planetPreview",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.FirstPlanet",
+          "components": [
+            {
+              "name": "galaxy",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "system",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "position",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "fields",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "temperature",
+              "type": "int16",
+              "internalType": "int16"
+            },
+            {
+              "name": "settledAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "settledBlock",
+              "type": "uint64",
+              "internalType": "uint64"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "previewResources",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "resources",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "productionPerHour",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "metalPerHour",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "crystalPerHour",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "deuteriumPerHour",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "protectedResources",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "raidableResources",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "randomnessEngine",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "recallFleetMission",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "releaseExcessResourceReserves",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "renamePlanet",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "string",
+          "internalType": "string"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "requestMarketResourceWithdrawal",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "",
+          "type": "uint128",
+          "internalType": "uint128"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "requireNoPendingMoonAttackResolution",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "researchCost",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "technology",
+          "type": "uint8",
+          "internalType": "enum Technology"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "researchQueue",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.ResearchQueue",
+          "components": [
+            {
+              "name": "active",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "technology",
+              "type": "uint8",
+              "internalType": "enum Technology"
+            },
+            {
+              "name": "targetLevel",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "readyAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "cost",
+              "type": "tuple",
+              "internalType": "struct VeydriftGameStorage.Resources",
+              "components": [
+                {
+                  "name": "metal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "crystal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "deuterium",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "researchQueues",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "active",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "technology",
+          "type": "uint8",
+          "internalType": "enum Technology"
+        },
+        {
+          "name": "targetLevel",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "cost",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "reserveMigrationCoordinates",
+      "inputs": [
+        {
+          "name": "galaxies",
+          "type": "uint16[]",
+          "internalType": "uint16[]"
+        },
+        {
+          "name": "systems",
+          "type": "uint16[]",
+          "internalType": "uint16[]"
+        },
+        {
+          "name": "positions",
+          "type": "uint8[]",
+          "internalType": "uint8[]"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "resolveFleetMission",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "resourceReserveAvailable",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "resourceReserveBalance",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "resourceReserveRequirement",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "resourceToken",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "resourceWithdrawals",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "active",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "amount",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "unlocksAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "riftExtractions",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "active",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "amount",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "startedAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "unlocksAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "setAllianceSystem",
+      "inputs": [
+        {
+          "name": "nextAllianceSystem",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setAttackProtectionExemption",
+      "inputs": [
+        {
+          "name": "attacker",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "defender",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "enabled",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setGamePaused",
+      "inputs": [
+        {
+          "name": "paused",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setMigrationSettlement",
+      "inputs": [
+        {
+          "name": "nextMigrationSettlement",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setMoonShipCount",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setMoonSystem",
+      "inputs": [
+        {
+          "name": "nextMoonSystem",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setRandomnessEngine",
+      "inputs": [
+        {
+          "name": "nextRandomnessEngine",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setResourceToken",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "token",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setResourceTokens",
+      "inputs": [
+        {
+          "name": "metalToken",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "crystalToken",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "deuteriumToken",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setSpaceDockSystem",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setStartPrice",
+      "inputs": [
+        {
+          "name": "nextPrice",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "settleDuePlayerColonizeArrivals",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "settleDuePlayerCombatArrivals",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "settleFirstPlanet",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.FirstPlanet",
+          "components": [
+            {
+              "name": "galaxy",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "system",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "position",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "fields",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "temperature",
+              "type": "int16",
+              "internalType": "int16"
+            },
+            {
+              "name": "settledAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "settledBlock",
+              "type": "uint64",
+              "internalType": "uint64"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "settleFirstPlanetWithReferral",
+      "inputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.FirstPlanet",
+          "components": [
+            {
+              "name": "galaxy",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "system",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "position",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "fields",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "temperature",
+              "type": "int16",
+              "internalType": "int16"
+            },
+            {
+              "name": "settledAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "settledBlock",
+              "type": "uint64",
+              "internalType": "uint64"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "settlePlanet",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "shipCost",
+      "inputs": [
+        {
+          "name": "ship",
+          "type": "uint8",
+          "internalType": "enum Ship"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "pure"
+    },
+    {
+      "type": "function",
+      "name": "shipCount",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "ship",
+          "type": "uint8",
+          "internalType": "enum Ship"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "shipQueue",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.ShipQueue",
+          "components": [
+            {
+              "name": "active",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "ship",
+              "type": "uint8",
+              "internalType": "enum Ship"
+            },
+            {
+              "name": "quantity",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "readyAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "cost",
+              "type": "tuple",
+              "internalType": "struct VeydriftGameStorage.Resources",
+              "components": [
+                {
+                  "name": "metal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "crystal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "deuterium",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "shipQueueBacklog",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple[]",
+          "internalType": "struct VeydriftGameStorage.ShipQueue[]",
+          "components": [
+            {
+              "name": "active",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "ship",
+              "type": "uint8",
+              "internalType": "enum Ship"
+            },
+            {
+              "name": "quantity",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "readyAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "cost",
+              "type": "tuple",
+              "internalType": "struct VeydriftGameStorage.Resources",
+              "components": [
+                {
+                  "name": "metal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "crystal",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                },
+                {
+                  "name": "deuterium",
+                  "type": "uint128",
+                  "internalType": "uint128"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "shipQueues",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "active",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "ship",
+          "type": "uint8",
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "quantity",
+          "type": "uint32",
+          "internalType": "uint32"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "cost",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "spendMoonResources",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "startBuildingUpgrade",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "building",
+          "type": "uint8",
+          "internalType": "enum Building"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "startDefenseProduction",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "startPlanet",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "startPlanetWithReferral",
+      "inputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
+      "name": "startPrice",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "startResearch",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum Technology"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "startShipProduction",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "storageCaps",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "metalCap",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystalCap",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuteriumCap",
+          "type": "uint128",
+          "internalType": "uint128"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "technologyLevel",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "technology",
+          "type": "uint8",
+          "internalType": "enum Technology"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "totalInternalResources",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "transferOwnership",
+      "inputs": [
+        {
+          "name": "nextOwner",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "untrackResolvedFleetMission",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "withdrawFees",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "address",
+          "internalType": "address payable"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "event",
+      "name": "AttackBattleResolved",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "attacker",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "targetPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "outcome",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "enum VeydriftGameStorage.BattleOutcome"
+        },
+        {
+          "name": "rounds",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "uint8"
+        },
+        {
+          "name": "randomSeed",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "lootMetal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "lootCrystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "lootDeuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "AttackMissionJoined",
+      "inputs": [
+        {
+          "name": "attackMissionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "joinedMissionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "participant",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "targetPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "BuildingCompleted",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "building",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Building"
+        },
+        {
+          "name": "level",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "BuildingStarted",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "building",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Building"
+        },
+        {
+          "name": "targetLevel",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ColonyCreated",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "colonyPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "galaxy",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "system",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "position",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "uint8"
+        },
+        {
+          "name": "fields",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "temperature",
+          "type": "int16",
+          "indexed": false,
+          "internalType": "int16"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "CombatDebrisSignaled",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "targetPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "CombatLosses",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "attackerMetal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "attackerCrystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "attackerDeuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "defenderMetal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "defenderCrystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "defenderDeuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "CombatRoundResolved",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "round",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "uint8"
+        },
+        {
+          "name": "attackerUnits",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "defenderUnits",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "attackerLossMetal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "attackerLossCrystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "defenderLossMetal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "defenderLossCrystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "DebrisFieldUpdated",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "DefenseCompleted",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "defense",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "quantity",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "total",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "DefenseHoldEnded",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "defenderPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "status",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "enum VeydriftGameStorage.FleetMissionStatus"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "DefenseHoldStationed",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "defenderPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "arrivalAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "holdUntil",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "returnAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "DefenseQueueTimingSet",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "defense",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "indexed": true,
+          "internalType": "uint64"
+        },
+        {
+          "name": "startedAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "originalQuantity",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "unitWorkSeconds",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "rate",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "DefenseQueued",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "defense",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "quantity",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ExcessResourceReserveReleased",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "treasury",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "liabilityRequirement",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "safetyMargin",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "remainingBalance",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FeesWithdrawn",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FirstPlanetSettled",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "galaxy",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "system",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "position",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "uint8"
+        },
+        {
+          "name": "coordinateKey",
+          "type": "bytes32",
+          "indexed": false,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "planetSeed",
+          "type": "bytes32",
+          "indexed": false,
+          "internalType": "bytes32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetArrived",
+      "inputs": [
+        {
+          "name": "fleetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "destinationPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "returning",
+          "type": "bool",
+          "indexed": false,
+          "internalType": "bool"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetDispatched",
+      "inputs": [
+        {
+          "name": "fleetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "destinationPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "arrivesAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "smallCargo",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "recycler",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "colonyShip",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "fuelCost",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionBodies",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "originIsMoon",
+          "type": "bool",
+          "indexed": false,
+          "internalType": "bool"
+        },
+        {
+          "name": "targetIsMoon",
+          "type": "bool",
+          "indexed": false,
+          "internalType": "bool"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionCargo",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "fuelCost",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionLaunched",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "missionType",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum VeydriftGameStorage.FleetMissionType"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "targetPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "arrivalAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "returnAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "randomnessRequestId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionLootRatio",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metalBps",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "crystalBps",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "deuteriumBps",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionRecalled",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "returnAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "recallCost",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionResolved",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "resolver",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "missionType",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum VeydriftGameStorage.FleetMissionType"
+        },
+        {
+          "name": "returnAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionReturnExposed",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "status",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum VeydriftGameStorage.FleetMissionStatus"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "targetPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "returnAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionReturned",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetMissionShips",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "smallCargo",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "lightFighter",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "recycler",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "colonyShip",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "largeCargo",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "heavyFighter",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "cruiser",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "battleship",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "bomber",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "destroyer",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "deathstar",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "battlecruiser",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "reaper",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "pathfinder",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "FleetRecalled",
+      "inputs": [
+        {
+          "name": "fleetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "destinationPlanetId",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "arrivesAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "Initialized",
+      "inputs": [
+        {
+          "name": "version",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "InterplanetaryMissileAttack",
+      "inputs": [
+        {
+          "name": "attacker",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "targetPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "primaryTarget",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "launched",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "intercepted",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "hits",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "destroyedPrimary",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "MarketResourceDeposited",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "amount",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "MarketResourceWithdrawalFinished",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "amount",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "MarketResourceWithdrawalRequested",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "amount",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "unlocksAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "MoonResourcesChanged",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "MoonShipCountChanged",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "ship",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "total",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "OwnershipTransferred",
+      "inputs": [
+        {
+          "name": "previousOwner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "newOwner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PlanetAbandoned",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "galaxy",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "system",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "position",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "uint8"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PlanetDefenseCountChanged",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "defense",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "total",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PlanetRenamed",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "indexed": false,
+          "internalType": "string"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PlanetSettled",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "settledAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PlanetShipCountChanged",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "ship",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "total",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PlanetStarted",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "galaxy",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "system",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "position",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "uint8"
+        },
+        {
+          "name": "fields",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "temperature",
+          "type": "int16",
+          "indexed": false,
+          "internalType": "int16"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "RaidLootResolved",
+      "inputs": [
+        {
+          "name": "targetPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "cargoCapacity",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "protectedMetal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "protectedCrystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "protectedDeuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "RandomnessEngineUpdated",
+      "inputs": [
+        {
+          "name": "oldRandomnessEngine",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "newRandomnessEngine",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResearchCompleted",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "technology",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Technology"
+        },
+        {
+          "name": "level",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResearchQueued",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "technology",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Technology"
+        },
+        {
+          "name": "targetLevel",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResearchQueuedV2",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "technology",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Technology"
+        },
+        {
+          "name": "targetLevel",
+          "type": "uint16",
+          "indexed": false,
+          "internalType": "uint16"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResourceReservesDeposited",
+      "inputs": [
+        {
+          "name": "depositor",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResourceTokenUpdated",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "oldToken",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "newToken",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResourceTokensUpdated",
+      "inputs": [
+        {
+          "name": "metalToken",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        },
+        {
+          "name": "crystalToken",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        },
+        {
+          "name": "deuteriumToken",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ResourcesTransferred",
+      "inputs": [
+        {
+          "name": "fleetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "originPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "destinationPlanetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "RiftExtractionFinalized",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "amount",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "RiftExtractionLooted",
+      "inputs": [
+        {
+          "name": "attacker",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "RiftExtractionStarted",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "amount",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "startedAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "unlocksAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ShipCompleted",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "ship",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "quantity",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "total",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ShipQueueTimingSet",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "ship",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "indexed": true,
+          "internalType": "uint64"
+        },
+        {
+          "name": "startedAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "originalQuantity",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "unitWorkSeconds",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "rate",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "ShipQueued",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "ship",
+          "type": "uint8",
+          "indexed": true,
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "quantity",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        },
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "StartPriceUpdated",
+      "inputs": [
+        {
+          "name": "oldPrice",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "newPrice",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "error",
+      "name": "AlreadyStarted",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "AttackBashingLimitReached",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "AttackJoinCutoffPassed",
+      "inputs": [
+        {
+          "name": "cutoffAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "AttackScoreProtection",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "BadStartPayment",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "CannotAbandonHomePlanet",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "CannotJoinOwnAttackTarget",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "CargoCapacityExceeded",
+      "inputs": [
+        {
+          "name": "capacity",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "cargo",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "CargoNotAllowed",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ConstructionActive",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ConstructionInactive",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ConstructionNotReady",
+      "inputs": [
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "CoordinatesExhausted",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "CoordinatesOccupied",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "DebrisFieldEmpty",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "DefenseHoldNotAuthorized",
+      "inputs": [
+        {
+          "name": "defenderPlanetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "DefenseHoldStillActive",
+      "inputs": [
+        {
+          "name": "holdUntil",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "DefenseLimitReached",
+      "inputs": [
+        {
+          "name": "defense",
+          "type": "uint8",
+          "internalType": "enum Defense"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "FieldCapacityReached",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "FleetAlreadyArrived",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "FleetAlreadyReturning",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "FleetInactive",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "FleetMissionNotResolved",
+      "inputs": [
+        {
+          "name": "returnAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "FleetNotArrived",
+      "inputs": [
+        {
+          "name": "arrivesAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "FleetNotOwner",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "FleetRecallCutoffPassed",
+      "inputs": [
+        {
+          "name": "recallDeadline",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "FleetSlotLimitReached",
+      "inputs": [
+        {
+          "name": "limit",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InsufficientExcessResourceReserve",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "requested",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "liabilityRequirement",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "safetyMargin",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "available",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InsufficientResourceReserve",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "required",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "available",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InsufficientResources",
+      "inputs": [
+        {
+          "name": "metal",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "internalType": "uint128"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InsufficientShips",
+      "inputs": [
+        {
+          "name": "ship",
+          "type": "uint8",
+          "internalType": "enum Ship"
+        },
+        {
+          "name": "available",
+          "type": "uint32",
+          "internalType": "uint32"
+        },
+        {
+          "name": "required",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InterplanetaryMissileOutOfRange",
+      "inputs": [
+        {
+          "name": "originSystem",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "targetSystem",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "range",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InvalidCoordinates",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidCoordinates",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidHoldWindow",
+      "inputs": [
+        {
+          "name": "holdSeconds",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InvalidId",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidInitialization",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidLootRatio",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidMissileTarget",
+      "inputs": [
+        {
+          "name": "defense",
+          "type": "uint8",
+          "internalType": "enum Defense"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InvalidMissionType",
+      "inputs": [
+        {
+          "name": "missionType",
+          "type": "uint8",
+          "internalType": "enum VeydriftGameStorage.FleetMissionType"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InvalidPlanetName",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidQuantity",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "InvalidResource",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "InvalidResourceTreasury",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "LegacyWithdrawalDisabled",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "LevelTooHigh",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "MissileSiloCapacityExceeded",
+      "inputs": [
+        {
+          "name": "requiredSlots",
+          "type": "uint32",
+          "internalType": "uint32"
+        },
+        {
+          "name": "availableSlots",
+          "type": "uint32",
+          "internalType": "uint32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "MissingDependency",
+      "inputs": [
+        {
+          "name": "dependency",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "NoFirstPlanet",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "NoPlanet",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotInitializing",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotPlanetOwner",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "PlanetHasActiveFleetMissions",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "PlanetHasActiveQueues",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "PlanetHasResources",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "PlanetLimitReached",
+      "inputs": [
+        {
+          "name": "limit",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "QueueActive",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "QueueInactive",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "QueueNotReady",
+      "inputs": [
+        {
+          "name": "readyAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "RandomnessEngineUnset",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ReferralCommitmentAlreadyClaimed",
+      "inputs": [
+        {
+          "name": "commitment",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ReferralCommitmentInvalid",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ReferralInviteAlreadyClaimed",
+      "inputs": [
+        {
+          "name": "inviter",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "commitment",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ReferralInviteExpired",
+      "inputs": [
+        {
+          "name": "commitment",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "expiredAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ReferralInviteInvalid",
+      "inputs": [
+        {
+          "name": "commitment",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ReferralInviteeAlreadyRedeemed",
+      "inputs": [
+        {
+          "name": "commitment",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "invitee",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ReferralRedemptionQuotaExceeded",
+      "inputs": [
+        {
+          "name": "commitment",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "resetsAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ReferralSelfInvite",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ReferralSignatureInvalid",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ReferralSignerUnset",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ResourceTokenNotConfigured",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ResourceTokenUnset",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ResourceTransferFailed",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        },
+        {
+          "name": "token",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "RiftExtractionActive",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "RiftExtractionInactive",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "RiftStabilizerRequired",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "SafeCastOverflowedIntDowncast",
+      "inputs": [
+        {
+          "name": "bits",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "value",
+          "type": "int256",
+          "internalType": "int256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "SafeCastOverflowedIntToUint",
+      "inputs": [
+        {
+          "name": "value",
+          "type": "int256",
+          "internalType": "int256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "SafeCastOverflowedUintDowncast",
+      "inputs": [
+        {
+          "name": "bits",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "value",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "SafeCastOverflowedUintToInt",
+      "inputs": [
+        {
+          "name": "value",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "SameAllianceAttack",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "SamePlanet",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "SelfAttack",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "TransferFailed",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "Unauthorized",
+      "inputs": [
+        {
+          "name": "account",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "UnpopulatedCoordinates",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "UnsupportedGameplayModule",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "WithdrawalActive",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "WithdrawalInactive",
+      "inputs": [
+        {
+          "name": "resource",
+          "type": "uint8",
+          "internalType": "enum Resource"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "WithdrawalNotReady",
+      "inputs": [
+        {
+          "name": "unlocksAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    }
+  ],
+  "methodIdentifiers": {
+    "ATTACK_BATTLE_DOMAIN()": "8a1b9c93",
+    "BATTLE_MAX_ROUNDS()": "1ab0cfdc",
+    "BPS()": "249d39e9",
+    "DEFAULT_START_PRICE()": "0ddd89b2",
+    "FIRST_PLANET_DOMAIN()": "c9967a4e",
+    "FLEET_RECALL_COST_BPS()": "b31d6b2c",
+    "FLEET_RECALL_CUTOFF_SECONDS()": "5e6f5748",
+    "FLEET_UNIVERSE_SPEED()": "1a2a7f4b",
+    "MARKET_WITHDRAWAL_DELAY()": "cefafda7",
+    "MAX_BUILDING_ID()": "b05f6bf4",
+    "MAX_DEFENSE_ID()": "1b168139",
+    "MAX_GALAXY()": "5a169051",
+    "MAX_LEVEL()": "a49062d4",
+    "MAX_POSITION()": "e2f2cafb",
+    "MAX_RESOURCE_ID()": "d44dd4f8",
+    "MAX_SHIP_ID()": "e0e615a9",
+    "MAX_SYSTEM()": "cd454923",
+    "MAX_TECHNOLOGY_ID()": "9fb351af",
+    "MIN_FLEET_TRAVEL_SECONDS()": "a38676d9",
+    "MIN_QUEUE_SECONDS()": "d4703e44",
+    "PLANET_SEED_DOMAIN()": "bb0d85e5",
+    "QUEUE_UNIVERSE_SPEED()": "62c2500a",
+    "RAID_LOOT_BPS()": "d16d9ffd",
+    "RAID_PROTECTED_STORAGE_BPS()": "7e2872ce",
+    "RIFT_EXTRACTION_DELAY()": "c8df8fd7",
+    "abandonPlanet(uint256)": "fa16dddc",
+    "activeBuildingConstruction(uint256)": "9074c206",
+    "activeFleetMissionCount(address)": "423f9f10",
+    "attackProtectionStatus(address,uint256)": "8a6b2246",
+    "buildingConstructions(uint256)": "b8e835ab",
+    "buildingLevel(uint256,uint8)": "d9b24865",
+    "buildingUpgradeCost(uint256,uint8)": "291ee1b5",
+    "clearMoonState(uint256)": "d4e8f4fa",
+    "collectResources(uint256)": "db43284d",
+    "completeAttackTargetSnapshotQueues(uint256,uint64)": "3e737981",
+    "completeFleetMissionReturn(uint256)": "c2472852",
+    "coordinateKey(uint16,uint16,uint8)": "d2f16c7d",
+    "debrisField(uint256)": "6a7cdaa5",
+    "defenseCost(uint8)": "9b906295",
+    "defenseCount(uint256,uint8)": "836e3a32",
+    "defenseQueue(uint256)": "71e104b3",
+    "defenseQueueBacklog(uint256)": "4f5ed437",
+    "defenseQueues(uint256)": "5758361d",
+    "depositMarketResource(uint256,uint8,uint128)": "25819e15",
+    "depositResourceReserves((uint128,uint128,uint128))": "00190a90",
+    "energyBalance(uint256)": "7938100c",
+    "finishBuildingUpgrade(uint256)": "6ab2f9d4",
+    "finishDefenseProduction(uint256)": "a5a0d597",
+    "finishMarketResourceWithdrawal(uint8)": "de0f208c",
+    "finishResearch()": "ba2fbdc8",
+    "finishShipProduction(uint256)": "7bd93154",
+    "firstPlanetOf(address)": "29147f24",
+    "fleetMission(uint256)": "f158c946",
+    "grantMoonResources(uint256,(uint128,uint128,uint128))": "c83b9b6b",
+    "hasFirstPlanet(address)": "1d750846",
+    "homePlanetOf(address)": "0ff79fa5",
+    "importMigratedState(address,bytes)": "f789025b",
+    "importMigratedStateWithReferral(address,bytes,bytes32,uint8,bytes32,bytes32)": "d97910a4",
+    "initialize(address)": "c4d66de8",
+    "isCoordinateAvailable(uint16,uint16,uint8)": "183e8268",
+    "joinAttackMission(uint256,uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128))": "28260eb6",
+    "launchAttackMission(uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256,(uint16,uint16,uint16))": "19fec22b",
+    "launchBodyFleetMission(uint256,uint256,uint8,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,bool,bool)": "0d0a9b08",
+    "launchDefenseHold(uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256)": "d3ad415f",
+    "launchFleetMission(uint256,uint256,uint8,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256)": "60eac16f",
+    "launchFleetMission(uint256,uint256,uint8,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint256)": "28247df8",
+    "launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)": "a72cd29a",
+    "lockedWithdrawalResources()": "ca086b98",
+    "maxPlanets(address)": "406975ff",
+    "maxRaidLoot(uint256,uint256)": "a2fbd1c6",
+    "moonResources(uint256)": "1f20b321",
+    "moonShipCount(uint256,uint8)": "dc02fa88",
+    "moveMoonGateShips(uint256,uint256,address,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32))": "c79cca11",
+    "nextFleetId()": "80198ce1",
+    "nextPlanetId()": "c16bedad",
+    "occupiedCoordinates(bytes32)": "fb80a508",
+    "owner()": "8da5cb5b",
+    "planet(uint256)": "181c1bc4",
+    "planetCountOf(address)": "02b30546",
+    "planetNames(uint256)": "ec16d865",
+    "planetSeed(uint16,uint16,uint8)": "e3d54574",
+    "previewFirstPlanet(address)": "729b082f",
+    "previewResources(uint256)": "0adbf924",
+    "productionPerHour(uint256)": "9ec5e0d5",
+    "protectedResources(uint256)": "222a58f5",
+    "raidableResources(uint256)": "1da1f692",
+    "randomnessEngine()": "baeab840",
+    "recallFleetMission(uint256)": "1cbc460c",
+    "releaseExcessResourceReserves(address,(uint128,uint128,uint128),(uint128,uint128,uint128))": "0abfc853",
+    "renamePlanet(uint256,string)": "a74c0906",
+    "requestMarketResourceWithdrawal(uint256,uint8,uint128)": "62a10a46",
+    "requireNoPendingMoonAttackResolution(uint256)": "9b0f6640",
+    "researchCost(address,uint8)": "6e984888",
+    "researchQueue(address)": "d0b044c5",
+    "researchQueues(address)": "2b98afc7",
+    "reserveMigrationCoordinates(uint16[],uint16[],uint8[])": "d957845c",
+    "resolveFleetMission(uint256)": "de09e7cf",
+    "resourceReserveAvailable()": "90117fd3",
+    "resourceReserveBalance(uint8)": "c72ba7ae",
+    "resourceReserveRequirement()": "a69df5f2",
+    "resourceToken(uint8)": "fb3113f0",
+    "resourceWithdrawals(address,uint8)": "91f8dfce",
+    "riftExtractions(uint256,uint8)": "5a1bb2fd",
+    "setAllianceSystem(address)": "580de3dc",
+    "setAttackProtectionExemption(address,address,bool)": "587ef138",
+    "setGamePaused(bool)": "b5c14adb",
+    "setMigrationSettlement(address)": "0ee30f00",
+    "setMoonShipCount(uint256,uint8,uint32)": "4acb7e0f",
+    "setMoonSystem(address)": "91d7dc4f",
+    "setRandomnessEngine(address)": "bb2a57f1",
+    "setResourceToken(uint8,address)": "601c3db7",
+    "setResourceTokens(address,address,address)": "be6df313",
+    "setSpaceDockSystem(address)": "5942ff32",
+    "setStartPrice(uint256)": "17d86154",
+    "settleDuePlayerColonizeArrivals(address)": "dd3aff23",
+    "settleDuePlayerCombatArrivals(address)": "5e0eed79",
+    "settleFirstPlanet()": "59268393",
+    "settleFirstPlanetWithReferral(bytes32,uint8,bytes32,bytes32)": "2f7a1ec2",
+    "settlePlanet(uint256)": "921609d9",
+    "shipCost(uint8)": "c4222030",
+    "shipCount(uint256,uint8)": "57686701",
+    "shipQueue(uint256)": "c6c8cf96",
+    "shipQueueBacklog(uint256)": "52b55205",
+    "shipQueues(uint256)": "b6f4b7b7",
+    "spendMoonResources(uint256,(uint128,uint128,uint128))": "8dabd452",
+    "startBuildingUpgrade(uint256,uint8)": "165715e3",
+    "startDefenseProduction(uint256,uint8,uint32)": "fec06283",
+    "startPlanet()": "f45f1f18",
+    "startPlanetWithReferral(bytes32,uint8,bytes32,bytes32)": "dad57ff9",
+    "startPrice()": "f1a9af89",
+    "startResearch(uint256,uint8)": "7f314b93",
+    "startShipProduction(uint256,uint8,uint32)": "13aed9a2",
+    "storageCaps(uint256)": "6db0ecd7",
+    "technologyLevel(address,uint8)": "e512884c",
+    "totalInternalResources()": "86252f4f",
+    "transferOwnership(address)": "f2fde38b",
+    "untrackResolvedFleetMission(uint256)": "8bd85c0e",
+    "withdrawFees(address)": "164e68de"
+  }
+}

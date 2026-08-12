@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "tier": "advisor",
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "planets": [664],
+  "chain_id": 8453,
+  "cadence": { "economy_minutes": 10, "research_minutes": 10, "fleet_minutes": 10, "universe_hours": 24 },
+  "limits": {
+    "gas_per_tx_wei": "3000000000000000",
+    "gas_per_day_wei": "20000000000000000",
+    "eth_gas_floor_wei": "2000000000000000",
+    "escalate_above_pct_of_resources": 25,
+    "max_index_wait_s": 300,
+    "field_warn_pct": 80
+  },
+  "reserves": { "metal": 0, "crystal": 0, "deuterium": 0 },
+  "storage": { "hours_to_cap_trigger": 2 },
+  "actions": {
+    "allow_building": true, "allow_research": true,
+    "allow_defense": false, "allow_ships": false,
+    "allow_fleet_noncombat": false, "allow_combat": false
+  },
+  "escalation": {
+    "on_incoming_fleet": true, "on_abi_hash_change": true,
+    "on_health_unhealthy_minutes": 30, "on_revert_count": 2
+  },
+  "wallet_engine": { "provider": "keystore", "require_confirmation": true }
+}

@@ -1,0 +1,598 @@
+{
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "bodyKind": "moon",
+  "homePlanetId": "664",
+  "parentPlanetId": "664",
+  "moonAvailable": true,
+  "unavailableReason": "No moon exists for this home planet yet.",
+  "resources": {
+    "metal": "0",
+    "crystal": "0",
+    "deuterium": "0"
+  },
+  "resourcesAsOfNow": {
+    "metal": "0",
+    "crystal": "0",
+    "deuterium": "0"
+  },
+  "resourceSnapshot": null,
+  "ships": [
+    {
+      "id": 0,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "2000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 1,
+      "count": 0,
+      "cost": {
+        "metal": "3000",
+        "crystal": "1000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 2,
+      "count": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "6000",
+        "deuterium": "2000"
+      }
+    },
+    {
+      "id": 3,
+      "count": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "20000",
+        "deuterium": "10000"
+      }
+    },
+    {
+      "id": 4,
+      "count": 0,
+      "cost": {
+        "metal": "6000",
+        "crystal": "6000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 5,
+      "count": 0,
+      "cost": {
+        "metal": "6000",
+        "crystal": "4000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 6,
+      "count": 0,
+      "cost": {
+        "metal": "20000",
+        "crystal": "7000",
+        "deuterium": "2000"
+      }
+    },
+    {
+      "id": 7,
+      "count": 0,
+      "cost": {
+        "metal": "45000",
+        "crystal": "15000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 8,
+      "count": 0,
+      "cost": {
+        "metal": "50000",
+        "crystal": "25000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 9,
+      "count": 0,
+      "cost": {
+        "metal": "0",
+        "crystal": "2000",
+        "deuterium": "500"
+      },
+      "energyPerUnit": "4"
+    },
+    {
+      "id": 10,
+      "count": 0,
+      "cost": {
+        "metal": "60000",
+        "crystal": "50000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 11,
+      "count": 0,
+      "cost": {
+        "metal": "5000000",
+        "crystal": "4000000",
+        "deuterium": "1000000"
+      }
+    },
+    {
+      "id": 12,
+      "count": 0,
+      "cost": {
+        "metal": "30000",
+        "crystal": "40000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 13,
+      "count": 0,
+      "cost": {
+        "metal": "85000",
+        "crystal": "55000",
+        "deuterium": "20000"
+      }
+    },
+    {
+      "id": 14,
+      "count": 0,
+      "cost": {
+        "metal": "8000",
+        "crystal": "15000",
+        "deuterium": "8000"
+      }
+    },
+    {
+      "id": 15,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "2000",
+        "deuterium": "1000"
+      }
+    }
+  ],
+  "launchableShips": [
+    {
+      "id": 0,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "2000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 1,
+      "count": 0,
+      "cost": {
+        "metal": "3000",
+        "crystal": "1000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 2,
+      "count": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "6000",
+        "deuterium": "2000"
+      }
+    },
+    {
+      "id": 3,
+      "count": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "20000",
+        "deuterium": "10000"
+      }
+    },
+    {
+      "id": 4,
+      "count": 0,
+      "cost": {
+        "metal": "6000",
+        "crystal": "6000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 5,
+      "count": 0,
+      "cost": {
+        "metal": "6000",
+        "crystal": "4000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 6,
+      "count": 0,
+      "cost": {
+        "metal": "20000",
+        "crystal": "7000",
+        "deuterium": "2000"
+      }
+    },
+    {
+      "id": 7,
+      "count": 0,
+      "cost": {
+        "metal": "45000",
+        "crystal": "15000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 8,
+      "count": 0,
+      "cost": {
+        "metal": "50000",
+        "crystal": "25000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 9,
+      "count": 0,
+      "cost": {
+        "metal": "0",
+        "crystal": "2000",
+        "deuterium": "500"
+      },
+      "energyPerUnit": "4"
+    },
+    {
+      "id": 10,
+      "count": 0,
+      "cost": {
+        "metal": "60000",
+        "crystal": "50000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 11,
+      "count": 0,
+      "cost": {
+        "metal": "5000000",
+        "crystal": "4000000",
+        "deuterium": "1000000"
+      }
+    },
+    {
+      "id": 12,
+      "count": 0,
+      "cost": {
+        "metal": "30000",
+        "crystal": "40000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 13,
+      "count": 0,
+      "cost": {
+        "metal": "85000",
+        "crystal": "55000",
+        "deuterium": "20000"
+      }
+    },
+    {
+      "id": 14,
+      "count": 0,
+      "cost": {
+        "metal": "8000",
+        "crystal": "15000",
+        "deuterium": "8000"
+      }
+    },
+    {
+      "id": 15,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "2000",
+        "deuterium": "1000"
+      }
+    }
+  ],
+  "moon": null,
+  "buildings": [
+    {
+      "id": 0,
+      "key": "lunarBase",
+      "label": "Lunar Base",
+      "level": 0,
+      "cost": {
+        "metal": "20000",
+        "crystal": "40000",
+        "deuterium": "20000"
+      },
+      "durationSeconds": 86400
+    },
+    {
+      "id": 1,
+      "key": "roboticsFactory",
+      "label": "Robotics Factory",
+      "level": 0,
+      "cost": {
+        "metal": "400",
+        "crystal": "120",
+        "deuterium": "200"
+      },
+      "durationSeconds": 748
+    },
+    {
+      "id": 2,
+      "key": "jumpGate",
+      "label": "Jump Gate",
+      "level": 0,
+      "cost": {
+        "metal": "2000000",
+        "crystal": "4000000",
+        "deuterium": "2000000"
+      },
+      "durationSeconds": 8640000
+    },
+    {
+      "id": 3,
+      "key": "shipyard",
+      "label": "Shipyard",
+      "level": 0,
+      "cost": {
+        "metal": "400",
+        "crystal": "200",
+        "deuterium": "100"
+      },
+      "durationSeconds": 864
+    }
+  ],
+  "fleet": [
+    {
+      "id": 0,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "2000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 1,
+      "count": 0,
+      "cost": {
+        "metal": "3000",
+        "crystal": "1000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 2,
+      "count": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "6000",
+        "deuterium": "2000"
+      }
+    },
+    {
+      "id": 3,
+      "count": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "20000",
+        "deuterium": "10000"
+      }
+    },
+    {
+      "id": 4,
+      "count": 0,
+      "cost": {
+        "metal": "6000",
+        "crystal": "6000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 5,
+      "count": 0,
+      "cost": {
+        "metal": "6000",
+        "crystal": "4000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 6,
+      "count": 0,
+      "cost": {
+        "metal": "20000",
+        "crystal": "7000",
+        "deuterium": "2000"
+      }
+    },
+    {
+      "id": 7,
+      "count": 0,
+      "cost": {
+        "metal": "45000",
+        "crystal": "15000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 8,
+      "count": 0,
+      "cost": {
+        "metal": "50000",
+        "crystal": "25000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 9,
+      "count": 0,
+      "cost": {
+        "metal": "0",
+        "crystal": "2000",
+        "deuterium": "500"
+      },
+      "energyPerUnit": "4"
+    },
+    {
+      "id": 10,
+      "count": 0,
+      "cost": {
+        "metal": "60000",
+        "crystal": "50000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 11,
+      "count": 0,
+      "cost": {
+        "metal": "5000000",
+        "crystal": "4000000",
+        "deuterium": "1000000"
+      }
+    },
+    {
+      "id": 12,
+      "count": 0,
+      "cost": {
+        "metal": "30000",
+        "crystal": "40000",
+        "deuterium": "15000"
+      }
+    },
+    {
+      "id": 13,
+      "count": 0,
+      "cost": {
+        "metal": "85000",
+        "crystal": "55000",
+        "deuterium": "20000"
+      }
+    },
+    {
+      "id": 14,
+      "count": 0,
+      "cost": {
+        "metal": "8000",
+        "crystal": "15000",
+        "deuterium": "8000"
+      }
+    },
+    {
+      "id": 15,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "2000",
+        "deuterium": "1000"
+      }
+    }
+  ],
+  "queue": null,
+  "technologyLevels": {},
+  "defenses": [
+    {
+      "id": 0,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "0",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 1,
+      "count": 0,
+      "cost": {
+        "metal": "1500",
+        "crystal": "500",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 2,
+      "count": 0,
+      "cost": {
+        "metal": "6000",
+        "crystal": "2000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 3,
+      "count": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "10000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 4,
+      "count": 0,
+      "cost": {
+        "metal": "20000",
+        "crystal": "15000",
+        "deuterium": "2000"
+      }
+    },
+    {
+      "id": 5,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "6000",
+        "deuterium": "0"
+      }
+    },
+    {
+      "id": 6,
+      "count": 0,
+      "cost": {
+        "metal": "50000",
+        "crystal": "50000",
+        "deuterium": "30000"
+      }
+    },
+    {
+      "id": 7,
+      "count": 0,
+      "cost": {
+        "metal": "50000",
+        "crystal": "50000",
+        "deuterium": "0"
+      }
+    }
+  ],
+  "defenseQueue": null,
+  "jumpGateDestinations": [],
+  "detail": "moon loaded from DB-indexed contract state.",
+  "stale": false,
+  "indexer": {
+    "indexedState": "healthy",
+    "safeToServeIndexedState": true,
+    "latestIndexedBlock": "49860796",
+    "indexedPlanets": 200
+  },
+  "source": "contract-state-indexer"
+}

@@ -1,0 +1,46 @@
+{
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "items": [
+    {
+      "transactionAt": "1786121739",
+      "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+      "relatedTransactionHash": null,
+      "blockNumber": "49666196",
+      "logIndex": "0x2",
+      "reconciliation": "indexed",
+      "category": "system",
+      "kind": "planet-started",
+      "direction": "personal",
+      "title": "Home planet settled",
+      "detail": "Planet #664 \u00b7 7:181:14",
+      "occurredAt": "1786121739",
+      "metadata": {
+        "galaxy": 7,
+        "planetId": "664",
+        "position": 14,
+        "system": 181
+      },
+      "id": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f:0x2",
+      "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
+    }
+  ],
+  "summary": {
+    "system": 1
+  },
+  "through": "1786510967",
+  "pagination": {
+    "page": 1,
+    "pageSize": 25,
+    "totalEntries": 1,
+    "totalPages": 1,
+    "hasPreviousPage": false,
+    "hasNextPage": false
+  },
+  "indexer": {
+    "indexedState": "healthy",
+    "safeToServeIndexedState": true,
+    "latestIndexedBlock": "49860796",
+    "indexedPlanets": 200
+  },
+  "source": "contract-state-indexer"
+}

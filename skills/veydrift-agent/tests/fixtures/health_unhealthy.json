@@ -1,0 +1,30 @@
+{
+  "ok": false,
+  "service": "veydrift-backend",
+  "configured": true,
+  "backend": {
+    "build": {
+      "deploymentAbiHash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+      "deploymentCommit": "701bed3578cff4d134657c714c599dbdb55a4b6a"
+    },
+    "worker": {
+      "count": 10,
+      "index": 0,
+      "role": "writer"
+    }
+  },
+  "readiness": {
+    "ready": false,
+    "degraded": true,
+    "degradationReasons": ["Upstream RPC unfinished requests are growing or stale."],
+    "configurationReady": true,
+    "chainSyncConnected": false,
+    "subscribedToHeads": false,
+    "subscribedToLogs": false,
+    "indexedState": "degraded",
+    "safeToServeIndexedState": false
+  },
+  "chainSync": null,
+  "indexer": null,
+  "rpc": null
+}

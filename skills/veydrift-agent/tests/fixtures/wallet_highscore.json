@@ -1,0 +1,27 @@
+{
+  "formula": {
+    "pointsDivisor": "1000",
+    "target": "Contract-parity player score plus classic non-lifeform category breakdowns: economy, research points, research levels, current military points, current fleet points, ship count, and defense points.",
+    "summary": "Veydrift Score uses the contract-parity totalUserScore formula: technology levels, owned planets, building levels, current ships, and current defenses. Category breakdowns still use completed canonical owned state: planet and moon buildings as economy, research globally, current military, current fleet, and current defenses.",
+    "excludedCategories": [
+      "Military built, military destroyed, military lost, and honor rankings are intentionally excluded until Veydrift exposes per-wallet historical combat and honor ledgers."
+    ]
+  },
+  "entry": {
+    "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+    "homePlanetId": "664",
+    "planetCount": 1,
+    "totalUserScore": "1000",
+    "score": {
+      "total": "0",
+      "economy": "0",
+      "research": "0",
+      "researchLevels": "0",
+      "military": "0",
+      "fleet": "0",
+      "fleetCount": "0",
+      "defense": "0"
+    }
+  },
+  "source": "contract-state-indexer"
+}

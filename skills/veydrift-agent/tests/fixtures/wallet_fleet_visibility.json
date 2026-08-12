@@ -1,0 +1,22 @@
+{
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "homePlanetId": "664",
+  "incoming": [],
+  "outgoing": [],
+  "returning": [],
+  "joinableAttacks": [],
+  "completedMissions": [],
+  "battleReports": [],
+  "indexedRevision": "251942:64057",
+  "indexedBlock": "49860796",
+  "generatedAt": "2026-08-12T05:02:46.477Z",
+  "detail": "fleet visibility loaded from DB-indexed contract state.",
+  "stale": false,
+  "indexer": {
+    "indexedState": "healthy",
+    "safeToServeIndexedState": true,
+    "latestIndexedBlock": "49860796",
+    "indexedPlanets": 200
+  },
+  "source": "contract-state-indexer"
+}

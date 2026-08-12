@@ -1,0 +1,31 @@
+{
+  "name": "veydrift-wallet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Veydrift wallet engine: builds, allowlists, simulates and (only on explicit --confirm) submits Veydrift game transactions. Never used by veydrift-agent to sign directly -- this is the sole submission path.",
+  "type": "module",
+  "bin": {
+    "walletctl": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "walletctl": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "ethers": "^6.13.5",
+    "viem": "^2.21.54"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

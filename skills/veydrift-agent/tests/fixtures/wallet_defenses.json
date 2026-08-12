@@ -1,0 +1,144 @@
+{
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "homePlanetId": "664",
+  "productionAvailable": true,
+  "unavailableReason": "defenses loaded from DB-indexed contract state.",
+  "resources": {
+    "metal": "1000",
+    "crystal": "1000",
+    "deuterium": "0"
+  },
+  "resourcesAsOfNow": {
+    "metal": "1000",
+    "crystal": "1000",
+    "deuterium": "0"
+  },
+  "resourceSnapshot": {
+    "planetId": "664",
+    "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+    "blockNumber": "49666196",
+    "logIndex": "0x4",
+    "lastSettledAt": "1786121739",
+    "resources": {
+      "metal": "1000",
+      "crystal": "1000",
+      "deuterium": "0"
+    }
+  },
+  "shipyardLevel": 0,
+  "naniteLevel": 0,
+  "missileSiloLevel": 0,
+  "technologyLevels": {},
+  "defenses": [
+    {
+      "id": 0,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "0",
+        "deuterium": "0"
+      },
+      "durationSeconds": 2880
+    },
+    {
+      "id": 1,
+      "count": 0,
+      "cost": {
+        "metal": "1500",
+        "crystal": "500",
+        "deuterium": "0"
+      },
+      "durationSeconds": 2880
+    },
+    {
+      "id": 2,
+      "count": 0,
+      "cost": {
+        "metal": "6000",
+        "crystal": "2000",
+        "deuterium": "0"
+      },
+      "durationSeconds": 11520
+    },
+    {
+      "id": 3,
+      "count": 0,
+      "cost": {
+        "metal": "10000",
+        "crystal": "10000",
+        "deuterium": "0"
+      },
+      "durationSeconds": 28800
+    },
+    {
+      "id": 4,
+      "count": 0,
+      "cost": {
+        "metal": "20000",
+        "crystal": "15000",
+        "deuterium": "2000"
+      },
+      "durationSeconds": 50400
+    },
+    {
+      "id": 5,
+      "count": 0,
+      "cost": {
+        "metal": "2000",
+        "crystal": "6000",
+        "deuterium": "0"
+      },
+      "durationSeconds": 11520
+    },
+    {
+      "id": 6,
+      "count": 0,
+      "cost": {
+        "metal": "50000",
+        "crystal": "50000",
+        "deuterium": "30000"
+      },
+      "durationSeconds": 144000
+    },
+    {
+      "id": 7,
+      "count": 0,
+      "cost": {
+        "metal": "50000",
+        "crystal": "50000",
+        "deuterium": "0"
+      },
+      "durationSeconds": 144000
+    },
+    {
+      "id": 8,
+      "count": 0,
+      "cost": {
+        "metal": "8000",
+        "crystal": "0",
+        "deuterium": "2000"
+      },
+      "durationSeconds": 11520
+    },
+    {
+      "id": 9,
+      "count": 0,
+      "cost": {
+        "metal": "12500",
+        "crystal": "2500",
+        "deuterium": "10000"
+      },
+      "durationSeconds": 21600
+    }
+  ],
+  "queue": null,
+  "detail": "defenses loaded from DB-indexed contract state.",
+  "stale": false,
+  "indexer": {
+    "indexedState": "healthy",
+    "safeToServeIndexedState": true,
+    "latestIndexedBlock": "49860796",
+    "indexedPlanets": 200
+  },
+  "source": "contract-state-indexer"
+}

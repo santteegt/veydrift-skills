@@ -1,0 +1,43 @@
+# --- Secrets. Bots scrape public AND private repos and exploit leaked keys within seconds. ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.keystore
+secrets/
+# Encrypted keystores are password-protected, but a committed keystore is still an offline
+# brute-force target. Keep them outside the repo (default: $VEYDRIFT_HOME).
+*keystore*.json
+
+# --- Agent runtime state: wallet address, action history, tx hashes, gas ledger ---
+state/
+!state/.gitkeep
+
+# --- Python (uv) ---
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# --- Node / TypeScript ---
+node_modules/
+dist/
+*.tsbuildinfo
+
+# --- Foundry (if contracts are ever built in-tree) ---
+out/
+cache/
+broadcast/
+
+# --- Installed skill copies (build artifacts of `npx skills add .`) ---
+# `skills add` COPIES the tree here; these are outputs, never sources. Edit skills/<name>/
+# and re-run the install. Note the CLI does not honour this file when copying -- clean
+# .venv/node_modules out of skills/ BEFORE installing or they get copied too, and a copied
+# .venv is broken (dyld: Library not loaded).
+.claude/skills/
+.agents/
+
+# --- OS ---
+.DS_Store

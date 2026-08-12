@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.veydrift.agent.plist.template — bare-launchd scheduling adapter (docs/SPEC.md §5.8).
+
+  This is a TEMPLATE. It is not installed by this package and nothing in this repository
+  runs `launchctl load` on it — installing a launchd agent is a human decision, done once,
+  outside of any tick. See references/scheduling.md for the full install/uninstall
+  recipe and why the four placeholders below exist.
+
+  Placeholders (replace all of these before installing):
+    __UV_BIN__            absolute path to `uv`               (`command -v uv`)
+    __SKILL_DIR__         absolute path to this installed skill, e.g.
+                           ~/.claude/skills/veydrift-agent      (NOT this repo checkout —
+                           the installed copy, since `npx skills add .` copies the tree;
+                           see docs/SPEC.md §2.1 and state.py's docstring)
+    __VEYDRIFT_HOME__     absolute path to $VEYDRIFT_HOME, e.g. ~/.veydrift
+    __INTERVAL_SECONDS__  StartInterval, in seconds (policy.cadence.economy_minutes * 60
+                           is a reasonable default -- see references/scheduling.md)
+
+  Install (documented here, not executed by this package):
+    sed -e "s#__UV_BIN__#$(command -v uv)#" \
+        -e "s#__SKILL_DIR__#$HOME/.claude/skills/veydrift-agent#" \
+        -e "s#__VEYDRIFT_HOME__#$HOME/.veydrift#" \
+        -e "s#__INTERVAL_SECONDS__#600#" \
+        com.veydrift.agent.plist.template > ~/Library/LaunchAgents/com.veydrift.agent.plist
+    launchctl load ~/Library/LaunchAgents/com.veydrift.agent.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.veydrift.agent.plist
+    rm ~/Library/LaunchAgents/com.veydrift.agent.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.veydrift.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__UV_BIN__</string>
+        <string>run</string>
+        <string>--directory</string>
+        <string>__SKILL_DIR__</string>
+        <string>vd</string>
+        <string>tick</string>
+        <string>--format</string>
+        <string>md</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>VEYDRIFT_HOME</key>
+        <string>__VEYDRIFT_HOME__</string>
+    </dict>
+
+    <!-- Fires every N seconds, regardless of how long the previous run took. tick.py's
+         own lockfile (state.tick_lock) is what makes an overlapping fire a no-op instead
+         of two concurrent ticks -- launchd itself does not guarantee mutual exclusion. -->
+    <key>StartInterval</key>
+    <integer>__INTERVAL_SECONDS__</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>__VEYDRIFT_HOME__/logs/launchd.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__VEYDRIFT_HOME__/logs/launchd.err.log</string>
+</dict>
+</plist>

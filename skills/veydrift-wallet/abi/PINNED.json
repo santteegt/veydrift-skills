@@ -1,0 +1,25 @@
+{
+  "commit": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+  "abiHash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+  "foundry": {
+    "solc": "0.8.28",
+    "optimizer_runs": 1,
+    "via_ir": true,
+    "cbor_metadata": false,
+    "bytecode_hash": "none"
+  },
+  "fetchedAt": "2026-08-12T05:06:18Z",
+  "source": {
+    "repo": "https://github.com/Borodutch/veydrift.git",
+    "localClone": "/Users/santteegt/GitRepositories/clones/veydrift",
+    "commit": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+    "artifactPath": "packages/contracts/out/VeydriftGame.sol/VeydriftGame.json",
+    "buildCommand": "forge build --skip test --skip script",
+    "verifiedAgainstLiveRuntimeConfig": true,
+    "liveRuntimeConfigUrl": "https://api.veydrift.com/runtime-config",
+    "liveDeploymentAbiHashAtVerification": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+    "liveDeploymentCommitAtVerification": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+    "verifiedAt": "2026-08-12T05:06:18Z"
+  },
+  "note": "abi/VeydriftGame.701bed3.json contains { abi, methodIdentifiers } extracted from the forge artifact above. abiHash = sha256(JSON.stringify(pinned.abi)) with compact separators, key order as emitted by forge/JSON.parse. main (HEAD 84e468f at research time) produces sha256:361b1c94bf532b97b9971ad41c5be1b4d952710f7c56f046f3999b520179d2a8 -- a DIFFERENT, WRONG hash. See references/abi-pinning.md."
+}

@@ -1,0 +1,154 @@
+{
+  "$defs": {
+    "ActionKind": {
+      "description": "What the planner decided. Only the first five map to a contract call.",
+      "enum": [
+        "build",
+        "research",
+        "ship",
+        "defense",
+        "resolve_mission",
+        "noop",
+        "escalate",
+        "halt"
+      ],
+      "title": "ActionKind",
+      "type": "string"
+    },
+    "Resources": {
+      "description": "A metal/crystal/deuterium triple. Used for holdings, costs, caps and reserves.",
+      "properties": {
+        "crystal": {
+          "default": 0,
+          "title": "Crystal",
+          "type": "integer"
+        },
+        "deuterium": {
+          "default": 0,
+          "title": "Deuterium",
+          "type": "integer"
+        },
+        "metal": {
+          "default": 0,
+          "title": "Metal",
+          "type": "integer"
+        }
+      },
+      "title": "Resources",
+      "type": "object"
+    }
+  },
+  "description": "Zero or one of these per tick. `function` is None for noop/escalate/halt.",
+  "properties": {
+    "cost": {
+      "$ref": "#/$defs/Resources"
+    },
+    "entity_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Entity Id"
+    },
+    "entity_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Entity Name"
+    },
+    "expected_effect": {
+      "default": "",
+      "title": "Expected Effect",
+      "type": "string"
+    },
+    "function": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Function"
+    },
+    "kind": {
+      "$ref": "#/$defs/ActionKind"
+    },
+    "mission_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mission Id"
+    },
+    "planet_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Planet Id"
+    },
+    "quantity": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Quantity"
+    },
+    "rationale": {
+      "default": "",
+      "title": "Rationale",
+      "type": "string"
+    },
+    "rule": {
+      "default": "",
+      "title": "Rule",
+      "type": "string"
+    },
+    "target_level": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Level"
+    }
+  },
+  "required": [
+    "kind"
+  ],
+  "title": "Action",
+  "type": "object"
+}

@@ -1,0 +1,248 @@
+{
+  "$defs": {
+    "ActionsCfg": {
+      "properties": {
+        "allow_building": {
+          "default": true,
+          "title": "Allow Building",
+          "type": "boolean"
+        },
+        "allow_combat": {
+          "default": false,
+          "title": "Allow Combat",
+          "type": "boolean"
+        },
+        "allow_defense": {
+          "default": false,
+          "title": "Allow Defense",
+          "type": "boolean"
+        },
+        "allow_fleet_noncombat": {
+          "default": false,
+          "title": "Allow Fleet Noncombat",
+          "type": "boolean"
+        },
+        "allow_research": {
+          "default": true,
+          "title": "Allow Research",
+          "type": "boolean"
+        },
+        "allow_ships": {
+          "default": false,
+          "title": "Allow Ships",
+          "type": "boolean"
+        }
+      },
+      "title": "ActionsCfg",
+      "type": "object"
+    },
+    "Cadence": {
+      "properties": {
+        "economy_minutes": {
+          "default": 10,
+          "title": "Economy Minutes",
+          "type": "integer"
+        },
+        "fleet_minutes": {
+          "default": 10,
+          "title": "Fleet Minutes",
+          "type": "integer"
+        },
+        "research_minutes": {
+          "default": 10,
+          "title": "Research Minutes",
+          "type": "integer"
+        },
+        "universe_hours": {
+          "default": 24,
+          "title": "Universe Hours",
+          "type": "integer"
+        }
+      },
+      "title": "Cadence",
+      "type": "object"
+    },
+    "EscalationCfg": {
+      "properties": {
+        "on_abi_hash_change": {
+          "default": true,
+          "title": "On Abi Hash Change",
+          "type": "boolean"
+        },
+        "on_health_unhealthy_minutes": {
+          "default": 30,
+          "title": "On Health Unhealthy Minutes",
+          "type": "integer"
+        },
+        "on_incoming_fleet": {
+          "default": true,
+          "title": "On Incoming Fleet",
+          "type": "boolean"
+        },
+        "on_revert_count": {
+          "default": 2,
+          "title": "On Revert Count",
+          "type": "integer"
+        }
+      },
+      "title": "EscalationCfg",
+      "type": "object"
+    },
+    "Limits": {
+      "properties": {
+        "escalate_above_pct_of_resources": {
+          "default": 25,
+          "title": "Escalate Above Pct Of Resources",
+          "type": "integer"
+        },
+        "eth_gas_floor_wei": {
+          "title": "Eth Gas Floor Wei",
+          "type": "integer"
+        },
+        "field_warn_pct": {
+          "default": 80,
+          "title": "Field Warn Pct",
+          "type": "integer"
+        },
+        "gas_per_day_wei": {
+          "title": "Gas Per Day Wei",
+          "type": "integer"
+        },
+        "gas_per_tx_wei": {
+          "title": "Gas Per Tx Wei",
+          "type": "integer"
+        },
+        "max_index_wait_s": {
+          "default": 300,
+          "title": "Max Index Wait S",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gas_per_tx_wei",
+        "gas_per_day_wei",
+        "eth_gas_floor_wei"
+      ],
+      "title": "Limits",
+      "type": "object"
+    },
+    "Resources": {
+      "description": "A metal/crystal/deuterium triple. Used for holdings, costs, caps and reserves.",
+      "properties": {
+        "crystal": {
+          "default": 0,
+          "title": "Crystal",
+          "type": "integer"
+        },
+        "deuterium": {
+          "default": 0,
+          "title": "Deuterium",
+          "type": "integer"
+        },
+        "metal": {
+          "default": 0,
+          "title": "Metal",
+          "type": "integer"
+        }
+      },
+      "title": "Resources",
+      "type": "object"
+    },
+    "StorageCfg": {
+      "properties": {
+        "hours_to_cap_trigger": {
+          "default": 2.0,
+          "title": "Hours To Cap Trigger",
+          "type": "number"
+        }
+      },
+      "title": "StorageCfg",
+      "type": "object"
+    },
+    "Tier": {
+      "enum": [
+        "advisor",
+        "economy",
+        "operator"
+      ],
+      "title": "Tier",
+      "type": "string"
+    },
+    "WalletEngineCfg": {
+      "properties": {
+        "provider": {
+          "default": "keystore",
+          "enum": [
+            "keystore",
+            "envkey"
+          ],
+          "title": "Provider",
+          "type": "string"
+        },
+        "require_confirmation": {
+          "default": true,
+          "title": "Require Confirmation",
+          "type": "boolean"
+        }
+      },
+      "title": "WalletEngineCfg",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "actions": {
+      "$ref": "#/$defs/ActionsCfg"
+    },
+    "cadence": {
+      "$ref": "#/$defs/Cadence"
+    },
+    "chain_id": {
+      "default": 8453,
+      "title": "Chain Id",
+      "type": "integer"
+    },
+    "escalation": {
+      "$ref": "#/$defs/EscalationCfg"
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits"
+    },
+    "planets": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Planets",
+      "type": "array"
+    },
+    "reserves": {
+      "$ref": "#/$defs/Resources"
+    },
+    "storage": {
+      "$ref": "#/$defs/StorageCfg"
+    },
+    "tier": {
+      "$ref": "#/$defs/Tier",
+      "default": "advisor"
+    },
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "wallet": {
+      "title": "Wallet",
+      "type": "string"
+    },
+    "wallet_engine": {
+      "$ref": "#/$defs/WalletEngineCfg"
+    }
+  },
+  "required": [
+    "wallet",
+    "limits"
+  ],
+  "title": "Policy",
+  "type": "object"
+}

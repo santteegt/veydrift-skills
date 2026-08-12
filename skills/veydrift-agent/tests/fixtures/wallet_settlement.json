@@ -1,0 +1,62 @@
+{
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "hasFirstPlanet": true,
+  "homePlanetId": "664",
+  "planet": {
+    "eventName": "PlanetStarted",
+    "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+    "blockNumber": "49666196",
+    "planetId": "664",
+    "owner": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+    "name": null,
+    "galaxy": 7,
+    "system": 181,
+    "position": 14,
+    "fields": 174,
+    "temperature": -111,
+    "metalMultiplierBps": 10000,
+    "crystalMultiplierBps": 10000,
+    "deuteriumMultiplierBps": 15020,
+    "lastSettledAt": "1786121739",
+    "resources": {
+      "metal": "1000",
+      "crystal": "1000",
+      "deuterium": "0"
+    },
+    "logIndex": "0x4",
+    "resourcesAsOfNow": {
+      "metal": "1000",
+      "crystal": "1000",
+      "deuterium": "0"
+    },
+    "resourceSnapshot": {
+      "planetId": "664",
+      "transactionHash": "0xb92a7742e2d3342b5dc9f59aaf58ad84be341f771ea0741ea3f30467c6c6186f",
+      "blockNumber": "49666196",
+      "logIndex": "0x4",
+      "lastSettledAt": "1786121739",
+      "resources": {
+        "metal": "1000",
+        "crystal": "1000",
+        "deuterium": "0"
+      }
+    }
+  },
+  "contractKind": "game",
+  "player": {
+    "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+    "displayName": "D@f7pUnK",
+    "description": null,
+    "fallbackName": "0x224a...fa0f",
+    "updatedAt": "2026-08-07T17:47:37.826Z"
+  },
+  "detail": "wallet settlement loaded from DB-indexed contract state.",
+  "stale": false,
+  "indexer": {
+    "indexedState": "healthy",
+    "safeToServeIndexedState": true,
+    "latestIndexedBlock": "49860796",
+    "indexedPlanets": 200
+  },
+  "source": "contract-state-indexer"
+}

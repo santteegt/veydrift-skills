@@ -1,0 +1,706 @@
+{
+  "taken_at": "2026-08-12T00:11:00Z",
+  "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "health_ok": true,
+  "indexed_state": "healthy",
+  "safe_to_serve_indexed_state": true,
+  "latest_indexed_block": 49839333,
+  "deployment_abi_hash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+  "eth_balance_wei": null,
+  "technologies": [
+    {
+      "id": 0,
+      "cost": {
+        "metal": "0",
+        "crystal": "800",
+        "deuterium": "400"
+      },
+      "duration_seconds": 2880,
+      "level": 0,
+      "name": "Energy Technology"
+    },
+    {
+      "id": 1,
+      "cost": {
+        "metal": "200",
+        "crystal": "100",
+        "deuterium": "0"
+      },
+      "duration_seconds": 1080,
+      "level": 0,
+      "name": "Laser Technology"
+    },
+    {
+      "id": 2,
+      "cost": {
+        "metal": "1000",
+        "crystal": "300",
+        "deuterium": "100"
+      },
+      "duration_seconds": 4680,
+      "level": 0,
+      "name": "Ion Technology"
+    },
+    {
+      "id": 3,
+      "cost": {
+        "metal": "400",
+        "crystal": "0",
+        "deuterium": "600"
+      },
+      "duration_seconds": 1440,
+      "level": 0,
+      "name": "Combustion Drive"
+    },
+    {
+      "id": 4,
+      "cost": {
+        "metal": "0",
+        "crystal": "400",
+        "deuterium": "600"
+      },
+      "duration_seconds": 1440,
+      "level": 0,
+      "name": "Computer Technology"
+    },
+    {
+      "id": 5,
+      "cost": {
+        "metal": "800",
+        "crystal": "200",
+        "deuterium": "0"
+      },
+      "duration_seconds": 3600,
+      "level": 0,
+      "name": "Weapons Technology"
+    },
+    {
+      "id": 6,
+      "cost": {
+        "metal": "200",
+        "crystal": "600",
+        "deuterium": "0"
+      },
+      "duration_seconds": 2880,
+      "level": 0,
+      "name": "Shielding Technology"
+    },
+    {
+      "id": 7,
+      "cost": {
+        "metal": "1000",
+        "crystal": "0",
+        "deuterium": "0"
+      },
+      "duration_seconds": 3600,
+      "level": 0,
+      "name": "Armor Technology"
+    },
+    {
+      "id": 8,
+      "cost": {
+        "metal": "0",
+        "crystal": "4000",
+        "deuterium": "2000"
+      },
+      "duration_seconds": 14400,
+      "level": 0,
+      "name": "Hyperspace Technology"
+    },
+    {
+      "id": 9,
+      "cost": {
+        "metal": "2000",
+        "crystal": "4000",
+        "deuterium": "600"
+      },
+      "duration_seconds": 21600,
+      "level": 0,
+      "name": "Impulse Drive"
+    },
+    {
+      "id": 10,
+      "cost": {
+        "metal": "10000",
+        "crystal": "20000",
+        "deuterium": "6000"
+      },
+      "duration_seconds": 108000,
+      "level": 0,
+      "name": "Hyperspace Drive"
+    },
+    {
+      "id": 11,
+      "cost": {
+        "metal": "2000",
+        "crystal": "4000",
+        "deuterium": "1000"
+      },
+      "duration_seconds": 21600,
+      "level": 0,
+      "name": "Plasma Technology"
+    },
+    {
+      "id": 12,
+      "cost": {
+        "metal": "4000",
+        "crystal": "8000",
+        "deuterium": "4000"
+      },
+      "duration_seconds": 43200,
+      "level": 0,
+      "name": "Astrophysics"
+    },
+    {
+      "id": 13,
+      "cost": {
+        "metal": "240000",
+        "crystal": "400000",
+        "deuterium": "160000"
+      },
+      "duration_seconds": 2304000,
+      "level": 0,
+      "name": "Intergalactic Research Network"
+    },
+    {
+      "id": 14,
+      "cost": {
+        "metal": "0",
+        "crystal": "0",
+        "deuterium": "0"
+      },
+      "duration_seconds": 1,
+      "level": 0,
+      "name": "Graviton Technology"
+    }
+  ],
+  "research_lab_level": 0,
+  "research_queue": null,
+  "fleet_slots_active": 0,
+  "fleet_slots_limit": 1,
+  "planets": [
+    {
+      "planet_id": 664,
+      "coordinates": "7:181:14",
+      "name": null,
+      "archetype": "frozen-ice",
+      "temperature": -111,
+      "fields_used": 0,
+      "fields_total": 174,
+      "metal_multiplier_bps": 10000,
+      "crystal_multiplier_bps": 10000,
+      "deuterium_multiplier_bps": 15020,
+      "resources": {
+        "metal": "1000",
+        "crystal": "1000",
+        "deuterium": "0"
+      },
+      "resources_as_of_now": {
+        "metal": "1000",
+        "crystal": "1000",
+        "deuterium": "0"
+      },
+      "storage_caps": {
+        "metal": "10000",
+        "crystal": "10000",
+        "deuterium": "10000"
+      },
+      "production_per_hour": {
+        "metal": "0",
+        "crystal": "0",
+        "deuterium": "0"
+      },
+      "raidable_resources": {
+        "metal": "500",
+        "crystal": "500",
+        "deuterium": "0"
+      },
+      "protected_resources": {
+        "metal": "0",
+        "crystal": "0",
+        "deuterium": "0"
+      },
+      "energy": {
+        "produced": 0,
+        "required": 0,
+        "scale_bps": 10000,
+        "solar_satellite_energy": 4
+      },
+      "buildings": [
+        {
+          "id": 0,
+          "cost": {
+            "metal": "60",
+            "crystal": "15",
+            "deuterium": "0"
+          },
+          "duration_seconds": 108,
+          "level": 0,
+          "name": "Metal Mine"
+        },
+        {
+          "id": 1,
+          "cost": {
+            "metal": "48",
+            "crystal": "24",
+            "deuterium": "0"
+          },
+          "duration_seconds": 103,
+          "level": 0,
+          "name": "Crystal Mine"
+        },
+        {
+          "id": 2,
+          "cost": {
+            "metal": "225",
+            "crystal": "75",
+            "deuterium": "0"
+          },
+          "duration_seconds": 432,
+          "level": 0,
+          "name": "Deuterium Synthesizer"
+        },
+        {
+          "id": 3,
+          "cost": {
+            "metal": "75",
+            "crystal": "30",
+            "deuterium": "0"
+          },
+          "duration_seconds": 151,
+          "level": 0,
+          "name": "Solar Plant"
+        },
+        {
+          "id": 4,
+          "cost": {
+            "metal": "400",
+            "crystal": "120",
+            "deuterium": "200"
+          },
+          "duration_seconds": 748,
+          "level": 0,
+          "name": "Robotics Factory"
+        },
+        {
+          "id": 5,
+          "cost": {
+            "metal": "400",
+            "crystal": "200",
+            "deuterium": "100"
+          },
+          "duration_seconds": 864,
+          "level": 0,
+          "name": "Shipyard"
+        },
+        {
+          "id": 6,
+          "cost": {
+            "metal": "200",
+            "crystal": "400",
+            "deuterium": "200"
+          },
+          "duration_seconds": 864,
+          "level": 0,
+          "name": "Research Lab"
+        },
+        {
+          "id": 7,
+          "cost": {
+            "metal": "1000",
+            "crystal": "0",
+            "deuterium": "0"
+          },
+          "duration_seconds": 1440,
+          "level": 0,
+          "name": "Metal Storage"
+        },
+        {
+          "id": 8,
+          "cost": {
+            "metal": "1000",
+            "crystal": "500",
+            "deuterium": "0"
+          },
+          "duration_seconds": 2160,
+          "level": 0,
+          "name": "Crystal Storage"
+        },
+        {
+          "id": 9,
+          "cost": {
+            "metal": "1000",
+            "crystal": "1000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 2880,
+          "level": 0,
+          "name": "Deuterium Tank"
+        },
+        {
+          "id": 10,
+          "cost": {
+            "metal": "900",
+            "crystal": "360",
+            "deuterium": "180"
+          },
+          "duration_seconds": 1814,
+          "level": 0,
+          "name": "Fusion Reactor"
+        },
+        {
+          "id": 11,
+          "cost": {
+            "metal": "1000000",
+            "crystal": "500000",
+            "deuterium": "100000"
+          },
+          "duration_seconds": 2160000,
+          "level": 0,
+          "name": "Nanite Factory"
+        },
+        {
+          "id": 12,
+          "cost": {
+            "metal": "0",
+            "crystal": "50000",
+            "deuterium": "100000"
+          },
+          "duration_seconds": 72000,
+          "level": 0,
+          "name": "Terraformer"
+        },
+        {
+          "id": 13,
+          "cost": {
+            "metal": "20000",
+            "crystal": "40000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 86400,
+          "level": 0,
+          "name": "Alliance Depot"
+        },
+        {
+          "id": 14,
+          "cost": {
+            "metal": "20000",
+            "crystal": "20000",
+            "deuterium": "1000"
+          },
+          "duration_seconds": 57600,
+          "level": 0,
+          "name": "Missile Silo"
+        },
+        {
+          "id": 15,
+          "cost": {
+            "metal": "8000",
+            "crystal": "8000",
+            "deuterium": "4000"
+          },
+          "duration_seconds": 23040,
+          "level": 0,
+          "name": "Rift Stabilizer"
+        }
+      ],
+      "ships": [
+        {
+          "id": 0,
+          "cost": {
+            "metal": "2000",
+            "crystal": "2000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 5760,
+          "count": 0,
+          "name": "Small Cargo"
+        },
+        {
+          "id": 1,
+          "cost": {
+            "metal": "3000",
+            "crystal": "1000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 5760,
+          "count": 0,
+          "name": "Light Fighter"
+        },
+        {
+          "id": 2,
+          "cost": {
+            "metal": "10000",
+            "crystal": "6000",
+            "deuterium": "2000"
+          },
+          "duration_seconds": 23040,
+          "count": 0,
+          "name": "Recycler"
+        },
+        {
+          "id": 3,
+          "cost": {
+            "metal": "10000",
+            "crystal": "20000",
+            "deuterium": "10000"
+          },
+          "duration_seconds": 43200,
+          "count": 0,
+          "name": "Colony Ship"
+        },
+        {
+          "id": 4,
+          "cost": {
+            "metal": "6000",
+            "crystal": "6000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 17280,
+          "count": 0,
+          "name": "Large Cargo"
+        },
+        {
+          "id": 5,
+          "cost": {
+            "metal": "6000",
+            "crystal": "4000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 14400,
+          "count": 0,
+          "name": "Heavy Fighter"
+        },
+        {
+          "id": 6,
+          "cost": {
+            "metal": "20000",
+            "crystal": "7000",
+            "deuterium": "2000"
+          },
+          "duration_seconds": 38880,
+          "count": 0,
+          "name": "Cruiser"
+        },
+        {
+          "id": 7,
+          "cost": {
+            "metal": "45000",
+            "crystal": "15000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 86400,
+          "count": 0,
+          "name": "Battleship"
+        },
+        {
+          "id": 8,
+          "cost": {
+            "metal": "50000",
+            "crystal": "25000",
+            "deuterium": "15000"
+          },
+          "duration_seconds": 108000,
+          "count": 0,
+          "name": "Bomber"
+        },
+        {
+          "id": 9,
+          "cost": {
+            "metal": "0",
+            "crystal": "2000",
+            "deuterium": "500"
+          },
+          "duration_seconds": 2880,
+          "count": 0,
+          "name": "Solar Satellite"
+        },
+        {
+          "id": 10,
+          "cost": {
+            "metal": "60000",
+            "crystal": "50000",
+            "deuterium": "15000"
+          },
+          "duration_seconds": 158400,
+          "count": 0,
+          "name": "Destroyer"
+        },
+        {
+          "id": 11,
+          "cost": {
+            "metal": "5000000",
+            "crystal": "4000000",
+            "deuterium": "1000000"
+          },
+          "duration_seconds": 12960000,
+          "count": 0,
+          "name": "Deathstar"
+        },
+        {
+          "id": 12,
+          "cost": {
+            "metal": "30000",
+            "crystal": "40000",
+            "deuterium": "15000"
+          },
+          "duration_seconds": 100800,
+          "count": 0,
+          "name": "Battlecruiser"
+        },
+        {
+          "id": 13,
+          "cost": {
+            "metal": "85000",
+            "crystal": "55000",
+            "deuterium": "20000"
+          },
+          "duration_seconds": 201600,
+          "count": 0,
+          "name": "Reaper"
+        },
+        {
+          "id": 14,
+          "cost": {
+            "metal": "8000",
+            "crystal": "15000",
+            "deuterium": "8000"
+          },
+          "duration_seconds": 33120,
+          "count": 0,
+          "name": "Pathfinder"
+        },
+        {
+          "id": 15,
+          "cost": {
+            "metal": "2000",
+            "crystal": "2000",
+            "deuterium": "1000"
+          },
+          "duration_seconds": 5760,
+          "count": 0,
+          "name": "Crawler"
+        }
+      ],
+      "defenses": [
+        {
+          "id": 0,
+          "cost": {
+            "metal": "2000",
+            "crystal": "0",
+            "deuterium": "0"
+          },
+          "duration_seconds": 2880,
+          "count": 0,
+          "name": "Rocket Launcher"
+        },
+        {
+          "id": 1,
+          "cost": {
+            "metal": "1500",
+            "crystal": "500",
+            "deuterium": "0"
+          },
+          "duration_seconds": 2880,
+          "count": 0,
+          "name": "Light Laser"
+        },
+        {
+          "id": 2,
+          "cost": {
+            "metal": "6000",
+            "crystal": "2000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 11520,
+          "count": 0,
+          "name": "Heavy Laser"
+        },
+        {
+          "id": 3,
+          "cost": {
+            "metal": "10000",
+            "crystal": "10000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 28800,
+          "count": 0,
+          "name": "Small Shield Dome"
+        },
+        {
+          "id": 4,
+          "cost": {
+            "metal": "20000",
+            "crystal": "15000",
+            "deuterium": "2000"
+          },
+          "duration_seconds": 50400,
+          "count": 0,
+          "name": "Gauss Cannon"
+        },
+        {
+          "id": 5,
+          "cost": {
+            "metal": "2000",
+            "crystal": "6000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 11520,
+          "count": 0,
+          "name": "Ion Cannon"
+        },
+        {
+          "id": 6,
+          "cost": {
+            "metal": "50000",
+            "crystal": "50000",
+            "deuterium": "30000"
+          },
+          "duration_seconds": 144000,
+          "count": 0,
+          "name": "Plasma Turret"
+        },
+        {
+          "id": 7,
+          "cost": {
+            "metal": "50000",
+            "crystal": "50000",
+            "deuterium": "0"
+          },
+          "duration_seconds": 144000,
+          "count": 0,
+          "name": "Large Shield Dome"
+        },
+        {
+          "id": 8,
+          "cost": {
+            "metal": "8000",
+            "crystal": "0",
+            "deuterium": "2000"
+          },
+          "duration_seconds": 11520,
+          "count": 0,
+          "name": "Anti-Ballistic Missile"
+        },
+        {
+          "id": 9,
+          "cost": {
+            "metal": "12500",
+            "crystal": "2500",
+            "deuterium": "10000"
+          },
+          "duration_seconds": 21600,
+          "count": 0,
+          "name": "Interplanetary Missile"
+        }
+      ],
+      "queues": {
+        "building": null,
+        "research": null,
+        "ship": null,
+        "defense": null
+      }
+    }
+  ],
+  "incoming_fleets": []
+}
