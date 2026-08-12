@@ -1,21 +1,16 @@
 # Veydrift read API — route reference
 
-**Owned by:** WP1 (`veydrift-agent` read layer). **Probe date for everything in this
-document that says "confirmed live":** 2026-08-12, against `https://api.veydrift.com`,
-wallet `0x224aba5d489675a7bd3ce07786fada466b46fa0f`, planet `664` (coordinates
-`7:181:14`), an unauthenticated GET for every route. Where this document cites the
-backend source instead of a live probe, it says so explicitly and gives a `file:line`
-against `/Users/santteegt/GitRepositories/clones/veydrift` at commit `84e468f` (`main`
-HEAD at clone time — the *backend* is not the same drift risk as the *contract*; see
-§0 below).
+**Probe date for everything in this document that says "confirmed live":** 2026-08-12,
+against `https://api.veydrift.com`, wallet `0x224aba5d489675a7bd3ce07786fada466b46fa0f`,
+planet `664` (coordinates `7:181:14`), an unauthenticated GET for every route. Where this
+document cites the backend source instead of a live probe, it says so explicitly and gives
+a `file:line` against the Veydrift backend repository at commit `84e468f` (`main` HEAD at
+clone time — the *backend* is not the same drift risk as the *contract*; see §0 below).
 
-**Sources of truth, in priority order (per the standing work-package rules):**
-`docs/RESEARCH-ADDENDUM.md` §2/§3 (backend-source-derived) > this document's live
-probes > `docs/NOTES.md` (partly superseded) > `docs.md` at veydrift.com. Where this
-document's live probe disagrees with the addendum, that is called out explicitly in
-§9 — the addendum itself says it "was written from backend source, not from probing
-every route, so field-level details may differ," and that is exactly what happened in
-a handful of places.
+Verified against this skill's source repository as of 2026-08-12; a small number of
+field-level details in this document were found to differ from that repository's own
+earlier backend-source-derived notes, and are called out explicitly in §9 where that
+happened.
 
 ## Table of contents
 
@@ -55,9 +50,8 @@ a handful of places.
 
 ## 0. A note on drift: contract vs backend
 
-`docs/RESEARCH-ADDENDUM.md` §1 documents that the **contract** on `main` has drifted
-from the deployed one (`playerScore` exists on `main`, reverts on the deployed
-implementation; see that section for the full list). That drift is specific to
+The **contract** on `main` has drifted from the deployed one (`playerScore` exists on
+`main`, reverts on the deployed implementation). That drift is specific to
 `packages/contracts/`. The **backend** (`apps/backend/src/server.ts`, `evm.ts`, etc.)
 is a live, currently-running service that this whole route table is read against
 directly — every route below was both (a) read from `apps/backend/src/server.ts` at
@@ -100,7 +94,7 @@ non-null. `read.py`'s `_health_ok()` implements exactly the two-field check abov
 Freshness (separate from health) comes from the `indexer` block riding on every
 **wallet** route (not `/health`): `indexedState: "healthy"` and
 `safeToServeIndexedState: true`. `lastReconciledBlock` sitting ~1.5M blocks behind
-`latestIndexedBlock` is expected (`docs/NOTES.md` §9) — full reconciliation is an
+`latestIndexedBlock` is expected — full reconciliation is an
 explicit operator action, not a background loop. Never gate on that gap.
 
 ---
@@ -243,13 +237,13 @@ Notes:
   The API never sends entity names on any route (confirmed across all four
   infrastructure/research/shipyard/defenses routes); `read.py` fills `Entity.name` from
   `ids.py`/local tables (§6), not from the wire.
-- `energyBalance.sources.solarSatelliteEnergy` is the contract's own precomputed value
-  (`docs/NOTES.md` §5) — read it directly, never recompute from temperature.
+- `energyBalance.sources.solarSatelliteEnergy` is the contract's own precomputed value —
+  read it directly, never recompute from temperature.
   `energyBalance.produced`/`required`/`scaleBps` arrive as **strings** ("0", "10000");
   pydantic coerces them, per `models.py`'s module docstring convention.
-- `raidableResources`/`protectedResources` are present and populated even at zero state
-  (`docs/NOTES.md` §6's open question — still unresolved, `models.py` still won't build
-  a loot model on it).
+- `raidableResources`/`protectedResources` are present and populated even at zero state.
+  What `protectedResources` actually means is still an open question — `models.py` still
+  won't build a loot model on it.
 - No `coordinates`/`fields`/`temperature`/`archetype` on this route at all — that's why
   `snapshot` also needs `overview` (§7).
 
@@ -266,8 +260,7 @@ no-name-field pattern as buildings.
 Query: `planetId` (**required**). `ships[]` items: `{id, count, cost, durationSeconds}`
 (note: `count`, not `level` — matches `models.Entity`'s `count` field for ships/
 defenses). Also carries `fleetSlots: {active, limit}` (confirmed `{active: 0, limit: 1}`
-at zero state — 1 slot at Computer Technology 0, `docs/NOTES.md` §4),
-`launchableShips` (identical to `ships` at zero state; presumably filters
+at zero state — 1 slot at Computer Technology 0), `launchableShips` (identical to `ships` at zero state; presumably filters
 zero-fuel-range ships when a wallet has any), `shipyardLevel`, `naniteLevel`.
 
 ### 3.10 `/wallet/{addr}/defenses`
@@ -402,15 +395,15 @@ defenderSnapshot, roundReports[]}` — `roundReports` has one entry per combat r
 Query: `category`, `currentWallet`, `includeAttackProtection`, `limit`, `live`, `page`,
 `pageSize` (default `page=1`, `pageSize=50`). `vd read highscores` uses the defaults —
 **and this is the single biggest correction in this document**: measured **2,269,161
-bytes (~2.2 MB)** for the default page on 2026-08-12, not the ~86 KB
-`docs/NOTES.md` §9 / `docs/SPEC.md` §5.2 figure. The reason: the default response
+bytes (~2.2 MB)** for the default page on 2026-08-12, not the ~86 KB figure this project's
+earlier research had estimated. The reason: the default response
 returns **8 ranking categories** (`total`, `economy`, `research`, `researchLevels`,
 `military`, `fleet`, `fleetCount`, `defense`) × 50 rows each, and — unlike a typical
 leaderboard — **every row embeds that player's full `homePlanet` object**, including a
 nested `tactical` block (current/raidable resources, ship/defense unit breakdowns,
-combat power). The ~86 KB figure in prior docs likely came from a much smaller universe
-population (`docs/NOTES.md` §8 shows the indexed-planet count growing ~4/day; the
-account population has grown since 2026-08-07) or from probing with `?category=` set to
+combat power). The ~86 KB figure in prior research likely came from a much smaller
+universe population (the indexed-planet count grows ~4/day, and the account population has
+grown since the figure was first measured) or from probing with `?category=` set to
 a single category. **`--out` is mandatory regardless of size** (§8); this document flags
 the size purely so nobody assumes "under 100 KB, safe-ish to eyeball via `--json` in a
 pinch" — it is not.
@@ -521,7 +514,7 @@ is unverifiable against the probed account (zero incoming fleets, always `[]`), 
 has ever seen what a live `AcsDefend`/`DefenseHold` row in *your own* `incoming` array
 actually looks like. `read.py`'s `_incoming_fleet()` carries a matching `# TODO` at the
 `hostile=True` line. **Before the first tier-3 policy edit** (the only tier that unlocks
-`launchFleetMission` — see `README.md`'s tier table), someone needs to either (a) observe a real
+`launchFleetMission`), someone needs to either (a) observe a real
 allied-reinforcement `incoming` row against a live account and confirm whether it's
 distinguishable from an attack by `mission_type_name` alone, or (b) get a definitive answer
 from the backend source/team on whether `fleet-visibility.incoming` can ever contain

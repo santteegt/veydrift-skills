@@ -8,9 +8,9 @@ matching the live backend's `deploymentAbiHash` (`walletctl verify-abi`, and `ch
 `src/allowlist.ts`). This document records how the pin was produced, how to reproduce it, and why
 building from `main` gives you the wrong answer.
 
-**`main` is not the deployed contract.** As of the research this package was built from
-(`docs/RESEARCH-ADDENDUM.md` §1, dated 2026-08-11), `main` HEAD (`84e468f6371ef844b4aa8293921737d569d0486a`
-at that time) has already drifted from what's actually running in production. Building the ABI
+**`main` is not the deployed contract.** As of 2026-08-11, `main` HEAD
+(`84e468f6371ef844b4aa8293921737d569d0486a` at that time) has already drifted from what's
+actually running in production. Building the ABI
 from whatever `main` happens to be at any given moment produces a *different, wrong* hash. The
 only correct source is the specific commit the live backend reports as `deploymentCommit`.
 
@@ -131,9 +131,12 @@ pinned ABI file on disk for selector computation), so **run `walletctl verify-ab
 
 ## Provenance
 
-- ABI hash and deployment commit: `docs/RESEARCH-ADDENDUM.md` §1, and re-verified live against
+- ABI hash and deployment commit re-verified live against
   `https://api.veydrift.com/runtime-config` on 2026-08-12 (see `abi/PINNED.json.source`).
-- Divergent function list: `docs/RESEARCH-ADDENDUM.md` §1.1.
 - Foundry settings: `packages/contracts/foundry.toml` at commit `701bed3578cff4d134657c714c599dbdb55a4b6a`.
+
+Verified against this skill's source repository as of 2026-08-12; that repository's own
+docs carry the full derivation and the divergent-function-list detail behind the summary
+above.
 - `playerScore`/`firstPlanetOf` presence: independently confirmed against the pinned artifact's
   `methodIdentifiers` (138 entries) during this work package, matching the addendum exactly.

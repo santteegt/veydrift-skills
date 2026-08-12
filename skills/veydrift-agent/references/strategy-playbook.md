@@ -1,10 +1,10 @@
 # Strategy playbook — deriving a build order for ANY planet
 
-**Owned by:** WP2 (`plan.py`). This is the document a human reads to check the planner's
-reasoning without reading `plan.py` itself. It generalizes `docs/NOTES.md` §12.10 ("How
-to re-run this for another planet") from a one-off analysis into the algorithm `plan.py`
-actually runs on every tick, for any planet the wallet holds — planet 664 appears in
-examples only because it is the account's real planet, never as a special case in code.
+This is the document a human reads to check the planner's reasoning without reading
+`plan.py` itself. It generalizes an earlier manual, one-off derivation method ("how to
+re-derive a strategy for another planet") into the algorithm `plan.py` actually runs on
+every tick, for any planet the wallet holds — planet 664 appears in examples only because
+it is the account's real planet, never as a special case in code.
 
 If you are reviewing a proposal `vd plan` made and want to know "is this right," this
 document plus `references/formulas.md` §9 (the worked energy-source example) should be
@@ -28,11 +28,11 @@ enough to check it by hand.
 
 ## 1. The method, in one page
 
-`docs/NOTES.md` §12.10 gives twelve manual steps for re-deriving a strategy for a new
-planet or account. `plan.py` is that method turned into code that runs unattended. The
+This codebase's earlier research gave twelve manual steps for re-deriving a strategy for a
+new planet or account. `plan.py` is that method turned into code that runs unattended. The
 correspondence:
 
-| NOTES.md §12.10 step | `plan.py` / `calc.py` equivalent |
+| Manual derivation step | `plan.py` / `calc.py` equivalent |
 | --- | --- |
 | 1-2. `/runtime-config`, `/health` | Not this module's job — `read.py` (WP1) gates on these before a `Snapshot` ever reaches `plan_next_action` |
 | 3. `/wallet/{addr}/settlement` (coords, fields, temperature, multipliers) | `PlanetSnapshot.temperature`, `.metal_multiplier_bps`, `.crystal_multiplier_bps`, `.deuterium_multiplier_bps` |
@@ -84,9 +84,9 @@ the true gap is not constant. `references/formulas.md` §8's crossover table, ge
 running the actual formula, shows the gap widening from +2 levels at mine level 3 to +5
 at mine level 14. A rule tuned on early-game numbers looks correct for a while and then
 fails exactly when the stakes are highest — a scaled-down mine at level 14 wastes far
-more resource than one at level 3. `docs/NOTES.md` §12.8 records this as a mistake the
-original manual analysis itself made and had to correct once the full table was
-generated; `plan.py` avoids repeating it by never hand-tuning an offset at all.
+more resource than one at level 3. This was a mistake the original manual analysis itself
+made and had to correct once the full table was generated; `plan.py` avoids repeating it
+by never hand-tuning an offset at all.
 
 **The consequence that surprises people:** because `scaled_level(10, 1) == 11` while
 `scaled_level(20, 0) == 0`, a planet with *zero* buildings already fails the check on its
@@ -114,9 +114,9 @@ The mine chosen next is the one with the lowest `(current_level + 1) / density` 
 the resource this planet is comparatively best at, weighted against how much is already
 invested in it, so the ranking doesn't just pick the same mine forever. This is what lets
 a deuterium-rich cold planet's opener lean toward Deuterium Synthesizer earlier than a
-1×-multiplier planet's opener would (`docs/NOTES.md` §12.7: "push Deuterium Synthesizer
-earlier than a generic opener would" — this is the generalization of that qualitative
-finding into an actual ranking rule, not a restatement of it).
+1×-multiplier planet's opener would — an earlier, purely qualitative finding ("push
+Deuterium Synthesizer earlier than a generic opener would") generalized here into an
+actual ranking rule, not just restated.
 
 On planet 664 specifically: density(Metal)=300,000, density(Crystal)=200,000,
 density(Deuterium)=150,200 (at the live multiplier 15,020 bps). Metal still ranks first
@@ -153,8 +153,7 @@ same code path produces opposite answers.
 ## 6. Worked walkthrough: planet 664
 
 Real, current, zero-state data (`tests/fixtures/planet_664.json`, captured live
-2026-08-12 — see `docs/RESEARCH-ADDENDUM.md` §6.4 / `docs/NOTES.md` §12.9 for why it is
-zero-state: this account has taken no actions since settlement).
+2026-08-12). It is zero-state because this account has taken no actions since settlement.
 
 1. Health ok, no killswitch, no pending tx, no resolvable mission, no incoming fleet —
    rungs 0-4 all pass through.
@@ -175,8 +174,8 @@ zero-state: this account has taken no actions since settlement).
 ## 7. Worked walkthrough: a hot planet, and why it inverts
 
 `tests/fixtures/planet_hot.json` is a synthetic fixture (planet id 900001, temperature
-40 °C, `archetype: "scorching-molten"` per the archetype values observed in
-`docs/NOTES.md` §7) built specifically to sit *past* the Solar-Plant-vs-satellite
+40 °C, `archetype: "scorching-molten"` per the archetype values this project's research
+has observed live) built specifically to sit *past* the Solar-Plant-vs-satellite
 crossover, so the counterfactual is not trivial:
 
 1. Buildings: Solar Plant level 15, Metal/Crystal/Deuterium mines all level 11.
@@ -203,7 +202,7 @@ be.
 
 ## 8. The full ladder, rung by rung
 
-`docs/SPEC.md` §5.4's ladder, implemented exactly, first match wins
+This codebase's decision ladder, implemented exactly, first match wins
 (`plan.plan_next_action`):
 
 0. **KILLSWITCH present -> HALT.** Not read from `$VEYDRIFT_HOME` by this module —
@@ -264,9 +263,8 @@ be.
 
 ## 9. There is no exit — why compounding is the only strategy here
 
-`docs/NOTES.md` §13 already established that planets are not transferable — no
-`transferPlanet`, no NFT, ownership is a plain struct field
-(`_planets[planetId].owner`). What sharpens this for planet 664 specifically:
+Planets are not transferable — no `transferPlanet`, no NFT, ownership is a plain struct
+field (`_planets[planetId].owner`). What sharpens this for planet 664 specifically:
 `abandonPlanet` reverts with `CannotAbandonHomePlanet` when the target is the caller's
 home planet —
 
@@ -275,30 +273,28 @@ home planet —
 if (homePlanetOf[msg.sender] == planetId) revert CannotAbandonHomePlanet();
 ```
 
-This wallet's only planet **is** its home planet (`docs/NOTES.md` §12.6: "Single planet,
-no colonies"). So neither transfer nor abandonment is available — not because it's
-unwise, but because the contract makes both unreachable for this specific account
-(abandoning any *other, non-home* planet would work fine; there just isn't one).
+This wallet's only planet **is** its home planet (single planet, no colonies). So neither
+transfer nor abandonment is available — not because it's unwise, but because the contract
+makes both unreachable for this specific account (abandoning any *other, non-home* planet
+would work fine; there just isn't one).
 
 The practical consequence for strategy: growing this planet's economy is not merely the
 best available option among several — it is the only one the contract permits. There is
-no "cut losses and start over" path short of handing over the private key entirely
-(`docs/NOTES.md` §13.4), which is custody transfer, not strategy. This reinforces every
-recommendation in this document (and in `docs/NOTES.md` §12.7's original table): the
-account has an unbounded time horizon on a single planet, which is exactly the condition
-under which compounding growth (energy-safe mines now, position for research and
+no "cut losses and start over" path short of handing over the private key entirely, which
+is custody transfer, not strategy. This reinforces every recommendation in this document:
+the account has an unbounded time horizon on a single planet, which is exactly the
+condition under which compounding growth (energy-safe mines now, position for research and
 Astrophysics-driven colonization later) dominates any short-term optimization.
 
 ## 10. What is unobserved, and which planner paths that leaves untested
 
 **The account has taken zero on-chain actions.** All queues are `null`, all building/tech
 levels are 0, resources are the untouched starting grant (1,000 metal / 1,000 crystal /
-0 deuterium) — unchanged since settlement at block 49,666,196
-(`docs/RESEARCH-ADDENDUM.md` §6.4, `docs/NOTES.md` §12.9). Concretely, that leaves three
-things this codebase has never observed:
+0 deuterium) — unchanged since settlement at block 49,666,196. Concretely, that leaves
+three things this codebase has never observed:
 
-1. **Cost scaling above level 0.** `docs/NOTES.md` §12.3's cost-fingerprinting method
-   only works at level 0, where live cost equals base cost — the moment any building goes
+1. **Cost scaling above level 0.** The cost-fingerprinting method this project's research
+   first used only works at level 0, where live cost equals base cost — the moment any building goes
    to level 1, that method stops working, and nothing in this codebase has since watched
    a live cost respond to a level-up. `calc.py`'s duration formulas (§5, verified live at
    level 0 by `vd calc verify`) are the only contract-derived formulas checked against
@@ -314,7 +310,7 @@ things this codebase has never observed:
    If the live `queue` field's shape differs even slightly from what `models.QueueEntry`
    expects, `read.py`'s parsing (not this module) would be where that surfaces —
    untested here because it cannot be tested here.
-3. **Lazy settlement.** `docs/NOTES.md` §13.5 confirms `startBuildingUpgrade` settles
+3. **Lazy settlement.** `startBuildingUpgrade` is confirmed to settle
    resources first (no separate `finishBuildingUpgrade` call is needed), but this account
    has never triggered that path — `lastSettledAt` has not moved since the settlement
    block. `resources_as_of_now` vs. `resources` (both present on `PlanetSnapshot`) has

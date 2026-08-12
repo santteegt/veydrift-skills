@@ -1,14 +1,14 @@
 # Formulas — every calculator in `calc.py`, with provenance
 
-**Owned by:** WP2 (`calc.py`). Every function below was written by reading
+Every function below was written by reading
 `packages/contracts/src/libraries/VeydriftFormulas.sol`,
 `VeydriftAntiRaidPrimitives.sol`, `VeydriftFleetFuel.sol`, `VeydriftCatalog.sol` and
 `VeydriftGameplayModule.sol` directly at commit `701bed3578cff4d134657c714c599dbdb55a4b6a`
-(`/Users/santteegt/GitRepositories/clones/veydrift`) — not transcribed from `docs.md`'s
-prose, and not from `docs/RESEARCH-ADDENDUM.md`'s summary of it, though every formula
-here agrees with both. Where the three disagree, the contract source is what `calc.py`
-implements; this document says so at the point of disagreement (there is exactly one,
-§7).
+— not transcribed from `docs.md`'s prose, though every formula here agrees with it. Where
+they disagree, the contract source is what `calc.py` implements; this document says so at
+the point of disagreement (there is exactly one, §7). Verified against this skill's source
+repository as of 2026-08-12; that repository's own docs carry the full derivation where
+one is needed beyond what's here.
 
 **The hard constraint that shapes every function here:** `calc.py` contains **no
 cost-scaling function**. `buildingCostFactor` (`VeydriftCatalog.sol:34-45`) returns an
@@ -90,15 +90,15 @@ function is written correctly regardless rather than relying on the clamp to hid
 **Confirmed against the live API, not just against the formula:** planet 664's
 `/wallet/{addr}/infrastructure` response reports
 `energyBalance.sources.solarSatelliteEnergy: "4"` at `temperature: -111`
-(`docs/RESEARCH-ADDENDUM.md` §5, live probe 2026-08-12) —
+(live probe, 2026-08-12) —
 
 ```
 solar_satellite_energy(-111) = clamp(trunc(29/6), 1, 65) = clamp(4, 1, 65) = 4   ✓
 ```
 
 `max_temp_from_bps` is the *inverse* of `deuterium_multiplier_bps`, used only as a
-diagnostic cross-check (`docs/NOTES.md` §12.5's method: invert the multiplier, then check
-it against the API's own `temperature` field). It is not a source of truth — the API
+diagnostic cross-check: invert the multiplier, then check it against the API's own
+`temperature` field. It is not a source of truth — the API
 returns `temperature` directly — and it is not exact once the multiplier clamps to 0
 (`max_temperature >= 640`).
 
@@ -121,8 +121,8 @@ comparison is `produced >= required`, **not** strictly greater — a planet with
 exactly equal to required is not throttled. `calc.energy_balance` takes
 `solar_satellite_energy_per_unit` as an explicit parameter rather than a temperature, so
 callers pass the API's live `energyBalance.sources.solarSatelliteEnergy` instead of
-recomputing it (`docs/SPEC.md` §5.4 says this explicitly: "the contract's own value is
-served to you"). `solar_satellite_energy` from §2 is available for the cases where no
+recomputing it — the contract's own value is served to you, and that's the one to use.
+`solar_satellite_energy` from §2 is available for the cases where no
 live value exists — a fixture, or a hypothetical planet.
 
 ```
@@ -192,9 +192,9 @@ time — this is a real rounding-mode difference between the three, not a typo, 
 modes disagree (`ship_seconds(1, 0, 1, 1, quantity=1) == 2`, while the floor sibling of
 the same division gives `1`).
 
-`docs/NOTES.md` §12.4 established `universe_speed == 1` three independent ways by
-isolating a different divisor in each check — this is exactly what `vd calc verify`
-re-runs against the live API (§11).
+`universe_speed == 1` was established three independent ways by isolating a different
+divisor in each check — this is exactly what `vd calc verify` re-runs against the live API
+(§11).
 
 | Entity | Formula | Computed (level 0, speed 1) | Live |
 | --- | --- | --: | --: |
@@ -219,8 +219,8 @@ hours_to_cap(current, per_hour, cap) = (cap - current) / per_hour     [per_hour 
                                       = None                          [per_hour <= 0]
 ```
 
-Plain arithmetic, not a contract formula. Feeds `vd read`'s `--summary` digest
-(`docs/SPEC.md` §5.2: "hours-to-cap per resource") and `plan.py`'s storage-overflow rung.
+Plain arithmetic, not a contract formula. Feeds `vd read`'s "hours-to-cap per resource"
+`--summary` digest and `plan.py`'s storage-overflow rung.
 
 ## 7. Distance, travel, fuel, cargo
 
@@ -268,26 +268,26 @@ exactly as `VeydriftFleetFuel.sol:9-34` (`ogameMissionFuelCost`) does: sum each 
 ship type's numerator, then convert once. `calc.mission_fuel` takes
 `(fuel_consumption, quantity, speed)` triples per ship type — with fuel and speed already
 resolved for the player's drive-tech levels — rather than reimplementing
-`VeydriftCatalog.shipMovementStats`'s tech-level lookup itself. This differs from
-`docs/RESEARCH-ADDENDUM.md` §5's simplified prose formula (`1 + floor(sum(qty * shipFuel
-* dist * (1 + eff/100)^2) / 35000 + 0.5)`) in one respect: the addendum's version assumes
-every ship in the mission travels at the same effective speed, while the exact contract
-formula (`ogameFuelNumerator`) computes a per-ship `speed_ratio_scaled` against the
-mission's *slowest* ship and only converts once at the end — `calc.py` implements the
-exact contract version, not the addendum's simplification, because the contract source
-was available and is the higher-priority source per the standing rules.
+`VeydriftCatalog.shipMovementStats`'s tech-level lookup itself. This differs from an
+earlier simplified prose formula this codebase's research once used
+(`1 + floor(sum(qty * shipFuel * dist * (1 + eff/100)^2) / 35000 + 0.5)`) in one respect:
+that version assumes every ship in the mission travels at the same effective speed, while
+the exact contract formula (`ogameFuelNumerator`) computes a per-ship `speed_ratio_scaled`
+against the mission's *slowest* ship and only converts once at the end — `calc.py`
+implements the exact contract version, not the simplification, because the contract source
+was available and is the higher-priority source.
 
 ```
 available_cargo(total_cargo_capacity, fuel_cost) = max(0, total_cargo_capacity - fuel_cost)
 ```
 
-`docs/RESEARCH-ADDENDUM.md` §5: "available cargo = total ship cargo - mission fuel". Fuel
-is deuterium and ships in the same cargo hold, so it is subtracted directly rather than
-converted; clamped at 0 rather than allowed to go negative.
+"Available cargo = total ship cargo - mission fuel." Fuel is deuterium and ships in the
+same cargo hold, so it is subtracted directly rather than converted; clamped at 0 rather
+than allowed to go negative.
 
 ## 8. The Solar Plant energy-crossover table (generated)
 
-Reproduces `docs/NOTES.md` §12.5's table, generated by running `calc.solar_crossover_table`
+Generated by running `calc.solar_crossover_table`
 (`uv run --directory skills/veydrift-agent vd calc crossover`), not typed by hand. For
 each mine level `L` with metal, crystal and deuterium mines all at `L` (no fusion, no
 satellites), the smallest Solar Plant level whose energy alone covers the demand:
@@ -313,9 +313,8 @@ satellites), the smallest Solar Plant level whose energy alone covers the demand
 +2 levels at mine 3, +4 at mine 10, +5 at mine 14. This table is the direct evidence for
 why `plan.py`'s energy-first invariant recomputes `required` vs. `produced` explicitly at
 the post-upgrade level on every proposal, instead of using a fixed "keep Solar Plant N
-levels above your highest mine" offset — `docs/NOTES.md` §12.8 records that exact offset
-rule as a mistake the original analysis made and then had to correct once this table was
-generated.
+levels above your highest mine" offset — that exact offset rule was an early mistake this
+project's own research made and had to correct once this table was generated.
 
 ## 9. Worked example: the energy-source choice, planet 664 vs. a hot planet
 
@@ -372,9 +371,9 @@ this is planet-trait-derived, not a hardcoded planet id.
 max_planets(astrophysics_level) = 1 + astrophysics_level
 ```
 
-Source: `VeydriftGame.sol:596-597` (`maxPlanets`). `docs/NOTES.md` §13.5 only said
-Astrophysics "raises colony capacity" — this is the exact formula, read from the facade
-contract that exposes it as a public view.
+Source: `VeydriftGame.sol:596-597` (`maxPlanets`). `docs.md` only says Astrophysics
+"raises colony capacity" — this is the exact formula, read from the facade contract that
+exposes it as a public view.
 
 ## 11. `vd calc verify` — what it actually checks
 
@@ -382,7 +381,7 @@ contract that exposes it as a public view.
 checks from §5 against the **live** API (Energy Technology, Small Cargo, Metal Mine),
 using each entity's live level and cost rather than assuming level 0 — so the check
 remains valid even after the account has taken real actions, unlike the original
-one-shot probe in `docs/NOTES.md` §12.4. All three checks agreeing is much stronger
+one-shot probe this project's research first ran with. All three checks agreeing is much stronger
 evidence than any one alone, because each isolates a different divisor (research lab /
 shipyard / robotics factory) while sharing the same `universe_speed` term. A mismatch on
 any one check exits non-zero rather than being averaged away — confirmed by running it

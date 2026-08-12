@@ -11,7 +11,7 @@ by rule, which of their guardrails this engine implements, which it consciously 
 | Checksum-validate addresses via `viem.getAddress()` | `describeTx`/`checkAllowlist` in `src/tx.ts`/`src/allowlist.ts`; `send` prints the checksummed destination before prompting |
 | Never move funds silently — show amount, destination, gas cost; await confirmation | `walletctl send` prints destination, decoded function+args, value, estimated gas, total ETH cost and the action's `purpose` string *before* anything is signed, and refuses to proceed without `--confirm` |
 | Log transactions, never keys | Password is read from `VEYDRIFT_KEYSTORE_PASSWORD` or a non-echoing stdin prompt, never a CLI flag (so never in argv/shell history/`ps`), and decrypted key material lives only in the local scope of `signAndSend` — never assigned to `this`, never logged. `console.warn` output never includes key material |
-| Use a dedicated, limited-fund wallet for agent operations | Out of this engine's control (it's an operational choice by whoever funds the wallet), but the tier model (`docs/SPEC.md` §4) and this engine's allowlist are exactly the mechanism that makes "dedicated, limited-fund wallet" enforceable rather than aspirational — see the allowlist section below |
+| Use a dedicated, limited-fund wallet for agent operations | Out of this engine's control (it's an operational choice by whoever funds the wallet), but the tier model and this engine's allowlist are exactly the mechanism that makes "dedicated, limited-fund wallet" enforceable rather than aspirational — see the allowlist section below |
 | Key storage hierarchy: prefer encrypted keystore over plaintext env var | `keystore` is the **default** provider; `envkey` exists, works, and prints a loud startup warning every time it's used, matching ethskills' "testing-grade storage only" ranking |
 | Never commit secrets to Git | `envkey`'s `refuseIfKeyLeakedInRepo` (`src/providers/envkey.ts`) is a best-effort, defense-in-depth check: if the key's raw value is found anywhere in the containing git repo outside `tests/`, the provider refuses to start. This is a safety net, not the primary control — the primary control is simply never writing it there |
 | Test on testnet first | Not this engine's decision to make — see "What this does not do" below |
@@ -31,17 +31,15 @@ Recording this disagreement with generally-good advice is deliberate, not an ove
 **Account abstraction / ERC-4337.** Same root cause: a smart-account wallet has its own address,
 distinct from the EOA that owns the planet. Not evaluated further here; EIP-7702 (which keeps the
 EOA's address while adding smart-account behavior) is the shape that *could* apply, and is
-explicitly deferred to `docs/wallet-provider-research.md` (WP4b) rather than implemented in this
-pass. `docs/RESEARCH-ADDENDUM.md` §6.1 notes Base blocks already carry Pectra's `requestsHash`
-header field as circumstantial evidence the chain supports type-0x04 transactions, but is explicit
-that this is "evidence, not proof" pending an actual landed 7702 transaction — this engine does not
-build on that assumption anywhere.
+explicitly deferred to this skill's source repository's research rather than implemented in this
+pass. EIP-7702 on Base is now confirmed live by a landed transaction (see `providers.md`) — this
+engine still does not build on it anywhere.
 
 **Hardware wallet / cloud KMS as the top storage tier.** ethskills ranks these above an encrypted
-keystore. Not implemented in this pass (`SPEC.md` §0 explicitly drops Turnkey from this pass and
-defers all hosted/HSM/MPC providers to WP4b's research document); `keystore` is this engine's
+keystore. Not implemented in this pass — this pass deliberately drops Turnkey and
+defers all hosted/HSM/MPC providers to the source repository's research; `keystore` is this engine's
 strongest *implemented* tier. Two working providers — not one working + one aspirational stub — is
-what SPEC.md asks this package to prove, and a KMS integration would be exactly that kind of stub
+what this package set out to prove, and a KMS integration would be exactly that kind of stub
 without a real account to test against.
 
 **Interactive y/n confirmation prompt for `send`.** ethskills' pattern describes "request approval"
@@ -53,7 +51,7 @@ why a flag was chosen over an interactive prompt (scriptability without weakenin
 **Gas-price / gas-cost ceilings inside this engine.** `send` computes and prints the estimated ETH
 cost, but does not itself refuse a transaction for being "too expensive" — `gas_per_tx_wei` /
 `gas_per_day_wei` / `escalate_above_pct_of_resources` ceilings live in `policy.json`, enforced by
-`veydrift-agent`'s `vd guard` before `walletctl build` is ever invoked (`docs/SPEC.md` §5.5). This
+`veydrift-agent`'s `vd guard` before `walletctl build` is ever invoked. This
 engine's allowlist is a second, independent gate on *what* can be signed (destination, selector,
 value, chainId, mission type) — not a policy engine for *how much*. Duplicating cost ceilings here
 would mean two places to keep in sync with no safety benefit, since the agent skill's gate runs
@@ -134,7 +132,7 @@ claims by the caller, which is why they survive a compromise that the tier check
 ## Defense in depth: the allowlist doesn't trust the agent skill
 
 `src/allowlist.ts`'s `checkAllowlist` is re-run unconditionally inside `sendTx` regardless of what
-already validated the transaction upstream (`docs/SPEC.md` §6.4). Five checks, every one evaluated
+already validated the transaction upstream. Five checks, every one evaluated
 and reported (never short-circuited in the report, only in the final `ok`):
 
 1. `tx.to` must be in the address set from a **live** `/runtime-config` fetch — never a hardcoded
@@ -182,8 +180,9 @@ what a function is:
 - It never decides *when* to send — that's a human, or `veydrift-agent`'s tier-gated proposal flow,
   never this engine acting on its own initiative.
 - It never submits a transaction from a test, from CI, or during development. **No transaction has
-  ever been submitted to Veydrift from this codebase** (`docs/SPEC.md` §11) — the write path is
+  ever been submitted to Veydrift from this codebase** — the write path is
   built, allowlisted, and fixture-simulated, never executed against mainnet, by design and by
   standing project rule.
-- It does not attempt to recover a lost password or lost keystore. There is no recovery path — see
-  `README.md`'s key-custody section for the operational consequence of that.
+- It does not attempt to recover a lost password or lost keystore. There is no recovery path — a
+  Veydrift planet is permanently bound to the EOA that settled it (`providers.md`'s opening
+  section has the full contract-level reasoning).

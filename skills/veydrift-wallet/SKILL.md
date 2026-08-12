@@ -13,15 +13,6 @@ to build next, planet strategy, or reading game state, route to `veydrift-agent`
 Single CLI: `walletctl`, run via `npx tsx src/cli.ts <command>` from this skill's directory,
 or the built `dist/cli.js` after `npm run build`.
 
-> **On the citations below.** This skill was extracted from a source repository that also
-> has a product `README.md`, a developer-facing `AGENTS.md`, and a `docs/` folder of
-> research (`docs/SPEC.md`, `docs/wallet-provider-research.md`, and others) that the ABI
-> pin and provider evaluation in this skill's own `references/` were verified against.
-> **None of that travels with an installed copy of this skill.** Treat a citation like
-> `(docs/SPEC.md §11)` as provenance, not a file you can open from here. Everything this
-> skill needs to operate correctly is self-contained in this file and this skill's own
-> `references/` directory.
-
 ```
 walletctl status                      # provider, address, chainId, ETH balance, ABI pin state
 walletctl verify-abi                  # live deploymentAbiHash vs pinned -- exit 1 on drift
@@ -85,8 +76,8 @@ freely; it cannot make this engine submit anything without a human (or a deliber
 scripted, explicitly flagged invocation) putting `--confirm` on that exact command line.
 
 **No transaction has ever been submitted to Veydrift from this codebase.** The write path
-is built, allowlisted, and fixture-tested — never executed against mainnet
-(`docs/SPEC.md` §11). Do not describe this system as having "sent" anything; it hasn't.
+is built, allowlisted, and fixture-tested — never executed against mainnet. Do not describe
+this system as having "sent" anything; it hasn't.
 
 ## Defense in depth: the allowlist, enforced here independently of the agent skill
 
@@ -145,10 +136,8 @@ a recommended read): `references/abi-pinning.md`.
 | Exact allowlist checks, the `--confirm` invariant, what ethskills recommends that this engine consciously skips (and why) | `references/tx-safety.md` |
 | ABI pin provenance, rebuild recipe, `main`-vs-deployed divergence | `references/abi-pinning.md` |
 
-Every row above is a file bundled with this skill — it travels with the install. Two
-supplementary sources are **not** bundled and are only available if you have this skill's
-source repository: `skills/veydrift-agent/references/contract-writes.md` (the deeper
-contract-level writeup of the traps above, if the `veydrift-agent` skill is also installed)
-and `docs/wallet-provider-research.md` (the full hosted/self-hosted provider evaluation —
-EIP-7702, Web3Signer, Vault, Cobo, CDP, Turnkey, OKX — that `references/providers.md`
-already summarizes). Neither is required to use this skill correctly.
+Every row above is a file bundled with this skill — it travels with the install and is all
+you need. (`skills/veydrift-agent/references/contract-writes.md`, if that sibling skill is
+also installed, has a deeper contract-level writeup of the traps above; any other
+`docs/*.md` mention elsewhere in this skill's files is a build-time provenance note from
+this skill's source repository, not a file this install carries.)

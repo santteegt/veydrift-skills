@@ -1,11 +1,9 @@
 # Contract writes — entrypoints and traps
 
-**Owned by:** WP5. Every claim below was checked directly against the *deployed* contract
-source with `git show 701bed3578cff4d134657c714c599dbdb55a4b6a:<path>` against
-`/Users/santteegt/GitRepositories/clones/veydrift` on 2026-08-12 — not transcribed from
-`docs/RESEARCH-ADDENDUM.md` §4 without re-checking it, even though that document is where
-this file's structure comes from. Where this file adds a nuance the addendum doesn't
-carry, it says so explicitly (§5, §6).
+Every claim below was checked directly against the *deployed* contract source with
+`git show 701bed3578cff4d134657c714c599dbdb55a4b6a:<path>` on 2026-08-12 — not transcribed
+from an earlier draft's summary of it without re-checking. Where this file adds a nuance
+that earlier summary didn't carry, it says so explicitly (§5, §6).
 
 This document is about the **contract**. `veydrift-agent` never encodes calldata or signs
 — `plan.py` only ever names a function and its arguments in an `Action`
@@ -30,11 +28,11 @@ encodes and gates it.
 
 ## 1. The write entrypoints this codebase's ladder can reach
 
-`docs/RESEARCH-ADDENDUM.md` §4 lists the write functions "inside a sane agent mandate" out
-of 61 total non-view functions on the deployed contract. This table is that same set,
-cross-checked against `packages/contracts/src/VeydriftGame.sol` at the deployment commit
-and against which tier's wallet-allowlist selector set (`skills/veydrift-wallet/src/allowlist.ts`)
-actually includes each one:
+This table is the write functions "inside a sane agent mandate" out of 61 total non-view
+functions on the deployed contract, cross-checked against
+`packages/contracts/src/VeydriftGame.sol` at the deployment commit and against which
+tier's wallet-allowlist selector set (`skills/veydrift-wallet/src/allowlist.ts`) actually
+includes each one:
 
 | Action | Signature | `VeydriftGame.sol` line | Tier that may submit it |
 | --- | --- | --- | --- |
@@ -46,11 +44,11 @@ actually includes each one:
 | Fleet launch (7-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` | 358 | operator only, and only for mission types Transport(0)/Deploy(1)/Harvest(4) — §3 |
 | Fleet launch (6-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` | 325 | operator only, same mission-type restriction |
 | Ship production | `startShipProduction(uint256,uint8,uint32)` | 186 | `economy` — granted 2026-08-12, see §8 |
-| Fleet return | `completeFleetMissionReturn(uint256)` | 442 | **none** — listed in `RESEARCH-ADDENDUM.md` §4 as "inside a sane agent mandate" but not in `SPEC.md` §4's tier table, and not in `allowlist.ts`'s selector sets. `plan.py` never constructs this action; noted here only because the addendum names it |
+| Fleet return | `completeFleetMissionReturn(uint256)` | 442 | **none** — not in any tier's table, and not in `allowlist.ts`'s selector sets. `plan.py` never constructs this action |
 
 The tier column is read straight from `allowlist.ts`'s `ECONOMY_SIGNATURES` and
 `LAUNCH_FLEET_MISSION_SIGNATURES` constants (`skills/veydrift-wallet/references/tx-safety.md`
-documents the allowlist mechanics), which match `docs/SPEC.md` §4's tier table exactly for
+documents the allowlist mechanics), which match the project's own tier table exactly for
 the first six rows. `advisor` is not a column here because it may build and simulate any
 of these, but its selector set is empty by design (`tierSelectors("advisor") === []`) — it
 can never submit anything.
@@ -119,13 +117,13 @@ they're meant to be sent as transactions:
 
 `viem.readContract` (and `ethers.callStatic`) will reject or mislead against these —
 `simulateContract` / `eth_call` is the only correct way to invoke them. `walletctl
-simulate` is the sanctioned path (`SPEC.md` §6.7); `walletctl send` refuses all six
+simulate` is the sanctioned path; `walletctl send` refuses all six
 unconditionally, at every tier, even with `--confirm` — sending one would mean paying real
 gas for what is, semantically, a read (`skills/veydrift-wallet/references/tx-safety.md`).
 
 ## 5. Trap: `finish*` functions — "back-compat no-op" is not quite right for three of the four
 
-`docs/RESEARCH-ADDENDUM.md` §4 states plainly: *"Confirmed: `finishBuildingUpgrade` /
+An earlier draft of this project's research stated plainly: *"Confirmed: `finishBuildingUpgrade` /
 `finishResearch` / `finishShipProduction` / `finishDefenseProduction` exist but are
 back-compat no-ops... calling them wastes gas."* Reading the actual delegatecall chain
 behind each one shows that framing is true for exactly one of the four and needs a real
@@ -206,21 +204,21 @@ error CannotAbandonHomePlanet();
 
 Both confirmed directly at commit `701bed35`. `abandonPlanet` is not on the tier table at
 all — no tier this codebase implements can submit it — so this is not a live-reachable
-trap for anything `vd plan`/`walletctl` do today. It matters for a different reason:
-**this is the contract-level proof behind the key-custody section of `README.md`.** Planet
-664 is this wallet's home planet (its only planet), so `abandonPlanet` is permanently
-unreachable for it — not merely inadvisable, but reverting by construction. Combined with
-there being no `transferPlanet` function anywhere in the contract (confirmed by
-`grep -lE "transferPlanet|sellPlanet|giftPlanet|setPlanetOwner"` across every `.sol` file
-at this commit, matching `docs/wallet-provider-research.md` §1's independent check),
-planet 664 cannot leave this EOA by any contract-level mechanism — only by handing over
-the private key itself, which is custody transfer, not a game action.
+trap for anything `vd plan`/`walletctl` do today. It matters for a different reason: **this
+is the contract-level proof behind why a Veydrift planet is permanently bound to the EOA
+that settled it.** Planet 664 is this wallet's home planet (its only planet), so
+`abandonPlanet` is permanently unreachable for it — not merely inadvisable, but reverting
+by construction. Combined with there being no `transferPlanet` function anywhere in the
+contract (confirmed by `grep -lE "transferPlanet|sellPlanet|giftPlanet|setPlanetOwner"`
+across every `.sol` file at this commit), planet 664 cannot leave this EOA by any
+contract-level mechanism — only by handing over the private key itself, which is custody
+transfer, not a game action.
 
 ## 8. A gap this pass found — and fixed on 2026-08-12
 
 > **Resolved.** `startShipProduction` was granted to the `economy` tier in **both** enforcement
 > layers (`guard.py`'s `_MIN_TIER_FOR_FUNCTION`, `allowlist.ts`'s `ECONOMY_SIGNATURES`) and in
-> `docs/SPEC.md` §4. Producing ships spends resources on your own planet — the same risk profile as
+> the project's own tier-table spec. Producing ships spends resources on your own planet — the same risk profile as
 > `startDefenseProduction`, which tier 2 already permitted. Combat remains gated separately, by
 > mission type on `launchFleetMission`, and stays unreachable in code. `allow_ships` still defaults
 > to `false`, so the fix widened nothing until a human opts in.
@@ -237,7 +235,7 @@ can construct an `Action` with `function="startShipProduction"` when
 `policy.actions.allow_ships` is `true` and a Solar Satellite is currently the cheaper
 energy source (`references/formulas.md` §9). But:
 
-- `docs/SPEC.md` §4's tier table does **not** list `startShipProduction` among what either
+- The project's tier table did **not** list `startShipProduction` among what either
   `economy` or `operator` may submit.
 - `skills/veydrift-wallet/src/allowlist.ts`'s `ECONOMY_SIGNATURES` (used by both `economy`
   and `operator`, since `operator` is `ECONOMY_SIGNATURES` plus the two

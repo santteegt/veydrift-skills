@@ -38,23 +38,21 @@ of them mint a new address as part of onboarding. It's also why **ethskills' 2-o
 recommendation for agent wallets — sound advice in general — does not apply here**, and
 `references/tx-safety.md` records that disagreement explicitly rather than quietly deviating from it.
 
-**Correction (2026-08-12, from WP4b's evaluation):** Coinbase CDP Server Wallets and Turnkey are
+**Correction (2026-08-12):** Coinbase CDP Server Wallets and Turnkey are
 *not* ruled out on address-binding grounds. Both support importing an existing private key, and
 CDP's `importAccount` is framed by its own docs as being for preserving a wallet address when
 migrating providers. They are ruled out here on **open-source and self-hosting** grounds instead —
 the stated aim for this project. Getting the *reason* right matters: if that aim is ever relaxed,
-these become viable again, whereas Safe and ERC-4337 never do. See
-`docs/wallet-provider-research.md` §3.
+these become viable again, whereas Safe and ERC-4337 never do.
 
-The two shapes that remain viable (per `docs/SPEC.md` §6.1) are: providers that *adopt* the
+The two shapes that remain viable are: providers that *adopt* the
 existing key (encrypted keystore, HSM/KMS import, an MPC service that supports key import), or
 EIP-7702 delegation, which lets the EOA gain smart-account behavior while **keeping its address**.
 Neither of the two providers implemented in this pass is EIP-7702-based — both work by holding (in
-one form or another) the actual private key for the actual EOA that owns the planet. A full
-evaluation of every remaining candidate against this constraint — including whether EIP-7702 is
-actually usable, which this package does not attempt to answer — is `docs/wallet-provider-research.md`'s
-job (WP4b), not this document's; that document is a research deliverable, not code, and no provider
-beyond the two below is implemented here.
+one form or another) the actual private key for the actual EOA that owns the planet. This skill's
+source repository ran a full evaluation of every remaining candidate against this constraint,
+including whether EIP-7702 is actually usable — that is a research deliverable, not code, and no
+provider beyond the two below is implemented here.
 
 ## The two providers
 
@@ -79,7 +77,7 @@ proves it directly: constructed from the *same* throwaway test key, both provide
 An encrypted EIP-2335/geth-format JSON keystore, decrypted via `ethers.Wallet.fromEncryptedJson`
 (`src/providers/keystore.ts`). Scrypt+AES decryption is not something to hand-roll — this is
 exactly the one place `ethers` earns its dependency slot in a codebase that otherwise uses `viem`
-for everything chain-side (`docs/SPEC.md` §3).
+for everything chain-side.
 
 - **Path**: `VEYDRIFT_KEYSTORE` env var, pointing at the keystore JSON file.
 - **Password**: `VEYDRIFT_KEYSTORE_PASSWORD` env var, or an interactive, non-echoing stdin prompt
@@ -113,7 +111,7 @@ better than committing it, worse than an encrypted keystore. Two things beyond "
 
 ## Selection and swap procedure
 
-Selected by `policy.wallet_engine.provider` (a `veydrift-agent` concern, `docs/SPEC.md` §5.6),
+Selected by `policy.wallet_engine.provider` (a `veydrift-agent` concern),
 overridable by the `WALLET_PROVIDER` env var, defaulting to `keystore`
 (`src/providers/index.ts`'s `getProvider()`). To swap providers:
 
@@ -137,19 +135,17 @@ transactions, but not for the planet you meant).
 
 ## Where the harder providers are actually evaluated
 
-`docs/wallet-provider-research.md` (WP4b, a research deliverable, not code shipped in this
-package) evaluates the remaining candidates against the address-binding constraint above: EIP-7702
+This skill's source repository ran a research pass (not code shipped in this package)
+evaluating the remaining candidates against the address-binding constraint above: EIP-7702
 delegation on the existing EOA, Web3Signer / HashiCorp Vault, Cobo CAW, Coinbase CDP Server
 Wallets, Turnkey, and OKX OnchainOS — including which of those are open-source/self-hostable versus
 hosted.
 
-**EIP-7702 on Base is confirmed live** (verified 2026-08-12 by the orchestrator, independently of
-WP4b): transaction `0xba45e2808d60302f4dbc7f63ab5d4e8cf914789eab289c358788c194d8c1d4db` in block
+**EIP-7702 on Base is confirmed live** (verified 2026-08-12): transaction
+`0xba45e2808d60302f4dbc7f63ab5d4e8cf914789eab289c358788c194d8c1d4db` in block
 `49860849` on Base mainnet has `type: 0x4` with a one-entry `authorizationList`, checked directly
-via `eth_getTransactionByHash` against `https://mainnet.base.org`. Earlier drafts of `docs/SPEC.md`
-§6.1 described this as inferred from the Pectra `requestsHash` block header field and flagged it as
-unproven; that caveat is retired. **This package still does not rely on 7702 anywhere** — both
+via `eth_getTransactionByHash` against `https://mainnet.base.org`. An earlier draft of this
+project described this as inferred from the Pectra `requestsHash` block header field and flagged it
+as unproven; that caveat is retired. **This package still does not rely on 7702 anywhere** — both
 implemented providers hold the actual key for the actual EOA — but the delegation path is now a real
 option for a future provider rather than a speculative one.
-
-Read `docs/wallet-provider-research.md` before evaluating a provider beyond the two implemented here.

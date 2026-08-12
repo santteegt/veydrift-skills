@@ -1,7 +1,6 @@
 # Scheduling — the tick contract and its four adapters
 
-**Owned by:** WP3 (`tick.py`). `docs/SPEC.md` §5.7–§5.8 is the frozen contract this
-document explains.
+`tick.py` is the frozen contract this document explains.
 
 ## The one thing every adapter shares: `vd tick`
 
@@ -18,7 +17,7 @@ flags above go directly on `vd tick`, not `vd tick run`. The one actual subcomma
 `vd tick init`, which copies `assets/policy.example.json` to
 `$VEYDRIFT_HOME/policy.json` (see "Why `vd tick init`, not `vd init`" below).
 
-### The 9 steps (docs/SPEC.md §5.7)
+### The 9 steps
 
 ```
 1. load + validate policy         6. guard
@@ -51,8 +50,9 @@ whenever `policy.tier is Tier.ADVISOR`, regardless of the flag. Tier 1 still run
 full pipeline through step 6 (guard) and still builds real calldata via `walletctl build`
 in step 6's data-gathering (`walletctl build` never signs — it's a pure ABI-encode plus a
 best-effort gas estimate) — that's what lets the tick report print a complete,
-ready-to-submit transaction for manual review (`docs/SPEC.md` §4: *"Tier 1 still builds
-calldata... that is what makes the T1→T2 decision evidence-based"*). It just never reaches
+ready-to-submit transaction for manual review: tier 1 still builds
+calldata, and that is what makes the T1→T2 decision evidence-based rather than a guess.
+It just never reaches
 step 7's `send`. In practice this is doubly enforced: `guard.py`'s own `tier` gate BLOCKs
 every on-chain function at `advisor` tier (see `references/guardrails.md`), so step 7's
 `guard_report.decision is ALLOW` condition is never true at tier 1 either. Two independent
@@ -77,17 +77,18 @@ grep-verifiable: this package's `src/` contains no import of a JS signing librar
 it isn't Python code at all — it's a different project invoked as an external tool.
 
 `_wallet_skill_dir()` resolves `skills/veydrift-wallet` as a **sibling** of this
-installed skill (`docs/SPEC.md` §2.2: both are installed together via
+installed skill (both are installed together via
 `npx skills add . -a claude-code -a hermes-agent`, so the sibling relationship should
 survive install). If that resolution fails — e.g. a harness that isolates each skill into
 its own root — set `VEYDRIFT_WALLET_DIR` to the wallet skill's install path, or install
 `walletctl` globally (`npm link` in that project) so it resolves from `PATH` instead. This
-is a real assumption, not a guarantee; see the WP3 report for the honest caveat.
+is a real assumption, not a guarantee, which is exactly why the three-tier fallback exists
+rather than a bare hardcoded path.
 
 ### Why `vd tick init`, not `vd init`
 
-`docs/SPEC.md`'s wording ("Add a `vd init` path...") is written as if a bare top-level
-`vd init` exists. It doesn't, and can't without editing the frozen `cli.py`: `cli.py`'s
+An earlier draft of this project's spec ("Add a `vd init` path...") reads as if a bare
+top-level `vd init` exists. It doesn't, and can't without editing the frozen `cli.py`: `cli.py`'s
 `_SUBAPPS` list only ever mounts this module under the name `tick` (alongside
 `read`/`calc`/`plan`/`guard`/`log`). The closest achievable command is therefore
 **`vd tick init`**, which is what this package actually ships. If `cli.py` is ever
@@ -95,7 +96,7 @@ unfrozen, promoting this to a bare `vd init` is a one-line change to `_SUBAPPS`.
 
 ### `vd tick --readiness`
 
-Prints the promotion evidence from `docs/SPEC.md` §4 — tick count, uptime, proposal count,
+Prints the promotion evidence — tick count, uptime, proposal count,
 executed count, a rough divergence figure, which guardrails fired and how often, and gas
 spent — **without running a tick**. Read honestly: "divergence" here is
 `proposals - actions.jsonl entries`, which only captures what this tool itself executed
@@ -104,7 +105,7 @@ is currently no command for a human to log "I executed proposal N by hand," so a
 proposal a human executes entirely outside this tool leaves no trace `--readiness` can
 see. The output says so directly rather than presenting an inflated confidence number.
 
-## The four adapters (docs/SPEC.md §5.8)
+## The four adapters
 
 | Harness | Adapter | Notes |
 | --- | --- | --- |

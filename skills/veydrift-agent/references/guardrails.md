@@ -1,9 +1,9 @@
 # Guardrails — `vd guard`, the 16 gates
 
-**Owned by:** WP3 (`guard.py`). Source of truth for *what* each gate checks, *why*, what
-data it needs, what it does when that data is missing, and how to configure it.
-`docs/SPEC.md` §5.5 is the frozen contract this document explains; nothing here should
-contradict it, and if it ever appears to, the spec wins and this file has a bug.
+Source of truth for *what* each gate checks, *why*, what data it needs, what it does when
+that data is missing, and how to configure it. `guard.py` is the frozen contract this
+document explains; nothing here should contradict the code, and if it ever appears to, the
+code wins and this file has a bug.
 
 ## The rule every gate is built around
 
@@ -85,10 +85,10 @@ you this transaction is going to the right contract," which is categorically wor
 "I don't yet know exactly how much gas this will cost."
 
 **`tier` allows `startShipProduction` from `economy` up, same as the other five economy
-functions:** `docs/SPEC.md` §4's tier table lists `startBuildingUpgrade`, `startResearch`,
+functions:** the project's tier table lists `startBuildingUpgrade`, `startResearch`,
 `resolveFleetMission`, `settlePlanet`, `startDefenseProduction`, and
 **`startShipProduction`** as submittable from T2 (`economy`); T3 (`operator`) adds only
-`launchFleetMission`. This corrects an earlier version of this document (and of §4) that
+`launchFleetMission`. This corrects an earlier version of this document that
 omitted `startShipProduction` from every tier's allowed set — a confirmed defect: `plan.py`
 rung 8 proposes ships when `policy.actions.allow_ships` is set, but with no tier granting
 the function, every such proposal was permanently `BLOCK`ed regardless of tier, making the
@@ -125,12 +125,12 @@ first.
 ## Configuring the gates
 
 Every numeric ceiling a gate checks against comes from `policy.json`'s `limits`,
-`reserves`, `storage`, and `escalation` blocks (`docs/SPEC.md` §5.6) — nothing here is
+`reserves`, `storage`, and `escalation` blocks — nothing here is
 hardcoded beyond the two contract-derived constants `guard.py` duplicates from
 `skills/veydrift-wallet/abi/PINNED.json` (`PINNED_ABI_HASH`) and from
 `veydrift-wallet/src/allowlist.ts` (`_MIN_TIER_FOR_FUNCTION`, the tier→function map).
 Those two are duplicated rather than imported because this package must never import
-from a TypeScript project (`docs/SPEC.md` §9 acceptance criterion 15) — if the wallet
+from a TypeScript project — if the wallet
 engine is ever re-pinned or its tier map changes, both copies need updating together;
 `references/abi-pinning.md` (WP4a's) is the canonical description of the pin itself.
 

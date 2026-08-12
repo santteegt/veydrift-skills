@@ -24,16 +24,6 @@ Run `vd doctor` first if unsure which subcommands are wired up in the copy you'r
 against — this skill is built across parallel work packages and a partially-built tree is
 expected to still run the parts that exist.
 
-> **On the citations below.** This skill was extracted from a source repository that also
-> has a product `README.md`, a developer-facing `AGENTS.md`, and a `docs/` folder of
-> research (`docs/SPEC.md`, `docs/RESEARCH-ADDENDUM.md`, `docs/NOTES.md`, and others) that
-> the formulas and enum tables in this skill's own `references/` were verified against.
-> **None of that travels with an installed copy of this skill.** Where you see a citation
-> like `(docs/RESEARCH-ADDENDUM.md §5)`, treat it as provenance — where a fact came from
-> and when it was checked — not a file you can open from here. Everything this skill needs
-> to operate correctly is self-contained in this file and this skill's own `references/`
-> directory; nothing below depends on those citations resolving.
-
 ## The tier model — the single most important thing to get right
 
 Tier lives in one field, `policy.json`'s `tier`. **No code path in this skill ever
@@ -154,8 +144,7 @@ whether it's present, so nothing here depends on it.)
 
 Combat and ACS (code-level block, not config), alliances, migration, referrals, NFT
 burns, the ERC-20 market bridge, and any raid-profitability recommendation —
-`protectedResources`' semantics are unconfirmed (`docs/RESEARCH-ADDENDUM.md` §6), so
-nothing here builds a loot model on it. If asked to plan a raid or an attack, say plainly
+`protectedResources`' semantics are unconfirmed, so nothing here builds a loot model on it. If asked to plan a raid or an attack, say plainly
 that this skill cannot do that by design, not just "wasn't asked to."
 
 ## Routing table — read these, don't guess
@@ -175,10 +164,9 @@ Defense enum order and the Deathstar/Dreadstar naming wrong (`references/entity-
 | Exact guardrail rules, current wiring status, what blocks vs. escalates | `references/guardrails.md` |
 | How `vd tick` is driven under Claude Code, Hermes, and bare launchd | `references/scheduling.md` |
 
-Every row above is a file bundled with this skill — it travels with the install. Citations
-elsewhere to `docs/*.md`, `AGENTS.md` or `README.md` are provenance from the source
-repository this skill was extracted from (see the note near the top of this file); they
-are not additional reading required to use this skill.
+Every row above is a file bundled with this skill — it travels with the install and is all
+you need. (Any `docs/*.md` mention elsewhere in this skill's files is a build-time
+provenance note from this skill's source repository, not a file this install carries.)
 
 If a reference file doesn't answer the question and you're tempted to compute a cost
 formula, stop: **`calc.py` deliberately contains no cost-scaling function.** Live cost at
