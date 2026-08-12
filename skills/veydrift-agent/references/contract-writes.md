@@ -207,7 +207,7 @@ error CannotAbandonHomePlanet();
 Both confirmed directly at commit `701bed35`. `abandonPlanet` is not on the tier table at
 all — no tier this codebase implements can submit it — so this is not a live-reachable
 trap for anything `vd plan`/`walletctl` do today. It matters for a different reason:
-**this is the contract-level proof behind the key-custody section of `AGENTS.md`.** Planet
+**this is the contract-level proof behind the key-custody section of `README.md`.** Planet
 664 is this wallet's home planet (its only planet), so `abandonPlanet` is permanently
 unreachable for it — not merely inadvisable, but reverting by construction. Combined with
 there being no `transferPlanet` function anywhere in the contract (confirmed by

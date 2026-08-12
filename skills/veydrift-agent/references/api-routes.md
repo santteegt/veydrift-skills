@@ -521,7 +521,7 @@ is unverifiable against the probed account (zero incoming fleets, always `[]`), 
 has ever seen what a live `AcsDefend`/`DefenseHold` row in *your own* `incoming` array
 actually looks like. `read.py`'s `_incoming_fleet()` carries a matching `# TODO` at the
 `hostile=True` line. **Before the first tier-3 policy edit** (the only tier that unlocks
-`launchFleetMission` — §1/§9 of `AGENTS.md`), someone needs to either (a) observe a real
+`launchFleetMission` — see `README.md`'s tier table), someone needs to either (a) observe a real
 allied-reinforcement `incoming` row against a live account and confirm whether it's
 distinguishable from an attack by `mission_type_name` alone, or (b) get a definitive answer
 from the backend source/team on whether `fleet-visibility.incoming` can ever contain

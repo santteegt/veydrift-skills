@@ -31,6 +31,12 @@ out/
 cache/
 broadcast/
 
+# --- Skill-consumer artifacts ---
+# skills-lock.json is generated in whatever directory `npx skills add` is RUN FROM (the
+# consumer's working directory), not something this source repo produces or should ship.
+# It landed here once because an install was tested from the repo root itself.
+skills-lock.json
+
 # --- Installed skill copies (build artifacts of `npx skills add .`) ---
 # `skills add` COPIES the tree here; these are outputs, never sources. Edit skills/<name>/
 # and re-run the install. Note the CLI does not honour this file when copying -- clean

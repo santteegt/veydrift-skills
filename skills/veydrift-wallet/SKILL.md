@@ -11,8 +11,8 @@ never touches `viem`/`ethers`/`web3` and never signs anything. If a question is 
 to build next, planet strategy, or reading game state, route to `veydrift-agent` instead.
 
 Single CLI: `walletctl`, run via `npx tsx src/cli.ts <command>` from this skill's directory
-(or the built `dist/cli.js` after `npm run build` — see `AGENTS.md` at the repo root for
-the exact commands verified to work in this environment).
+(or the built `dist/cli.js` after `npm run build` — see `README.md` at the repo root for
+verified example transcripts, and `AGENTS.md` for the test/verify commands).
 
 ```
 walletctl status                      # provider, address, chainId, ETH balance, ABI pin state
@@ -136,4 +136,5 @@ a recommended read): `references/abi-pinning.md`.
 | ABI pin provenance, rebuild recipe, `main`-vs-deployed divergence | `references/abi-pinning.md` |
 | Contract write entrypoints and every calldata-level trap (fleet tuple, overloads, fake-read functions, revert conditions) | `skills/veydrift-agent/references/contract-writes.md` |
 | Every hosted/self-hosted provider evaluated beyond the two implemented here (EIP-7702, Web3Signer, Vault, Cobo, CDP, Turnkey, OKX) and why none of them is adopted yet | `docs/wallet-provider-research.md` |
-| Repo map, install, key custody, what's never been verified | `AGENTS.md` (repo root) |
+| Repo map, setup/test commands, invariants, ABI-pinning procedure, known gaps | `AGENTS.md` (repo root) |
+| Install, usage, key custody, what's never been verified | `README.md` (repo root) |

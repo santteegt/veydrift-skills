@@ -186,4 +186,4 @@ what a function is:
   built, allowlisted, and fixture-simulated, never executed against mainnet, by design and by
   standing project rule.
 - It does not attempt to recover a lost password or lost keystore. There is no recovery path — see
-  `AGENTS.md`'s key-custody section (owned by WP5) for the operational consequence of that.
+  `README.md`'s key-custody section for the operational consequence of that.

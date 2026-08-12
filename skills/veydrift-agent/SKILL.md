@@ -19,7 +19,7 @@ ordering does **not** match Veydrift's — `references/entity-ids.md` §4).
 
 Single entrypoint: `uv run --directory <path-to-this-skill> vd <subcommand>`. Paths are
 resolved from `__file__`, so this works from any cwd once installed
-(`npx skills add . -a claude-code -a hermes-agent` — see `AGENTS.md` at the repo root).
+(`npx skills add . -a claude-code -a hermes-agent` — see `README.md` at the repo root).
 Run `vd doctor` first if unsure which subcommands are wired up in the copy you're running
 against — this skill is built across parallel work packages and a partially-built tree is
 expected to still run the parts that exist.
@@ -43,7 +43,7 @@ different things at each tier.
 
 Even at tier 1, `vd plan run` produces a complete, ready-to-submit transaction description
 — that's what makes a T1→T2 promotion decision evidence-based instead of a guess. See
-`AGENTS.md`'s promotion procedure for what evidence a human should actually look at before
+`README.md`'s promotion procedure for what evidence a human should actually look at before
 editing `tier`.
 
 ## The tick contract
@@ -150,7 +150,8 @@ Defense enum order and the Deathstar/Dreadstar naming wrong (`references/entity-
 | How `vd tick` is driven under Claude Code, Hermes, and bare launchd | `references/scheduling.md` (WP3) |
 | Contract vs. API vs. `docs.md` disagreements, the full write-entrypoint list, canonical enums | `docs/RESEARCH-ADDENDUM.md` |
 | The full spec this codebase was built against | `docs/SPEC.md` |
-| Repo map, install, promotion procedure, key custody, what's never been verified | `AGENTS.md` (repo root) |
+| Repo map, setup/test commands, invariants, ABI-pinning procedure, known gaps | `AGENTS.md` (repo root) |
+| Install, usage, promotion procedure, key custody, what's never been verified | `README.md` (repo root) |
 
 If a reference file doesn't answer the question and you're tempted to compute a cost
 formula, stop: **`calc.py` deliberately contains no cost-scaling function.** Live cost at
