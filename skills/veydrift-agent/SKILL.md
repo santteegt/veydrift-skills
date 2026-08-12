@@ -19,10 +19,20 @@ ordering does **not** match Veydrift's — `references/entity-ids.md` §4).
 
 Single entrypoint: `uv run --directory <path-to-this-skill> vd <subcommand>`. Paths are
 resolved from `__file__`, so this works from any cwd once installed
-(`npx skills add . -a claude-code -a hermes-agent` — see `README.md` at the repo root).
+(`npx skills add . -a claude-code -a hermes-agent`, run from the source repository).
 Run `vd doctor` first if unsure which subcommands are wired up in the copy you're running
 against — this skill is built across parallel work packages and a partially-built tree is
 expected to still run the parts that exist.
+
+> **On the citations below.** This skill was extracted from a source repository that also
+> has a product `README.md`, a developer-facing `AGENTS.md`, and a `docs/` folder of
+> research (`docs/SPEC.md`, `docs/RESEARCH-ADDENDUM.md`, `docs/NOTES.md`, and others) that
+> the formulas and enum tables in this skill's own `references/` were verified against.
+> **None of that travels with an installed copy of this skill.** Where you see a citation
+> like `(docs/RESEARCH-ADDENDUM.md §5)`, treat it as provenance — where a fact came from
+> and when it was checked — not a file you can open from here. Everything this skill needs
+> to operate correctly is self-contained in this file and this skill's own `references/`
+> directory; nothing below depends on those citations resolving.
 
 ## The tier model — the single most important thing to get right
 
@@ -42,20 +52,35 @@ different things at each tier.
 `AcsAttack`, `MissileAttack` or `Intercept` requires editing source, not flipping a flag.
 
 Even at tier 1, `vd plan run` produces a complete, ready-to-submit transaction description
-— that's what makes a T1→T2 promotion decision evidence-based instead of a guess. See
-`README.md`'s promotion procedure for what evidence a human should actually look at before
-editing `tier`.
+— that's what makes a T1→T2 promotion decision evidence-based instead of a guess.
+`vd tick --readiness` prints the evidence directly: tick count, uptime, proposals made, how
+many a human actually executed, **divergences between proposal and human action**, which
+guardrails fired and why, and cumulative gas spent. A clean report is necessary but not
+sufficient — before hand-editing `policy.json`'s `tier` field:
+
+1. At least 24 hours of continuous T1 ticks.
+2. A human reads `$VEYDRIFT_HOME/logs/strategy.md` **in full**, not just the latest tick,
+   and confirms the reasoning — not just that individual proposals looked plausible.
+3. Check `logs/proposals.jsonl` for guardrail fires: a run where guards fired correctly
+   and the agent respected them is *stronger* evidence than a clean run with zero fires —
+   a green tick count alone is a bad promotion signal on its own.
+4. Only then, hand-edit `tier` to `"economy"`. No command does this automatically.
+5. Confirm `walletctl verify-abi` passes immediately before the first real `send` — ABI
+   drift can happen silently between the review and the first live action.
+
+T2 → T3 is the same shape at a higher bar: at least **7 days** of clean T2 operation (real
+submissions, not just ticks). Never promote on tick count alone, without reading
+`strategy.md`, or while any guard fails intermittently rather than consistently.
 
 ## The tick contract
 
-One tick is meant to run as: `load policy → killswitch check → reconcile pending txs →
-snapshot → plan → guard → (if allow: walletctl build/simulate/send, tier ≥ 2 only) → log →
-pretty report`. `vd tick` is the entrypoint that runs all of this atomically and
-idempotently, lockfile-protected under `$VEYDRIFT_HOME` (WP3's `state.py`/`tick.py`/
-`guard.py`). **As of this writing, `guard`/`tick`/`log` may not be wired into `vd --help`
-yet** in whatever copy you're running against — that's expected if this document reached
-you before that work package landed; `vd doctor` reports exactly what's live. Until then,
-the read → plan pipeline is fully usable standalone:
+One tick runs as: `load policy → killswitch check → reconcile pending txs → snapshot →
+plan → guard → (if allow: walletctl build/simulate/send, tier ≥ 2 only) → log → pretty
+report`. `vd tick` is the entrypoint that runs all of this atomically and idempotently,
+lockfile-protected under `$VEYDRIFT_HOME`. `vd doctor` reports which subcommands are wired
+in the copy you're running — useful if you're working from a partially-updated checkout.
+The read → plan pipeline underneath is also fully usable standalone, without a policy file
+or `$VEYDRIFT_HOME` at all:
 
 ```bash
 # 1. Get a snapshot (network — needs a live wallet address)
@@ -118,11 +143,12 @@ live `/runtime-config`) · `abi_hash` (live hash == pinned, else block every wri
 `gas_per_tx` / `gas_per_day` · `eth_floor` · `value_ceiling` (spend over
 `escalate_above_pct_of_resources` → ESCALATE, not BLOCK) · `idempotency` · `revert_streak`
 
-Two of these are re-checked independently by `veydrift-wallet`'s own allowlist
-(`skills/veydrift-wallet/references/tx-safety.md`) — `tier`/selector and `address` — on
-purpose: a fully compromised copy of this skill still cannot make `walletctl` sign
-something outside Veydrift or outside its tier. Defense in depth, not redundancy for its
-own sake.
+Two of these are re-checked independently by `veydrift-wallet`'s own allowlist — `tier`/
+selector and `address` — on purpose: a fully compromised copy of this skill still cannot
+make `walletctl` sign something outside Veydrift or outside its tier. Defense in depth, not
+redundancy for its own sake. (If the `veydrift-wallet` skill is also installed, its
+`references/tx-safety.md` has the exact checks; that skill enforces this independently of
+whether it's present, so nothing here depends on it.)
 
 ## Non-goals — things this skill will never propose, at any tier
 
@@ -146,12 +172,13 @@ Defense enum order and the Deathstar/Dreadstar naming wrong (`references/entity-
 | Building/Technology/Ship/Defense/FleetMissionType/Resource id → name, and the fleet-tuple index shift | `references/entity-ids.md` |
 | Why did the planner propose *this specific* action — the full derivation, worked examples for a cold and a hot planet, what's unobserved | `references/strategy-playbook.md` |
 | Which deployed contract function does a given `Action.function` map to, and the traps in calling it (overloads, revert conditions, functions that look like reads but aren't) | `references/contract-writes.md` |
-| Exact guardrail rules, current wiring status, what blocks vs. escalates | `references/guardrails.md` (WP3) |
-| How `vd tick` is driven under Claude Code, Hermes, and bare launchd | `references/scheduling.md` (WP3) |
-| Contract vs. API vs. `docs.md` disagreements, the full write-entrypoint list, canonical enums | `docs/RESEARCH-ADDENDUM.md` |
-| The full spec this codebase was built against | `docs/SPEC.md` |
-| Repo map, setup/test commands, invariants, ABI-pinning procedure, known gaps | `AGENTS.md` (repo root) |
-| Install, usage, promotion procedure, key custody, what's never been verified | `README.md` (repo root) |
+| Exact guardrail rules, current wiring status, what blocks vs. escalates | `references/guardrails.md` |
+| How `vd tick` is driven under Claude Code, Hermes, and bare launchd | `references/scheduling.md` |
+
+Every row above is a file bundled with this skill — it travels with the install. Citations
+elsewhere to `docs/*.md`, `AGENTS.md` or `README.md` are provenance from the source
+repository this skill was extracted from (see the note near the top of this file); they
+are not additional reading required to use this skill.
 
 If a reference file doesn't answer the question and you're tempted to compute a cost
 formula, stop: **`calc.py` deliberately contains no cost-scaling function.** Live cost at

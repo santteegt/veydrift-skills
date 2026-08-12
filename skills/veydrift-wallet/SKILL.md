@@ -10,9 +10,17 @@ a transaction. `veydrift-agent` (a separate skill) proposes actions as plain JSO
 never touches `viem`/`ethers`/`web3` and never signs anything. If a question is about *what*
 to build next, planet strategy, or reading game state, route to `veydrift-agent` instead.
 
-Single CLI: `walletctl`, run via `npx tsx src/cli.ts <command>` from this skill's directory
-(or the built `dist/cli.js` after `npm run build` — see `README.md` at the repo root for
-verified example transcripts, and `AGENTS.md` for the test/verify commands).
+Single CLI: `walletctl`, run via `npx tsx src/cli.ts <command>` from this skill's directory,
+or the built `dist/cli.js` after `npm run build`.
+
+> **On the citations below.** This skill was extracted from a source repository that also
+> has a product `README.md`, a developer-facing `AGENTS.md`, and a `docs/` folder of
+> research (`docs/SPEC.md`, `docs/wallet-provider-research.md`, and others) that the ABI
+> pin and provider evaluation in this skill's own `references/` were verified against.
+> **None of that travels with an installed copy of this skill.** Treat a citation like
+> `(docs/SPEC.md §11)` as provenance, not a file you can open from here. Everything this
+> skill needs to operate correctly is self-contained in this file and this skill's own
+> `references/` directory.
 
 ```
 walletctl status                      # provider, address, chainId, ETH balance, ABI pin state
@@ -28,17 +36,18 @@ walletctl receipt --hash 0x...
 **Planet 664 — or any Veydrift planet — is permanently bound to the EOA that settled it.**
 Ownership (`_planets[planetId].owner`) is a plain struct field, not a token; there is no
 `transferPlanet` function anywhere in the deployed contract; and `abandonPlanet` reverts
-with `CannotAbandonHomePlanet` for a wallet's home planet
-(`VeydriftPlanetManagementModule.sol:150`, verified directly against the deployed commit —
-see `skills/veydrift-agent/references/contract-writes.md` §7 for the full citation).
+with `CannotAbandonHomePlanet` for a wallet's home planet (`VeydriftPlanetManagementModule.sol:150`,
+verified directly against the deployed commit). If the `veydrift-agent` skill is also
+installed, its `references/contract-writes.md` §7 has the full citation trail; this fact
+doesn't depend on that skill being present.
 
 **Consequence:** any provider that mints a *new* address — Safe multisig, ERC-4337 smart
 accounts, most hosted MPC/TEE wallets — cannot ever hold this planet. That single fact
 rules out the ethskills 2-of-3-Safe recommendation for this project specifically (sound
 advice in general, wrong here) and is why this skill ships exactly two providers, both of
 which sign with the *existing* key rather than minting a new one. Full reasoning:
-`references/providers.md` §1; the deeper research pass across every hosted/self-hosted
-alternative: `docs/wallet-provider-research.md`.
+`references/providers.md` §1, which also has the short version of the deeper
+hosted/self-hosted provider evaluation this skill's source repository ran.
 
 ## Providers
 
@@ -109,12 +118,13 @@ and rationale: `references/tx-safety.md`.
    deployed ABI simultaneously. Selecting by bare name is ambiguous; every resolution in
    this codebase goes through the full canonical signature.
 
-Full detail on both, plus the six ABI-`nonpayable`-but-semantically-read functions
-(`protectedResources`, `raidableResources`, `maxRaidLoot`, `debrisField`,
-`collectResources`, `attackProtectionStatus` — route these through `simulate`, never
-`send`): `skills/veydrift-agent/references/contract-writes.md` (the write-entrypoint
-reference lives in the agent skill since it documents the contract, not the encoder;
-this skill's own `references/tx-safety.md` documents what `send` refuses and why).
+The six ABI-`nonpayable`-but-semantically-read functions — `protectedResources`,
+`raidableResources`, `maxRaidLoot`, `debrisField`, `collectResources`,
+`attackProtectionStatus` — route through `simulate`, never `send`; this skill's own
+`references/tx-safety.md` documents exactly what `send` refuses and why. If the
+`veydrift-agent` skill is also installed, its `references/contract-writes.md` has the full
+contract-level writeup of all three traps (it documents the contract, not the encoder);
+that's supplementary detail, not something this skill's own operation depends on.
 
 ## ABI pinning
 
@@ -134,7 +144,11 @@ a recommended read): `references/abi-pinning.md`.
 | Provider selection, swap procedure, the address-binding constraint in full | `references/providers.md` |
 | Exact allowlist checks, the `--confirm` invariant, what ethskills recommends that this engine consciously skips (and why) | `references/tx-safety.md` |
 | ABI pin provenance, rebuild recipe, `main`-vs-deployed divergence | `references/abi-pinning.md` |
-| Contract write entrypoints and every calldata-level trap (fleet tuple, overloads, fake-read functions, revert conditions) | `skills/veydrift-agent/references/contract-writes.md` |
-| Every hosted/self-hosted provider evaluated beyond the two implemented here (EIP-7702, Web3Signer, Vault, Cobo, CDP, Turnkey, OKX) and why none of them is adopted yet | `docs/wallet-provider-research.md` |
-| Repo map, setup/test commands, invariants, ABI-pinning procedure, known gaps | `AGENTS.md` (repo root) |
-| Install, usage, key custody, what's never been verified | `README.md` (repo root) |
+
+Every row above is a file bundled with this skill — it travels with the install. Two
+supplementary sources are **not** bundled and are only available if you have this skill's
+source repository: `skills/veydrift-agent/references/contract-writes.md` (the deeper
+contract-level writeup of the traps above, if the `veydrift-agent` skill is also installed)
+and `docs/wallet-provider-research.md` (the full hosted/self-hosted provider evaluation —
+EIP-7702, Web3Signer, Vault, Cobo, CDP, Turnkey, OKX — that `references/providers.md`
+already summarizes). Neither is required to use this skill correctly.
