@@ -111,6 +111,26 @@ demands a human at a TTY for every single send. Setting `VEYDRIFT_KEYSTORE_PASSW
 `envkey` at all) trades that guarantee for convenience; say so plainly rather than overclaiming a
 "defense in depth" that a leaked env var defeats in one step.
 
+**A second, cheaper bypass of the tier check specifically** (found by the second judge pass,
+2026-08-12, confirmed by execution). The paragraph above is about *credential* reachability. The
+tier check has its own, weaker hole that needs no credentials at all: `resolveTier` falls back to
+the caller-supplied `--tier` / `VEYDRIFT_TIER` whenever **no policy file exists** (rule 2). A
+compromised agent controls its own environment, so it can point `VEYDRIFT_HOME` at an empty
+directory and pass `--tier operator`:
+
+```
+VEYDRIFT_HOME=/tmp/empty  walletctl … --tier operator   ->  resolved tier: operator
+```
+
+The no-policy fallback is deliberate — `walletctl` has to be usable standalone, before `vd tick
+init` has ever run — so this is not a bug to remove. It does mean **the tier check defends against
+an honest-but-misconfigured caller, not against a hostile one.** Against a hostile caller it adds
+nothing that the credential bypass above hasn't already conceded. What still holds unconditionally,
+against any caller: Veydrift-address-only from a live `/runtime-config` fetch, chainId 8453,
+`value == 0`, game-selectors-only, the operator mission-type restriction, `--confirm` mandatory,
+and refusal to `send` a nonpayable-read function. Those are properties of the transaction, not
+claims by the caller, which is why they survive a compromise that the tier check does not.
+
 ## Defense in depth: the allowlist doesn't trust the agent skill
 
 `src/allowlist.ts`'s `checkAllowlist` is re-run unconditionally inside `sendTx` regardless of what

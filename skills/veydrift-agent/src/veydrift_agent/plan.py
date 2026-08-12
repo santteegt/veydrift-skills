@@ -245,6 +245,22 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
                 # Try the next mine in priority order rather than giving up entirely.
                 continue
             _, kind, entity = choice
+            if kind == "solar_satellite" and not policy.actions.allow_ships:
+                # `allow_ships` is a policy knob, so it has to bind every path that can emit
+                # startShipProduction -- not just rung 8. This branch is the other one: on a
+                # hot planet a Solar Satellite can be the cheaper energy source, and before
+                # 2026-08-12 it was returned here regardless of the flag. Found by the second
+                # judge pass; the same class of defect as the original `allow_ships` bug, which
+                # was a knob the code never honoured.
+                #
+                # Falling back to the Solar Plant (rather than returning None) keeps the
+                # energy-first invariant intact: the mine still gets the energy it needs, just
+                # from the source the operator permitted. Refusing outright would stall the
+                # economy on a legitimate configuration.
+                solar_fallback = _entity(planet.buildings, ids.Building.SOLAR_PLANT)
+                if solar_fallback is None:
+                    continue
+                kind, entity = "solar_plant", solar_fallback
             if kind == "solar_plant":
                 return Action(
                     kind=ActionKind.BUILD,

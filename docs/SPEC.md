@@ -556,6 +556,16 @@ Defence in depth: a fully compromised `veydrift-agent` still cannot make `wallet
 > interactive keystore prompt, where the human supplies the password per signing session. Anyone
 > reading §6.4 as "the agent cannot sign outside the allowlist" should read it as "the agent cannot
 > sign outside the allowlist *through this tool*".
+>
+> **And a second, cheaper bypass of the tier check** (second judge pass, 2026-08-12, confirmed by
+> execution): the no-policy fallback means a caller that controls its own environment can point
+> `VEYDRIFT_HOME` at an empty directory and pass `--tier operator`. The fallback is deliberate —
+> `walletctl` must work standalone before `vd tick init` has run — so **the tier check defends
+> against an honest-but-misconfigured caller, not a hostile one.** The checks that do survive a
+> hostile caller are the ones that are properties of the *transaction* rather than claims by the
+> caller: live-config address, chainId, `value == 0`, selector set, mission type, mandatory
+> `--confirm`, and refusal to send a nonpayable-read. State the distinction that way; a tier check
+> that reads as a security boundary when it is really a misconfiguration guard is worse than none.
 
 ### 6.5 Deferred research — `docs/wallet-provider-research.md` (WP4b)
 

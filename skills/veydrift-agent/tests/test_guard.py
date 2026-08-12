@@ -694,3 +694,65 @@ def test_decision_is_escalate_when_no_block_but_an_escalate_present():
         action, make_snapshot(), policy, live_addresses={LIVE_ADDR}, unsigned_tx=make_unsigned_tx(), gas_cost_wei=None
     )
     assert report.decision is Decision.ESCALATE
+
+
+# --------------------------------------------------------------------------------------
+# Cross-layer agreement
+# --------------------------------------------------------------------------------------
+
+
+def test_tier_map_agrees_with_the_wallet_engines_allowlist():
+    """The two enforcement layers are deliberately duplicated; nothing kept them in sync.
+
+    `guard._MIN_TIER_FOR_FUNCTION` (Python) and `allowlist.ts`'s `ECONOMY_SIGNATURES` /
+    `LAUNCH_FLEET_MISSION_SIGNATURES` (TypeScript) encode the same tier policy in two
+    languages, on purpose: the wallet engine must re-check independently of whatever the
+    agent claims to have checked. But the second judge pass observed they "match today by
+    inspection only" — there was no test that would notice a future edit to one and not
+    the other.
+
+    A *permissive* divergence fails closed (the wallet-side allowlist is the authoritative
+    backstop and refuses), so this is not a security hole. It is a correctness and
+    debuggability hole: the agent would confidently propose and build an action that
+    `walletctl` then rejects, which is exactly the dead-config failure mode that the
+    `startShipProduction` bug produced for weeks before anyone noticed.
+
+    Parsed rather than hardcoded so this test tracks the real file. Skipped when the
+    wallet skill isn't alongside — an installed copy of this skill is standalone.
+    """
+    import re
+    from pathlib import Path
+
+    import pytest
+
+    # tests/ -> veydrift-agent/ -> skills/  ... then across to the sibling wallet skill.
+    allowlist_ts = (
+        Path(__file__).resolve().parents[2] / "veydrift-wallet" / "src" / "allowlist.ts"
+    )
+    if not allowlist_ts.is_file():
+        pytest.skip(f"wallet engine not alongside this skill ({allowlist_ts})")
+
+    source = allowlist_ts.read_text()
+
+    def names_in(const: str) -> set[str]:
+        block = re.search(rf"const {const}\s*=\s*\[(.*?)\]\s*as const;", source, re.S)
+        assert block, f"could not find {const} in {allowlist_ts}"
+        # Signatures are full: "startBuildingUpgrade(uint256,uint8)" -> bare name.
+        return {m.split("(", 1)[0] for m in re.findall(r'"([^"]+)"', block.group(1))}
+
+    ts_economy = names_in("ECONOMY_SIGNATURES")
+    ts_operator_extra = names_in("LAUNCH_FLEET_MISSION_SIGNATURES")
+
+    py_economy = {fn for fn, tier in guard._MIN_TIER_FOR_FUNCTION.items() if tier is Tier.ECONOMY}
+    py_operator = {fn for fn, tier in guard._MIN_TIER_FOR_FUNCTION.items() if tier is Tier.OPERATOR}
+
+    assert py_economy == ts_economy, (
+        "economy-tier functions disagree between guard.py and allowlist.ts.\n"
+        f"  only in guard.py:    {sorted(py_economy - ts_economy)}\n"
+        f"  only in allowlist.ts:{sorted(ts_economy - py_economy)}"
+    )
+    assert py_operator == ts_operator_extra, (
+        "operator-tier functions disagree between guard.py and allowlist.ts.\n"
+        f"  only in guard.py:    {sorted(py_operator - ts_operator_extra)}\n"
+        f"  only in allowlist.ts:{sorted(ts_operator_extra - py_operator)}"
+    )

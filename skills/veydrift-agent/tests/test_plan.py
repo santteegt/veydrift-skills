@@ -79,8 +79,16 @@ def test_planet_664_energy_first_opener_never_proposes_satellite():
 
 
 def test_planet_hot_inverts_and_proposes_satellite():
+    """The AC4 counterfactual: identical code, opposite answer, driven only by planet traits.
+
+    `allow_ships=True` is required here and is not incidental. Satellites *are* ship
+    production, so the operator must have permitted ships for this branch to be reachable
+    at all — see `test_planet_hot_falls_back_to_solar_plant_when_ships_disallowed`. Before
+    2026-08-12 this test passed with the default `allow_ships=False`, which looked like
+    proof of trait-derived reasoning but was actually masking a policy bypass.
+    """
     snapshot = load_snapshot("planet_hot.json")
-    policy = make_policy(planets=[900001])
+    policy = make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=True))
 
     action = plan_next_action(snapshot, policy)
 
@@ -89,6 +97,28 @@ def test_planet_hot_inverts_and_proposes_satellite():
     assert action.function == "startShipProduction"
     assert action.entity_id == ids.Ship.SOLAR_SATELLITE
     assert action.quantity == 1
+
+
+def test_planet_hot_falls_back_to_solar_plant_when_ships_disallowed():
+    """`allow_ships` must bind every path that can emit startShipProduction, not just rung 8.
+
+    On a hot planet a Solar Satellite is the cheaper energy source, so the energy-first
+    branch reaches for one. With ships disallowed it must build the Solar Plant instead —
+    the mine still gets its energy, just from the source the operator permitted. Returning
+    nothing would stall the economy on a perfectly legitimate configuration.
+    """
+    snapshot = load_snapshot("planet_hot.json")
+    policy = make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=False))
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.function == "startBuildingUpgrade"
+    assert action.entity_id == ids.Building.SOLAR_PLANT
+    assert action.kind == ActionKind.BUILD
+    # And the knob is genuinely load-bearing: the only difference is the policy.
+    assert plan_next_action(
+        snapshot, make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=True))
+    ).entity_id == ids.Ship.SOLAR_SATELLITE
 
 
 def _with_building(planet_entities: list[Entity], entity_id: int, **updates) -> list[Entity]:
