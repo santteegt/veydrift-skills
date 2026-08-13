@@ -41,6 +41,18 @@ reaching the decision ladder, a new wallet provider, a new guardrail) — not pe
   permanently bound to the EOA that settled it, verified directly against the deployed
   contract. Recommendation: keep the encrypted keystore; EIP-7702 to Base's audited
   `EIP7702Proxy` is the one path worth prototyping later.
+- `docs/PLAYER-GUIDE.md`: a full player-facing tutorial — environment/skill install,
+  wallet keystore setup (with a verified, tested creation recipe), a field-by-field
+  `policy.json` walkthrough, reading a tick's output, and the tier-promotion checklist.
+- `docs/TECHNICAL-WALKTHROUGH.md`: a full developer-facing review — the spec's decisions
+  and its three inline-corrected mistakes, a module-by-module tour of both skills, a tick
+  traced end to end, why the two independent tier-enforcement layers exist and how they
+  once drifted, the two contract-encoding traps, and an honest account of what's tested
+  versus fixture-only versus genuinely unverified against a live chain.
+  Both linked from `README.md` and `AGENTS.md`, with a maintenance note in `AGENTS.md` §11
+  flagging that they restate spec content in prose and need a matching update whenever the
+  tier model, policy schema, or decision ladder changes — neither has a test that would
+  catch drift.
 
 ### Changed
 

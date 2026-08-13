@@ -255,6 +255,13 @@ insurance, not ceremony.
 
 ## 11. Pointers into `docs/`
 
+- `docs/PLAYER-GUIDE.md` — a full player-facing tutorial: environment and skill install,
+  wallet/keystore setup, a `policy.json` walkthrough with every field explained, and the
+  tier-promotion checklist. Synthesis, not source of truth — see the maintenance note below.
+- `docs/TECHNICAL-WALKTHROUGH.md` — a full developer-facing review: the spec, the
+  architecture, the codebase module by module, the two enforcement layers, the known
+  silent-corruption traps, and what's tested versus genuinely unverified. Also synthesis;
+  same maintenance note applies.
 - `docs/SPEC.md` — the full implementation spec and every acceptance criterion this repo
   is checked against, including inline-dated corrections from both judge passes.
 - `docs/RESEARCH-ADDENDUM.md` — contract- and backend-source-derived corrections: the real
@@ -265,3 +272,14 @@ insurance, not ceremony.
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.
+
+**Maintenance note — read this before changing `docs/SPEC.md`.**
+`docs/PLAYER-GUIDE.md` and `docs/TECHNICAL-WALKTHROUGH.md` both restate spec content in
+prose: the tier table, the policy schema, the decision ladder, the guardrail list, module
+responsibilities. That restatement is deliberate — it's what makes them readable without
+first internalizing the spec — but it means they go stale exactly when `SPEC.md` changes
+underneath them, silently, unless someone remembers to check. If a change alters the tier
+model, the `Policy`/`Action` schema, the decision ladder's rungs, or a module's
+responsibilities, **grep both files for the thing you changed** before considering the
+change done. Neither document has a test that would catch drift — this note is the only
+thing that currently does.

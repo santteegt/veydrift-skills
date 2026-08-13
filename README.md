@@ -85,6 +85,11 @@ copy is a build artifact, not something to hand-edit or commit. It also does not
 
 ## Quick start: running a tick
 
+**For a full, start-to-finish walkthrough** — environment setup, creating a wallet
+keystore, writing your first `policy.json`, and how to evolve through the tiers —
+see [`docs/PLAYER-GUIDE.md`](docs/PLAYER-GUIDE.md). What follows here is the condensed
+version.
+
 | Harness | How |
 | --- | --- |
 | Claude Code, interactive | `/loop 10m` driving `vd tick --format md` |
@@ -245,10 +250,17 @@ Read before trusting a claim about this project — it's the single easiest thin
 
 Build commands, test suites, coding conventions, and the invariants a change must not
 break live in [`AGENTS.md`](AGENTS.md). Start there if you're modifying this codebase
-rather than using it.
+rather than using it. For a full architecture review — spec, module-by-module codebase
+walkthrough, the two enforcement layers, and what's genuinely unverified — see
+[`docs/TECHNICAL-WALKTHROUGH.md`](docs/TECHNICAL-WALKTHROUGH.md).
 
 ## Further reading
 
+- [`docs/PLAYER-GUIDE.md`](docs/PLAYER-GUIDE.md) — a full tutorial for players: environment
+  setup, wallet/keystore setup, writing a `policy.json`, and evolving through the tiers.
+- [`docs/TECHNICAL-WALKTHROUGH.md`](docs/TECHNICAL-WALKTHROUGH.md) — a full technical
+  review for developers: the spec, the architecture, the codebase module by module, and
+  what's tested versus genuinely unverified.
 - [`docs/SPEC.md`](docs/SPEC.md) — the full implementation spec, work-package breakdown,
   and every acceptance criterion this repo is checked against.
 - [`docs/RESEARCH-ADDENDUM.md`](docs/RESEARCH-ADDENDUM.md) — contract- and backend-source-
