@@ -704,9 +704,12 @@ footer.doc-foot a { color: var(--ink-dim); }
   <p>Open a fresh session in your installed harness and say something like:</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>prompt — paste into your agent session</span></div>
-    <div class="codeblock-body"><pre>I just installed the Veydrift skills. My wallet is &lt;your address&gt; and my planet
-is &lt;your planet id&gt;. Set up my policy file for a cautious first run in advisor
-mode, explain each field you set, and get me ready to run my first tick.</pre></div>
+    <div class="codeblock-body"><pre>You're an agent that helps me play Veydrift, an on-chain space-strategy game on
+Base — reading my planet's state, proposing what to build next, and never
+submitting anything until I've explicitly raised your tier. I've installed the
+Veydrift skills. Help me set up my policy file for a cautious first run in
+advisor mode: explain each field you set, and get me ready to run my first
+tick. My wallet is &lt;your address&gt; and my settled planet is &lt;your planet id&gt;.</pre></div>
   </div>
   <p>Because <code>veydrift-agent</code>'s <code>SKILL.md</code> explicitly lists "planet id," "wallet," and "policy.json" among the phrases that trigger it, a Claude Code or Hermes session with the skill installed picks this up on its own — you don't need to name the skill or type a slash command. What actually happens next is not magic — it's the agent typing the same commands this guide documents by hand:</p>
   <ol class="checklist">

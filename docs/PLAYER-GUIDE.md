@@ -187,9 +187,12 @@ request is enough to get moving.
 Open a fresh session in your installed harness and say something like:
 
 ```
-I just installed the Veydrift skills. My wallet is <your address> and my planet
-is <your planet id>. Set up my policy file for a cautious first run in advisor
-mode, explain each field you set, and get me ready to run my first tick.
+You're an agent that helps me play Veydrift, an on-chain space-strategy game on
+Base — reading my planet's state, proposing what to build next, and never
+submitting anything until I've explicitly raised your tier. I've installed the
+Veydrift skills. Help me set up my policy file for a cautious first run in
+advisor mode: explain each field you set, and get me ready to run my first
+tick. My wallet is <your address> and my settled planet is <your planet id>.
 ```
 
 Because `veydrift-agent`'s `SKILL.md` explicitly lists "planet id," "wallet," and
