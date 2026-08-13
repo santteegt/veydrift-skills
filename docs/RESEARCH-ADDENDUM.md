@@ -109,10 +109,10 @@ layer planet-scoped from day one — `/wallet/{addr}/planets` enumerates them.
 ## 3. Canonical enums — from the contract, not inferred
 
 `NOTES.md` §2 derived the Building / Technology / Ship maps by cost-fingerprinting. All three are
-**confirmed correct** against `packages/contracts/src/libraries/VeydriftTypes.sol`. Two enums were
+**confirmed correct** against [`packages/contracts/src/libraries/VeydriftTypes.sol`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol). Two enums were
 previously unknown.
 
-### `Defense` (new — `VeydriftTypes.sol`)
+### `Defense` (new — [VeydriftTypes.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol))
 
 | id | Defense | id | Defense |
 | --: | --- | --: | --- |
@@ -124,7 +124,7 @@ previously unknown.
 
 Note **SmallShieldDome (3) sorts before GaussCannon (4), and IonCannon is 5** — not the OGame order.
 
-### `FleetMissionType` (new — `VeydriftGameStorage.sol:174`)
+### `FleetMissionType` (new — [VeydriftGameStorage.sol:174](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameStorage.sol#L174))
 
 | id | Mission | id | Mission |
 | --: | --- | --: | --- |
@@ -144,7 +144,7 @@ Note **SmallShieldDome (3) sorts before GaussCannon (4), and IonCannon is 5** �
 ### The 14-slot fleet tuple is **not** the Ship enum
 
 Every fleet entrypoint takes `(uint32 × 14)`, but there are **16** ships. `SolarSatellite (9)` and
-`Crawler (15)` cannot fly and are omitted (`VeydriftFleetFuel.sol:73-87`). Tuple order:
+`Crawler (15)` cannot fly and are omitted ([VeydriftFleetFuel.sol:73-87](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFleetFuel.sol#L73-L87)). Tuple order:
 
 ```
 0 SmallCargo   1 LightFighter  2 Recycler    3 ColonyShip   4 LargeCargo
@@ -174,7 +174,8 @@ single tested conversion function, never hand-written at a call site.
 
 **Correction (2026-08-12).** An earlier draft of this section, and `NOTES.md` §13.5, state that all
 four `finish*` functions are back-compat no-ops. Only one is. Verified against
-`git show 701bed35:packages/contracts/src/VeydriftGame.sol`:
+`git show 701bed35:packages/contracts/src/VeydriftGame.sol`
+([or the same source, browsable](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol)):
 
 | Function | Body | Behaviour |
 | --- | --- | --- |

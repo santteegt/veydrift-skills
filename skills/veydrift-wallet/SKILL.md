@@ -27,7 +27,7 @@ walletctl receipt --hash 0x...
 **Planet 664 — or any Veydrift planet — is permanently bound to the EOA that settled it.**
 Ownership (`_planets[planetId].owner`) is a plain struct field, not a token; there is no
 `transferPlanet` function anywhere in the deployed contract; and `abandonPlanet` reverts
-with `CannotAbandonHomePlanet` for a wallet's home planet (`VeydriftPlanetManagementModule.sol:150`,
+with `CannotAbandonHomePlanet` for a wallet's home planet ([VeydriftPlanetManagementModule.sol:150](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftPlanetManagementModule.sol#L150),
 verified directly against the deployed commit). If the `veydrift-agent` skill is also
 installed, its `references/contract-writes.md` §7 has the full citation trail; this fact
 doesn't depend on that skill being present.

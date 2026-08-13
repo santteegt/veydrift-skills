@@ -1,9 +1,9 @@
 # Formulas — every calculator in `calc.py`, with provenance
 
 Every function below was written by reading
-`packages/contracts/src/libraries/VeydriftFormulas.sol`,
-`VeydriftAntiRaidPrimitives.sol`, `VeydriftFleetFuel.sol`, `VeydriftCatalog.sol` and
-`VeydriftGameplayModule.sol` directly at commit `701bed3578cff4d134657c714c599dbdb55a4b6a`
+[`packages/contracts/src/libraries/VeydriftFormulas.sol`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol),
+[VeydriftAntiRaidPrimitives.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftAntiRaidPrimitives.sol), [VeydriftFleetFuel.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFleetFuel.sol), [VeydriftCatalog.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftCatalog.sol) and
+[VeydriftGameplayModule.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameplayModule.sol) directly at commit `701bed3578cff4d134657c714c599dbdb55a4b6a`
 — not transcribed from `docs.md`'s prose, though every formula here agrees with it. Where
 they disagree, the contract source is what `calc.py` implements; this document says so at
 the point of disagreement (there is exactly one, §7). Verified against this skill's source
@@ -11,7 +11,7 @@ repository as of 2026-08-12; that repository's own docs carry the full derivatio
 one is needed beyond what's here.
 
 **The hard constraint that shapes every function here:** `calc.py` contains **no
-cost-scaling function**. `buildingCostFactor` (`VeydriftCatalog.sol:34-45`) returns an
+cost-scaling function**. `buildingCostFactor` ([VeydriftCatalog.sol:34-45](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftCatalog.sol#L34-L45)) returns an
 unpublished per-building rational (numerator, denominator); the API serves the *result*
 of applying it — live cost at the current level — in every entity's `cost` field. Every
 function below that needs a cost takes it as a parameter, read live. If you find yourself
@@ -41,12 +41,12 @@ scaled_level(base, level) = floor(base * level * 11^level / 10^level)     [level
                            = 0                                            [level == 0]
 ```
 
-Source: `VeydriftFormulas.sol:221-223` (`_scaledLevelValue`), which is
+Source: [VeydriftFormulas.sol:221-223](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L221-L223) (`_scaledLevelValue`), which is
 `_scaledLevelValueWithFactor(base, level, 11, 10)` at `:231-238`. This is OGame's classic
 ×1.1-per-level curve and is the single most-reused formula in the contract: mine
 production, energy required/produced, and (via a different numerator/denominator pair)
 Fusion Reactor output all reduce to it. `calc.scale_by_factor(value, exponent, numerator,
-denominator)` (`VeydriftFormulas.sol:174-181`, `scaleByFactor`) is the general form; every
+denominator)` ([VeydriftFormulas.sol:174-181](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L174-L181), `scaleByFactor`) is the general form; every
 other level-based function in this module is `scale_by_factor` with specific arguments.
 
 **Worked example:** `scaled_level(10, 1) = floor(10*1*11/10) = 11`. This single value is
@@ -59,7 +59,7 @@ There is also a ceiling variant, used exactly once (Fusion Reactor's deuterium u
 scaled_level_ceil(base, level) = ceil(base * level * 11^level / 10^level)
 ```
 
-Source: `VeydriftFormulas.sol:225-229` (`_scaledLevelValueCeil`). `fusion_energy` (§3)
+Source: [VeydriftFormulas.sol:225-229](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L225-L229) (`_scaledLevelValueCeil`). `fusion_energy` (§3)
 uses the floor form via `scale_by_factor` with a different factor; only
 `fusion_deuterium_upkeep` uses the ceiling.
 
@@ -72,7 +72,7 @@ the entire strategic character of a planet (see §9).
 deuterium_multiplier_bps(max_temperature) = max(0, 12_800 - max_temperature * 20)
 ```
 
-Source: `VeydriftFormulas.sol:25-35` (`planetMultipliers`). **Metal and crystal
+Source: [VeydriftFormulas.sol:25-35](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L25-L35) (`planetMultipliers`). **Metal and crystal
 multipliers are always 10_000** regardless of temperature (`:32-33` of the same
 function) — there is no metal/crystal equivalent of this formula. Only deuterium varies.
 
@@ -80,7 +80,7 @@ function) — there is no metal/crystal equivalent of this formula. Only deuteri
 solar_satellite_energy(max_temperature) = clamp(trunc((max_temperature + 140) / 6), 1, 65)
 ```
 
-Source: `VeydriftFormulas.sol:143-149` (`solarSatelliteEnergy`). **Uses truncating
+Source: [VeydriftFormulas.sol:143-149](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L143-L149) (`solarSatelliteEnergy`). **Uses truncating
 (toward-zero) division**, matching Solidity's `int256` semantics — `calc._trunc_div`
 exists specifically because Python's `//` floors toward `-inf` and would silently
 disagree for a negative numerator (`max_temperature < -140`). The disagreement is masked
@@ -116,7 +116,7 @@ scale_bps = 10_000                              if required == 0 or produced >= 
           = floor(produced * 10_000 / required)  otherwise
 ```
 
-Source: `VeydriftFormulas.sol:107-129` (`energyBalance`). Note the contract's own
+Source: [VeydriftFormulas.sol:107-129](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L107-L129) (`energyBalance`). Note the contract's own
 comparison is `produced >= required`, **not** strictly greater — a planet with produced
 exactly equal to required is not throttled. `calc.energy_balance` takes
 `solar_satellite_energy_per_unit` as an explicit parameter rather than a temperature, so
@@ -130,14 +130,14 @@ fusion_energy(level, energy_technology_level)
     = floor(30 * level * (105 + energy_technology_level)^level / 100^level)
 ```
 
-Source: `VeydriftFormulas.sol:131-137` (`fusionReactorEnergyProduction`) —
+Source: [VeydriftFormulas.sol:131-137](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L131-L137) (`fusionReactorEnergyProduction`) —
 `scale_by_factor(30*level, level, 105+energy_technology_level, 100)`.
 
 ```
 fusion_deuterium_upkeep(level) = ceil(10 * level * 11^level / 10^level)
 ```
 
-Source: `VeydriftFormulas.sol:139-141` (`fusionReactorDeuteriumConsumption`), via the
+Source: [VeydriftFormulas.sol:139-141](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L139-L141) (`fusionReactorDeuteriumConsumption`), via the
 ceiling variant from §1.
 
 ```
@@ -146,7 +146,7 @@ effective_crawlers   = min(crawler_count, effective_cap)
 crawler_boost_bps    = min(effective_crawlers * 2, 5_000)
 ```
 
-Source: `VeydriftFormulas.sol:93-105` (`crawlerProductionBoostBps`). 0.02% per effective
+Source: [VeydriftFormulas.sol:93-105](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L93-L105) (`crawlerProductionBoostBps`). 0.02% per effective
 crawler, capped at 8 crawlers per combined mine level and 50% total boost.
 
 ## 4. Production
@@ -162,7 +162,7 @@ deuterium -= fusion_deuterium_upkeep(fusion_level)          # floored at 0
 if energy.required != 0: multiply all three by energy.scale_bps/10_000
 ```
 
-Source: `VeydriftFormulas.sol:37-91` (`productionPerHour`). **The order matters and must
+Source: [VeydriftFormulas.sol:37-91](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L37-L91) (`productionPerHour`). **The order matters and must
 not be reordered**: multiplier first, then the crawler boost, then Fusion Reactor's
 deuterium upkeep, then the energy shortage factor last. Energy throttles the
 already-reduced (post-upkeep) deuterium figure, not the raw mine output.
@@ -170,7 +170,7 @@ already-reduced (post-upkeep) deuterium figure, not the raw mine output.
 ## 5. Durations
 
 All three share a `universe_speed` term (contract constant `QUEUE_UNIVERSE_SPEED = 1`,
-`VeydriftGameStorage.sol`) and floor at `min_queue_seconds` (contract default 1,
+[VeydriftGameStorage.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameStorage.sol)) and floor at `min_queue_seconds` (contract default 1,
 `MIN_QUEUE_SECONDS`).
 
 ```
@@ -184,7 +184,7 @@ ship_seconds      = max(min_queue_seconds, ceil((metal_cost+crystal_cost)*quanti
                         / (2500 * (shipyard_level+1) * 2^nanite_level * universe_speed)))
 ```
 
-Sources: `VeydriftFormulas.sol:160-172` (`buildingDuration`), `:199-211`
+Sources: [VeydriftFormulas.sol:160-172](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L160-L172) (`buildingDuration`), `:199-211`
 (`researchDuration`), `:182-197` (`unitDuration`). **`ship_seconds` ceiling-divides; the
 other two floor.** A partial second of ship production still costs a full second of queue
 time — this is a real rounding-mode difference between the three, not a typo, and
@@ -208,7 +208,7 @@ divisor in each check — this is exactly what `vd calc verify` re-runs against 
 storage_cap(level)   # a literal per-level table, levels 0-50 -- not a formula
 ```
 
-Source: `VeydriftFormulas.sol:241-295` (`_storageCap`), used identically for Metal
+Source: [VeydriftFormulas.sol:241-295](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L241-L295) (`_storageCap`), used identically for Metal
 Storage, Crystal Storage and the Deuterium Tank (`storageCaps` at `:150-158` calls the
 same private function for all three). `storage_cap(0) == 10_000`,
 `storage_cap(50) == 180_862_636_975_685_000`. Raises `ValueError` above level 50
@@ -232,13 +232,13 @@ distance(a, b):
     else: 0
 ```
 
-Source: `VeydriftGameplayModule.sol:814-829` (`_planetDistance` / `_absoluteDifference`).
+Source: [VeydriftGameplayModule.sol:814-829](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameplayModule.sol#L814-L829) (`_planetDistance` / `_absoluteDifference`).
 **This is the one place `docs.md`'s published prose and the contract source were checked
 against each other and agree exactly** (`docs.md` fetched live 2026-08-12: "same system
 distance = 1000 + 5 * position difference", "same galaxy distance = 2700 + 95 * system
 difference", "different galaxy distance = 20000 * galaxy difference"). Local Harvest
 missions use a fixed distance of 5 instead (`LOCAL_HARVEST_DISTANCE`,
-`VeydriftGameStorage.sol:52`) — not a function of two coordinates, so not reproduced in
+[VeydriftGameStorage.sol:52](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameStorage.sol#L52)) — not a function of two coordinates, so not reproduced in
 `distance()`.
 
 ```
@@ -246,14 +246,14 @@ travel_seconds = 10 + floor(isqrt(distance * 10 * 122_500 / slowest_ship_speed) 
                              / (speed_percent * universe_speed))
 ```
 
-Source: `VeydriftAntiRaidPrimitives.sol:55-68` (`travelSeconds`, 4-arg overload).
+Source: [VeydriftAntiRaidPrimitives.sol:55-68](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftAntiRaidPrimitives.sol#L55-L68) (`travelSeconds`, 4-arg overload).
 **Computed as one integer square root of the full product**
 (`distance*10*122_500/slowest_ship_speed`), not as `350 * isqrt(distance*10/speed)` even
 though `sqrt(122_500) == 350` exactly — factoring the constant out of the square root can
 round differently for some inputs, so `calc.travel_seconds` mirrors the contract's own
 order of operations rather than the algebraically-equivalent-looking shortcut. Uses
 `math.isqrt`, Python's exact floor integer square root, which matches the contract's own
-bit-shift Babylonian-method `_sqrt` (`VeydriftAntiRaidPrimitives.sol:240-278`) for every
+bit-shift Babylonian-method `_sqrt` ([VeydriftAntiRaidPrimitives.sol:240-278](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftAntiRaidPrimitives.sol#L240-L278)) for every
 non-negative input.
 
 ```
@@ -262,9 +262,9 @@ mission_fuel = 1 + floor((sum over ships of ogame_fuel_numerator) + denominator/
 denominator  = 35_000 * 100^2 * (10^9)^2
 ```
 
-Sources: `VeydriftAntiRaidPrimitives.sol:93-131` (`ogameFuelNumerator` /
+Sources: [VeydriftAntiRaidPrimitives.sol:93-131](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftAntiRaidPrimitives.sol#L93-L131) (`ogameFuelNumerator` /
 `ogameFuelDenominator` / `ogameFuelCostFromNumerator`), aggregated across ship types
-exactly as `VeydriftFleetFuel.sol:9-34` (`ogameMissionFuelCost`) does: sum each flyable
+exactly as [VeydriftFleetFuel.sol:9-34](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFleetFuel.sol#L9-L34) (`ogameMissionFuelCost`) does: sum each flyable
 ship type's numerator, then convert once. `calc.mission_fuel` takes
 `(fuel_consumption, quantity, speed)` triples per ship type — with fuel and speed already
 resolved for the player's drive-tech levels — rather than reimplementing
@@ -341,7 +341,7 @@ on temperature:
 | 15 -> 16 | 45,978 | 217 | **211.88** |
 | 16 -> 17 | 68,968 | 248 | 278.10 |
 
-(Costs computed from `VeydriftCatalog.sol`'s published base cost (75, 30, 0) and factor
+(Costs computed from [VeydriftCatalog.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftCatalog.sol)'s published base cost (75, 30, 0) and factor
 (15, 10) for illustration only — this table lives in documentation, not in `calc.py`,
 which never recomputes a cost.)
 
@@ -371,7 +371,7 @@ this is planet-trait-derived, not a hardcoded planet id.
 max_planets(astrophysics_level) = 1 + astrophysics_level
 ```
 
-Source: `VeydriftGame.sol:596-597` (`maxPlanets`). `docs.md` only says Astrophysics
+Source: [VeydriftGame.sol:596-597](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol#L596-L597) (`maxPlanets`). `docs.md` only says Astrophysics
 "raises colony capacity" — this is the exact formula, read from the facade contract that
 exposes it as a public view.
 

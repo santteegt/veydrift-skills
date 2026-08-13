@@ -457,7 +457,7 @@ raw file access works, and so does Blockscout. Three working routes to the code,
 
 | Route | URL |
 | --- | --- |
-| Source (best) | `raw.githubusercontent.com/Borodutch/veydrift/main/packages/contracts/src/VeydriftGame.sol` |
+| Source (best) | [`raw.githubusercontent.com/Borodutch/veydrift/main/packages/contracts/src/VeydriftGame.sol`](https://raw.githubusercontent.com/Borodutch/veydrift/main/packages/contracts/src/VeydriftGame.sol) — for the pinned deployment commit specifically, use [the `701bed35` blob instead](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol) |
 | Verified contract + ABI | `base.blockscout.com/api/v2/smart-contracts/{implementation}` |
 | Proxy → implementation | `base.blockscout.com/api/v2/addresses/{proxy}` → `implementations[0]` |
 
@@ -469,7 +469,7 @@ skips. Fetching the `.sol` from raw GitHub avoids that entirely — do that inst
 
 ## 13.2 The evidence
 
-`VeydriftGame.sol` is a facade that enumerates **every** external entrypoint before delegating to
+[VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol) is a facade that enumerates **every** external entrypoint before delegating to
 modules. That makes it a complete, checkable inventory of what the game can do.
 
 1. **There is no planet transfer function.** No `transferPlanet`, `sellPlanet`, `giftPlanet`,

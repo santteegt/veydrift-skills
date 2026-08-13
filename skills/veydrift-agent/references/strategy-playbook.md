@@ -101,7 +101,7 @@ the first proposal is `startBuildingUpgrade(664, SolarPlant)` to level 1.
 
 Once energy is not the binding constraint, which mine goes next? `plan.py` ranks Metal,
 Crystal and Deuterium mines by **value density**: the contract's own base production rate
-for that mine (30 / 20 / 10 per scaled level — `VeydriftFormulas.sol:70-72`) multiplied
+for that mine (30 / 20 / 10 per scaled level — [VeydriftFormulas.sol:70-72](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFormulas.sol#L70-L72)) multiplied
 by this planet's *live* multiplier for that resource.
 
 ```
@@ -223,7 +223,7 @@ This codebase's decision ladder, implemented exactly, first match wins
    - If the building queue is **busy**, this rung proposes nothing at all and falls
      through. The contract allows only one active `BuildingConstruction` per planet
      (`buildingConstructions[planetId].active` -> `ConstructionActive` revert,
-     `VeydriftGame.sol:117-138`) — a second `startBuildingUpgrade` while one is already
+     [VeydriftGame.sol:117-138](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol#L117-L138)) — a second `startBuildingUpgrade` while one is already
      in flight would be a guaranteed-revert proposal, whether it's "spend it" or the
      matching storage building. Rung 6 will independently see the same busy queue and
      also not fire; the ladder either finds something else to do further down (research,

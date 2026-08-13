@@ -36,14 +36,14 @@ checked out the *deployed* commit `701bed3578cff4d134657c714c599dbdb55a4b6a` (ma
 already drifted — confirmed by `RESEARCH-ADDENDUM.md` §1.1, and this pass did not re-verify the drift
 list itself). The working tree was returned to `main` afterward; nothing in the clone was left modified.
 
-- `struct Planet` (`VeydriftGameStorage.sol:68-80`) carries `address owner` as a plain field — no
+- `struct Planet` ([VeydriftGameStorage.sol:68-80](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameStorage.sol#L68-L80)) carries `address owner` as a plain field — no
   ERC-721, no token registry. `grep -rn "IERC721\|ERC721\|_mint(" packages/contracts/src/*.sol` finds
-  ERC-20 mints only (`VeydriftToken.sol`, `VeydriftResourceToken.sol`); nothing mints a planet.
+  ERC-20 mints only ([VeydriftToken.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftToken.sol), [VeydriftResourceToken.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftResourceToken.sol)); nothing mints a planet.
 - `grep -lE "transferPlanet|sellPlanet|giftPlanet|setPlanetOwner"` across every `.sol` file returns
   nothing. There is no transfer function.
-- `transferOwnership(address)` exists (`VeydriftGame.sol:55`) but is `onlyOwner` — the **game contract
+- `transferOwnership(address)` exists ([VeydriftGame.sol:55](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol#L55)) but is `onlyOwner` — the **game contract
   admin**, unrelated to any specific planet. An ordinary player cannot call it.
-- `abandonPlanet(uint256)` (`VeydriftPlanetManagementModule.sol:146-206`) ends in
+- `abandonPlanet(uint256)` ([VeydriftPlanetManagementModule.sol:146-206](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftPlanetManagementModule.sol#L146-L206)) ends in
   `delete _planets[planetId]` — destruction, not transfer. It also **reverts with
   `CannotAbandonHomePlanet`** if `homePlanetOf[msg.sender] == planetId` (line 150).
 
@@ -53,7 +53,7 @@ the planet cannot even be abandoned.** The only two things that can happen to it
 this EOA forever, or the private key controlling this EOA changes custody (still the same address,
 still the same planet).
 
-- `_requirePlanetOwner` (`VeydriftGame.sol:793-796`) is a plain `planetRef.owner != msg.sender` check —
+- `_requirePlanetOwner` ([VeydriftGame.sol:793-796](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol#L793-L796)) is a plain `planetRef.owner != msg.sender` check —
   ordinary `msg.sender` authorization, not `tx.origin`. This is relevant to §2: it means any code path
   that ends in *this exact address* calling `VeydriftGame` — whether a raw signed transaction or an
   EIP-7702-delegated account's own internal `call()` — presents the same `msg.sender` and passes this

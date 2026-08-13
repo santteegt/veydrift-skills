@@ -68,7 +68,7 @@ Re-fetch `/runtime-config` at agent startup rather than hardcoding. It's a UUPS 
 
 > **Solved — see `NOTES.md` §13.1.** The source is publicly readable with no API key. Use either:
 >
-> 1. **Raw GitHub** (best): `raw.githubusercontent.com/Borodutch/veydrift/main/packages/contracts/src/VeydriftGame.sol`
+> 1. **Raw GitHub** (best): [`raw.githubusercontent.com/Borodutch/veydrift/main/packages/contracts/src/VeydriftGame.sol`](https://raw.githubusercontent.com/Borodutch/veydrift/main/packages/contracts/src/VeydriftGame.sol) — for the pinned deployment commit specifically, use [the `701bed35` blob instead](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol)
 >    — the facade enumerates every external entrypoint. Other modules sit alongside it in `src/`.
 > 2. **Blockscout**: `base.blockscout.com/api/v2/addresses/0xf397910F005151b09644228573a4353818D3755d`
 >    → `implementations[0]` = `0xf210b66b23731971ac606fC2C5c29a96eA19A99d`, then

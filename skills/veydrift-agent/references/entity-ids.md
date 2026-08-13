@@ -33,7 +33,7 @@ builds the wrong thing.
 
 ## 1. `Building`
 
-Source: `packages/contracts/src/libraries/VeydriftTypes.sol:4-21` (commit `701bed35`).
+Source: [`packages/contracts/src/libraries/VeydriftTypes.sol:4-21`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L4-L21) (commit `701bed35`).
 
 | id | Building | id | Building |
 | --: | --- | --: | --- |
@@ -51,16 +51,16 @@ shortens it to "Rift Stabilizer". Hard-capped at level 1; mechanics otherwise un
 (`docs.md` mentions "Rift resource movement" with no formula).
 
 There is also a separate 4-member `MoonBuilding` enum
-(`VeydriftTypes.sol:23-28`: `LunarBase, RoboticsFactory, JumpGate, Shipyard`) for moon
+([VeydriftTypes.sol:23-28](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L23-L28): `LunarBase, RoboticsFactory, JumpGate, Shipyard`) for moon
 construction, out of scope for this codebase. Not reproduced in `ids.py` — add it there
 first if a future pass needs it, rather than reusing `Building`'s ids (they are a different
 enum entirely and only partially overlap by coincidence: `RoboticsFactory` and `Shipyard`
-share the same *contract function* for base cost, `VeydriftCatalog.sol:75-77`, but are
+share the same *contract function* for base cost, [VeydriftCatalog.sol:75-77](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftCatalog.sol#L75-L77), but are
 still distinct enum types).
 
 ## 2. `Technology`
 
-Source: `packages/contracts/src/libraries/VeydriftTypes.sol:62-78` (commit `701bed35`).
+Source: [`packages/contracts/src/libraries/VeydriftTypes.sol:62-78`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L62-L78) (commit `701bed35`).
 
 | id | Technology | id | Technology |
 | --: | --- | --: | --- |
@@ -79,7 +79,7 @@ declaration.
 
 ## 3. `Ship`
 
-Source: `packages/contracts/src/libraries/VeydriftTypes.sol:43-60` (commit `701bed35`).
+Source: [`packages/contracts/src/libraries/VeydriftTypes.sol:43-60`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L43-L60) (commit `701bed35`).
 
 | id | Ship | id | Ship |
 | --: | --- | --: | --- |
@@ -95,7 +95,7 @@ Source: `packages/contracts/src/libraries/VeydriftTypes.sol:43-60` (commit `701b
 ### The Deathstar/Dreadstar trap
 
 The enum member at id 11 is literally spelled `Deathstar`
-(`VeydriftTypes.sol:53: Deathstar,`) and appears directly in `VeydriftFleetFuel.sol`'s
+([`VeydriftTypes.sol:53`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L53): `Deathstar,`) and appears directly in [VeydriftFleetFuel.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFleetFuel.sol)'s
 `_missionShipQuantity` (`if (ship == Ship.Deathstar) return ships.deathstar;`). Every
 rapidfire table in `docs.md` ("Reaper -> Deathstar x10", "Deathstar -> any defense x200")
 does say Deathstar — but the same unit gets called **Dreadstar** in some project research
@@ -118,7 +118,7 @@ once, in the rapidfire table.
 
 ## 4. `Defense`
 
-Source: `packages/contracts/src/libraries/VeydriftTypes.sol:30-41` (commit `701bed35`).
+Source: [`packages/contracts/src/libraries/VeydriftTypes.sol:30-41`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L30-L41) (commit `701bed35`).
 
 | id | Defense | id | Defense |
 | --: | --- | --: | --- |
@@ -136,8 +136,8 @@ from the enum declaration, not inferred.
 
 ## 5. `FleetMissionType`
 
-Source: `packages/contracts/src/VeydriftGameStorage.sol:166-177` (commit `701bed35`,
-inside `abstract contract VeydriftGameStorage`, not `VeydriftTypes.sol` — the one enum of
+Source: [`packages/contracts/src/VeydriftGameStorage.sol:166-177`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameStorage.sol#L166-L177) (commit `701bed35`,
+inside `abstract contract VeydriftGameStorage`, not [VeydriftTypes.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol) — the one enum of
 the six that lives in the storage contract rather than the shared types library).
 
 | id | Mission | id | Mission |
@@ -150,7 +150,7 @@ the six that lives in the storage contract rather than the shared types library)
 
 `Intercept` (6) and `DefenseHold` (9) appear in neither `docs.md` nor any prior project
 research — genuinely new, found only by reading the enum. Both are combat-adjacent
-counterplay mechanics (`VeydriftGameplayModule.sol`'s `_isCounterplayMissionType` groups
+counterplay mechanics ([VeydriftGameplayModule.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameplayModule.sol)'s `_isCounterplayMissionType` groups
 `AcsAttack`, `AcsDefend` and `Intercept` together) and their detailed mechanics are
 undocumented anywhere.
 
@@ -164,7 +164,7 @@ can propose is the permissionless `resolveFleetMission` (ladder rung 3).
 
 ## 6. `Resource`
 
-Source: `packages/contracts/src/libraries/VeydriftTypes.sol:80-85` (commit `701bed35`).
+Source: [`packages/contracts/src/libraries/VeydriftTypes.sol:80-85`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L80-L85) (commit `701bed35`).
 
 | id | Resource |
 | --: | --- |
@@ -185,7 +185,7 @@ reach; included for completeness because `ids.py` owns all six enums, not becaus
 
 Every fleet entrypoint (`launchFleetMission`, both overloads) takes a fixed
 `(uint32 x 14)` tuple, not the 16-member `Ship` enum directly. Two ships cannot fly and
-are omitted from the tuple entirely (`VeydriftFleetFuel.sol:73-87`, `_missionShipQuantity`;
+are omitted from the tuple entirely ([VeydriftFleetFuel.sol:73-87](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFleetFuel.sol#L73-L87), `_missionShipQuantity`;
 both non-flyable ships simply `return 0` for any input): **Solar Satellite (9)** and
 **Crawler (15)**. Because both omissions are followed by real, flyable ship ids, every
 tuple slot from index 9 onward is shifted down by one relative to the `Ship` enum id:
@@ -246,8 +246,8 @@ is no silent fallback anywhere in this module.
 
 | Claim in `docs.md` (or genre convention) | Correction | Evidence |
 | --- | --- | --- |
-| Defense enum follows OGame order (never actually asserted, just an easy default to assume) | `SmallShieldDome`=3, `GaussCannon`=4, `IonCannon`=5 | `VeydriftTypes.sol:30-41` |
-| Ship 11 is "Dreadstar" | Contract enum member is `Deathstar`; "Dreadstar" is an alias, not the canonical name | `VeydriftTypes.sol:53`, `VeydriftFleetFuel.sol` (`Ship.Deathstar`) |
+| Defense enum follows OGame order (never actually asserted, just an easy default to assume) | `SmallShieldDome`=3, `GaussCannon`=4, `IonCannon`=5 | [VeydriftTypes.sol:30-41](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L30-L41) |
+| Ship 11 is "Dreadstar" | Contract enum member is `Deathstar`; "Dreadstar" is an alias, not the canonical name | [VeydriftTypes.sol:53](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L53), [VeydriftFleetFuel.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFleetFuel.sol) (`Ship.Deathstar`) |
 | `playerScore` is a useful read function | Not on the deployed implementation; reverts. Use `/wallet/{addr}/highscore` | deployed ABI, verified live |
-| Pathfinder missing from ship catalog | Real enum member, id 14, mission-capable | `VeydriftTypes.sol:56` |
-| `Intercept`/`DefenseHold` mission types | Not mentioned anywhere in `docs.md`; real enum members, ids 6 and 9, mechanics undocumented | `VeydriftGameStorage.sol:166-177` |
+| Pathfinder missing from ship catalog | Real enum member, id 14, mission-capable | [VeydriftTypes.sol:56](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L56) |
+| `Intercept`/`DefenseHold` mission types | Not mentioned anywhere in `docs.md`; real enum members, ids 6 and 9, mechanics undocumented | [VeydriftGameStorage.sol:166-177](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGameStorage.sol#L166-L177) |
