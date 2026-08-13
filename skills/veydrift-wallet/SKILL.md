@@ -64,6 +64,10 @@ default; `WALLET_PROVIDER` overrides it. Neither provider is EIP-7702-based — 
 the actual private key for the actual EOA. Full detail, including the leak-detection
 refusal `envkey` runs on startup: `references/providers.md`.
 
+RPC endpoint is a separate, provider-independent knob: `VEYDRIFT_RPC_URL`, defaulting to
+`https://mainnet.base.org`. Point it at a dedicated endpoint (e.g. Alchemy) to avoid the
+public endpoint's rate limits — see `references/providers.md`'s "RPC endpoint" section.
+
 ## The `--confirm` invariant — the property the whole tier model rests on
 
 **No environment variable, no config field, and no other flag can make `--confirm`

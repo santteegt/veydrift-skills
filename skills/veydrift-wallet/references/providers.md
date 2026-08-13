@@ -109,6 +109,33 @@ better than committing it, worse than an encrypted keystore. Two things beyond "
   every leak — once the skill is installed elsewhere via `npx skills add`, it may not be running
   inside any git repo at all, in which case the check silently no-ops.
 
+## RPC endpoint
+
+Every read (`getPublicClient()`) and every write (both providers' `signAndSend`) resolve
+their RPC target through one chokepoint, `getRpcUrl()` (`src/tx.ts`):
+
+```ts
+export const DEFAULT_RPC_URL = "https://mainnet.base.org";
+export function getRpcUrl(): string {
+  return process.env.VEYDRIFT_RPC_URL?.trim() || DEFAULT_RPC_URL;
+}
+```
+
+- **Default**: `https://mainnet.base.org`, Base's public RPC endpoint. Works, but is
+  rate-limited and shared with everyone else hitting it — a sequence of calls in a short
+  window (e.g. `status` immediately followed by `build`/`simulate`) can get throttled.
+- **Override**: set `VEYDRIFT_RPC_URL` to any Base-mainnet-compatible JSON-RPC endpoint,
+  for example an Alchemy app URL (`https://base-mainnet.g.alchemy.com/v2/<your-key>`).
+  This applies regardless of which provider (`keystore`/`envkey`) is selected — it's
+  orthogonal to signing. No code change is required; `walletctl status`'s `rpcUrl:` line
+  reflects whichever endpoint is currently configured, so switching is verifiable before
+  it's ever used for a `send`.
+- **Not the same knob as `/runtime-config`**: `verify-abi` and `buildTx`'s destination
+  address both come from a live fetch of `https://api.veydrift.com/runtime-config`
+  (`abi.ts`'s `RUNTIME_CONFIG_URL`), which is a separate HTTP endpoint unrelated to
+  `VEYDRIFT_RPC_URL` — changing the RPC endpoint does not change where the ABI/address
+  data comes from, and vice versa.
+
 ## Selection and swap procedure
 
 Selected by `policy.wallet_engine.provider` (a `veydrift-agent` concern),
