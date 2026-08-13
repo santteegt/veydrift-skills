@@ -145,10 +145,35 @@ installs never need this.
 in `skills/veydrift-agent/` and `skills/veydrift-wallet/` at that moment, including build
 artifacts if you happen to have run tests recently (`.venv/`, `node_modules/`,
 `__pycache__/`). If you're installing from a checkout where you've run `uv run pytest` or
-`npm test`, clean those out first (`rm -rf skills/veydrift-agent/.venv
-skills/veydrift-wallet/node_modules`) or the install will carry dead weight — a copied
-`.venv` in particular is actively broken until you delete it and let `uv` rebuild a fresh
-one. If you're installing fresh from a clone, this doesn't apply.
+`npm test`, clean those out first or the install will carry dead weight — a copied `.venv`
+in particular is actively broken until you delete it and let `uv` rebuild a fresh one. If
+you're installing fresh from a clone, this doesn't apply.
+
+The repo ships a `Makefile` for exactly this:
+
+```bash
+$ make clean            # just tidy skills/ — .venv, node_modules, dist, __pycache__, etc.
+$ make install-skills   # clean, then install globally, no prompts (see below)
+```
+
+Both are safe to re-run any time — `clean` only ever removes known build-artifact directory
+names under `skills/`, never source files, and both skills rebuild their own
+`.venv`/`node_modules` automatically the next time you run their tests or `walletctl`.
+
+`install-skills` doesn't just prepend `clean` to the command shown above — it runs
+`npx skills add . -g -y -a claude-code -a hermes-agent`, which installs differently in two
+ways worth knowing before you run it:
+
+- **`-g` (global)**: both skills land once at `~/.agents/skills/veydrift-agent` and
+  `~/.agents/skills/veydrift-wallet` — verified, that's genuinely where they end up — and
+  get symlinked from there into each agent's own directory (`~/.claude/skills/`,
+  `~/.hermes/skills/`, etc.), rather than copied separately into *this repo's*
+  `.claude/skills/`. That makes them available to every project on your machine, not just
+  this checkout — worth knowing since it's a bigger footprint than the plain command above.
+- **`-y` (yes)**: skips the confirmation prompt the plain command would otherwise show you.
+
+If you specifically want the install confined to this checkout, run the plain
+`npx skills add . -a claude-code -a hermes-agent` command instead of the Makefile target.
 
 ## 5. Bootstrap via an agent session
 

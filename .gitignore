@@ -41,7 +41,8 @@ skills-lock.json
 # `skills add` COPIES the tree here; these are outputs, never sources. Edit skills/<name>/
 # and re-run the install. Note the CLI does not honour this file when copying -- clean
 # .venv/node_modules out of skills/ BEFORE installing or they get copied too, and a copied
-# .venv is broken (dyld: Library not loaded).
+# .venv is broken (dyld: Library not loaded). `make install-skills` handles this for you
+# (it's `make clean` + the install command); `make clean` alone just tidies skills/.
 .claude/skills/
 .agents/
 

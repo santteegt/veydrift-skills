@@ -81,7 +81,23 @@ copy is a build artifact, not something to hand-edit or commit. It also does not
 `.gitignore` when copying: clean `.venv/`, `node_modules/`, and other build caches out of
 `skills/*/` *before* installing, or they get copied along with everything else (a copied
 `.venv` is actively broken — `uv run` from the copy fails with a dyld error until you
-`rm -rf` it and let `uv` rebuild a fresh one).
+`rm -rf` it and let `uv` rebuild a fresh one). `make install-skills` does this for you, but
+runs a *different* command from the one above — `npx skills add . -g -y -a claude-code -a
+hermes-agent` — not just the same one with `clean` prepended:
+
+- **`-g`/`--global`** installs user-level instead of project-level: both skills land once at
+  `~/.agents/skills/veydrift-agent` and `~/.agents/skills/veydrift-wallet` (verified — that's
+  where they actually appear), symlinked from there into each agent's own directory
+  (`~/.claude/skills/veydrift-agent`, `~/.hermes/skills/veydrift-agent`, etc.) rather than
+  copied separately into this repo's own `.claude/skills/`. Available to every project on the
+  machine, not just this checkout.
+- **`-y`/`--yes`** skips the interactive confirmation prompt — appropriate for a Makefile
+  target, less so if you want the chance to bail out before it writes anywhere.
+
+Run the plain command shown at the top of this section instead if you specifically want a
+project-scoped install confined to this checkout; use `make install-skills` for the global,
+no-prompts version. `make clean` alone is useful either way if you just want the workspace
+tidy without installing anything.
 
 ## Quick start: running a tick
 
