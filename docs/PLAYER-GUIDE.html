@@ -696,10 +696,6 @@ footer.doc-foot a { color: var(--ink-dim); }
     <div class="codeblock-body"><pre><span class="c-comment">$</span> make clean            <span class="c-comment"># tidy skills/ — .venv, node_modules, etc.</span>
 <span class="c-comment">$</span> make install-skills   <span class="c-comment"># clean, then install globally, no prompts</span></pre></div>
   </div>
-  <div class="callout caution">
-    <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
-    <div><strong class="callout-title"><code>install-skills</code> installs differently, not just with clean prepended</strong><p>It runs <code>npx skills add . -g -y -a claude-code -a hermes-agent</code>. <strong><code>-g</code> (global)</strong> lands both skills once at <code>~/.agents/skills/veydrift-agent</code> and <code>~/.agents/skills/veydrift-wallet</code> — verified, that's genuinely where they end up — symlinked from there into each agent's own directory, rather than copied separately into <em>this repo's</em> <code>.claude/skills/</code>. Available to every project on your machine, not just this checkout. <strong><code>-y</code> (yes)</strong> skips the confirmation prompt the plain command above would otherwise show. Run the plain <code>npx skills add . -a claude-code -a hermes-agent</code> command instead if you want the install confined to this checkout.</p></div>
-  </div>
 </section>
 
 <section class="chapter" id="s5" data-num="05" data-label="Bootstrap via an agent">
