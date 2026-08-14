@@ -27,6 +27,7 @@ Deferred wallet-provider evaluation: `docs/wallet-provider-research.md`.
 skills/
 ├── veydrift-agent/
 │   ├── SKILL.md                 # progressive-disclosure entry point
+│   ├── CHANGELOG.md             # semver, Keep a Changelog format — see below
 │   ├── pyproject.toml, uv.lock
 │   ├── src/veydrift_agent/
 │   │   ├── models.py            # pydantic: Policy, Action, Snapshot, GuardReport — see §4
@@ -39,6 +40,7 @@ skills/
 │   └── tests/
 └── veydrift-wallet/
     ├── SKILL.md
+    ├── CHANGELOG.md             # semver, Keep a Changelog format — see below
     ├── package.json, tsconfig.json
     ├── abi/                     # pinned ABI + provenance — see §6
     ├── src/{cli,abi,allowlist,tx,fleet,policy}.ts, src/providers/
@@ -48,6 +50,17 @@ skills/
 
 Runtime state lives in `$VEYDRIFT_HOME` (default `~/.veydrift`), **outside this repo
 entirely** — never write there from a test, and never assume anything under it exists.
+
+**Versioning:** each skill keeps its own `CHANGELOG.md` (semver, [Keep a
+Changelog](https://keepachangelog.com/en/1.1.0/) format) and its own version number
+(`pyproject.toml` for the agent, `package.json` for the wallet) — the two are **not**
+versioned in lockstep, since they change at different rates. There's no dedicated
+`version` key in `SKILL.md`'s frontmatter (the spec only allows `name`, `description`,
+`license`, `allowed-tools`, `metadata`, `compatibility`), so this stays a plain
+package-version + changelog convention rather than something either skill reports at
+runtime. When you change either skill's behavior, add an entry under that skill's
+`CHANGELOG.md` `[Unreleased]` section — patch for fixes/docs, minor for additive
+backward-compatible changes, major for a breaking CLI/schema/ABI change.
 
 ## 3. Setup and test commands
 
@@ -63,7 +76,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **257 Python tests, 104 TypeScript tests**, both suites green. Run both before
+baseline: **264 Python tests, 104 TypeScript tests**, both suites green. Run both before
 calling any change done; they are independent projects but cover a system with two
 enforcement layers that must agree (§6).
 
