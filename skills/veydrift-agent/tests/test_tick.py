@@ -849,6 +849,108 @@ def test_walletctl_eth_balance_wei_passes_the_provider_flag(isolated_home, monke
     assert captured["args"][captured["args"].index("--provider") + 1] == "envkey"
 
 
+# --------------------------------------------------------------------------------------
+# `npx skills add` copies veydrift-wallet's source + package.json/package-lock.json but
+# never runs `npm install` at the destination. `_run_walletctl` self-heals this once (from
+# the pinned lockfile, never a floating resolution) rather than letting a raw
+# ERR_MODULE_NOT_FOUND surface as an opaque walletctl_build ESCALATE detail.
+# --------------------------------------------------------------------------------------
+
+
+def test_ensure_wallet_deps_installed_skips_npm_when_node_modules_present(tmp_path, monkeypatch):
+    (tmp_path / "node_modules").mkdir()
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("npm install should not run when node_modules already exists")
+
+    monkeypatch.setattr(subprocess, "run", _fail_if_called)
+    assert tick._ensure_wallet_deps_installed(tmp_path) is None
+
+
+def test_ensure_wallet_deps_installed_runs_npm_install_when_missing(tmp_path, monkeypatch):
+    captured = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["cwd"] = kwargs.get("cwd")
+        return subprocess.CompletedProcess(argv, 0, stdout="added 42 packages", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    assert tick._ensure_wallet_deps_installed(tmp_path) is None
+    assert captured["argv"] == ["npm", "install", "--no-audit", "--no-fund"]
+    assert captured["cwd"] == tmp_path
+
+
+def test_ensure_wallet_deps_installed_reports_npm_failure_without_a_raw_stack(tmp_path, monkeypatch):
+    def _fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="npm ERR! network timeout")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    error = tick._ensure_wallet_deps_installed(tmp_path)
+    assert error is not None
+    assert "npm ERR! network timeout" in error
+    assert str(tmp_path) in error
+
+
+def test_ensure_wallet_deps_installed_reports_when_npm_itself_is_missing(tmp_path, monkeypatch):
+    def _fake_run(argv, **kwargs):
+        raise FileNotFoundError("npm not found")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    error = tick._ensure_wallet_deps_installed(tmp_path)
+    assert error is not None
+    assert "npm install" in error
+    assert str(tmp_path) in error
+
+
+def test_run_walletctl_installs_deps_then_still_runs_the_real_command(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[0] == "npm":
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="balance: 1.0 ETH\n", stderr="")
+
+    monkeypatch.setattr(tick, "_walletctl_argv", lambda *args: (["npx", "--yes", "tsx", "cli.ts", *args], tmp_path))
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    result = tick._run_walletctl("status")
+
+    assert len(calls) == 2
+    assert calls[0] == ["npm", "install", "--no-audit", "--no-fund"]
+    assert calls[1][0] == "npx"
+    assert result.returncode == 0
+
+
+def test_run_walletctl_never_shells_out_when_install_fails(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="npm ERR! network timeout")
+
+    monkeypatch.setattr(tick, "_walletctl_argv", lambda *args: (["npx", "--yes", "tsx", "cli.ts", *args], tmp_path))
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    result = tick._run_walletctl("status")
+
+    assert len(calls) == 1  # only the npm install attempt -- never the real walletctl call
+    assert result.returncode != 0
+    assert "npm ERR! network timeout" in result.stderr
+
+
+def test_run_walletctl_skips_the_check_when_no_wallet_dir_resolved(monkeypatch):
+    # cwd=None means walletctl is on PATH (e.g. npm link) -- nothing to npm-install into.
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("should not attempt npm install when cwd is None")
+
+    monkeypatch.setattr(tick, "_walletctl_argv", lambda *args: (["walletctl", *args], None))
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""))
+    result = tick._run_walletctl("status")
+    assert result.returncode == 0
+
+
 def test_load_policy_warns_when_allow_fleet_noncombat_is_dead_config(isolated_home, capsys):
     from veydrift_agent.state import policy_path
 

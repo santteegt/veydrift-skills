@@ -93,9 +93,11 @@ from veydrift_agent.state import (
 
 app = typer.Typer(no_args_is_help=False, help="Run one loop iteration.")
 _console = Console()
+_stderr_console = Console(stderr=True)
 
 _WALLETCTL_TIMEOUT_S = 60
 _INDEX_POLL_INTERVAL_S = 5
+_NPM_INSTALL_TIMEOUT_S = 300
 
 
 # --------------------------------------------------------------------------------------
@@ -194,8 +196,51 @@ def _walletctl_argv(*args: str) -> tuple[list[str], Path | None]:
     return ["walletctl", *args], None
 
 
+def _ensure_wallet_deps_installed(wallet_dir: Path) -> str | None:
+    """`npx skills add` copies `veydrift-wallet`'s source, `package.json` and
+    `package-lock.json` but never runs `npm install` at the destination -- there's no
+    `uv run`-style auto-venv equivalent for npm. Left alone, the first `npx tsx cli.ts`
+    invocation fails with a raw `ERR_MODULE_NOT_FOUND` on `commander`, which then surfaces
+    as an opaque `walletctl_build` ESCALATE detail. This self-heals it once, from the
+    already-committed, pinned `package-lock.json` (`npm install`, never a floating
+    resolution) -- visibly, via `_stderr_console`, never silently. Returns `None` on
+    success (or if already installed), or a human-readable error to use as the
+    `CompletedProcess.stderr` in place of the eventual cryptic import failure."""
+    if (wallet_dir / "node_modules").is_dir():
+        return None
+    _stderr_console.print(
+        f"[dim]veydrift-wallet: no node_modules yet in {wallet_dir} -- running `npm install` "
+        "(first run only, from the pinned package-lock.json)...[/dim]"
+    )
+    try:
+        install = subprocess.run(
+            ["npm", "install", "--no-audit", "--no-fund"],
+            cwd=wallet_dir,
+            capture_output=True,
+            text=True,
+            timeout=_NPM_INSTALL_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return (
+            f"veydrift-wallet dependencies are not installed and `npm install` could not be "
+            f"run automatically ({exc}). Run `npm install` in {wallet_dir} yourself, then retry."
+        )
+    if install.returncode != 0:
+        detail = (install.stderr or install.stdout).strip()[:500]
+        return (
+            "veydrift-wallet dependencies are not installed and automatic `npm install` "
+            f"failed: {detail}. Run `npm install` in {wallet_dir} yourself, then retry."
+        )
+    _stderr_console.print("[dim]veydrift-wallet: dependencies installed.[/dim]")
+    return None
+
+
 def _run_walletctl(*args: str, timeout: int = _WALLETCTL_TIMEOUT_S) -> subprocess.CompletedProcess[str]:
     argv, cwd = _walletctl_argv(*args)
+    if cwd is not None:
+        install_error = _ensure_wallet_deps_installed(cwd)
+        if install_error is not None:
+            return subprocess.CompletedProcess(argv, 1, "", install_error)
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 

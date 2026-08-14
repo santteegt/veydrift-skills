@@ -13,6 +13,14 @@ to build next, planet strategy, or reading game state, route to `veydrift-agent`
 Single CLI: `walletctl`, run via `npx tsx src/cli.ts <command>` from this skill's directory,
 or the built `dist/cli.js` after `npm run build`.
 
+**Before running any `walletctl` command in a fresh install, check for `node_modules/`
+next to this skill's `package.json` — if it's missing, run `npm install` here first.**
+`npx skills add` copies this skill's source and its `package.json`/`package-lock.json`,
+but never installs from them; a first run without this step fails with a raw
+`ERR_MODULE_NOT_FOUND` on `commander`. `veydrift-agent`'s own `walletctl` subprocess calls
+already self-heal this once, automatically, from the pinned lockfile — but if you're
+invoking `walletctl` directly (not through `vd tick`), do the check yourself.
+
 ```
 walletctl status                      # provider, address, chainId, ETH balance, ABI pin state
 walletctl verify-abi                  # live deploymentAbiHash vs pinned -- exit 1 on drift

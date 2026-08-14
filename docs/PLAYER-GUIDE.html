@@ -686,11 +686,7 @@ footer.doc-foot a { color: var(--ink-dim); }
   </div>
   <p>That's the whole install. To update after this repo changes, re-run the same command — it's a fresh copy each time, never a merge, so don't hand-edit anything under <code>.claude/skills/</code>.</p>
   <p>This install puts both skills side by side, which is what lets <code>veydrift-agent</code> find <code>veydrift-wallet</code> automatically (it resolves it as a sibling directory) when it shells out for tier ≥2 sends. If your harness installs skills into isolated per-skill roots instead, set <code>VEYDRIFT_WALLET_DIR</code> to the wallet skill's install path as an escape hatch — most installs never need this.</p>
-  <div class="callout note">
-    <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-    <div><strong class="callout-title">Before you install</strong><p>The installer copies whatever is in <code>skills/</code> at that moment, including build artifacts (<code>.venv/</code>, <code>node_modules/</code>). If you've run tests recently, clean those out first — a copied <code>.venv</code> is actively broken until you delete it and let <code>uv</code> rebuild.</p></div>
-  </div>
-  <p>The repo ships a <code>Makefile</code> for exactly this — both targets are safe to re-run any time, since <code>clean</code> only ever removes known build-artifact directory names under <code>skills/</code>, never source files:</p>
+  <p>The repo also ships a <code>Makefile</code> — a <strong>dev-repo convenience only</strong>, for installing from your own checkout, not part of what a real install does or needs:</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>shell</span></div>
     <div class="codeblock-body"><pre><span class="c-comment">$</span> make clean            <span class="c-comment"># tidy skills/ — .venv, node_modules, etc.</span>

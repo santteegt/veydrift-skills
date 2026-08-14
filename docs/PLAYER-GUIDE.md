@@ -139,17 +139,8 @@ for tier ≥2 sends. If your harness installs skills into isolated per-skill roo
 set `VEYDRIFT_WALLET_DIR` to the wallet skill's install path as an escape hatch — most
 installs never need this.
 
-**One thing worth knowing before you run this yourself:** the installer copies whatever is
-in `skills/veydrift-agent/` and `skills/veydrift-wallet/` at that moment, including build
-artifacts if you happen to have run tests recently (`.venv/`, `node_modules/`,
-`__pycache__/`). If you're installing from a checkout where you've run `uv run pytest` or
-`npm test`, clean those out first or the install will carry dead weight — a copied `.venv`
-in particular is actively broken until you delete it and let `uv` rebuild a fresh one. If
-you're installing fresh from a clone, this doesn't apply.
-
-The repo ships a `Makefile` for exactly this — both targets are safe to re-run any time,
-since `clean` only ever removes known build-artifact directory names under `skills/`,
-never source files:
+The repo also ships a `Makefile` — a **dev-repo convenience only**, for installing from
+your own checkout, not part of what a real install does or needs:
 
 ```bash
 $ make clean            # tidy skills/ — .venv, node_modules, etc.
