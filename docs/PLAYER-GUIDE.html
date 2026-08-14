@@ -696,6 +696,24 @@ footer.doc-foot a { color: var(--ink-dim); }
     <div class="codeblock-body"><pre><span class="c-comment">$</span> make clean            <span class="c-comment"># tidy skills/ — .venv, node_modules, etc.</span>
 <span class="c-comment">$</span> make install-skills   <span class="c-comment"># clean, then install globally, no prompts</span></pre></div>
   </div>
+  <h3>Environment variables at a glance</h3>
+  <p>Every env var either skill reads, in one place — most of these won't matter until later sections set them up; this is the reference to come back to:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Variable</th><th>Skill</th><th>Purpose</th><th>Default</th></tr></thead>
+      <tbody>
+        <tr><td><code>VEYDRIFT_HOME</code></td><td>both</td><td>Where policy, logs and cached state live — see §6 and §11.</td><td><code>~/.veydrift</code></td></tr>
+        <tr><td><code>VEYDRIFT_RPC_URL</code></td><td>wallet</td><td>Base RPC endpoint for every read/write.</td><td><code>https://mainnet.base.org</code></td></tr>
+        <tr><td><code>WALLET_PROVIDER</code></td><td>wallet</td><td>Which provider to sign with (<code>keystore</code>/<code>envkey</code>).</td><td><code>keystore</code></td></tr>
+        <tr><td><code>VEYDRIFT_KEYSTORE</code></td><td>wallet</td><td>Path to the encrypted keystore JSON (<code>keystore</code> provider).</td><td>— (required by that provider)</td></tr>
+        <tr><td><code>VEYDRIFT_KEYSTORE_PASSWORD</code></td><td>wallet</td><td>Keystore password. Leave unset for an interactive, non-echoing prompt instead — recommended, see §7.</td><td>unset (prompts)</td></tr>
+        <tr><td><code>VEYDRIFT_PRIVATE_KEY</code></td><td>wallet</td><td>Raw private key (<code>envkey</code> provider, testing only).</td><td>— (required by that provider)</td></tr>
+        <tr><td><code>VEYDRIFT_TIER</code></td><td>wallet</td><td>Fallback tier when no <code>policy.json</code> exists yet. Ignored (and flagged as a disagreement) once a policy file is present — <code>walletctl</code> always trusts the file over this.</td><td><code>advisor</code></td></tr>
+        <tr><td><code>VEYDRIFT_WALLET_DIR</code></td><td>agent</td><td>Escape hatch if the two skills aren't installed as siblings — see above.</td><td>sibling-directory auto-detect</td></tr>
+        <tr><td><code>VEYDRIFT_SECRET_ENV_VARS</code></td><td>agent</td><td>Comma-separated extra env var names to redact from logs, beyond the built-in <code>VEYDRIFT_PRIVATE_KEY</code>/<code>VEYDRIFT_KEYSTORE_PASSWORD</code>.</td><td>unset (built-ins only)</td></tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <section class="chapter" id="s5" data-num="05" data-label="Bootstrap via an agent">
@@ -812,25 +830,7 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
     <div class="codeblock-body"><pre><span class="c-key">export</span> VEYDRIFT_RPC_URL=https://base-mainnet.g.alchemy.com/v2/your-api-key</pre></div>
   </div>
   <p>Left unset, it defaults to <code>https://mainnet.base.org</code> — Base's public endpoint, which works but is shared and rate-limited. If you're running frequent ticks or doing anything call-heavy, pointing this at a dedicated endpoint like Alchemy avoids getting throttled. <code>walletctl status</code>'s <code>rpcUrl:</code> line always shows whichever endpoint is actually configured, so you can confirm the override took effect before relying on it.</p>
-
-  <h3>Environment variables at a glance</h3>
-  <p>Every env var either skill reads, in one place:</p>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Variable</th><th>Skill</th><th>Purpose</th><th>Default</th></tr></thead>
-      <tbody>
-        <tr><td><code>VEYDRIFT_HOME</code></td><td>both</td><td>Where policy, logs and cached state live — see §6 and §11.</td><td><code>~/.veydrift</code></td></tr>
-        <tr><td><code>VEYDRIFT_RPC_URL</code></td><td>wallet</td><td>Base RPC endpoint for every read/write.</td><td><code>https://mainnet.base.org</code></td></tr>
-        <tr><td><code>WALLET_PROVIDER</code></td><td>wallet</td><td>Which provider to sign with (<code>keystore</code>/<code>envkey</code>).</td><td><code>keystore</code></td></tr>
-        <tr><td><code>VEYDRIFT_KEYSTORE</code></td><td>wallet</td><td>Path to the encrypted keystore JSON (<code>keystore</code> provider).</td><td>— (required by that provider)</td></tr>
-        <tr><td><code>VEYDRIFT_KEYSTORE_PASSWORD</code></td><td>wallet</td><td>Keystore password. Leave unset for an interactive, non-echoing prompt instead — recommended, see above.</td><td>unset (prompts)</td></tr>
-        <tr><td><code>VEYDRIFT_PRIVATE_KEY</code></td><td>wallet</td><td>Raw private key (<code>envkey</code> provider, testing only).</td><td>— (required by that provider)</td></tr>
-        <tr><td><code>VEYDRIFT_TIER</code></td><td>wallet</td><td>Fallback tier when no <code>policy.json</code> exists yet. Ignored once a policy file is present — <code>walletctl</code> always trusts the file.</td><td><code>advisor</code></td></tr>
-        <tr><td><code>VEYDRIFT_WALLET_DIR</code></td><td>agent</td><td>Escape hatch if the two skills aren't installed as siblings — see §4.</td><td>sibling-directory auto-detect</td></tr>
-        <tr><td><code>VEYDRIFT_SECRET_ENV_VARS</code></td><td>agent</td><td>Comma-separated extra env var names to redact from logs, beyond the built-in <code>VEYDRIFT_PRIVATE_KEY</code>/<code>VEYDRIFT_KEYSTORE_PASSWORD</code>.</td><td>unset (built-ins only)</td></tr>
-      </tbody>
-    </table>
-  </div>
+  <p>§4 has the full list of environment variables both skills read, including the ones on this page.</p>
 </section>
 
 <section class="chapter" id="s8" data-num="08" data-label="Your first tick">

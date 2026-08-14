@@ -118,22 +118,20 @@ knowing they exist so a raw number in a log line never looks like a mistake.
 From this repository's root:
 
 ```bash
-npx skills add . -a claude-code -a hermes-agent
+npx skills add . -g -a claude-code -a hermes-agent -y
 ```
 
 Verified output (from this repo, 2026-08-12):
 
 ```
 ◇  Installed 2 skills
-   ✓ veydrift-agent (copied)  → ~/Verydrift/.claude/skills/veydrift-agent
-   ✓ veydrift-wallet (copied) → ~/Verydrift/.claude/skills/veydrift-wallet
+   ✓ veydrift-agent (copied)  → ~/.claude/skills/veydrift-agent
+   ✓ veydrift-wallet (copied) → ~/.claude/skills/veydrift-wallet
 ```
 
-That's the whole install. `npx skills add . -l` (list mode) prints both skills'
-descriptions without touching disk, if you want to confirm they parse correctly first.
-To update after this repo changes, re-run the same command — it's a fresh copy each time,
-never a merge, so don't hand-edit anything under `.claude/skills/` or `.agents/`; edit
-`skills/` in this repo and reinstall.
+That's the whole install. To update after this repo changes, re-run the same command —
+it's a fresh copy each time, never a merge, so don't hand-edit anything under
+`.claude/skills/`.
 
 This install puts both skills side by side, which is what lets `veydrift-agent` find
 `veydrift-wallet` automatically (it resolves it as a sibling directory) when it shells out
@@ -149,31 +147,31 @@ artifacts if you happen to have run tests recently (`.venv/`, `node_modules/`,
 in particular is actively broken until you delete it and let `uv` rebuild a fresh one. If
 you're installing fresh from a clone, this doesn't apply.
 
-The repo ships a `Makefile` for exactly this:
+The repo ships a `Makefile` for exactly this — both targets are safe to re-run any time,
+since `clean` only ever removes known build-artifact directory names under `skills/`,
+never source files:
 
 ```bash
-$ make clean            # just tidy skills/ — .venv, node_modules, dist, __pycache__, etc.
-$ make install-skills   # clean, then install globally, no prompts (see below)
+$ make clean            # tidy skills/ — .venv, node_modules, etc.
+$ make install-skills   # clean, then install globally, no prompts
 ```
 
-Both are safe to re-run any time — `clean` only ever removes known build-artifact directory
-names under `skills/`, never source files, and both skills rebuild their own
-`.venv`/`node_modules` automatically the next time you run their tests or `walletctl`.
+### Environment variables at a glance
 
-`install-skills` doesn't just prepend `clean` to the command shown above — it runs
-`npx skills add . -g -y -a claude-code -a hermes-agent`, which installs differently in two
-ways worth knowing before you run it:
+Every env var either skill reads, in one place — most of these won't matter until later
+sections set them up; this is the reference to come back to:
 
-- **`-g` (global)**: both skills land once at `~/.agents/skills/veydrift-agent` and
-  `~/.agents/skills/veydrift-wallet` — verified, that's genuinely where they end up — and
-  get symlinked from there into each agent's own directory (`~/.claude/skills/`,
-  `~/.hermes/skills/`, etc.), rather than copied separately into *this repo's*
-  `.claude/skills/`. That makes them available to every project on your machine, not just
-  this checkout — worth knowing since it's a bigger footprint than the plain command above.
-- **`-y` (yes)**: skips the confirmation prompt the plain command would otherwise show you.
-
-If you specifically want the install confined to this checkout, run the plain
-`npx skills add . -a claude-code -a hermes-agent` command instead of the Makefile target.
+| Variable | Skill | Purpose | Default |
+| --- | --- | --- | --- |
+| `VEYDRIFT_HOME` | both | Where policy, logs and cached state live — see §6 and §11. | `~/.veydrift` |
+| `VEYDRIFT_RPC_URL` | wallet | Base RPC endpoint for every read/write. | `https://mainnet.base.org` |
+| `WALLET_PROVIDER` | wallet | Which provider to sign with (`keystore`/`envkey`). | `keystore` |
+| `VEYDRIFT_KEYSTORE` | wallet | Path to the encrypted keystore JSON (`keystore` provider). | — (required by that provider) |
+| `VEYDRIFT_KEYSTORE_PASSWORD` | wallet | Keystore password. Leave unset for an interactive, non-echoing prompt instead — recommended, see §7. | unset (prompts) |
+| `VEYDRIFT_PRIVATE_KEY` | wallet | Raw private key (`envkey` provider, testing only). | — (required by that provider) |
+| `VEYDRIFT_TIER` | wallet | Fallback tier when no `policy.json` exists yet. Ignored (and flagged as a disagreement) once a policy file is present — `walletctl` always trusts the file over this. | `advisor` |
+| `VEYDRIFT_WALLET_DIR` | agent | Escape hatch if the two skills aren't installed as siblings — see above. | sibling-directory auto-detect |
+| `VEYDRIFT_SECRET_ENV_VARS` | agent | Comma-separated extra env var names to redact from logs, beyond the built-in `VEYDRIFT_PRIVATE_KEY`/`VEYDRIFT_KEYSTORE_PASSWORD`. Only needed if you've added your own secret-bearing env var into this system's environment. | unset (built-ins only) |
 
 ## 5. Bootstrap via an agent session
 
@@ -395,21 +393,8 @@ dedicated endpoint like Alchemy avoids getting throttled. `walletctl status`'s `
 line always shows whichever endpoint is actually configured, so you can confirm the
 override took effect before relying on it.
 
-### Environment variables at a glance
-
-Every env var either skill reads, in one place:
-
-| Variable | Skill | Purpose | Default |
-| --- | --- | --- | --- |
-| `VEYDRIFT_HOME` | both | Where policy, logs and cached state live — see §6 and §11. | `~/.veydrift` |
-| `VEYDRIFT_RPC_URL` | wallet | Base RPC endpoint for every read/write. | `https://mainnet.base.org` |
-| `WALLET_PROVIDER` | wallet | Which provider to sign with (`keystore`/`envkey`). | `keystore` |
-| `VEYDRIFT_KEYSTORE` | wallet | Path to the encrypted keystore JSON (`keystore` provider). | — (required by that provider) |
-| `VEYDRIFT_KEYSTORE_PASSWORD` | wallet | Keystore password. Leave unset for an interactive, non-echoing prompt instead — recommended, see above. | unset (prompts) |
-| `VEYDRIFT_PRIVATE_KEY` | wallet | Raw private key (`envkey` provider, testing only). | — (required by that provider) |
-| `VEYDRIFT_TIER` | wallet | Fallback tier when no `policy.json` exists yet. Ignored (and flagged as a disagreement) once a policy file is present — `walletctl` always trusts the file over this. | `advisor` |
-| `VEYDRIFT_WALLET_DIR` | agent | Escape hatch if the two skills aren't installed as siblings — see §4. | sibling-directory auto-detect |
-| `VEYDRIFT_SECRET_ENV_VARS` | agent | Comma-separated extra env var names to redact from logs, beyond the built-in `VEYDRIFT_PRIVATE_KEY`/`VEYDRIFT_KEYSTORE_PASSWORD`. Only needed if you've added your own secret-bearing env var into this system's environment. | unset (built-ins only) |
+§4 has the full list of environment variables both skills read, including the ones on
+this page.
 
 ## 8. Your first tick
 
