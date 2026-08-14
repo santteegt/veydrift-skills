@@ -178,47 +178,36 @@ If you specifically want the install confined to this checkout, run the plain
 ## 5. Bootstrap via an agent session
 
 Everything in §6 and §7 below — writing `policy.json`, picking a wallet provider — can be
-done by hand, editing files yourself. It can also be done by just asking your agent
-session to do it, since both skills were built specifically to be driven this way: each
-one ships a `SKILL.md` that tells a Claude Code or Hermes session exactly when to trigger
-and what it's allowed to do, so once the skills are installed (§4), a plain-language
-request is enough to get moving.
+done by hand, or handed straight to your agent session: both skills ship a `SKILL.md` that
+tells Claude Code or Hermes exactly when to trigger and what to do, so once installed (§4)
+a plain-language request is enough.
 
-Open a fresh session in your installed harness and say something like:
+Open a fresh session and say something like — keep the first paragraph as-is for future
+sessions, and swap the second for whatever you actually want next (§10 covers this ongoing
+use):
 
 ```
 You're an agent that helps me play Veydrift, an on-chain space-strategy game on
-Base — reading my planet's state, proposing what to build next, and never
-submitting anything until I've explicitly raised your tier. I've installed the
-Veydrift skills. Help me set up my policy file for a cautious first run in
-advisor mode: explain each field you set, and get me ready to run my first
-tick. My wallet is <your address> and my settled planet is <your planet id>.
+Base, using the Veydrift skills installed in this environment. You read my
+planet's state, propose what to build next, and explain your reasoning in
+plain terms — but you never submit a transaction until I've explicitly raised
+your tier past advisor.
+
+My wallet is <your address> and my settled planet is <your planet id or
+coordinates>. Initialize my policy file for a cautious first run in advisor
+mode, explaining each field you set. Then give me an initial overview: my
+planet's profile and type, its strengths and limitations, current resources,
+what's nearby in its neighborhood and the wider universe, and a suggested
+strategy for my first 24 hours. Finally, run my first tick.
 ```
 
-Because `veydrift-agent`'s `SKILL.md` explicitly lists "planet id," "wallet," and
-"policy.json" among the phrases that trigger it, a Claude Code or Hermes session with the
-skill installed will pick this up on its own — you don't need to name the skill or type a
-slash command. What actually happens next is not magic — it's the agent typing the same
-commands this guide documents by hand:
+Coordinates (`7:181:14`, the format shown in-game) work as well as the raw id — the agent
+resolves them via `vd read planets --wallet <address>`, which lists both.
 
-1. It runs `vd tick init` to write a fresh `policy.json` from the shipped template
-   (exactly the command shown in §6).
-2. It opens the file and walks you through each field — tier, wallet, planet id(s),
-   spending limits, reserves, which action types are enabled — the same fields §6 explains
-   below.
-3. It should ask you to confirm your wallet address and planet id specifically, since those
-   are the two fields it cannot guess correctly on its own.
-4. It will likely offer to run `vd tick --dry-run` once the file looks right, so you can
-   see a first proposal before deciding anything further.
-
-**Read what it wrote anyway.** Letting the agent do the typing doesn't change what ends up
-in the file or skip any review step — it's the same `policy.json`, validated the same
-strict way, that §6 walks through field by field. If you'd rather do this entirely by hand
-instead — or want to understand exactly what the agent just set on your behalf — §6 is the
-complete reference. This same plain-language approach isn't limited to setup, either: once
-you're running, you can ask the same kind of session "run a Veydrift tick" or "check my
-queues" at any point instead of typing the raw `uv run` commands yourself — §10 covers
-this alongside the more formal scheduling options.
+This isn't magic: it's the agent running the same `vd tick init` and `vd tick --dry-run`
+commands this guide documents by hand, then explaining what it finds. Read what it wrote
+anyway — §6 is the same file, explained field by field, if you'd rather check its work or
+do this yourself.
 
 ## 6. Create your policy
 
@@ -283,7 +272,11 @@ change called out:
   want managed. `0x224a…fa0f` above is this repository's own reference example; it is not
   a wallet you should use.
 - `planets`: your planet id(s), or `[]` to have the agent discover every planet the wallet
-  holds automatically via `/wallet/{addr}/planets`.
+  holds automatically via `/wallet/{addr}/planets`. This field only ever holds numeric ids
+  — if you only know your coordinates (the `galaxy:system:position` shown in the game's
+  UI, e.g. `7:181:14`), not the id, editing this file by hand means finding the id first:
+  `uv run --directory skills/veydrift-agent vd read planets --wallet <your address>` lists
+  every planet you own with both, so you can match yours by coordinates.
 
 Everything else in `limits`/`reserves`/`actions`/`escalation` is a reasonable starting
 point. Don't loosen `limits` or flip on `allow_defense`/`allow_ships` until you've watched

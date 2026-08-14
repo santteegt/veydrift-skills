@@ -700,28 +700,25 @@ footer.doc-foot a { color: var(--ink-dim); }
 
 <section class="chapter" id="s5" data-num="05" data-label="Bootstrap via an agent">
   <div class="chapter-head"><span class="chapter-num">05</span><h2 class="chapter-title">Bootstrap via an agent session</h2></div>
-  <p>Everything in §6 and §7 below — writing <code>policy.json</code>, picking a wallet provider — can be done by hand, editing files yourself. It can also be done by just asking your agent session to do it, since both skills were built specifically to be driven this way: each ships a <code>SKILL.md</code> that tells a Claude Code or Hermes session exactly when to trigger and what it's allowed to do, so once the skills are installed (§4), a plain-language request is enough to get moving.</p>
-  <p>Open a fresh session in your installed harness and say something like:</p>
+  <p>Everything in §6 and §7 below — writing <code>policy.json</code>, picking a wallet provider — can be done by hand, or handed straight to your agent session: both skills ship a <code>SKILL.md</code> that tells Claude Code or Hermes exactly when to trigger and what to do, so once installed (§4) a plain-language request is enough.</p>
+  <p>Open a fresh session and say something like — keep the first paragraph as-is for future sessions, and swap the second for whatever you actually want next (§10 covers this ongoing use):</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>prompt — paste into your agent session</span></div>
     <div class="codeblock-body"><pre>You're an agent that helps me play Veydrift, an on-chain space-strategy game on
-Base — reading my planet's state, proposing what to build next, and never
-submitting anything until I've explicitly raised your tier. I've installed the
-Veydrift skills. Help me set up my policy file for a cautious first run in
-advisor mode: explain each field you set, and get me ready to run my first
-tick. My wallet is &lt;your address&gt; and my settled planet is &lt;your planet id&gt;.</pre></div>
+Base, using the Veydrift skills installed in this environment. You read my
+planet's state, propose what to build next, and explain your reasoning in
+plain terms — but you never submit a transaction until I've explicitly raised
+your tier past advisor.
+
+My wallet is &lt;your address&gt; and my settled planet is &lt;your planet id or
+coordinates&gt;. Initialize my policy file for a cautious first run in advisor
+mode, explaining each field you set. Then give me an initial overview: my
+planet's profile and type, its strengths and limitations, current resources,
+what's nearby in its neighborhood and the wider universe, and a suggested
+strategy for my first 24 hours. Finally, run my first tick.</pre></div>
   </div>
-  <p>Because <code>veydrift-agent</code>'s <code>SKILL.md</code> explicitly lists "planet id," "wallet," and "policy.json" among the phrases that trigger it, a Claude Code or Hermes session with the skill installed picks this up on its own — you don't need to name the skill or type a slash command. What actually happens next is not magic — it's the agent typing the same commands this guide documents by hand:</p>
-  <ol class="checklist">
-    <li><span class="check-num">1</span><div>Runs <code>vd tick init</code> to write a fresh <code>policy.json</code> from the shipped template — exactly the command shown in §6.</div></li>
-    <li><span class="check-num">2</span><div>Opens the file and walks you through each field — tier, wallet, planet id(s), spending limits, reserves, which action types are enabled — the same fields §6 explains below.</div></li>
-    <li><span class="check-num">3</span><div>Should ask you to confirm your wallet address and planet id specifically, since those are the two fields it cannot guess correctly on its own.</div></li>
-    <li><span class="check-num">4</span><div>Will likely offer to run <code>vd tick --dry-run</code> once the file looks right, so you can see a first proposal before deciding anything further.</div></li>
-  </ol>
-  <div class="callout note">
-    <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-    <div><strong class="callout-title">Read what it wrote anyway</strong><p>Letting the agent do the typing doesn't change what ends up in the file or skip any review step — it's the same <code>policy.json</code>, validated the same strict way, that §6 walks through field by field. If you'd rather do this entirely by hand — or want to understand exactly what the agent just set on your behalf — §6 is the complete reference. This same plain-language approach isn't limited to setup, either: once you're running, you can ask the same kind of session "run a Veydrift tick" or "check my queues" instead of typing raw commands yourself — §10 covers this alongside the more formal scheduling options.</p></div>
-  </div>
+  <p>Coordinates (<code>7:181:14</code>, the format shown in-game) work as well as the raw id — the agent resolves them via <code>vd read planets --wallet &lt;address&gt;</code>, which lists both.</p>
+  <p>This isn't magic: it's the agent running the same <code>vd tick init</code> and <code>vd tick --dry-run</code> commands this guide documents by hand, then explaining what it finds. Read what it wrote anyway — §6 is the same file, explained field by field, if you'd rather check its work or do this yourself.</p>
 </section>
 
 <section class="chapter" id="s6" data-num="06" data-label="Create your policy">
@@ -754,7 +751,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   <span class="c-key">"wallet_engine"</span>: { <span class="c-key">"provider"</span>: <span class="c-str">"keystore"</span>, <span class="c-key">"require_confirmation"</span>: true }
 }</pre></div>
   </div>
-  <p><code>wallet</code> is the address that settled the planet(s) you want managed. <code>planets: []</code> auto-discovers every planet that wallet holds. Everything else shown is a reasonable default — don't loosen <code>limits</code> or flip on <code>allow_defense</code>/<code>allow_ships</code> until you've watched the agent for a while (§12).</p>
+  <p><code>wallet</code> is the address that settled the planet(s) you want managed. <code>planets: []</code> auto-discovers every planet that wallet holds. This field only ever holds numeric ids — if you only know your coordinates (the <code>galaxy:system:position</code> shown in the game's UI, e.g. <code>7:181:14</code>), not the id, editing this file by hand means finding the id first: <code>vd read planets --wallet &lt;your address&gt;</code> lists every planet you own with both, so you can match yours by coordinates. Everything else shown is a reasonable default — don't loosen <code>limits</code> or flip on <code>allow_defense</code>/<code>allow_ships</code> until you've watched the agent for a while (§12).</p>
   <div class="callout note">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
     <div><strong class="callout-title">Strict validation</strong><p><code>policy.json</code> is validated on every tick — an unrecognized key is a hard error, not a silent ignore. If you break the JSON, the next tick tells you exactly what's wrong instead of guessing.</p></div>
