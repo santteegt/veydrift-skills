@@ -11,6 +11,8 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-15
+
 ### Added
 - `vd tick`/`vd tick --readiness` narrow (do not close) the documented "a human
   executing a T1 proposal by hand is invisible to this tool" blind spot: whenever the

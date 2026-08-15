@@ -11,6 +11,8 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-15
+
 ### Changed
 - `SKILL.md` now tells an agent invoking `walletctl` directly (not through
   `veydrift-agent`'s `vd tick`) to check for `node_modules/` and run `npm install` first
