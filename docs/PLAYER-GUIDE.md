@@ -387,6 +387,36 @@ override took effect before relying on it.
 §4 has the full list of environment variables both skills read, including the ones on
 this page.
 
+### Running multiple gameplay sessions on one machine
+
+Playing more than one wallet from the same laptop — different accounts, different
+sessions, running concurrently — is safe, but needs two separate settings per session,
+not one:
+
+- **`VEYDRIFT_HOME`** — a distinct directory per session (`~/.veydrift-alice`,
+  `~/.veydrift-bob`, ...). This is what isolates policy, logs, cache, and the tick
+  lockfile between sessions.
+- **`VEYDRIFT_KEYSTORE`** (and `VEYDRIFT_KEYSTORE_PASSWORD`, if you're not using the
+  interactive prompt) — a distinct keystore file per session. This is **not** derived
+  from `VEYDRIFT_HOME` in any way; it's an independent path you set explicitly. It
+  doesn't need to live inside `VEYDRIFT_HOME` either — anywhere on disk works, including
+  right alongside it (`~/.veydrift-alice/keystore.json`) if you'd rather keep each
+  wallet's files together.
+
+In practice this isn't extra bookkeeping: different wallets already mean different
+keystore files (a keystore encodes exactly one key), so you'd be setting
+`VEYDRIFT_KEYSTORE` per session regardless. The thing to actually watch is remembering to
+set **both** vars for each session — setting `VEYDRIFT_HOME` alone does not scope or
+relocate the keystore.
+
+Two caveats, neither a correctness risk: the first tick after a fresh install may trigger
+`veydrift-wallet`'s one-time `npm install` self-heal (§4) — if two sessions' very first
+ticks land in the same instant against a not-yet-installed shared skill copy, both could
+kick off that install at once; harmless once `node_modules` exists, which is almost
+always immediately. And both sessions share whatever RPC/API rate limits the default
+endpoints impose unless you point each at its own via `VEYDRIFT_RPC_URL` above — a
+throughput consideration, not a data-collision one.
+
 ## 8. Your first tick
 
 With `policy.json` written and the wallet skill verified, run one tick:
