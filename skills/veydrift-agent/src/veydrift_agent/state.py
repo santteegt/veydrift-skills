@@ -173,6 +173,29 @@ class PendingTx(BaseModel):
     reverted: bool = False
 
 
+class UnresolvedProposal(BaseModel):
+    """Identity of the most recently *logged* on-chain proposal (`Action.is_onchain()`)
+    that `vd tick` itself did NOT execute -- either because the policy was tier 1
+    (`advisor`, which never sends) or because `wallet_engine.require_confirmation`
+    stopped the send at tier>=2. A guard-BLOCKed tier>=2 proposal is deliberately NOT
+    captured here -- that path never reaches a send decision at all, so there's nothing
+    "unresolved" about it in the sense this model tracks.
+
+    Consumed by `tick.py`'s `_maybe_check_human_activity` at the START of the tick AFTER
+    this one, before that tick's own `_finish_tick` overwrites this field for the round
+    after that -- see `AgentState.last_unresolved_onchain_proposal`'s own docstring."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    ts: datetime
+    planet_id: int | None = None
+    function: str | None = None
+    entity_id: int | None = None
+    entity_name: str | None = None
+    target_level: int | None = None
+    quantity: int | None = None
+
+
 class AgentState(_Base):
     version: int = 1
 
@@ -208,6 +231,22 @@ class AgentState(_Base):
     #: (AgentState is not part of the frozen models.py on-disk contract -- AGENTS.md §4 --
     #: so this is safe to add without a version bump).
     last_proposal_fingerprint: str | None = None
+
+    #: The most recently *logged* on-chain proposal this tool itself did NOT execute --
+    #: tier 1 (which never sends), or `wallet_engine.require_confirmation` stopping the
+    #: send at tier>=2. `None` whenever the most-recent logged proposal doesn't meet that
+    #: description: a noop/escalate/halt, a guard-BLOCKed tier>=2 proposal, or an
+    #: on-chain proposal this tool DID send itself. Read (then always overwritten --
+    #: never merely cleared) by `tick._run_tick`/`_finish_tick` every tick: the value
+    #: captured at the TOP of one tick (before this tick's own state mutations) drives
+    #: that tick's best-effort `/wallet/{addr}/activity?since=...` check
+    #: (`tick._maybe_check_human_activity`); the value written at the BOTTOM of the same
+    #: tick describes THIS tick's own proposal for the NEXT tick to check against, gated
+    #: on `not is_duplicate` the same way `last_proposal_fingerprint` is (a
+    #: content-identical repeat tick produced no new evidence and must not overwrite
+    #: this). Never read by guard.py -- this is reporting-only, never a Decision input.
+    #: Additive field, same rationale as `last_proposal_fingerprint` above.
+    last_unresolved_onchain_proposal: UnresolvedProposal | None = None
 
     def record_tick(self, *, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC)

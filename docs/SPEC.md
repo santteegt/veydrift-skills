@@ -225,6 +225,16 @@ for manual execution. That is what makes the T1→T2 decision evidence-based.
 actually executed, **divergences between proposal and human action**, which guardrails fired and why,
 and gas spent. A green tick count alone is a bad promotion signal; divergence is the useful one.
 
+Divergence's stated blind spot ("a human executing a T1 proposal by hand, outside this tool, leaves
+no trace this command can see") is narrowed, not closed, by a best-effort check: whenever the previous
+tick's proposal was on-chain and unresolved (tier 1, or `require_confirmation` stopped the send), the
+next tick fetches `/wallet/{addr}/activity` since that proposal's timestamp and surfaces whatever raw
+items come back — titles, kinds, transaction hashes — for a human to read. This is deliberately **not**
+a confirmed match/diverge verdict: the only `/activity` item ever actually observed in this project is
+a one-time "planet settled" milestone, so the shape of a routine building/research-completion item is
+unconfirmed. `vd readiness`'s `human_activity_checked`/`human_activity_hits` counts summarise this;
+never a guard input, never affects `Decision`.
+
 ---
 
 ## 5. The `veydrift-agent` skill
@@ -408,6 +418,14 @@ current state with a `duplicate`/`note` marker. This is content-based, not time-
 based: live guard-evaluation figures drift over real elapsed time even when the
 recommendation itself is unchanged, so a genuine re-evaluation hours later still logs
 normally.
+
+Step 8 also runs a best-effort human-activity check, gated on there being anything
+unresolved from the *previous* tick to check (an on-chain proposal this tool itself did
+not execute): a `/wallet/{addr}/activity` fetch, embedded into this tick's own
+`proposals.jsonl` entry (`human_activity_check`, excluded from the dedup fingerprint
+above -- its content legitimately varies tick to tick even when this tick's own proposal
+is a genuine repeat) and surfaced on the printed report as an `activity:` line. See §4's
+promotion-evidence note for the full framing (raw evidence, never a verdict).
 
 `--dry-run` is the default at tier 1 and cannot be disabled there. The indexed-wait in step 7 is
 mandatory: a confirmed receipt is not indexed state, and no dependent action may follow until the

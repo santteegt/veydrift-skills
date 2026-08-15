@@ -11,6 +11,20 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+### Added
+- `vd tick`/`vd tick --readiness` narrow (do not close) the documented "a human
+  executing a T1 proposal by hand is invisible to this tool" blind spot: whenever the
+  previous tick's proposal was on-chain and unresolved (tier 1, or
+  `wallet_engine.require_confirmation` stopped the send), the next tick makes a
+  best-effort `/wallet/{addr}/activity` fetch and surfaces whatever raw items come back
+  — titles, kinds, transaction hashes — for a human to read. This is **observational
+  only**: it never feeds `guard.py`/`Decision`, and it deliberately does **not** classify
+  "followed advice" vs. "diverted" — the only `/activity` item ever actually observed by
+  this project is a one-time "planet settled" milestone, so the shape of a routine
+  building/research-completion item is unconfirmed. A structured match/diverge
+  classifier is a deferred follow-up once a real completion-shaped item has been
+  observed.
+
 ### Fixed
 - `tick.py`'s `_run_walletctl` now self-heals a missing `veydrift-wallet/node_modules`
   (installs once from the pinned lockfile, logged visibly, never silently) instead of

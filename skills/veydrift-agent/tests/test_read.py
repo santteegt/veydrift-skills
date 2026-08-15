@@ -25,7 +25,7 @@ import respx
 from typer.testing import CliRunner
 
 from veydrift_agent import http
-from veydrift_agent.read import app
+from veydrift_agent.read import app, fetch_activity
 
 BASE = http.API_BASE_URL
 WALLET = "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
@@ -369,3 +369,39 @@ def test_snapshot_reports_an_incoming_hostile_fleet():
 
     summary = runner.invoke(app, ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET)])
     assert "Attack from 23" in summary.stdout
+
+
+# --------------------------------------------------------------------------------------
+# fetch_activity() -- the internal, CLI-bypassing helper tick.py's human-activity
+# reconciliation check calls directly (never through `vd read activity`).
+# --------------------------------------------------------------------------------------
+
+
+@respx.mock
+def test_fetch_activity_wires_since_param():
+    route = respx.get(f"{BASE}/wallet/{WALLET}/activity", params={"since": "1786121739"}).mock(
+        return_value=httpx.Response(200, json=load("wallet_activity.json"))
+    )
+
+    data = fetch_activity(WALLET, since="1786121739")
+
+    assert route.called
+    assert data["items"][0]["kind"] == "planet-started"
+
+
+@respx.mock
+def test_fetch_activity_without_since_sends_no_since_param():
+    route = respx.get(f"{BASE}/wallet/{WALLET}/activity").mock(return_value=httpx.Response(200, json=load("wallet_activity.json")))
+
+    fetch_activity(WALLET)
+
+    assert route.called
+    assert "since" not in route.calls.last.request.url.params
+
+
+@respx.mock
+def test_fetch_activity_raises_on_http_error_rather_than_exiting():
+    respx.get(f"{BASE}/wallet/{WALLET}/activity").mock(return_value=httpx.Response(404, text="not found"))
+
+    with pytest.raises(http.VeydriftHTTPError):
+        fetch_activity(WALLET)

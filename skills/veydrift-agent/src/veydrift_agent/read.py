@@ -548,6 +548,24 @@ def missions(
     _emit(data, target="missions", json_output=json_output, out=out)
 
 
+def fetch_activity(wallet: str, *, since: str | None = None, max_age: float | None = None) -> dict[str, Any]:
+    """GET /wallet/{addr}/activity, bypassing the CLI/`_emit` layer -- called directly by
+    `tick.py`'s human-activity reconciliation check (tick.py never goes through the CLI
+    command). Unlike `_fetch_or_exit`, this does NOT catch `http.VeydriftAPIError`; a
+    caller needing best-effort behaviour (tick.py) catches it itself, the same posture
+    `tick._live_addresses` already takes for `/runtime-config`.
+
+    `since`'s exact wire format is unverified -- no fixture or probe in this repo
+    demonstrates a request that actually sets it (`references/api-routes.md` §3.15 lists
+    it as a real query param but `vd read activity` has never exercised it). Assumed
+    unix-epoch-seconds-as-string, matching the fixture's `transactionAt`/`occurredAt`
+    shape. If that assumption is wrong, this degrades to an ignored filter or a caught
+    4xx -- never a crash -- so a caller must not treat an empty `items` list as proof
+    nothing happened."""
+    params: dict[str, Any] | None = {"since": since} if since is not None else None
+    return http.fetch(f"/wallet/{wallet}/activity", params, max_age=max_age)
+
+
 @app.command()
 def activity(
     wallet: str | None = WalletOption,

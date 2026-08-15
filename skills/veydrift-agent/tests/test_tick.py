@@ -39,7 +39,7 @@ from veydrift_agent.models import (
     Tier,
     UnsignedTx,
 )
-from veydrift_agent.state import AgentState, PendingTx, init_policy, load_agent_state, save_agent_state
+from veydrift_agent.state import AgentState, PendingTx, UnresolvedProposal, init_policy, load_agent_state, save_agent_state
 
 runner = CliRunner()
 WALLET = "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
@@ -1089,4 +1089,208 @@ def test_duplicate_substantive_block_does_not_append_a_second_strategy_md_entry(
     second_strategy = log.strategy_path().read_text()
     assert second_strategy == first_strategy  # unchanged -- no new entry appended
     assert load_agent_state().tick_count == 1
+
+
+# --------------------------------------------------------------------------------------
+# Human-activity reconciliation: a best-effort /wallet/{addr}/activity check for the
+# previous tick's unresolved (tier 1, or require_confirmation-stopped) on-chain proposal.
+# Never affects Decision; deliberately does not classify match/diverge -- see
+# tick.py's _maybe_check_human_activity docstring.
+# --------------------------------------------------------------------------------------
+
+
+def test_no_activity_check_on_the_very_first_tick(isolated_home, monkeypatch):
+    _write_policy()  # tier advisor
+    _patch_common(monkeypatch)
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not check /activity when nothing is unresolved yet")
+
+    monkeypatch.setattr(tick.read, "fetch_activity", _boom)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+
+def test_activity_checked_on_the_tick_after_a_tier1_onchain_proposal(isolated_home, monkeypatch):
+    _write_policy()  # tier advisor
+    _patch_common(monkeypatch)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    previous = load_agent_state().last_unresolved_onchain_proposal
+    assert previous is not None
+    assert previous.function == "startBuildingUpgrade"
+
+    calls = []
+
+    def _fake_fetch_activity(wallet, *, since=None, max_age=None):
+        calls.append({"wallet": wallet, "since": since})
+        return {
+            "items": [
+                {
+                    "kind": "planet-started",
+                    "title": "Home planet settled",
+                    "detail": "Planet #664",
+                    "transactionHash": "0x" + "ab" * 32,
+                    "occurredAt": "1786121739",
+                    "metadata": {"planetId": "664"},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(tick.read, "fetch_activity", _fake_fetch_activity)
+    changed_action = _build_action().model_copy(update={"target_level": 2})
+    _patch_common(monkeypatch, action=changed_action)  # must differ, or tick 2 dedups against tick 1
+
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r2.exit_code == 0, r2.output
+
+    assert len(calls) == 1
+    assert calls[0]["wallet"] == WALLET
+    assert calls[0]["since"] == str(int(previous.ts.timestamp()))
+
+    proposals = log.read_proposals()
+    assert len(proposals) == 2
+    check = proposals[1]["human_activity_check"]
+    assert check["checked"] is True
+    assert check["items_found"] == 1
+    assert check["items"][0]["kind"] == "planet-started"
+    assert "activity: 1 activity item(s)" in r2.output
+
+
+@respx.mock
+def test_activity_check_skipped_on_killswitch_tick(isolated_home, monkeypatch):
+    from veydrift_agent.state import killswitch_path
+
+    _write_policy()  # tier advisor
+    _patch_common(monkeypatch)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    assert load_agent_state().last_unresolved_onchain_proposal is not None
+
+    def _boom(*a, **kw):
+        raise AssertionError("killswitch tick must not check /activity")
+
+    monkeypatch.setattr(tick.read, "fetch_activity", _boom)
+    monkeypatch.setattr(tick, "_fetch_snapshot", _boom)
+
+    killswitch_path().touch()
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json={"ok": True, "readiness": {"ready": True}}))
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+
+def test_activity_check_degrades_gracefully_on_fetch_failure(isolated_home, monkeypatch):
+    _write_policy()  # tier advisor
+    _patch_common(monkeypatch)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+
+    def _fail(*a, **kw):
+        raise http.VeydriftNetworkError("boom")
+
+    monkeypatch.setattr(tick.read, "fetch_activity", _fail)
+    changed_action = _build_action().model_copy(update={"target_level": 3})
+    _patch_common(monkeypatch, action=changed_action)
+
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r2.exit_code == 0, r2.output  # never crashes on a fetch failure
+
+    proposals = log.read_proposals()
+    check = proposals[1]["human_activity_check"]
+    assert check["checked"] is True
+    assert check["items_found"] is None
+    assert "boom" in check["fetch_error"]
+    assert proposals[1]["guard_decision"] == proposals[0]["guard_decision"]  # guard untouched by the failure
+
+
+def test_last_unresolved_onchain_proposal_set_when_require_confirmation_stops_send(isolated_home, monkeypatch, tmp_path):
+    _write_policy(tier="economy")  # wallet_engine.require_confirmation defaults to true
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, gas=1_000_000_000, built_tx_path=tmp_path / "tx.json")
+    _allow_guard(monkeypatch)
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+
+    previous = load_agent_state().last_unresolved_onchain_proposal
+    assert previous is not None
+    assert previous.function == "startBuildingUpgrade"
+
+
+def test_last_unresolved_onchain_proposal_cleared_when_tool_executes_the_action_itself(isolated_home, monkeypatch, tmp_path):
+    _write_policy(tier="economy", wallet_engine={"provider": "keystore", "require_confirmation": False})
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, gas=1_000_000_000, built_tx_path=tmp_path / "tx.json")
+    _allow_guard(monkeypatch)
+    monkeypatch.setattr(tick, "_send_and_await", lambda *a, **kw: (True, "success", "0x" + "cc" * 32))
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+    assert load_agent_state().last_unresolved_onchain_proposal is None
+
+
+def test_duplicate_tick_leaves_last_unresolved_onchain_proposal_untouched(isolated_home, monkeypatch):
+    _write_policy()  # tier advisor
+    monkeypatch.setattr(tick.read, "fetch_activity", lambda *a, **kw: {"items": []})
+    _patch_common(monkeypatch)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    first = load_agent_state().last_unresolved_onchain_proposal
+    assert first is not None
+
+    r2 = runner.invoke(tick.app, ["--dry-run"])  # identical action -> deduped against tick 1
+    assert r2.exit_code == 0, r2.output
+    second = load_agent_state().last_unresolved_onchain_proposal
+    assert second is not None
+    assert second.ts == first.ts  # untouched, not re-set to tick 2's own `now`
+
+
+def test_activity_items_filtered_by_metadata_planet_id_mismatch_excluded_but_missing_metadata_kept(isolated_home, monkeypatch):
+    previous = UnresolvedProposal(
+        ts=datetime(2026, 8, 12, 12, 0, tzinfo=UTC), planet_id=664, function="startBuildingUpgrade", entity_id=3
+    )
+
+    def _fake_fetch_activity(wallet, *, since=None, max_age=None):
+        return {
+            "items": [
+                {"kind": "a", "title": "same planet", "metadata": {"planetId": "664"}},
+                {"kind": "b", "title": "different planet", "metadata": {"planetId": "999"}},
+                {"kind": "c", "title": "no metadata"},
+            ]
+        }
+
+    monkeypatch.setattr(tick.read, "fetch_activity", _fake_fetch_activity)
+
+    record, _line = tick._maybe_check_human_activity(_economy_policy(), previous, now=datetime(2026, 8, 12, 13, 0, tzinfo=UTC))
+
+    titles = {i["title"] for i in record["items"]}
+    assert titles == {"same planet", "no metadata"}
+
+
+def test_readiness_reports_human_activity_checked_and_hits_counts(isolated_home, monkeypatch):
+    _write_policy()  # tier advisor
+    _patch_common(monkeypatch)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+
+    monkeypatch.setattr(
+        tick.read, "fetch_activity", lambda *a, **kw: {"items": [{"kind": "planet-started", "title": "x", "metadata": {"planetId": "664"}}]}
+    )
+    changed_action = _build_action().model_copy(update={"target_level": 4})
+    _patch_common(monkeypatch, action=changed_action)
+
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r2.exit_code == 0, r2.output
+
+    result = runner.invoke(tick.app, ["--readiness"])
+    assert result.exit_code == 0, result.output
+    assert "human_activity_checked: 1 tick(s) checked" in result.output
+    assert "; 1 found" in result.output
 

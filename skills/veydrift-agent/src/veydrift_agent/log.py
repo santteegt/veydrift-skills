@@ -117,6 +117,16 @@ def _extract_known_tx_hashes(record: Mapping[str, Any]) -> list[str]:
         # uint256 arg). Calldata is passed through scrub_text separately, unscrubbed, by
         # `_json_line` below -- see its docstring.
         del data
+    # tick.py's human-activity reconciliation (_maybe_check_human_activity) embeds real,
+    # public, already-indexed tx hashes from /wallet/{addr}/activity -- exactly as "known
+    # legitimate" as the top-level tx_hash field above, not a secret. Without this, every
+    # activity tx hash would come out masked as `0x****...`, defeating the point of
+    # recording it for a human to cross-reference.
+    activity = record.get("human_activity_check")
+    if isinstance(activity, Mapping):
+        for item in activity.get("items") or []:
+            if isinstance(item, Mapping) and isinstance(item.get("transactionHash"), str):
+                hashes.append(item["transactionHash"])
     return hashes
 
 
@@ -219,12 +229,14 @@ def format_tick_block(
     proposal_lines: list[str],
     next_hint: str | None = None,
     duplicate_of: str | None = None,
+    human_activity_line: str | None = None,
 ) -> str:
     lines = [
         f"[{taken_at.strftime('%Y-%m-%dT%H:%M:%SZ')}] TICK #{tick_number}  tier={tier}  {planet_line}",
         f"  state:    {state_line}",
         f"  queues:   {queues_line}",
         f"  incoming: {incoming_line}",
+        *([f"  activity: {human_activity_line}"] if human_activity_line else []),
         *[f"  {line}" for line in proposal_lines],
     ]
     if duplicate_of:

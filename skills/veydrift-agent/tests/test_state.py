@@ -164,6 +164,38 @@ def test_agent_state_missing_fingerprint_field_loads_with_default(isolated_home)
     assert loaded.last_proposal_fingerprint is None
 
 
+def test_last_unresolved_onchain_proposal_defaults_none_and_round_trips(isolated_home):
+    from datetime import UTC, datetime
+
+    assert state.load_agent_state().last_unresolved_onchain_proposal is None
+
+    s = state.AgentState()
+    s.last_unresolved_onchain_proposal = state.UnresolvedProposal(
+        ts=datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC),
+        planet_id=664,
+        function="startBuildingUpgrade",
+        entity_id=0,
+        entity_name="Metal Mine",
+        target_level=5,
+    )
+    state.save_agent_state(s)
+
+    reloaded = state.load_agent_state().last_unresolved_onchain_proposal
+    assert reloaded is not None
+    assert reloaded.planet_id == 664
+    assert reloaded.function == "startBuildingUpgrade"
+    assert reloaded.target_level == 5
+
+
+def test_agent_state_missing_unresolved_proposal_field_loads_with_default(isolated_home):
+    """Same additive-field guarantee as last_proposal_fingerprint above."""
+    state.agent_state_path().parent.mkdir(parents=True, exist_ok=True)
+    state.agent_state_path().write_text(json.dumps({"version": 1, "tick_count": 3}))
+
+    loaded = state.load_agent_state()
+    assert loaded.last_unresolved_onchain_proposal is None
+
+
 def test_record_gas_spent_accumulates_within_a_day():
     s = state.AgentState()
     from datetime import UTC, datetime

@@ -126,6 +126,29 @@ def test_log_action_record_with_known_tx_hash_preserves_it(isolated_home):
     assert record["tx_hash"] == FAKE_TX_HASH
 
 
+def test_human_activity_check_tx_hashes_survive_scrubbing(isolated_home):
+    """tick.py's _maybe_check_human_activity embeds real, public /activity tx hashes --
+    these must survive the hex64 mask exactly like the top-level tx_hash field does,
+    while an unrelated hex64-shaped string elsewhere in the same record still gets
+    masked."""
+    unrelated_hex64 = "b" * 64
+    log.log_proposal(
+        {
+            "ts": "2026-08-12T00:00:00Z",
+            "tick": 2,
+            "rationale": f"unrelated leaked-looking value: 0x{unrelated_hex64}",
+            "human_activity_check": {
+                "checked": True,
+                "items_found": 1,
+                "items": [{"kind": "planet-started", "title": "Home planet settled", "transactionHash": FAKE_TX_HASH}],
+            },
+        }
+    )
+    record = json.loads(log.proposals_path().read_text().splitlines()[0])
+    assert record["human_activity_check"]["items"][0]["transactionHash"] == FAKE_TX_HASH
+    assert unrelated_hex64 not in log.proposals_path().read_text()
+
+
 # --------------------------------------------------------------------------------------
 # strategy.md
 # --------------------------------------------------------------------------------------
@@ -168,6 +191,35 @@ def test_write_tick_markdown_creates_one_file_per_tick(isolated_home):
     text = path.read_text()
     assert "TICK #1" in text
     assert "next:     Metal Mine 3->4" in text
+
+
+def test_format_tick_block_omits_activity_line_when_none():
+    block = log.format_tick_block(
+        tick_number=1,
+        taken_at=datetime(2026, 8, 12, tzinfo=UTC),
+        tier="advisor",
+        planet_line="planet 664",
+        state_line="M 1  C 1  D 1",
+        queues_line="idle",
+        incoming_line="none",
+        proposal_lines=[],
+    )
+    assert "activity:" not in block
+
+
+def test_format_tick_block_includes_activity_line_when_set():
+    block = log.format_tick_block(
+        tick_number=1,
+        taken_at=datetime(2026, 8, 12, tzinfo=UTC),
+        tier="advisor",
+        planet_line="planet 664",
+        state_line="M 1  C 1  D 1",
+        queues_line="idle",
+        incoming_line="none",
+        proposal_lines=[],
+        human_activity_line="1 activity item(s) since unresolved startBuildingUpgrade",
+    )
+    assert "activity: 1 activity item(s) since unresolved startBuildingUpgrade" in block
 
 
 def test_write_tick_markdown_scrubs_secrets(isolated_home, monkeypatch):

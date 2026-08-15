@@ -333,8 +333,21 @@ Query: `includeProjected`, `page`, `pageSize`, `since` — `vd read activity` us
 these (not in SPEC.md §5.2's flag list), always fetching page 1 defaults. Shape:
 `{wallet, items, summary, through, pagination}`. `items[]` is a chronological event feed
 (`{transactionAt, transactionHash, category, kind, direction, title, detail,
-occurredAt, ...}`) — e.g. `{"kind": "planet-started", "title": "Home planet settled",
-"detail": "Planet #664 · 7:181:14"}` for the account's one lifetime event so far.
+occurredAt, metadata: {galaxy, planetId, position, system}, ...}`) — e.g. `{"kind":
+"planet-started", "title": "Home planet settled", "detail": "Planet #664 · 7:181:14"}`
+for the account's one lifetime event so far — **still the only `/activity` item ever
+actually observed by this project**, live or fixture. No routine building/research/ship/
+defense-completion item has ever been seen here, so its `kind`/shape is unconfirmed
+(the pinned ABI's `BuildingCompleted`/`ResearchCompleted`/etc. events strongly suggest
+one exists, but that's inference from contract source, not observation — keep that
+distinction in mind before trusting any code that assumes a specific `kind` value for
+those).
+
+Also consumed internally, bypassing this CLI command entirely: `read.fetch_activity()`
+is called directly by `tick.py`'s `_maybe_check_human_activity` (the best-effort
+"did a human execute my proposal by hand" check, §4/§5.7 of `docs/SPEC.md`) with a
+`since` param this CLI command has never exercised — see that function's docstring for
+the resulting caveat about `since`'s wire format being an unverified assumption.
 
 ### 3.16 The three "universe" routes
 

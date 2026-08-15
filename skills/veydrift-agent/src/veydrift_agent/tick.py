@@ -99,6 +99,7 @@ from veydrift_agent.state import (
     AgentState,
     PendingTx,
     TickLockedError,
+    UnresolvedProposal,
     load_agent_state,
     policy_path,
     save_agent_state,
@@ -527,6 +528,99 @@ def _reconcile_pending(agent_state: AgentState, *, indexed_block: int | None, no
     return True
 
 
+def _maybe_check_human_activity(
+    policy_model: Policy, previous: UnresolvedProposal | None, *, now: datetime
+) -> tuple[dict[str, Any] | None, str | None]:
+    """If `previous` (the previous tick's unresolved on-chain proposal -- tier 1, or
+    `require_confirmation` stopped the send) is set, fetch
+    `/wallet/{addr}/activity?since=<previous.ts>` and surface whatever raw items come
+    back, verbatim -- title/kind/tx hash, no match/diverge verdict. Returns `(None,
+    None)` when `previous` is `None`, which is the common case (nothing unresolved to
+    check this tick).
+
+    **Deliberately does not classify.** The only `/activity` item ever actually observed
+    against this codebase (fixtures or live) is a one-time `"planet-started"` milestone
+    (`references/api-routes.md` §3.15) -- nobody has confirmed the shape of a
+    queue-completion item. Asserting a confident match/no-match against an unconfirmed
+    `kind` taxonomy would be exactly the vacuous-confidence trap AGENTS.md §5 warns
+    guard.py's gates against; a human reads the raw titles instead. A structured
+    classifier is a deferred follow-up once a real completion-shaped item has actually
+    been observed -- see CHANGELOG.md's `[Unreleased]` entry for this feature.
+
+    Never raises and never influences `Decision`/guard.py -- reporting-only, exactly like
+    `_live_addresses`'s existing best-effort posture. A fetch failure degrades to a
+    `fetch_error` field and an honest "could not fetch" line, never a crash.
+
+    `/activity` has no server-side planet filter (confirmed, `references/api-routes.md`
+    §3.15) -- filtering to `previous.planet_id` happens client-side against each item's
+    `metadata.planetId`. An item with no `planetId` in its metadata is KEPT rather than
+    dropped: the metadata shape beyond the one observed sample is unconfirmed, and
+    hiding a true positive is worse than showing an unrelated item.
+    """
+    if previous is None:
+        return None, None
+
+    since = str(int(previous.ts.timestamp()))
+    prior_desc = f"{previous.function or previous.entity_name or 'action'} (planet {previous.planet_id}, entity {previous.entity_id})"
+
+    try:
+        data = read.fetch_activity(policy_model.wallet, since=since)
+    except http.VeydriftAPIError as exc:
+        record = {
+            "checked": True,
+            "since_ts": previous.ts.isoformat(),
+            "prior_function": previous.function,
+            "prior_planet_id": previous.planet_id,
+            "prior_entity_id": previous.entity_id,
+            "items_found": None,
+            "items": [],
+            "fetch_error": str(exc)[:300],
+        }
+        return record, f"could not fetch /activity since unresolved {prior_desc} -- see fetch_error in proposals.jsonl"
+
+    raw_items = data.get("items") or []
+    kept: list[dict[str, Any]] = []
+    for item in raw_items:
+        meta_planet = (item.get("metadata") or {}).get("planetId")
+        if previous.planet_id is not None and meta_planet is not None and str(meta_planet) != str(previous.planet_id):
+            continue
+        kept.append(
+            {
+                "kind": item.get("kind"),
+                "title": item.get("title"),
+                "detail": item.get("detail"),
+                "transactionHash": item.get("transactionHash"),
+                "occurredAt": item.get("occurredAt"),
+            }
+        )
+
+    record = {
+        "checked": True,
+        "since_ts": previous.ts.isoformat(),
+        "prior_function": previous.function,
+        "prior_planet_id": previous.planet_id,
+        "prior_entity_id": previous.entity_id,
+        "items_found": len(kept),
+        "items": kept,
+        "fetch_error": None,
+    }
+
+    if kept:
+        titles = "; ".join(f"{i.get('kind')}: {i.get('title')}" for i in kept)
+        log.append_strategy(
+            f"human activity check: {len(kept)} /activity item(s) since the unresolved proposal "
+            f"{prior_desc} at {previous.ts.isoformat()} -- {titles}. NOT a confirmed match to that "
+            "proposal (see tick.py's _maybe_check_human_activity docstring); a human should read "
+            "these titles directly.",
+            now=now,
+        )
+        line = f"{len(kept)} activity item(s) since unresolved {prior_desc} -- see logs/strategy.md"
+    else:
+        line = f"no activity items found since unresolved {prior_desc} (does not confirm nothing happened)"
+
+    return record, line
+
+
 def _await_indexed(*, wallet: str, policy_planets: list[int], target_block: int, max_wait_s: int) -> bool:
     """The mandatory post-receipt wait (docs/SPEC.md §5.7): polls a fresh snapshot's
     `latest_indexed_block` until it covers `target_block`, or `max_wait_s` elapses.
@@ -644,6 +738,10 @@ def main(
 def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> None:
     now = datetime.now(UTC)
     agent_state = load_agent_state()
+    # Captured BEFORE this tick's own state mutations -- describes what this tick should
+    # check for human activity on, not what it's about to propose itself. Never consulted
+    # on the killswitch path below (must never add a network call beyond /health there).
+    previous_unresolved = agent_state.last_unresolved_onchain_proposal
     agent_state.touch(now=now)  # tick_count decision is deferred to _finish_tick's dedup check
 
     # Step 2: killswitch check -- ONE health call, nothing else, if active.
@@ -735,6 +833,8 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
                 policy_model, agent_state, action, unsigned_tx, snapshot, now, gas_cost_wei_estimate=gas_cost_wei
             )
 
+    human_activity_record, human_activity_line = _maybe_check_human_activity(policy_model, previous_unresolved, now=now)
+
     _finish_tick(
         policy_model,
         agent_state,
@@ -748,6 +848,8 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
         send_outcome=send_outcome,
         confirm_hint=confirm_hint,
         tx_hash=tx_hash,
+        human_activity_record=human_activity_record,
+        human_activity_line=human_activity_line,
     )
 
 
@@ -886,19 +988,24 @@ def _send_and_await(
     return False, "unknown", tx_hash
 
 
-_FINGERPRINT_EXCLUDED_KEYS = {"ts", "tick"}
+_FINGERPRINT_EXCLUDED_KEYS = {"ts", "tick", "human_activity_check"}
 
 
 def _fingerprint_proposal(record: dict[str, Any]) -> str:
     """Stable content fingerprint of a proposals.jsonl record, excluding `ts`/`tick` --
     the only two fields expected to differ between a genuine content-identical repeat and
-    a first-time proposal. `sort_keys=True` makes this order-independent even though
-    `guard_verdicts` is already gate-order-deterministic; `default=str` covers any
-    non-JSON-native value the same way `log.py`'s own serialisation would. Computed over
-    the in-memory record, deliberately never over a re-read/re-parsed `proposals.jsonl`
-    line -- `log.py`'s `_json_line` scrubs secrets/hex before writing, and comparing
-    pre-scrub to post-scrub content risks a false match or mismatch from the scrub step
-    itself."""
+    a first-time proposal -- and `human_activity_check`: that field describes a
+    best-effort /activity lookup about a DIFFERENT (earlier, unresolved) proposal, not
+    this one, and its content (since_ts, items found) legitimately varies tick to tick
+    even when this tick's own proposed action is a genuine content-identical repeat of
+    the last one. Including it would silently defeat dedup on every tick that has
+    anything unresolved to check -- i.e. almost every tick at tier 1. `sort_keys=True`
+    makes this order-independent even though `guard_verdicts` is already
+    gate-order-deterministic; `default=str` covers any non-JSON-native value the same way
+    `log.py`'s own serialisation would. Computed over the in-memory record, deliberately
+    never over a re-read/re-parsed `proposals.jsonl` line -- `log.py`'s `_json_line`
+    scrubs secrets/hex before writing, and comparing pre-scrub to post-scrub content
+    risks a false match or mismatch from the scrub step itself."""
     comparable = {k: v for k, v in record.items() if k not in _FINGERPRINT_EXCLUDED_KEYS}
     return hashlib.sha256(json.dumps(comparable, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -917,6 +1024,8 @@ def _finish_tick(
     send_outcome: str | None = None,
     confirm_hint: str | None = None,
     tx_hash: str | None = None,
+    human_activity_record: dict[str, Any] | None = None,
+    human_activity_line: str | None = None,
 ) -> None:
     proposal_record = {
         "ts": now.isoformat(),
@@ -939,6 +1048,7 @@ def _finish_tick(
         "tx_hash": tx_hash,  # Fix 6c: previously always None (`action.function and None`)
         "send_outcome": send_outcome,
         "executed": executed,
+        "human_activity_check": human_activity_record,
     }
 
     # Dedup: a content-identical repeat of the immediately-previous logged proposal (e.g.
@@ -961,6 +1071,23 @@ def _finish_tick(
         agent_state.record_tick(now=now)
         agent_state.proposals_count += 1
         agent_state.last_proposal_fingerprint = fingerprint
+        # This tick's own proposal becomes the NEXT tick's "unresolved" check target only
+        # if it's on-chain and this tick itself did not execute it (tier 1, or
+        # require_confirmation stopped the send -- confirm_hint is only ever set in that
+        # branch). A guard-BLOCKed tier>=2 proposal never reaches a send decision at all,
+        # so it falls through to the `else` (cleared) case, same as a noop/escalate.
+        if action.is_onchain() and (policy_model.tier is Tier.ADVISOR or confirm_hint is not None):
+            agent_state.last_unresolved_onchain_proposal = UnresolvedProposal(
+                ts=now,
+                planet_id=action.planet_id,
+                function=action.function,
+                entity_id=action.entity_id,
+                entity_name=action.entity_name,
+                target_level=action.target_level,
+                quantity=action.quantity,
+            )
+        else:
+            agent_state.last_unresolved_onchain_proposal = None
         proposal_record["tick"] = agent_state.tick_count
     save_agent_state(agent_state)
 
@@ -976,6 +1103,7 @@ def _finish_tick(
             action, guard_report, unsigned_tx, executed, policy_model.tier, send_outcome=send_outcome, confirm_hint=confirm_hint
         ),
         duplicate_of=duplicate_note,
+        human_activity_line=human_activity_line,
     )
 
     if not is_duplicate:
@@ -1022,6 +1150,11 @@ def _print_readiness() -> None:
     `walletctl` directly, without ever recording it back into this tool, leaves no trace
     this command can see. That limitation is stated in the output itself, not hidden.
 
+    `_maybe_check_human_activity` NARROWS this blind spot on a best-effort basis (raw
+    `/wallet/{addr}/activity` items surfaced for a human to read, never a confirmed
+    match) -- it does not close it. `human_activity_checked`/`human_activity_hits` below
+    summarise what's already embedded in each `proposals.jsonl` entry, no new I/O.
+
     Fix 5: structural tier blocks (the `tier` gate BLOCKing alone, expected at every tick
     below the function's minimum tier) are counted and reported SEPARATELY from
     substantive guardrail fires -- see `guard.is_structural_tier_block`. Mixing the two
@@ -1058,6 +1191,10 @@ def _print_readiness() -> None:
         outcome = a.get("status") or "success"
         outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
 
+    activity_checks = [p for p in proposals if (p.get("human_activity_check") or {}).get("checked")]
+    human_activity_checked = len(activity_checks)
+    human_activity_hits = sum(1 for p in activity_checks if (p.get("human_activity_check") or {}).get("items_found"))
+
     lines = [
         f"tick_count:        {agent_state.tick_count}",
         f"uptime:            {uptime}",
@@ -1065,6 +1202,9 @@ def _print_readiness() -> None:
         f"executed:          {len(actions)} (by outcome: {', '.join(f'{k}={v}' for k, v in sorted(outcome_counts.items())) or 'none'})",
         f"divergence:        {len(proposals) - len(actions)} proposals with no matching actions.jsonl entry "
         "(NOTE: a human executing a T1 proposal by hand, outside this tool, is not observable here)",
+        f"human_activity_checked: {human_activity_checked} tick(s) checked /wallet/{{addr}}/activity for evidence "
+        f"of a human executing an unresolved T1/require-confirmation proposal by hand; {human_activity_hits} found "
+        "≥1 raw item (titles only, see proposals.jsonl -- NOT a confirmed match to the proposal)",
         f"gas_spent_wei:     {gas_spent}",
         f"structural_tier_blocks: {structural_tier_blocks} (the `tier` gate BLOCKing alone -- expected below "
         "the function's minimum tier, NOT promotion evidence; see references/guardrails.md)",
