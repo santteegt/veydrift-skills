@@ -218,6 +218,7 @@ def format_tick_block(
     incoming_line: str,
     proposal_lines: list[str],
     next_hint: str | None = None,
+    duplicate_of: str | None = None,
 ) -> str:
     lines = [
         f"[{taken_at.strftime('%Y-%m-%dT%H:%M:%SZ')}] TICK #{tick_number}  tier={tier}  {planet_line}",
@@ -226,6 +227,8 @@ def format_tick_block(
         f"  incoming: {incoming_line}",
         *[f"  {line}" for line in proposal_lines],
     ]
+    if duplicate_of:
+        lines.append(f"  note:     {duplicate_of}")
     if next_hint:
         lines.append(f"  next:     {next_hint}")
     return "\n".join(lines)

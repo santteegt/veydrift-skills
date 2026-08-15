@@ -183,7 +183,10 @@ verification.
    and not --dry-run               THEN await INDEXED (a confirmed receipt is not the
                                     same as indexed state -- no dependent action follows
                                     until the index actually reflects it)
-8. log                          →  proposal always logged; action only if actually executed
+8. log                          →  proposal logged, unless content-identical (excl.
+                                    ts/tick) to the immediately-previous logged proposal
+                                    (dedup, tick.py's _fingerprint_proposal); action only
+                                    if actually executed
 9. pretty report                →  stdout + logs/ticks/<iso>.md
 ```
 

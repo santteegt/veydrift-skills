@@ -1028,3 +1028,65 @@ def test_is_structural_tier_block_false_when_anything_else_is_wrong():
     assert guard_mod.is_structural_tier_block([("tier", "block"), ("gas", "block")]) is False  # real ceiling breach
     assert guard_mod.is_structural_tier_block([("tier", "block"), ("energy", "warn")]) is False
 
+
+# --------------------------------------------------------------------------------------
+# Dedup: a repeated `vd tick` invocation producing a content-identical proposal to the
+# immediately-previous one must not be double-counted or double-logged. Confirmed real
+# bug: a live proposals.jsonl showed ticks #9/#10/#11 and #16/#17 as byte-identical
+# records (excl. ts/tick) logged seconds apart, caused by re-running `vd tick` purely to
+# re-inspect output.
+# --------------------------------------------------------------------------------------
+
+
+def test_repeated_identical_tick_is_not_logged_twice(isolated_home, monkeypatch):
+    _write_policy()  # tier advisor
+    _patch_common(monkeypatch)  # same snapshot/action on both calls (defaults)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    assert r2.exit_code == 0, r2.output
+
+    assert load_agent_state().tick_count == 1
+    assert len(log.read_proposals()) == 1
+    assert "duplicate" in r2.output.lower()
+
+
+def test_genuinely_different_second_tick_is_logged_normally(isolated_home, monkeypatch):
+    """Proves the check doesn't over-suppress: a second call whose action differs must be
+    logged as its own tick, same as today."""
+    _write_policy()  # tier advisor
+    _patch_common(monkeypatch)  # first call: default _build_action()
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+
+    changed_action = _build_action().model_copy(update={"target_level": 2})
+    _patch_common(monkeypatch, action=changed_action)
+
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r2.exit_code == 0, r2.output
+
+    assert load_agent_state().tick_count == 2
+    assert len(log.read_proposals()) == 2
+
+
+def test_duplicate_substantive_block_does_not_append_a_second_strategy_md_entry(isolated_home, monkeypatch):
+    """Extends test_substantive_block_alongside_tier_still_appends_to_strategy_md: a
+    genuine substantive gate firing (address mismatch) is narrated once; an immediately
+    repeated, content-identical call must not add a second entry."""
+    _write_policy()  # tier advisor
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={"0x000000000000000000000000000000000000dead"}, unsigned_tx=tx)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    first_strategy = log.strategy_path().read_text()
+    assert "tick 1:" in first_strategy
+
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r2.exit_code == 0, r2.output
+    second_strategy = log.strategy_path().read_text()
+    assert second_strategy == first_strategy  # unchanged -- no new entry appended
+    assert load_agent_state().tick_count == 1
+

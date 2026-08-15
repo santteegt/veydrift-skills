@@ -198,12 +198,35 @@ class AgentState(_Base):
     #: sequential ladder, never a batch of parallel proposals.
     pending: PendingTx | None = None
 
+    #: sha256 hex digest of the last *persisted* proposals.jsonl record (every field
+    #: log_proposal wrote except `ts`/`tick`). None until the first proposal is ever
+    #: logged. Lets tick.py's _finish_tick detect a content-identical repeat `vd tick`
+    #: invocation against genuinely unchanged state (e.g. re-running it seconds later
+    #: just to inspect a different --format) and skip re-counting/re-logging it -- see
+    #: tick.py's docstring and docs/SPEC.md §5.7 step 8. Additive field: an
+    #: agent-state.json written before this existed simply loads with the default None
+    #: (AgentState is not part of the frozen models.py on-disk contract -- AGENTS.md §4 --
+    #: so this is safe to add without a version bump).
+    last_proposal_fingerprint: str | None = None
+
     def record_tick(self, *, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC)
         if self.first_tick_at is None:
             self.first_tick_at = now
         self.last_tick_at = now
         self.tick_count += 1
+
+    def touch(self, *, now: datetime | None = None) -> None:
+        """Update first_tick_at/last_tick_at only -- no tick_count change. Called
+        unconditionally on every `vd tick` invocation (tick.py's _run_tick), including one
+        later found to be a content-duplicate of the previous logged proposal: "was this
+        run recently" is honest bookkeeping regardless of whether the run produced new
+        evidence, unlike tick_count/proposals_count which specifically measure novel
+        evidence and must not advance for a duplicate."""
+        now = now or datetime.now(UTC)
+        if self.first_tick_at is None:
+            self.first_tick_at = now
+        self.last_tick_at = now
 
     def record_gas_spent(self, gas_wei: int, *, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC)

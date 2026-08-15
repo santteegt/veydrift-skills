@@ -6,9 +6,25 @@
 3. reconcile pending txs                 walletctl build (already done at step 6)
 4. snapshot                              if require_confirmation: print the command, don't send
 5. plan                                  else: send -> await receipt status -> await INDEXED
-                                    8. log: proposal always; action only on a real send attempt
+                                    8. log: proposal, unless content-identical to the
+                                       immediately-previous logged proposal (dedup);
+                                       action only on a real send attempt
                                     9. pretty report -> stdout + logs/ticks/
 ```
+
+**Repeated identical proposals are deduped, not re-logged** (step 8): `_finish_tick`
+fingerprints the record it's about to write (`_fingerprint_proposal`, sha256 over every
+field except `ts`/`tick`) and compares it against `AgentState.last_proposal_fingerprint`.
+A match means this tick produced no new evidence — most commonly a human or agent
+re-running `vd tick` seconds later just to re-inspect output in a different `--format` —
+so `tick_count`/`proposals_count` don't advance and nothing is appended to
+`proposals.jsonl`/`strategy.md`. `last_tick_at` still updates regardless (`AgentState.touch`),
+and the printed/`--format json` report is always the full, accurate current state, with a
+`duplicate`/`note` marker so the caller isn't confused about why the tick number didn't
+move. This is deliberately content-based, not time-window-based: live guard-evaluation
+figures (resources, energy, gas price) drift over any real elapsed time even when the
+top recommendation is unchanged, so a genuine re-evaluation hours later naturally
+produces a different fingerprint and is logged normally.
 
 **Never signs, never imports any chain-signing JS library** (acceptance criterion 15 —
 grep-verifiable per docs/SPEC.md; this package's `src/` must not contain those library
@@ -51,6 +67,7 @@ wording in the WP3 report; `references/scheduling.md` and `SKILL.md` should poin
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -627,7 +644,7 @@ def main(
 def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> None:
     now = datetime.now(UTC)
     agent_state = load_agent_state()
-    agent_state.record_tick(now=now)
+    agent_state.touch(now=now)  # tick_count decision is deferred to _finish_tick's dedup check
 
     # Step 2: killswitch check -- ONE health call, nothing else, if active.
     if _killswitch_active():
@@ -869,6 +886,23 @@ def _send_and_await(
     return False, "unknown", tx_hash
 
 
+_FINGERPRINT_EXCLUDED_KEYS = {"ts", "tick"}
+
+
+def _fingerprint_proposal(record: dict[str, Any]) -> str:
+    """Stable content fingerprint of a proposals.jsonl record, excluding `ts`/`tick` --
+    the only two fields expected to differ between a genuine content-identical repeat and
+    a first-time proposal. `sort_keys=True` makes this order-independent even though
+    `guard_verdicts` is already gate-order-deterministic; `default=str` covers any
+    non-JSON-native value the same way `log.py`'s own serialisation would. Computed over
+    the in-memory record, deliberately never over a re-read/re-parsed `proposals.jsonl`
+    line -- `log.py`'s `_json_line` scrubs secrets/hex before writing, and comparing
+    pre-scrub to post-scrub content risks a false match or mismatch from the scrub step
+    itself."""
+    comparable = {k: v for k, v in record.items() if k not in _FINGERPRINT_EXCLUDED_KEYS}
+    return hashlib.sha256(json.dumps(comparable, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def _finish_tick(
     policy_model: Policy,
     agent_state: AgentState,
@@ -884,7 +918,50 @@ def _finish_tick(
     confirm_hint: str | None = None,
     tx_hash: str | None = None,
 ) -> None:
-    agent_state.proposals_count += 1
+    proposal_record = {
+        "ts": now.isoformat(),
+        "tick": agent_state.tick_count + 1,  # prospective; corrected below if not a duplicate
+        "wallet": policy_model.wallet,
+        "tier": policy_model.tier.value,
+        "planet_id": action.planet_id,
+        "rule": action.rule,
+        "kind": action.kind.value,
+        "function": action.function,
+        "entity_id": action.entity_id,
+        "entity_name": action.entity_name,
+        "target_level": action.target_level,
+        "quantity": action.quantity,
+        "cost": action.cost.model_dump(),
+        "rationale": action.rationale,
+        "guard_decision": guard_report.decision.value,
+        "guard_verdicts": [v.model_dump() for v in guard_report.verdicts],
+        "tx": unsigned_tx.model_dump() if unsigned_tx else None,
+        "tx_hash": tx_hash,  # Fix 6c: previously always None (`action.function and None`)
+        "send_outcome": send_outcome,
+        "executed": executed,
+    }
+
+    # Dedup: a content-identical repeat of the immediately-previous logged proposal (e.g.
+    # a human/agent re-running `vd tick` seconds later just to re-inspect a different
+    # --format) is not new evidence -- see tick.py's module docstring and
+    # docs/SPEC.md §5.7 step 8. Fingerprint excludes only `ts`/`tick`; everything else
+    # (including wallet/tier, so a mid-session promotion still counts as a real change)
+    # must match.
+    fingerprint = _fingerprint_proposal(proposal_record)
+    is_duplicate = agent_state.last_proposal_fingerprint is not None and fingerprint == agent_state.last_proposal_fingerprint
+
+    duplicate_note: str | None = None
+    if is_duplicate:
+        duplicate_note = (
+            f"duplicate of tick {agent_state.tick_count} -- content-identical to the last logged "
+            "proposal (excl. ts/tick); not counted as a new tick, not written to "
+            "proposals.jsonl/strategy.md."
+        )
+    else:
+        agent_state.record_tick(now=now)
+        agent_state.proposals_count += 1
+        agent_state.last_proposal_fingerprint = fingerprint
+        proposal_record["tick"] = agent_state.tick_count
     save_agent_state(agent_state)
 
     block_text = log.format_tick_block(
@@ -898,43 +975,24 @@ def _finish_tick(
         proposal_lines=_proposal_lines(
             action, guard_report, unsigned_tx, executed, policy_model.tier, send_outcome=send_outcome, confirm_hint=confirm_hint
         ),
+        duplicate_of=duplicate_note,
     )
 
-    log.log_proposal(
-        {
-            "ts": now.isoformat(),
-            "tick": agent_state.tick_count,
-            "wallet": policy_model.wallet,
-            "tier": policy_model.tier.value,
-            "planet_id": action.planet_id,
-            "rule": action.rule,
-            "kind": action.kind.value,
-            "function": action.function,
-            "entity_id": action.entity_id,
-            "entity_name": action.entity_name,
-            "target_level": action.target_level,
-            "quantity": action.quantity,
-            "cost": action.cost.model_dump(),
-            "rationale": action.rationale,
-            "guard_decision": guard_report.decision.value,
-            "guard_verdicts": [v.model_dump() for v in guard_report.verdicts],
-            "tx": unsigned_tx.model_dump() if unsigned_tx else None,
-            "tx_hash": tx_hash,  # Fix 6c: previously always None (`action.function and None`)
-            "send_outcome": send_outcome,
-            "executed": executed,
-        }
-    )
+    if not is_duplicate:
+        log.log_proposal(proposal_record)
 
     # Fix 5: a *structural* tier block (the ONLY reason decision != ALLOW is the `tier`
     # gate itself) is expected at every tick until the policy is promoted and carries no
     # information -- see guard.is_structural_tier_block's docstring. Logging it to
     # strategy.md every tick would drown the genuinely useful entries (a substantive
     # gate -- affordability/energy/gas/etc -- actually firing). The full verdict list,
-    # including the tier verdict, still always goes to proposals.jsonl above; only the
-    # strategy.md narration is suppressed for the purely-structural case.
+    # including the tier verdict, still always goes to proposals.jsonl above (unless this
+    # tick is itself a duplicate, in which case nothing goes to proposals.jsonl at all);
+    # only the strategy.md narration is suppressed for the purely-structural or
+    # duplicate case.
     non_passing = [(v.gate, v.status.value) for v in guard_report.verdicts if v.status is not GuardStatus.PASS]
     structural = guard_mod.is_structural_tier_block(non_passing)
-    if (action.kind is ActionKind.ESCALATE or guard_report.decision is not Decision.ALLOW) and not structural:
+    if (action.kind is ActionKind.ESCALATE or guard_report.decision is not Decision.ALLOW) and not structural and not is_duplicate:
         log.append_strategy(f"tick {agent_state.tick_count}: {action.rule} -- {action.rationale} (guard={guard_report.decision.value})", now=now)
 
     log.write_tick_markdown(block_text, taken_at=now)
@@ -948,6 +1006,7 @@ def _finish_tick(
                     "guard": json.loads(guard_report.model_dump_json()),
                     "executed": executed,
                     "send_outcome": send_outcome,
+                    "duplicate": is_duplicate,
                 },
                 indent=2,
             )

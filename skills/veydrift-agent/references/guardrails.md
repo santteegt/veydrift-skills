@@ -30,7 +30,11 @@ rest of this codebase is shaped:
 Every gate is evaluated on every tick, regardless of what earlier gates decided —
 `GuardReport.verdicts` is a fixed-length list of exactly 16 entries every time. A blocked
 proposal is exactly as informative as an allowed one, which is the entire point of never
-short-circuiting: `logs/proposals.jsonl` is the audit trail, not just the last mile.
+short-circuiting: `logs/proposals.jsonl` is the audit trail, not just the last mile. (A
+content-identical repeat of the immediately-previous proposal is not re-persisted to
+`proposals.jsonl` — `tick.py`'s `_fingerprint_proposal` dedup — but every gate still runs
+to completion on every single call; only the already-complete result's *write* is
+conditional.)
 
 ## `evaluate_guardrails()` is pure — `tick.py` gathers the live facts
 

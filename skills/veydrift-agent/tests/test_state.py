@@ -142,6 +142,28 @@ def test_agent_state_file_is_valid_json_on_disk(isolated_home):
     assert raw["tick_count"] == 1
 
 
+def test_last_proposal_fingerprint_defaults_none_and_round_trips(isolated_home):
+    assert state.load_agent_state().last_proposal_fingerprint is None
+
+    s = state.AgentState()
+    s.last_proposal_fingerprint = "deadbeef"
+    state.save_agent_state(s)
+
+    assert state.load_agent_state().last_proposal_fingerprint == "deadbeef"
+
+
+def test_agent_state_missing_fingerprint_field_loads_with_default(isolated_home):
+    """An agent-state.json written before this field existed must still load -- additive
+    field, not a breaking rename (AgentState is not part of the frozen models.py
+    contract, see AGENTS.md §4)."""
+    state.agent_state_path().parent.mkdir(parents=True, exist_ok=True)
+    state.agent_state_path().write_text(json.dumps({"version": 1, "tick_count": 3}))
+
+    loaded = state.load_agent_state()
+    assert loaded.tick_count == 3
+    assert loaded.last_proposal_fingerprint is None
+
+
 def test_record_gas_spent_accumulates_within_a_day():
     s = state.AgentState()
     from datetime import UTC, datetime

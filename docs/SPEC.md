@@ -392,9 +392,22 @@ Idempotent, lockfile-protected in `$VEYDRIFT_HOME`:
 2. killswitch check               7. if ALLOW and tier>=2 and not --dry-run:
 3. reconcile pending txs                 walletctl build -> confirm -> send
 4. snapshot                              await receipt, THEN await INDEXED
-5. plan                           8. log: proposal always; action only if executed
+5. plan                           8. log: proposal, unless content-identical to the
+                                     immediately-previous logged proposal (dedup);
+                                     action only if executed
                                   9. pretty report -> stdout + logs/ticks/
 ```
+
+Step 8's dedup: a repeat `vd tick` invocation whose full proposal record (everything
+except `ts`/`tick`) is byte-identical to the immediately-previous logged proposal is not
+new evidence -- most commonly a human/agent re-running `vd tick` seconds later just to
+re-inspect a different `--format`. `tick_count`/`proposals_count` don't advance and
+nothing is appended to `proposals.jsonl`/`strategy.md` on that repeat; `last_tick_at`
+still updates, and the printed/`--format json` report always shows the full, accurate
+current state with a `duplicate`/`note` marker. This is content-based, not time-window
+based: live guard-evaluation figures drift over real elapsed time even when the
+recommendation itself is unchanged, so a genuine re-evaluation hours later still logs
+normally.
 
 `--dry-run` is the default at tier 1 and cannot be disabled there. The indexed-wait in step 7 is
 mandatory: a confirmed receipt is not indexed state, and no dependent action may follow until the
