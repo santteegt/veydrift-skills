@@ -367,6 +367,58 @@ def test_affordability_passes_when_cost_covered():
     assert verdict(report, "affordability").status is GuardStatus.PASS
 
 
+def test_affordability_block_detail_includes_eta_for_short_resource():
+    planet = make_planet(
+        resources_as_of_now=Resources(metal=200, crystal=1000, deuterium=0),
+        production_per_hour=Resources(metal=100, crystal=0, deuterium=0),
+    )
+    action = make_build_action(cost=Resources(metal=500, crystal=15, deuterium=0))
+    report = evaluate(action, make_snapshot(planets=[planet]), make_policy())
+    detail = verdict(report, "affordability").detail
+    assert "300 more Metal (affordable in ~3h 0m)" in detail
+
+
+def test_affordability_block_detail_says_never_when_cost_exceeds_storage_cap():
+    planet = make_planet(
+        resources_as_of_now=Resources(metal=200, crystal=1000, deuterium=0),
+        storage_caps=Resources(metal=10_000, crystal=10_000, deuterium=10_000),
+        production_per_hour=Resources(metal=100, crystal=0, deuterium=0),
+    )
+    action = make_build_action(cost=Resources(metal=20_000, crystal=15, deuterium=0))
+    report = evaluate(action, make_snapshot(planets=[planet]), make_policy())
+    detail = verdict(report, "affordability").detail
+    assert "never affordable: cost exceeds storage cap" in detail
+    assert "affordable in ~" not in detail  # the only short resource here is the impossible one
+
+
+def test_affordability_block_detail_says_never_when_production_is_zero():
+    planet = make_planet(
+        resources_as_of_now=Resources(metal=200, crystal=1000, deuterium=0),
+        production_per_hour=Resources(metal=0, crystal=0, deuterium=0),
+    )
+    action = make_build_action(cost=Resources(metal=500, crystal=15, deuterium=0))
+    report = evaluate(action, make_snapshot(planets=[planet]), make_policy())
+    detail = verdict(report, "affordability").detail
+    assert "never affordable: no production" in detail
+
+
+def test_affordability_block_detail_shows_both_resources_when_two_are_short():
+    planet = make_planet(
+        resources_as_of_now=Resources(metal=200, crystal=100, deuterium=0),
+        production_per_hour=Resources(metal=100, crystal=50, deuterium=0),
+    )
+    action = make_build_action(cost=Resources(metal=500, crystal=250, deuterium=0))
+    report = evaluate(action, make_snapshot(planets=[planet]), make_policy())
+    detail = verdict(report, "affordability").detail
+    assert "300 more Metal (affordable in ~3h 0m)" in detail
+    assert "150 more Crystal (affordable in ~3h 0m)" in detail
+
+
+def test_format_eta_hm():
+    assert guard._format_eta_hm(1.6333) == "1h 38m"
+    assert guard._format_eta_hm(2.0) == "2h 0m"
+
+
 # --------------------------------------------------------------------------------------
 # energy — the gate the brief calls out by name. MISSING DATA must not vacuously pass.
 # --------------------------------------------------------------------------------------

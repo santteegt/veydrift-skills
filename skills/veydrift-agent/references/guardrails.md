@@ -77,6 +77,13 @@ facts.
 | 15 | `idempotency` | no pending tx for the same `(planet, function, entity)` key | `AgentState.pending` | n/a — presence/absence is always knowable |
 | 16 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
 
+**`affordability`'s BLOCK detail includes a per-resource ETA.** For each resource short of
+the proposed cost, the detail string now also states an estimated "affordable in ~Xh Ym"
+(`calc.hours_to_afford`, from live `production_per_hour`), or an explicit "never
+affordable" when that resource's cost exceeds its `storage_caps` value or its production
+rate is zero. This is purely informational — the `BLOCK` decision itself is still decided
+solely by `resources_as_of_now.covers(action.cost)`, unchanged.
+
 **Why `gas`/`eth_floor` ESCALATE on missing data instead of BLOCK:** an ESCALATE (not
 BLOCK) still lets a tier-1 dry run complete and print a full, honest report — the whole
 point of `--dry-run` is that nothing is ever sent regardless of the guard decision, so

@@ -256,6 +256,18 @@ def test_hours_to_cap_never_reached():
     assert calc.hours_to_cap(0, 0, 10_000) is None
 
 
+def test_hours_to_afford_basic():
+    assert calc.hours_to_afford(current=200, per_hour=100, cost=500, cap=10_000) == 3.0
+
+
+def test_hours_to_afford_zero_rate_never():
+    assert calc.hours_to_afford(current=0, per_hour=0, cost=500, cap=10_000) is None
+
+
+def test_hours_to_afford_cost_exceeds_cap_never():
+    assert calc.hours_to_afford(current=0, per_hour=100, cost=20_000, cap=10_000) is None
+
+
 # --------------------------------------------------------------------------------------
 # Distance, travel, fuel, cargo.
 # --------------------------------------------------------------------------------------

@@ -278,6 +278,28 @@ def test_format_json_prints_valid_json(isolated_home, monkeypatch):
     assert "action" in payload and "guard" in payload
 
 
+def test_expected_effect_appears_in_report_and_proposal_record(isolated_home, monkeypatch):
+    action = _build_action().model_copy(update={"expected_effect": "produced energy 100 -> 150"})
+    _write_policy()
+    _patch_common(monkeypatch, action=action)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "effect: produced energy 100 -> 150" in result.output
+
+    proposals = log.read_proposals()
+    assert proposals[0]["expected_effect"] == "produced energy 100 -> 150"
+
+
+def test_empty_expected_effect_omits_the_effect_line(isolated_home, monkeypatch):
+    _write_policy()
+    _patch_common(monkeypatch)  # default _build_action() has no expected_effect
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "effect:" not in result.output
+
+
 # --------------------------------------------------------------------------------------
 # --readiness — reports without running a tick.
 # --------------------------------------------------------------------------------------

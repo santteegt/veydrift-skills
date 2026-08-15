@@ -24,6 +24,19 @@ skills are not versioned in lockstep.
   building/research-completion item is unconfirmed. A structured match/diverge
   classifier is a deferred follow-up once a real completion-shaped item has been
   observed.
+- `vd plan`'s mine/building-upgrade proposals now carry a plain-text `expected_effect`
+  note showing how much faster the exact same build would complete at Robotics Factory
+  level+1 (e.g. "at Robotics Factory 4, this build takes 3600s; at level 5, it would take
+  1800s (50% faster)"), using the already-verified `calc.build_seconds` formula. `guard`'s
+  `affordability` gate's BLOCK detail now also states an estimated "affordable in ~Xh Ym"
+  per resource that's short, based on current `production_per_hour`, or explicitly "never
+  affordable" when a resource's cost exceeds its storage cap or its production rate is
+  zero. Both are **informational only** — plain computed facts appended to existing text
+  fields, never a verdict, never a new guard behavior, never a `Decision` input;
+  deliberately not an ROI/opportunity-cost calculator, since that would require assuming
+  an unbounded, unknowable future build plan. `Action.expected_effect` — previously
+  written by `plan.py` but read by nothing — is now also surfaced in `vd tick`'s printed/
+  `--format json` report and in `logs/proposals.jsonl`.
 
 ### Fixed
 - `tick.py`'s `_run_walletctl` now self-heals a missing `veydrift-wallet/node_modules`

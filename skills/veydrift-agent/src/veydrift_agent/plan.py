@@ -183,6 +183,30 @@ def _energy_candidate(
     return options[0]
 
 
+def _build_time_savings_note(entity: Entity, robotics_level: int, nanite_level: int) -> str:
+    """Plain informational text: how much faster this exact build would complete at
+    Robotics Factory level+1. Never a recommendation to build Robotics Factory instead --
+    this codebase deliberately has no formula netting time saved against resources not
+    spent (an unbounded-future-horizon problem with no honest single answer); this is
+    strictly the computable half, for a human/agent to read alongside the proposal.
+    `calc.build_seconds` is a `public pure` contract formula, not a guessed constant --
+    see calc.py's own "no cost-scaling function" hard constraint, which this doesn't
+    trip (every term here is a live-known contract input, not an unpublished rational).
+
+    Returns "" when there's nothing meaningful to report -- a build cheap enough that
+    both the current and Robotics+1 durations floor at `min_queue_seconds`, where
+    "0% faster" would be numerically true but reads as noise."""
+    current = entity.duration_seconds or calc.build_seconds(robotics_level, nanite_level, entity.cost.metal, entity.cost.crystal)
+    faster = calc.build_seconds(robotics_level + 1, nanite_level, entity.cost.metal, entity.cost.crystal)
+    if faster >= current:
+        return ""
+    pct = round((current - faster) / current * 100)
+    return (
+        f"At Robotics Factory {robotics_level}, this build takes {current}s; "
+        f"at level {robotics_level + 1}, it would take {faster}s ({pct}% faster)."
+    )
+
+
 def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Policy, rule: str) -> Action | None:
     """The energy-first opener. Walks `_mine_priority_order`; for the first mine with
     live data, computes required energy at the *post-upgrade* level
@@ -199,6 +223,8 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
     solar_entity = _entity(planet.buildings, ids.Building.SOLAR_PLANT)
     fusion_entity = _entity(planet.buildings, ids.Building.FUSION_REACTOR)
     satellite_entity = _entity(planet.ships, ids.Ship.SOLAR_SATELLITE)
+    robotics_level = _level(planet, ids.Building.ROBOTICS_FACTORY)
+    nanite_level = _level(planet, ids.Building.NANITE_FACTORY)
 
     base_levels = {
         ids.Building.METAL_MINE: _level(planet, ids.Building.METAL_MINE),
@@ -281,6 +307,7 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
                     expected_effect=(
                         f"produced energy {produced_now} -> "
                         f"{produced_now + calc.scaled_level(20, (entity.level or 0) + 1) - calc.scaled_level(20, entity.level or 0)}"
+                        + (f" | {note}" if (note := _build_time_savings_note(entity, robotics_level, nanite_level)) else "")
                     ),
                 )
             return Action(
@@ -317,6 +344,7 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
                 f"{mine_entity.level}->{mine_entity.level + 1} needs {required_post} energy "
                 f"against {produced_now} produced -- energy-safe."
             ),
+            expected_effect=_build_time_savings_note(mine_entity, robotics_level, nanite_level),
         )
 
     return None

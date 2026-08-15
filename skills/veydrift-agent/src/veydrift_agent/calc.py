@@ -458,6 +458,26 @@ def hours_to_cap(current: int, per_hour: int, cap: int) -> float | None:
     return remaining / per_hour
 
 
+def hours_to_afford(current: int, per_hour: int, cost: int, cap: int) -> float | None:
+    """Hours until `current` (growing at `per_hour`) reaches `cost` -- the
+    affordability-ETA counterpart to `hours_to_cap` above (same arithmetic; `cap` there
+    is `cost` here, just a different kind of target: a spend requirement, not a storage
+    ceiling). Kept as a distinctly-named wrapper rather than called directly as
+    `hours_to_cap(current, per_hour, cost)` because that reads misleadingly at call
+    sites -- there is no "cap" involved in "when can I afford this".
+
+    Returns `None` when it will never happen via production alone:
+    - `per_hour <= 0` (delegates to `hours_to_cap`'s own convention), or
+    - `cost > cap`: storage overflow discards anything above the cap, so passive
+      accumulation can never reach a cost that exceeds it. `hours_to_cap` itself can't
+      hit this case (the cap IS its target there), so it has no such guard -- this
+      wrapper adds it explicitly before delegating.
+    """
+    if cost > cap:
+        return None
+    return hours_to_cap(current, per_hour, cost)
+
+
 # --------------------------------------------------------------------------------------
 # Distance, travel, fuel, cargo.
 # --------------------------------------------------------------------------------------

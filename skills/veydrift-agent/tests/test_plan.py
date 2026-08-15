@@ -19,10 +19,12 @@ from veydrift_agent.models import (
     Action,
     ActionKind,
     ActionsCfg,
+    EnergyBalance,
     Entity,
     EscalationCfg,
     IncomingFleet,
     Limits,
+    PlanetSnapshot,
     Policy,
     QueueEntry,
     QueueKind,
@@ -30,7 +32,7 @@ from veydrift_agent.models import (
     Snapshot,
     StorageCfg,
 )
-from veydrift_agent.plan import plan_next_action
+from veydrift_agent.plan import _next_building_action, plan_next_action
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -381,6 +383,74 @@ def test_action_is_onchain_helper_matches_function_presence():
     noop_action = Action(kind=ActionKind.NOOP)
     assert build_action.is_onchain() is True
     assert noop_action.is_onchain() is False
+
+
+# --------------------------------------------------------------------------------------
+# Build-time-savings note on expected_effect -- informational only, never a verdict.
+# --------------------------------------------------------------------------------------
+
+
+def _energy_safe_planet(*, robotics_level: int, metal_mine_duration_seconds: int | None) -> PlanetSnapshot:
+    return PlanetSnapshot(
+        planet_id=664,
+        coordinates="7:181:14",
+        fields_used=7,
+        fields_total=174,
+        resources_as_of_now=Resources(metal=10_000, crystal=10_000, deuterium=0),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(metal=0, crystal=0, deuterium=0),
+        energy=EnergyBalance(produced=10_000, required=0, scale_bps=10_000, solar_satellite_energy=4),
+        buildings=[
+            Entity(
+                id=ids.Building.METAL_MINE,
+                name="Metal Mine",
+                level=0,
+                cost=Resources(metal=60, crystal=15),
+                duration_seconds=metal_mine_duration_seconds,
+            ),
+            Entity(id=ids.Building.CRYSTAL_MINE, name="Crystal Mine", level=0, cost=Resources(metal=48, crystal=24)),
+            Entity(id=ids.Building.DEUTERIUM_SYNTHESIZER, name="Deuterium Synthesizer", level=0, cost=Resources(metal=225, crystal=75)),
+            Entity(id=ids.Building.SOLAR_PLANT, name="Solar Plant", level=1, cost=Resources(metal=75, crystal=30)),
+            Entity(
+                id=ids.Building.ROBOTICS_FACTORY,
+                name="Robotics Factory",
+                level=robotics_level,
+                cost=Resources(metal=400, crystal=120, deuterium=200),
+            ),
+        ],
+        ships=[],
+        defenses=[],
+    )
+
+
+def test_mine_upgrade_expected_effect_includes_build_time_savings_note():
+    # duration_seconds=36 -- the real value calc.build_seconds(2, 0, 60, 15) computes,
+    # consistent with the robotics_level=2 set on the planet below (matches what the live
+    # API would actually report at that robotics level).
+    planet = _energy_safe_planet(robotics_level=2, metal_mine_duration_seconds=36)
+    snapshot = Snapshot(taken_at="2026-08-15T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664])
+
+    action = _next_building_action(planet, snapshot, policy, rule="6:building-queue-empty")
+
+    assert action is not None
+    assert action.entity_id == ids.Building.METAL_MINE
+    assert action.expected_effect == "At Robotics Factory 2, this build takes 36s; at level 3, it would take 27s (25% faster)."
+
+
+def test_mine_upgrade_expected_effect_omits_note_when_both_durations_floor():
+    # A build cheap enough that both the current and Robotics+1 durations hit
+    # min_queue_seconds (1s) -- "faster >= current" the note's own correctness guard,
+    # not an arbitrary noise-suppression threshold.
+    planet = _energy_safe_planet(robotics_level=50, metal_mine_duration_seconds=1)
+    snapshot = Snapshot(taken_at="2026-08-15T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664])
+
+    action = _next_building_action(planet, snapshot, policy, rule="6:building-queue-empty")
+
+    assert action is not None
+    assert action.entity_id == ids.Building.METAL_MINE
+    assert action.expected_effect == ""
 
 
 # --------------------------------------------------------------------------------------

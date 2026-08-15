@@ -688,6 +688,8 @@ def _proposal_lines(
     if action.cost.metal or action.cost.crystal or action.cost.deuterium:
         lines.append(f"  cost:   M {action.cost.metal}  C {action.cost.crystal}  D {action.cost.deuterium}")
     lines.append(f"  why:    {action.rationale}")
+    if action.expected_effect:
+        lines.append(f"  effect: {action.expected_effect}")
     lines.append(f"  guards: {guard_report.passed}/{guard_report.total} pass ({guard_report.decision.value})")
     if unsigned_tx is not None:
         submitted = "" if executed else f" (NOT SUBMITTED -- tier {tier.value})"
@@ -1042,6 +1044,7 @@ def _finish_tick(
         "quantity": action.quantity,
         "cost": action.cost.model_dump(),
         "rationale": action.rationale,
+        "expected_effect": action.expected_effect,
         "guard_decision": guard_report.decision.value,
         "guard_verdicts": [v.model_dump() for v in guard_report.verdicts],
         "tx": unsigned_tx.model_dump() if unsigned_tx else None,

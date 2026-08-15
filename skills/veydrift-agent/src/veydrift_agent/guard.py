@@ -94,6 +94,15 @@ def _verdict(gate: str, status: GuardStatus, detail: str) -> GuardVerdict:
     return GuardVerdict(gate=gate, status=status, detail=detail)
 
 
+def _format_eta_hm(hours: float) -> str:
+    """`1.6333` -> `"1h 38m"`. Rounds to the nearest minute; `"0h 0m"` for a near-miss ETA
+    rounding down to zero -- an already-affordable resource never reaches this formatter
+    at all (see `_gate_affordability`'s `covers()` short-circuit)."""
+    total_minutes = round(hours * 60)
+    h, m = divmod(total_minutes, 60)
+    return f"{h}h {m}m"
+
+
 def idempotency_key(action: Action) -> str:
     """`(planet, action, entity)` per docs/SPEC.md §5.5's `idempotency` row. Shared with
     `state.PendingTx.key` / `AgentState.revert_counts` so `idempotency` and
@@ -239,12 +248,41 @@ def _gate_affordability(action: Action, snapshot: Snapshot) -> GuardVerdict:
         return _verdict("affordability", GuardStatus.BLOCK, f"planet {action.planet_id} not found in snapshot")
     if planet.resources_as_of_now.covers(action.cost):
         return _verdict("affordability", GuardStatus.PASS, "resourcesAsOfNow covers the proposed cost")
+
+    # Best-effort, informational only -- never changes this gate's BLOCK decision, which
+    # is already fixed by the covers() check above. Each short resource gets its own
+    # clause rather than a single collapsed number: a reader takes the max (every
+    # resource must clear at once) by inspection, and collapsing would hide which
+    # resource is actually the bottleneck.
+    eta_bits: list[str] = []
+    for label, cost, current, per_hour, cap in (
+        ("Metal", action.cost.metal, planet.resources_as_of_now.metal, planet.production_per_hour.metal, planet.storage_caps.metal),
+        ("Crystal", action.cost.crystal, planet.resources_as_of_now.crystal, planet.production_per_hour.crystal, planet.storage_caps.crystal),
+        (
+            "Deuterium",
+            action.cost.deuterium,
+            planet.resources_as_of_now.deuterium,
+            planet.production_per_hour.deuterium,
+            planet.storage_caps.deuterium,
+        ),
+    ):
+        if current >= cost:
+            continue  # this resource isn't the short one
+        shortfall = cost - current
+        hours = calc.hours_to_afford(current, per_hour, cost, cap)
+        if hours is None:
+            reason = "cost exceeds storage cap" if cost > cap else "no production"
+            eta_bits.append(f"{shortfall} more {label} (never affordable: {reason})")
+        else:
+            eta_bits.append(f"{shortfall} more {label} (affordable in ~{_format_eta_hm(hours)})")
+    eta_text = "; ".join(eta_bits)
+
     return _verdict(
         "affordability",
         GuardStatus.BLOCK,
         f"resourcesAsOfNow does not cover cost (need M{action.cost.metal} C{action.cost.crystal} "
         f"D{action.cost.deuterium}; have M{planet.resources_as_of_now.metal} "
-        f"C{planet.resources_as_of_now.crystal} D{planet.resources_as_of_now.deuterium})",
+        f"C{planet.resources_as_of_now.crystal} D{planet.resources_as_of_now.deuterium}) -- {eta_text}",
     )
 
 
