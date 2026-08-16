@@ -1,10 +1,10 @@
-"""`vd guard` — the 16-gate guardrail evaluator (docs/SPEC.md §5.5).
+"""`vd guard` — the 17-gate guardrail evaluator (docs/SPEC.md §5.5).
 
 `evaluate_guardrails()` is the pure core: given an `Action`, the `Snapshot` it was
 planned from, the `Policy`, the persisted `AgentState`, and a handful of caller-supplied
 facts that don't live on any of those frozen/local models (live contract addresses, the
 live ABI hash, a built `UnsignedTx` + gas estimate, the wallet's ETH balance), it returns
-a `GuardReport` with **all 16 gates evaluated, never short-circuited** — the full
+a `GuardReport` with **all 17 gates evaluated, never short-circuited** — the full
 `GuardReport.verdicts` list is the audit artifact (docs/SPEC.md §5.5), so a passing tick
 is exactly as informative as a blocked one.
 
@@ -40,12 +40,22 @@ from veydrift_agent.models import (
     GuardReport,
     GuardStatus,
     GuardVerdict,
+    PlanetSnapshot,
     Policy,
+    QueueKind,
     Snapshot,
     Tier,
     UnsignedTx,
 )
 from veydrift_agent.state import AgentState
+from veydrift_agent.techtree import (
+    MAX_DEFENSE_PER_PLANET,
+    MISSILE_SLOTS,
+    EntityFamily,
+    describe,
+    missile_silo_capacity,
+    unmet,
+)
 
 app = typer.Typer(no_args_is_help=True, help="Evaluate guardrails against a proposed action.")
 
@@ -89,6 +99,16 @@ _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR:
 _MINE_ENTITY_IDS = {ids.Building.METAL_MINE, ids.Building.CRYSTAL_MINE, ids.Building.DEUTERIUM_SYNTHESIZER}
 _ENERGY_FIX_BUILDINGS = {ids.Building.SOLAR_PLANT, ids.Building.FUSION_REACTOR}
 
+#: Which `techtree` table an `Action.kind` maps to. `RESOLVE_MISSION`/`NOOP`/`ESCALATE`/
+#: `HALT` have no entry -- `_gate_prerequisites` treats those as "nothing to check," the
+#: same posture `_gate_energy`/`_gate_affordability` take toward an action with no target.
+_FAMILY_FOR_ACTION_KIND: dict[ActionKind, EntityFamily] = {
+    ActionKind.BUILD: EntityFamily.BUILDING,
+    ActionKind.RESEARCH: EntityFamily.RESEARCH,
+    ActionKind.SHIP: EntityFamily.SHIP,
+    ActionKind.DEFENSE: EntityFamily.DEFENSE,
+}
+
 
 def _verdict(gate: str, status: GuardStatus, detail: str) -> GuardVerdict:
     return GuardVerdict(gate=gate, status=status, detail=detail)
@@ -130,13 +150,14 @@ def is_structural_tier_block(non_passing_gates: list[tuple[str, str]]) -> bool:
     optionally alongside `gas`/`eth_floor` ESCALATEing purely because no gas estimate or
     ETH balance is available yet.
 
-    This is not a guess: the worked `vd tick --dry-run` example in `AGENTS.md` §5 shows
-    exactly `guards: 13/16 pass (block)` for a routine tier-1 proposal, and the 3 gates
-    that don't pass there are precisely `tier` (BLOCK), `gas` (ESCALATE, no estimate),
-    `eth_floor` (ESCALATE, balance never checked at tier 1) -- this predicate is written
-    to recognise exactly that cluster as carrying zero promotion-relevant information,
-    matching what `references/guardrails.md` already says about `gas`/`eth_floor` missing
-    data being routine and non-alarming at tier 1.
+    This is not a guess: a routine tier-1 proposal on an unlocked entity (the
+    `prerequisites` gate PASSes -- nothing about a plain mine upgrade is locked) shows
+    exactly `guards: 14/17 pass (block)`, and the 3 gates that don't pass there are
+    precisely `tier` (BLOCK), `gas` (ESCALATE, no estimate), `eth_floor` (ESCALATE,
+    balance never checked at tier 1) -- this predicate is written to recognise exactly
+    that cluster as carrying zero promotion-relevant information, matching what
+    `references/guardrails.md` already says about `gas`/`eth_floor` missing data being
+    routine and non-alarming at tier 1.
 
     `tier` BLOCKing is required for a result to count as structural at all -- `non_passing_gates`
     without it (e.g. only `gas`/`eth_floor` escalating on an otherwise-ALLOWed action)
@@ -183,6 +204,135 @@ def _gate_tier(action: Action, policy: Policy) -> GuardVerdict:
             f"{action.function} requires tier >= {min_tier.value}; policy tier is {policy.tier.value}",
         )
     return _verdict("tier", GuardStatus.PASS, f"{action.function} allowed at tier {policy.tier.value}")
+
+
+def _defense_count(planet: PlanetSnapshot, defense_id: int) -> int | None:
+    entity = next((d for d in planet.defenses if d.id == defense_id), None)
+    return entity.count if entity is not None else None
+
+
+def _queued_defense_quantity(planet: PlanetSnapshot, defense_id: int) -> int:
+    """Best-effort re-derivation of `_queuedDefenseQuantity`
+    (`VeydriftDefenseProductionModule.sol:398-`) from the single `QueueEntry`
+    `PlanetSnapshot` carries per queue kind -- there is no backlog list in the frozen
+    `models.py` (`techtree.py`'s own docstring on `MAX_DEFENSE_PER_PLANET` flags this).
+    Returns `0` when nothing matching this defense id is currently queued; a caller
+    already-built + this always undercounts rather than overcounts a real backlog deeper
+    than one entry, which is the safe-to-under-restrict-yourself direction for a queue
+    quantity feeding a cap check, not the safe-to-vacuously-pass one."""
+    entry = planet.queues.get(QueueKind.DEFENSE)
+    if entry is None or entry.entity_id != defense_id:
+        return 0
+    return entry.quantity or 0
+
+
+def _defense_cap_violation(action: Action, planet: PlanetSnapshot) -> str | None:
+    """Re-derives `_requireDefenseCapacity` (`VeydriftDefenseProductionModule.sol:352-380`)
+    independently from the snapshot: the shield-dome per-planet cap
+    (`techtree.MAX_DEFENSE_PER_PLANET`) and the missile-silo slot cap
+    (`techtree.MISSILE_SLOTS` / `missile_silo_capacity`). Returns `None` when nothing is
+    violated, else a detail string for the `prerequisites` gate's `BLOCK`. Fails closed:
+    a defense/missile count the snapshot didn't report BLOCKs rather than being treated
+    as zero."""
+    defense_id = action.entity_id
+    quantity = action.quantity if action.quantity is not None else 1
+
+    cap = MAX_DEFENSE_PER_PLANET.get(defense_id)
+    if cap is not None:
+        built = _defense_count(planet, defense_id)
+        if built is None:
+            return (
+                f"{action.entity_name or f'defense {defense_id}'} count not reported for "
+                f"planet {planet.planet_id}; cannot verify the {cap}-per-planet cap"
+            )
+        queued = _queued_defense_quantity(planet, defense_id)
+        projected = built + queued + quantity
+        if projected > cap:
+            return (
+                f"{action.entity_name or f'defense {defense_id}'} is capped at {cap} per "
+                f"planet (built {built} + queued {queued} + this action {quantity} = "
+                f"{projected})"
+            )
+
+    slots_per_unit = MISSILE_SLOTS.get(defense_id, 0)
+    if slots_per_unit:
+        silo_entity = next((b for b in planet.buildings if b.id == ids.Building.MISSILE_SILO), None)
+        silo_level = silo_entity.level if silo_entity is not None else None
+        if silo_level is None:
+            return (
+                f"Missile Silo level not reported for planet {planet.planet_id}; cannot "
+                "verify missile slot capacity"
+            )
+        capacity = missile_silo_capacity(silo_level)
+        used = 0
+        for missile_id, slots in MISSILE_SLOTS.items():
+            count = _defense_count(planet, missile_id)
+            if count is None:
+                return (
+                    f"{ids.defense_name(missile_id)} count not reported for planet "
+                    f"{planet.planet_id}; cannot verify missile slot capacity"
+                )
+            used += slots * count
+            used += slots * _queued_defense_quantity(planet, missile_id)
+        requested = slots_per_unit * quantity
+        if used + requested > capacity:
+            return (
+                f"{action.entity_name or f'defense {defense_id}'} would use {requested} "
+                f"missile silo slot(s); {used} already used/queued against a capacity of "
+                f"{capacity} (Missile Silo level {silo_level})"
+            )
+    return None
+
+
+def _gate_prerequisites(action: Action, snapshot: Snapshot) -> GuardVerdict:
+    """New gate (docs/SPEC.md §5.5), slotted immediately after `tier` and before
+    `address`. Independently re-derives the planet's building/technology level vectors
+    from `snapshot` -- never trusts `plan.py`'s own filtering, exactly as `_gate_energy`
+    already re-derives the energy invariant rather than calling `plan.py`. BLOCKs on any
+    unmet `techtree` requirement, on any `have=None` (a level the snapshot didn't report
+    -- fail closed, never PASS on absent data), and on a shield-dome/missile-slot cap
+    violation.
+
+    Actions with no entity to check (`resolve_mission`/`noop`/`escalate`/`halt`, or any
+    action missing `entity_id`) PASS trivially -- there is nothing here for this gate to
+    say anything about, the same posture `_gate_energy`/`_gate_affordability` take toward
+    an action with no target planet.
+    """
+    family = _FAMILY_FOR_ACTION_KIND.get(action.kind)
+    if family is None or action.entity_id is None:
+        return _verdict("prerequisites", GuardStatus.PASS, "action has no entity to check prerequisites for")
+    if action.planet_id is None:
+        return _verdict(
+            "prerequisites",
+            GuardStatus.BLOCK,
+            f"{action.entity_name or action.entity_id} has no target planet to derive levels from",
+        )
+    planet = snapshot.planet(action.planet_id)
+    if planet is None:
+        return _verdict("prerequisites", GuardStatus.BLOCK, f"planet {action.planet_id} not found in snapshot")
+
+    building_levels: dict[int, int | None] = {b.id: b.level for b in planet.buildings}
+    technology_levels: dict[int, int | None] = {t.id: t.level for t in snapshot.technologies}
+
+    unmet_reqs = unmet(family, action.entity_id, building_levels=building_levels, technology_levels=technology_levels)
+    if unmet_reqs:
+        detail = "; ".join(describe(u) for u in unmet_reqs)
+        return _verdict(
+            "prerequisites",
+            GuardStatus.BLOCK,
+            f"{action.entity_name or action.entity_id} on-chain prerequisites unmet: {detail}",
+        )
+
+    if family is EntityFamily.DEFENSE:
+        cap_violation = _defense_cap_violation(action, planet)
+        if cap_violation is not None:
+            return _verdict("prerequisites", GuardStatus.BLOCK, cap_violation)
+
+    return _verdict(
+        "prerequisites",
+        GuardStatus.PASS,
+        f"{action.entity_name or action.entity_id} on-chain prerequisites satisfied",
+    )
 
 
 def _gate_address(action: Action, *, live_addresses: set[str] | None, unsigned_tx: UnsignedTx | None) -> GuardVerdict:
@@ -548,7 +698,7 @@ def _gate_revert_streak(action: Action, agent_state: AgentState, policy: Policy)
 
 
 # --------------------------------------------------------------------------------------
-# The full 16-gate evaluation.
+# The full 17-gate evaluation.
 # --------------------------------------------------------------------------------------
 
 
@@ -565,7 +715,7 @@ def evaluate_guardrails(
     eth_balance_wei: int | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 16 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 17 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -580,6 +730,7 @@ def evaluate_guardrails(
     verdicts = [
         _gate_killswitch(killswitch_active=killswitch_active),
         _gate_tier(action, policy),
+        _gate_prerequisites(action, snapshot),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),
         _gate_abi_hash(action, snapshot),
         _gate_health(snapshot),

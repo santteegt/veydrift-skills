@@ -1,11 +1,11 @@
-"""Tests for veydrift_agent.guard — the 16-gate guardrail evaluator.
+"""Tests for veydrift_agent.guard — the 17-gate guardrail evaluator.
 
 The most important tests here are the "missing data must not vacuously pass" ones (one
 per gate where that risk is real: `address`, `abi_hash`, `affordability`, `energy`,
-`fields`, `reserve`, `gas`, `eth_floor`, `value_ceiling`). Each constructs a snapshot/
-policy/action where the relevant field is `None` (or otherwise absent) and asserts the
-gate resolves to `BLOCK` or `ESCALATE`, never `PASS` — the exact defect the work package
-brief calls out as the most likely real bug in this package.
+`fields`, `reserve`, `gas`, `eth_floor`, `value_ceiling`, `prerequisites`). Each
+constructs a snapshot/policy/action where the relevant field is `None` (or otherwise
+absent) and asserts the gate resolves to `BLOCK` or `ESCALATE`, never `PASS` — the exact
+defect the work package brief calls out as the most likely real bug in this package.
 """
 
 from __future__ import annotations
@@ -69,6 +69,12 @@ def make_planet(**overrides) -> PlanetSnapshot:
         buildings=[
             Entity(id=ids.Building.METAL_MINE, name="Metal Mine", level=0, cost=Resources(metal=60, crystal=15)),
             Entity(id=ids.Building.SOLAR_PLANT, name="Solar Plant", level=1, cost=Resources(metal=105, crystal=25)),
+            # Both at level 1 so the suite's many pre-existing Energy Technology research
+            # actions and Solar Satellite ship actions stay legal under the `prerequisites`
+            # gate (Energy needs Research Lab >= 1; Solar Satellite needs Shipyard >= 1) --
+            # tests that specifically exercise `prerequisites` override these explicitly.
+            Entity(id=ids.Building.RESEARCH_LAB, name="Research Lab", level=1, cost=Resources(metal=200, crystal=400, deuterium=200)),
+            Entity(id=ids.Building.SHIPYARD, name="Shipyard", level=1, cost=Resources(metal=400, crystal=200, deuterium=100)),
         ],
         ships=[],
         defenses=[],
@@ -126,17 +132,17 @@ def verdict(report, gate: str):
 
 
 # --------------------------------------------------------------------------------------
-# All 16 gates are always present, never short-circuited.
+# All 17 gates are always present, never short-circuited.
 # --------------------------------------------------------------------------------------
 
 
-def test_all_sixteen_gates_always_present_even_when_blocked():
+def test_all_seventeen_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 16
+    assert report.total == 17
     gates = {v.gate for v in report.verdicts}
     assert gates == {
-        "killswitch", "tier", "address", "abi_hash", "health", "index_lag",
+        "killswitch", "tier", "prerequisites", "address", "abi_hash", "health", "index_lag",
         "affordability", "energy", "storage_overflow", "fields", "reserve",
         "gas", "eth_floor", "value_ceiling", "idempotency", "revert_streak",
     }
@@ -222,6 +228,184 @@ def test_tier_allows_start_ship_production_from_economy_up():
     assert verdict(evaluate(action, snapshot, make_policy(tier=Tier.ADVISOR)), "tier").status is GuardStatus.BLOCK
     assert verdict(evaluate(action, snapshot, make_policy(tier=Tier.ECONOMY)), "tier").status is GuardStatus.PASS
     assert verdict(evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR)), "tier").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# prerequisites — independently re-derives the level vectors from the snapshot; MISSING
+# DATA must not vacuously pass. Slotted immediately after `tier` and before `address`
+# (docs/SPEC.md §5.5).
+# --------------------------------------------------------------------------------------
+
+
+def test_prerequisites_passes_for_an_unlocked_entity():
+    # make_planet()'s default Research Lab is level 1, satisfying Energy Technology's
+    # only requirement.
+    action = make_build_action(kind=ActionKind.RESEARCH, function="startResearch", entity_id=ids.Technology.ENERGY, target_level=1)
+    report = evaluate(action, make_snapshot(), make_policy())
+    assert verdict(report, "prerequisites").status is GuardStatus.PASS
+
+
+def test_prerequisites_blocks_an_entity_whose_requirement_is_unmet():
+    """Shipyard requires Robotics Factory >= 2; this planet reports Robotics Factory at a
+    known, insufficient level (0) -- a genuine "unmet," distinct from the absent-data case
+    below."""
+    planet = make_planet(
+        buildings=[
+            Entity(id=ids.Building.ROBOTICS_FACTORY, name="Robotics Factory", level=0, cost=Resources(metal=400, crystal=120, deuterium=200)),
+        ]
+    )
+    snapshot = make_snapshot(planets=[planet])
+    action = make_build_action(entity_id=ids.Building.SHIPYARD, entity_name="Shipyard", target_level=1)
+    report = evaluate(action, snapshot, make_policy())
+    v = verdict(report, "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "Robotics Factory 2 (have 0)" in v.detail
+
+
+def test_prerequisites_blocks_on_an_absent_level_never_passes_vacuously():
+    """The gate this whole feature is built around: a snapshot that simply never
+    reported Robotics Factory's level must BLOCK exactly like a reported level of 0 --
+    absent data is never treated as "must be high enough"."""
+    planet = make_planet(buildings=[])  # nothing reported at all
+    snapshot = make_snapshot(planets=[planet])
+    action = make_build_action(entity_id=ids.Building.SHIPYARD, entity_name="Shipyard", target_level=1)
+    report = evaluate(action, snapshot, make_policy())
+    v = verdict(report, "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "not reported" in v.detail
+
+
+def test_prerequisites_passes_trivially_for_an_action_with_no_entity():
+    report = evaluate(Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x"), make_snapshot(), make_policy())
+    assert verdict(report, "prerequisites").status is GuardStatus.PASS
+
+
+def test_prerequisites_blocks_when_planet_not_found():
+    action = make_build_action(planet_id=999999, entity_id=ids.Building.SHIPYARD)
+    report = evaluate(action, make_snapshot(), make_policy())
+    v = verdict(report, "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "999999" in v.detail
+
+
+def test_prerequisites_blocks_a_second_small_shield_dome():
+    """Small Shield Dome is capped at 1 built+queued per planet
+    (`techtree.MAX_DEFENSE_PER_PLANET`). Shielding Technology 2 is supplied so the
+    *requirement* check passes cleanly and the cap check is what actually fires."""
+    planet = make_planet(
+        defenses=[Entity(id=ids.Defense.SMALL_SHIELD_DOME, name="Small Shield Dome", count=1, cost=Resources(metal=10_000, crystal=10_000))]
+    )
+    snapshot = make_snapshot(
+        planets=[planet],
+        technologies=[Entity(id=ids.Technology.SHIELDING, name="Shielding Technology", level=2, cost=Resources())],
+    )
+    action = make_build_action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        entity_id=ids.Defense.SMALL_SHIELD_DOME,
+        entity_name="Small Shield Dome",
+        quantity=1,
+    )
+    report = evaluate(action, snapshot, make_policy())
+    v = verdict(report, "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "capped at 1" in v.detail
+
+
+def test_prerequisites_allows_the_first_small_shield_dome():
+    planet = make_planet(
+        defenses=[Entity(id=ids.Defense.SMALL_SHIELD_DOME, name="Small Shield Dome", count=0, cost=Resources(metal=10_000, crystal=10_000))]
+    )
+    snapshot = make_snapshot(
+        planets=[planet],
+        technologies=[Entity(id=ids.Technology.SHIELDING, name="Shielding Technology", level=2, cost=Resources())],
+    )
+    action = make_build_action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        entity_id=ids.Defense.SMALL_SHIELD_DOME,
+        entity_name="Small Shield Dome",
+        quantity=1,
+    )
+    report = evaluate(action, snapshot, make_policy())
+    assert verdict(report, "prerequisites").status is GuardStatus.PASS
+
+
+def test_prerequisites_blocks_missiles_over_silo_capacity():
+    """Missile Silo level 4 -> 40 slots (`techtree.missile_silo_capacity`), satisfying
+    Anti-Ballistic Missile's own MissileSilo>=2 requirement. 40 Anti-Ballistic Missiles
+    already occupy all 40 slots; requesting one more overruns capacity."""
+    planet = make_planet(
+        buildings=[
+            Entity(id=ids.Building.SHIPYARD, name="Shipyard", level=1, cost=Resources(metal=400, crystal=200, deuterium=100)),
+            Entity(id=ids.Building.MISSILE_SILO, name="Missile Silo", level=4, cost=Resources(metal=20_000, crystal=20_000, deuterium=1_000)),
+        ],
+        defenses=[
+            Entity(id=ids.Defense.ANTI_BALLISTIC_MISSILE, name="Anti-Ballistic Missile", count=40, cost=Resources(metal=8_000, deuterium=2_000)),
+            Entity(id=ids.Defense.INTERPLANETARY_MISSILE, name="Interplanetary Missile", count=0, cost=Resources(metal=12_500, crystal=2_500, deuterium=10_000)),
+        ],
+    )
+    snapshot = make_snapshot(planets=[planet])
+    action = make_build_action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        entity_id=ids.Defense.ANTI_BALLISTIC_MISSILE,
+        entity_name="Anti-Ballistic Missile",
+        quantity=1,
+    )
+    report = evaluate(action, snapshot, make_policy())
+    v = verdict(report, "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "silo slot" in v.detail
+
+
+def test_prerequisites_allows_missiles_within_silo_capacity():
+    planet = make_planet(
+        buildings=[
+            Entity(id=ids.Building.SHIPYARD, name="Shipyard", level=1, cost=Resources(metal=400, crystal=200, deuterium=100)),
+            Entity(id=ids.Building.MISSILE_SILO, name="Missile Silo", level=4, cost=Resources(metal=20_000, crystal=20_000, deuterium=1_000)),
+        ],
+        defenses=[
+            Entity(id=ids.Defense.ANTI_BALLISTIC_MISSILE, name="Anti-Ballistic Missile", count=39, cost=Resources(metal=8_000, deuterium=2_000)),
+            Entity(id=ids.Defense.INTERPLANETARY_MISSILE, name="Interplanetary Missile", count=0, cost=Resources(metal=12_500, crystal=2_500, deuterium=10_000)),
+        ],
+    )
+    snapshot = make_snapshot(planets=[planet])
+    action = make_build_action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        entity_id=ids.Defense.ANTI_BALLISTIC_MISSILE,
+        entity_name="Anti-Ballistic Missile",
+        quantity=1,
+    )
+    report = evaluate(action, snapshot, make_policy())
+    assert verdict(report, "prerequisites").status is GuardStatus.PASS
+
+
+def test_defense_cap_violation_blocks_on_a_missile_silo_level_the_snapshot_never_reported():
+    """Whitebox test of `guard._defense_cap_violation`'s own fail-closed branch directly:
+    through the full `prerequisites` gate this path is currently unreachable (every
+    missile-slot defense already has a Missile Silo `Requirement` in
+    `techtree.DEFENSE_REQUIREMENTS`, so an absent Missile Silo level always BLOCKs at the
+    requirement check first) -- but the cap-check code is real and independently
+    defends against the same absent-data failure mode, so it gets its own direct test
+    rather than relying on that always being true of every future table entry."""
+    planet = make_planet(
+        buildings=[Entity(id=ids.Building.SHIPYARD, name="Shipyard", level=1, cost=Resources(metal=400, crystal=200, deuterium=100))],
+        defenses=[
+            Entity(id=ids.Defense.ANTI_BALLISTIC_MISSILE, name="Anti-Ballistic Missile", count=0, cost=Resources(metal=8_000, deuterium=2_000)),
+        ],
+    )
+    action = make_build_action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        entity_id=ids.Defense.ANTI_BALLISTIC_MISSILE,
+        entity_name="Anti-Ballistic Missile",
+        quantity=1,
+    )
+    result = guard._defense_cap_violation(action, planet)
+    assert result is not None
+    assert "Missile Silo" in result
 
 
 def test_storage_overflow_escalates_when_producing_with_no_reported_cap():

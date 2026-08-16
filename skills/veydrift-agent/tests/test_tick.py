@@ -765,7 +765,7 @@ def _allow_guard(monkeypatch):
     """Force guard.evaluate_guardrails to ALLOW, the same trick
     test_dry_run_at_tier1_never_sends_even_when_guard_would_allow already uses -- lets
     these tests isolate the require_confirmation branch without needing every one of the
-    16 gates to genuinely pass."""
+    17 gates to genuinely pass."""
     import veydrift_agent.guard as guard_module
 
     monkeypatch.setattr(
@@ -1005,7 +1005,7 @@ def test_load_policy_is_silent_when_allow_fleet_noncombat_is_false(isolated_home
 def test_structural_tier_block_alone_does_not_append_to_strategy_md(isolated_home, monkeypatch):
     """At tier 1 with no wallet configured, a routine onchain proposal's only non-passing
     gates are `tier` (BLOCK) + `gas`/`eth_floor` (ESCALATE, missing data) -- exactly the
-    `13/16 pass (block)` cluster AGENTS.md's worked example shows. That is expected noise,
+    `14/17 pass (block)` cluster README.md's worked example shows. That is expected noise,
     not new information, so it must not accrue a strategy.md entry every single tick."""
     _write_policy()  # tier advisor
     tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)

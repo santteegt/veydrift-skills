@@ -391,7 +391,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   <div class="module-row"><div class="module-name">read.py</div><div class="module-lines">830</div><div class="module-desc">One <code>vd read</code> subcommand per route (18 targets). <code>--summary</code> is capped near 2KB; <code>battle-reports</code>/<code>highscores</code> refuse stdout entirely — up to 2.2MB uncompressed.</div></div>
   <div class="module-row"><div class="module-name">calc.py</div><div class="module-lines">737</div><div class="module-desc">Pure formulas, no network. Contains <strong>no cost-scaling function</strong> by design — live cost always comes from the API, since recomputing the unpublished per-building factors is exactly how affordability checks go wrong silently.</div></div>
   <div class="module-row"><div class="module-name">plan.py</div><div class="module-lines">658</div><div class="module-desc">The decision ladder and the planet-trait-derived build order. Energy-first: post-upgrade <code>required</code> vs. current <code>produced</code>, computed fresh every tick — never a fixed offset.</div></div>
-  <div class="module-row"><div class="module-name">guard.py</div><div class="module-lines">640</div><div class="module-desc">16 gates, every one evaluated and reported — never short-circuited. Missing data resolves toward <code>BLOCK</code>/<code>ESCALATE</code>, never <code>PASS</code>.</div></div>
+  <div class="module-row"><div class="module-name">guard.py</div><div class="module-lines">640</div><div class="module-desc">17 gates, every one evaluated and reported — never short-circuited. Missing data resolves toward <code>BLOCK</code>/<code>ESCALATE</code>, never <code>PASS</code>.</div></div>
   <div class="module-row"><div class="module-name">state.py</div><div class="module-lines">287</div><div class="module-desc"><code>$VEYDRIFT_HOME</code> resolution, <code>AgentState</code>, the tick lockfile, <code>KILLSWITCH</code> detection.</div></div>
   <div class="module-row"><div class="module-name">tick.py</div><div class="module-lines">978</div><div class="module-desc">The orchestrator — the nine-step loop (§7), the <code>walletctl</code> subprocess bridge, <code>--readiness</code>. Largest module, and where both criticals in §10 actually lived.</div></div>
   <div class="module-row"><div class="module-name">log.py</div><div class="module-lines">377</div><div class="module-desc">Four log sinks, secret scrubbing, the pretty-report renderer, <code>--digest</code>.</div></div>
@@ -451,7 +451,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
 
         <circle cx="40" cy="230" r="14" fill="var(--surface-2)" stroke="var(--border)"/>
         <text x="40" y="234" text-anchor="middle" font-family="Plex Mono, monospace" font-size="11" font-weight="700" fill="var(--ink-dim)">6</text>
-        <text x="66" y="235">guard → all 16 gates, one Decision</text>
+        <text x="66" y="235">guard → all 17 gates, one Decision</text>
       </g>
 
       <!-- branch box for step 7 -->

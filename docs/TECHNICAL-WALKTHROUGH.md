@@ -178,7 +178,7 @@ verification.
 4. snapshot                     →  read.py: /health, /infrastructure, /research, /shipyard,
                                     /defenses, /fleet-visibility -- composed into one Snapshot
 5. plan                         →  plan.py: the decision ladder, zero or one Action out
-6. guard                        →  guard.py: all 16 gates, full verdict list, one Decision
+6. guard                        →  guard.py: all 17 gates, full verdict list, one Decision
 7. if ALLOW and tier>=2         →  walletctl build -> simulate -> send, await receipt,
    and not --dry-run               THEN await INDEXED (a confirmed receipt is not the
                                     same as indexed state -- no dependent action follows

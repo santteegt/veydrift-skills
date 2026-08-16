@@ -71,7 +71,7 @@ output — reads as plain English instead of jargon.
 | --- | --- |
 | **Tick** | One complete, atomic run of the agent's pipeline: load your policy, check for a killswitch, reconcile any pending transaction, read your planet's live state, decide on zero or one next action, run every safety check against it, and — only at tier ≥2 with a real send — submit it. Nothing schedules a tick by itself; something else (you, typing a command; a loop; a scheduler) decides *when* to call one. §8 and §10 cover running them. |
 | **Tier** | How much the agent is trusted to *submit*, not what it's allowed to *think about* — it always proposes the same way regardless of tier. Three tiers: `advisor` (propose only, never send — where you start), `economy` (can submit building/research/production actions), `operator` (also non-combat fleet missions). Advancing tiers is always a manual edit you make, never automatic — §12. |
-| **Guard** | One of 16 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no, so a blocked tick is exactly as inspectable as an allowed one. §9 shows what this looks like in real output. |
+| **Guard** | One of 17 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no, so a blocked tick is exactly as inspectable as an allowed one. §9 shows what this looks like in real output. |
 | **Snapshot** | The live read of your planet — resources, queues, energy, incoming fleets — that a tick's decision is computed against. Always fetched fresh from Veydrift's own API at the start of the tick; a decision is never made against stale or cached numbers. |
 | **Proposal vs. action** | A *proposal* is what the agent decided it would do. An *action* is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction doesn't matter until tier 2, where it becomes the whole point of `logs/proposals.jsonl` vs. `logs/actions.jsonl` (§11). |
 | **Policy** | The one file, `policy.json`, that holds every setting governing what the agent's allowed to do for your account — tier, wallet, planet(s), spending limits, which action types are enabled. §6 walks through every field. |
@@ -445,7 +445,7 @@ it off at this tier. Real output, captured against this repo's reference planet:
 │     why:    Metal Mine 0->1 would need 11 energy against 0 produced.         │
 │ Energy-first invariant: Solar Plant's marginal cost per energy point is      │
 │ cheaper here than one more Solar Satellite (satellite energy/unit=4).        │
-│     guards: 13/16 pass (block)                                               │
+│     guards: 14/17 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -475,7 +475,7 @@ knowing before you move on to §10's scheduling options:
 
 A few things worth understanding about that block before you trust it:
 
-- **`guards: 13/16 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
+- **`guards: 14/17 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
   itself blocks — every onchain proposal is blocked at tier 1 by design, since advisor
   mode may never submit. That's what makes tier 1 safe *by construction*, not by
   discipline: the decision genuinely is `BLOCK`, so nothing past that point ever runs.
@@ -597,7 +597,7 @@ room, not less.
 | `vd tick` says `readiness.ready` is not true, or health nulls | Almost always transient backend replica lag, not an outage — the agent already treats this correctly and will retry. If it persists past `on_health_unhealthy_minutes` (default 30), it escalates instead of retrying forever. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
-| Guards read `13/16 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |
+| Guards read `14/17 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 

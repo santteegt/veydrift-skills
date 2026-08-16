@@ -59,6 +59,7 @@ from veydrift_agent.models import (
     QueueKind,
     Snapshot,
 )
+from veydrift_agent.techtree import EntityFamily, unmet
 
 app = typer.Typer(no_args_is_help=True, help="Decide the next action from a snapshot + policy.")
 
@@ -75,6 +76,33 @@ def _entity(entities: list[Entity], entity_id: int) -> Entity | None:
 def _level(planet: PlanetSnapshot, building_id: int) -> int:
     entity = _entity(planet.buildings, building_id)
     return entity.level if entity is not None and entity.level is not None else 0
+
+
+def _level_vector(entities: list[Entity]) -> dict[int, int | None]:
+    """Legality-checking counterpart to `_level()`: preserves "not reported" as `None`
+    instead of collapsing it to `0`. `_level()` stays as-is for its existing callers
+    (docs/SPEC.md's energy-first invariant is fine treating an unreported mine as level
+    0 — that's a "nothing built yet" default, not a legality check); this builds the
+    vector `techtree.unmet()` needs to tell "reported and genuinely 0" apart from
+    "the snapshot didn't say" (`AGENTS.md` §5). An id with an `Entity` in the list but
+    `level=None` maps to `None` here, same as an id with no `Entity` at all -- both mean
+    "not reported."""
+    return {entity.id: entity.level for entity in entities}
+
+
+def _unlocked(
+    family: EntityFamily,
+    entity_id: int,
+    *,
+    building_levels: dict[int, int | None],
+    technology_levels: dict[int, int | None],
+) -> bool:
+    return not unmet(
+        family,
+        entity_id,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+    )
 
 
 def _energy_technology_level(snapshot: Snapshot) -> int:
@@ -144,7 +172,11 @@ def _mine_priority_order(planet: PlanetSnapshot) -> list[int]:
 
 
 def _energy_candidate(
-    planet: PlanetSnapshot, satellite_energy_per_unit: int | None
+    planet: PlanetSnapshot,
+    satellite_energy_per_unit: int | None,
+    *,
+    building_levels: dict[int, int | None],
+    technology_levels: dict[int, int | None],
 ) -> tuple[float, str, Entity] | None:
     """Choose the cheaper energy source per unit of energy gained, comparing the next
     Solar Plant level against one more Solar Satellite — using only *live* costs
@@ -160,8 +192,15 @@ def _energy_candidate(
     That crossover, not a planet id, is what makes 664 never propose a satellite and a
     hot-planet fixture do so as soon as Solar Plant's marginal cost catches up.
 
+    Solar Satellite (`Ship.SolarSatellite`, id 9) requires Shipyard >= 1
+    (`techtree.SHIP_REQUIREMENTS`) — a planet with no Shipyard (or one the snapshot didn't
+    report a level for) never gets it offered as a candidate at all, so the cheaper
+    *legal* option wins instead of stalling the energy-first invariant on a locked choice.
+    Solar Plant carries no requirement in the source, so it is never filtered here.
+
     Returns `(cost_per_energy, "solar_plant" | "solar_satellite", live_entity)` for the
-    cheaper option, or `None` if neither is buildable from the data available.
+    cheaper *unlocked* option, or `None` if neither is buildable/unlocked from the data
+    available.
     """
     options: list[tuple[float, str, Entity]] = []
 
@@ -173,7 +212,16 @@ def _energy_candidate(
             options.append((cost_total / gained, "solar_plant", solar))
 
     satellite = _entity(planet.ships, ids.Ship.SOLAR_SATELLITE)
-    if satellite is not None and satellite_energy_per_unit:
+    if (
+        satellite is not None
+        and satellite_energy_per_unit
+        and _unlocked(
+            EntityFamily.SHIP,
+            ids.Ship.SOLAR_SATELLITE,
+            building_levels=building_levels,
+            technology_levels=technology_levels,
+        )
+    ):
         cost_total = satellite.cost.metal + satellite.cost.crystal + satellite.cost.deuterium
         options.append((cost_total / satellite_energy_per_unit, "solar_satellite", satellite))
 
@@ -217,6 +265,9 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
     """
     if not policy.actions.allow_building:
         return None
+
+    building_levels = _level_vector(planet.buildings)
+    technology_levels = _level_vector(snapshot.technologies)
 
     energy_technology_level = _energy_technology_level(snapshot)
     satellite_energy = _satellite_energy_per_unit(planet)
@@ -265,7 +316,12 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
         ).required
 
         if required_post > produced_now:
-            choice = _energy_candidate(planet, satellite_energy)
+            choice = _energy_candidate(
+                planet,
+                satellite_energy,
+                building_levels=building_levels,
+                technology_levels=technology_levels,
+            )
             if choice is None:
                 # No energy source resolvable from live data; this mine can't be helped.
                 # Try the next mine in priority order rather than giving up entirely.
@@ -329,6 +385,18 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
                 expected_effect=f"produced energy {produced_now} -> {produced_now + (satellite_energy or 0)}",
             )
 
+        # Defense in depth: mines carry no requirement in the source today
+        # (`techtree.BUILDING_REQUIREMENTS` has no entry for Metal/Crystal/Deuterium
+        # Mine), so this is a no-op check against live data -- but every building branch
+        # here goes through the same `unmet()` filter on principle, so a future entity
+        # added to this loop (or a contract change) can't silently reintroduce the bug
+        # this module exists to close. A locked mine is skipped in favour of the next
+        # one in priority order, never a silent stall.
+        if not _unlocked(
+            EntityFamily.BUILDING, mine_id, building_levels=building_levels, technology_levels=technology_levels
+        ):
+            continue
+
         return Action(
             kind=ActionKind.BUILD,
             function="startBuildingUpgrade",
@@ -351,33 +419,62 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
 
 
 def _next_research_action(snapshot: Snapshot, target_planets: list[PlanetSnapshot], policy: Policy, rule: str) -> Action | None:
-    """Research is per-player, not per-planet (`Snapshot.research_queue`). This picks the
-    technology with the lowest current level account-wide, ties broken by ascending
-    contract id — a simple, generalizable default (it happens to prefer Energy
-    Technology, id 0, on a fresh account only because of the tie-break, not a special
-    case). This is deliberately not as richly derived as the energy invariant: the ladder
-    only asks for "next research", not a tech-tree strategy, and prerequisite/tier
-    awareness (`researchLabRequirement` in `VeydriftCatalog.sol`) is not modelled here.
-    See references/strategy-playbook.md for this limitation.
+    """Research is per-player, not per-planet (`Snapshot.research_queue`). This walks
+    technologies ordered by lowest current level account-wide (ties broken by ascending
+    contract id — a simple, generalizable default) and returns the **first one whose
+    on-chain prerequisites are met** (`techtree.unmet`, `EntityFamily.RESEARCH`), skipping
+    any locked candidate rather than proposing it or falling straight through to a NOOP.
+
+    **This is the fix for the bug this work package exists to close.** Before this
+    change, the lowest-level tie-break alone picked Energy Technology (id 0) on a fresh
+    account — but Energy requires Research Lab >= 1 (`VeydriftDependencies.sol:
+    requireResearch` via `VeydriftCatalog.researchLabRequirement`). On a Research-Lab-less
+    planet that was a guaranteed on-chain revert, paid in real gas, the very first time
+    tier >= 2 ever tried it. The contract's Research Lab check is planet-scoped even
+    though the research *queue* itself is per-player
+    (`VeydriftPlanetManagementModule.sol:558`: `_buildingLevels[planetId][ResearchLab]`),
+    so the building-level vector used here comes from `target_planets[0]` — the planet
+    `startResearch` would actually be submitted through — not from any other target
+    planet.
+
+    If every candidate technology is locked (e.g. Research Lab is genuinely 0, or its
+    level wasn't reported at all), this returns `None` rather than proposing anything —
+    rung 7 simply doesn't fire, and the ladder falls through to rung 8/9 exactly as if the
+    research queue were merely unavailable. It never falls back to a locked first choice.
     """
     if not policy.actions.allow_research or not snapshot.technologies or not target_planets:
         return None
-    candidate = min(snapshot.technologies, key=lambda t: ((t.level or 0), t.id))
-    planet_id = target_planets[0].planet_id
-    return Action(
-        kind=ActionKind.RESEARCH,
-        function="startResearch",
-        planet_id=planet_id,
-        entity_id=candidate.id,
-        entity_name=candidate.name or ids.technology_name(candidate.id),
-        target_level=(candidate.level or 0) + 1,
-        cost=candidate.cost,
-        rule=rule,
-        rationale=(
-            f"{candidate.name or ids.technology_name(candidate.id)} is the lowest-level "
-            f"technology account-wide (level {candidate.level or 0}); research queue is idle."
-        ),
-    )
+
+    planet = target_planets[0]
+    building_levels = _level_vector(planet.buildings)
+    technology_levels = _level_vector(snapshot.technologies)
+
+    candidates = sorted(snapshot.technologies, key=lambda t: ((t.level or 0), t.id))
+    for candidate in candidates:
+        unmet_reqs = unmet(
+            EntityFamily.RESEARCH,
+            candidate.id,
+            building_levels=building_levels,
+            technology_levels=technology_levels,
+        )
+        if unmet_reqs:
+            continue
+        return Action(
+            kind=ActionKind.RESEARCH,
+            function="startResearch",
+            planet_id=planet.planet_id,
+            entity_id=candidate.id,
+            entity_name=candidate.name or ids.technology_name(candidate.id),
+            target_level=(candidate.level or 0) + 1,
+            cost=candidate.cost,
+            rule=rule,
+            rationale=(
+                f"{candidate.name or ids.technology_name(candidate.id)} is the lowest-level "
+                f"unlocked technology account-wide (level {candidate.level or 0}); research "
+                f"queue is idle."
+            ),
+        )
+    return None
 
 
 # --------------------------------------------------------------------------------------
@@ -501,10 +598,17 @@ def _shipyard_action(snapshot: Snapshot, target_planets: list[PlanetSnapshot], p
     for planet in target_planets:
         ship_idle = planet.queues.get(QueueKind.SHIP) is None
         defense_idle = planet.queues.get(QueueKind.DEFENSE) is None
+        building_levels = _level_vector(planet.buildings)
+        technology_levels = _level_vector(snapshot.technologies)
 
         if policy.actions.allow_ships and ship_idle:
             satellite_energy = _satellite_energy_per_unit(planet)
-            choice = _energy_candidate(planet, satellite_energy)
+            choice = _energy_candidate(
+                planet,
+                satellite_energy,
+                building_levels=building_levels,
+                technology_levels=technology_levels,
+            )
             if choice is not None and choice[1] == "solar_satellite":
                 _, _, entity = choice
                 return Action(
@@ -522,7 +626,16 @@ def _shipyard_action(snapshot: Snapshot, target_planets: list[PlanetSnapshot], p
                     ),
                 )
 
-        if policy.actions.allow_defense and defense_idle:
+        if (
+            policy.actions.allow_defense
+            and defense_idle
+            and _unlocked(
+                EntityFamily.DEFENSE,
+                ids.Defense.ROCKET_LAUNCHER,
+                building_levels=building_levels,
+                technology_levels=technology_levels,
+            )
+        ):
             entity = _entity(planet.defenses, ids.Defense.ROCKET_LAUNCHER)
             if entity is not None and entity.count is not None:
                 return Action(

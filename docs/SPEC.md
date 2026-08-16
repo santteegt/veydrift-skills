@@ -335,6 +335,7 @@ reported**, never short-circuited — the full verdict list is the audit artifac
 | --- | --- |
 | `killswitch` | `$VEYDRIFT_HOME/KILLSWITCH` absent |
 | `tier` | action's function ∈ tier's allowed set |
+| `prerequisites` | proposed entity's on-chain requirements (`techtree.py`) are met on the target planet — a level the snapshot didn't report is treated as unmet, never assumed high enough; also enforces shield-dome/missile-slot caps |
 | `address` | destination ∈ **live** `/runtime-config` address set |
 | `abi_hash` | live `deploymentAbiHash` == pinned → else **BLOCK all writes** |
 | `health` | `ok && readiness.ready` |
@@ -349,6 +350,32 @@ reported**, never short-circuited — the full verdict list is the audit artifac
 | `value_ceiling` | spend > `escalate_above_pct_of_resources` (default 25%) → **ESCALATE** |
 | `idempotency` | no pending tx for the same `(planet, action, entity)` |
 | `revert_streak` | same action reverted < 2× |
+
+> **Gap closed, 2026-08-16 (legality layer, phase 1 of the general-strategy-engine
+> program).** Nothing in `plan.py` or `guard.py` checked an on-chain prerequisite of any
+> kind before this change. `plan.py`'s rung 7 (`_next_research_action`) picked
+> `min(snapshot.technologies, key=lambda t: ((t.level or 0), t.id))`, which on a fresh
+> planet resolves to Energy Technology (id 0) — but Energy requires Research Lab ≥ 1
+> (`VeydriftDependencies.sol`'s `requireResearch`, composed from
+> `VeydriftCatalog.researchLabRequirement`). On a fresh planet at tier 2 that is a
+> guaranteed on-chain revert, paid in real gas, the first time the ladder's own default
+> pick was ever submitted. The same hole let rung 8 propose a Rocket Launcher on a planet
+> with no Shipyard (`requireDefense`'s unconditional `if (shipyardLevel == 0) revert`).
+>
+> Fixed with a new pure-data module, `skills/veydrift-agent/src/veydrift_agent/techtree.py`
+> — the full building/ship/defense/research prerequisite table transcribed from
+> `VeydriftDependencies.sol`/`VeydriftCatalog.sol` at the pinned commit, plus the
+> shield-dome and missile-silo-slot hard caps — wired in twice, independently: `plan.py`
+> now filters every candidate through it before returning an `Action` (a locked first
+> choice is skipped in favour of the next unlocked candidate, never silently dropped to a
+> rung-9 NOOP when an unlocked alternative exists), and the new `prerequisites` gate above
+> independently re-derives the same check from `Snapshot` rather than trusting what
+> `plan.py` already filtered — the same defense-in-depth posture `_gate_energy` already
+> takes toward the energy invariant. Both sides fail closed on absent data: a building or
+> technology level the snapshot didn't report is treated as *not* satisfying the
+> requirement, never assumed high enough (`AGENTS.md` §5's no-vacuous-pass rule applied to
+> a new class of check). The tech-tree table itself is **transcribed from contract source
+> and has never been validated against a live revert** — see §11.
 
 ### 5.6 `policy.json`
 
@@ -702,6 +729,8 @@ silent-failure risks, guardrail bypasses and spec defects. Triage, fix, repeat u
 9. `shipCountsToFleetTuple` places Destroyer at index 9; throws on SolarSatellite and Crawler.
 10. `touch $VEYDRIFT_HOME/KILLSWITCH` → the next tick halts before any network call beyond health.
 11. Both providers return the **same address** for the same key material, one from keystore, one from env.
+11a. `vd plan` never proposes an entity whose contract prerequisites are unmet; `vd guard` BLOCKs one
+    that is unmet **and** one whose level the snapshot did not report.
 
 **Structural**
 12. `npx skills add .` installs both skills to `claude-code`; they load and are invocable by name.
@@ -748,3 +777,15 @@ silent-failure risks, guardrail bypasses and spec defects. Triage, fix, repeat u
 - **`protectedResources` semantics remain unconfirmed**; no loot model is built on them.
 - **No wallet provider beyond local key custody has been evaluated in depth** — that is WP4b's output,
   and it is a research document, not a recommendation to deploy.
+- **`techtree.py`'s prerequisite table is transcribed from `VeydriftDependencies.sol`/
+  `VeydriftCatalog.sol` at the pinned commit and has never been validated against a live
+  revert.** Every table entry was read from source, spot-checked in `tests/test_techtree.py`
+  against the Solidity, and cross-checked for the two known transcription traps (the
+  9-arg vs. 5-arg `requireBuilding` overload; conjunction vs. disjunction in the source's
+  `||` clauses) — but this account has taken zero on-chain actions (§10's "Zero-state
+  account" risk), so no proposal this table declares "unlocked" has ever actually been
+  submitted and observed to succeed, and no proposal it declares "locked" has been
+  confirmed to revert for exactly the stated reason. The shield-dome/missile-silo cap
+  arithmetic carries the same caveat, plus a narrower one of its own: it is derived from a
+  single `QueueEntry` per `PlanetSnapshot` (no backlog list — `models.py` is frozen), so a
+  real queue backlog deeper than one entry would be undercounted, not overcounted.

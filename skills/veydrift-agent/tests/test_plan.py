@@ -342,9 +342,41 @@ def test_no_overflow_falls_through_to_building_queue_rung():
     assert action.rule == "6:building-queue-empty"
 
 
-def test_research_queue_empty_proposes_lowest_level_technology():
+# --------------------------------------------------------------------------------------
+# Prerequisite legality (docs/SPEC.md's `prerequisites` layer). The bug this work package
+# exists to fix: `_next_research_action` used to pick the lowest-level technology
+# account-wide with no regard for whether its Research Lab (or other) prerequisite was
+# met. On planet 664's fixture -- a fresh, unsettled planet with every building at level
+# 0, including Research Lab -- that picked Energy Technology (id 0), which requires
+# Research Lab >= 1. Proposing it would have been a guaranteed on-chain revert the first
+# time tier >= 2 tried it.
+# --------------------------------------------------------------------------------------
+
+
+def test_research_not_proposed_when_research_lab_is_zero_the_bug_this_wp_fixes():
+    """Every technology's minimum `researchLabRequirement` is >= 1
+    (`VeydriftCatalog.sol:442-458`), so with Research Lab at 0 (planet 664's fixture, a
+    fresh account) rung 7 must propose *nothing* -- not a different, still-locked
+    technology, nothing at all -- and the ladder falls through to an honest rung-9 NOOP
+    rather than a proposal `walletctl` (or the chain itself) would revert."""
     snapshot = load_snapshot("planet_664.json")
     # Disable building so the ladder falls through to the research rung.
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=False, allow_research=True))
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "9:no-match"
+    assert action.kind == ActionKind.NOOP
+
+
+def test_research_proposes_lowest_level_unlocked_technology_once_research_lab_is_built():
+    """Same fixture, Research Lab bumped to level 1 -- the previously-buggy pick (Energy
+    Technology, lowest level, tie-break by id) becomes legitimate again once its actual
+    prerequisite is satisfied."""
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    lab = next(b for b in planet.buildings if b.id == ids.Building.RESEARCH_LAB)
+    lab.level = 1
     policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=False, allow_research=True))
 
     action = plan_next_action(snapshot, policy)
@@ -352,7 +384,76 @@ def test_research_queue_empty_proposes_lowest_level_technology():
     assert action.rule == "7:research-queue-empty"
     assert action.kind == ActionKind.RESEARCH
     assert action.function == "startResearch"
-    assert action.entity_id == ids.Technology.ENERGY  # lowest level (0) at a fresh account, tie-break by id
+    assert action.entity_id == ids.Technology.ENERGY  # lowest level (0), tie-break by id, now unlocked
+
+
+def test_research_skips_a_locked_lower_candidate_in_favour_of_the_next_unlocked_one():
+    """Laser Technology (id 1) sorts before Combustion Drive (id 3) at the same level (0),
+    but Laser requires Energy Technology >= 2 (`VeydriftDependencies.sol:requireResearch`)
+    while this planet's Energy is only level 1 -- locked. Combustion Drive only needs
+    Energy >= 1, which is met. The fix must skip the locked first choice and propose the
+    next unlocked one, never fall straight through to a rung-9 NOOP just because the
+    *first* candidate by the tie-break was illegal."""
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    lab = next(b for b in planet.buildings if b.id == ids.Building.RESEARCH_LAB)
+    lab.level = 2  # unlocks both Laser (lab>=1) and Combustion Drive (lab>=1)
+    energy_tech = next(t for t in snapshot.technologies if t.id == ids.Technology.ENERGY)
+    energy_tech.level = 1  # unlocks Combustion Drive (needs energy>=1) but not Laser (needs energy>=2)
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=False, allow_research=True))
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "7:research-queue-empty"
+    assert action.kind == ActionKind.RESEARCH
+    assert action.entity_id == ids.Technology.COMBUSTION_DRIVE
+
+
+# --------------------------------------------------------------------------------------
+# Rocket Launcher requires Shipyard >= 1 (`requireDefense`'s unconditional
+# `shipyardLevel == 0` revert -- every defense id, even Rocket Launcher, carries this
+# implicit floor). Rung 8's shipyard-idle branch must not propose it on a planet with no
+# Shipyard.
+# --------------------------------------------------------------------------------------
+
+
+def test_rocket_launcher_not_proposed_without_a_shipyard():
+    snapshot = load_snapshot("planet_664.json")  # Shipyard level 0 in this fixture
+    # "Economy on track" (rung 8's own precondition) needs *something* already building or
+    # researching; the building queue stays idle here on purpose so the ladder actually
+    # reaches rung 8 rather than proposing a building first.
+    snapshot.research_queue = QueueEntry(
+        kind=QueueKind.RESEARCH, entity_id=ids.Technology.ENERGY, entity_name="Energy Technology"
+    )
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=False, allow_research=False, allow_defense=True, allow_ships=False),
+    )
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "9:no-match"
+    assert action.kind == ActionKind.NOOP
+
+
+def test_rocket_launcher_proposed_once_shipyard_is_built():
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    shipyard = next(b for b in planet.buildings if b.id == ids.Building.SHIPYARD)
+    shipyard.level = 1
+    snapshot.research_queue = QueueEntry(
+        kind=QueueKind.RESEARCH, entity_id=ids.Technology.ENERGY, entity_name="Energy Technology"
+    )
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=False, allow_research=False, allow_defense=True, allow_ships=False),
+    )
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "8:shipyard-idle"
+    assert action.kind == ActionKind.DEFENSE
+    assert action.entity_id == ids.Defense.ROCKET_LAUNCHER
 
 
 def test_policy_disallowing_everything_results_in_explicit_noop():

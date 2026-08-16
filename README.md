@@ -128,13 +128,13 @@ $ uv run --directory skills/veydrift-agent vd tick --dry-run
 │     why:    Metal Mine 0->1 would need 11 energy against 0 produced.         │
 │ Energy-first invariant: Solar Plant's marginal cost per energy point is      │
 │ cheaper here than one more Solar Satellite (satellite energy/unit=4).        │
-│     guards: 13/16 pass (block)                                               │
+│     guards: 14/17 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-`guards: 13/16 pass (block)` is expected and correct at tier 1: the `tier` gate itself
+`guards: 14/17 pass (block)` is expected and correct at tier 1: the `tier` gate itself
 blocks, which is exactly the mechanism that makes tier 1 safe by construction rather than
 by discipline. Nothing downstream of the guard ever runs. `$VEYDRIFT_HOME` defaults to
 `~/.veydrift` for every invocation on a given machine regardless of which harness runs it —
@@ -261,6 +261,12 @@ Read before trusting a claim about this project — it's the single easiest thin
 - **This is an advisor, not a proven autonomous system.** At tier 1 — the only tier this
   project has ever run at — the agent proposes and pretty-prints; a human reads the
   proposal and decides.
+- **Most of what Veydrift lets a player do, this agent doesn't touch yet.** Building,
+  research, ships, defenses and mission-resolution are covered; combat, moons, debris
+  fields, raiding, alliances, expeditions, referrals/migration, and colonizing a second
+  planet are not — some by deliberate policy (combat stays unreachable in code, by design),
+  some because nobody has built that planner path yet. `docs/COVERAGE.md` is the full,
+  function-by-function ledger of what's covered, planned, or out of scope, and why.
 
 ## Contributing / development
 
@@ -288,3 +294,6 @@ walkthrough, the two enforcement layers, and what's genuinely unverified — see
   `docs/veydrift-agent-resources.md`, `docs/veydrift-briefing.html` — earlier research
   inputs this project was built from; superseded in places by the addendum but kept for
   provenance.
+- [`docs/COVERAGE.md`](docs/COVERAGE.md) — the standing ledger of what this codebase can
+  actually do today versus what's planned or out of scope, derived from the pinned contract
+  ABI rather than hand-maintained.

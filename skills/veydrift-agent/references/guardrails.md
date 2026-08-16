@@ -1,4 +1,4 @@
-# Guardrails — `vd guard`, the 16 gates
+# Guardrails — `vd guard`, the 17 gates
 
 Source of truth for *what* each gate checks, *why*, what data it needs, what it does when
 that data is missing, and how to configure it. `guard.py` is the frozen contract this
@@ -28,7 +28,7 @@ rest of this codebase is shaped:
   below).
 
 Every gate is evaluated on every tick, regardless of what earlier gates decided —
-`GuardReport.verdicts` is a fixed-length list of exactly 16 entries every time. A blocked
+`GuardReport.verdicts` is a fixed-length list of exactly 17 entries every time. A blocked
 proposal is exactly as informative as an allowed one, which is the entire point of never
 short-circuiting: `logs/proposals.jsonl` is the audit trail, not just the last mile. (A
 content-identical repeat of the immediately-previous proposal is not re-persisted to
@@ -56,26 +56,46 @@ This mirrors the same posture `plan.py` takes with `killswitch_active` /
 the one module that's allowed to touch the network/subprocess (`tick.py`) gather the
 facts.
 
-## The 16 gates
+## The 17 gates
 
 | # | Gate | What it checks | Data it needs | On missing data |
 | - | --- | --- | --- | --- |
 | 1 | `killswitch` | `$VEYDRIFT_HOME/KILLSWITCH` absent | `killswitch_active` (bool, never missing) | n/a |
 | 2 | `tier` | `action.function` ∈ the policy tier's allowed-to-*submit* set | `Action.function`, `Policy.tier` | function absent (off-chain action) → PASS trivially; function present but unknown to any tier → BLOCK |
-| 3 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
-| 4 | `abi_hash` | live `deploymentAbiHash` == pinned | `Snapshot.deployment_abi_hash` | missing or mismatched → BLOCK **all** writes |
-| 5 | `health` | `/health` reported `ok && readiness.ready` | `Snapshot.health_ok` (never `None`) | n/a |
-| 6 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
-| 7 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
-| 8 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
-| 9 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
-| 10 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
-| 11 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
-| 12 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
-| 13 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
-| 14 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
-| 15 | `idempotency` | no pending tx for the same `(planet, function, entity)` key | `AgentState.pending` | n/a — presence/absence is always knowable |
-| 16 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
+| 3 | `prerequisites` | the proposed entity's on-chain requirements (`techtree.py`, transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`) are met on the target planet, plus shield-dome/missile-slot caps | target planet's building levels, account technology levels | any unmet requirement, or any level the snapshot didn't report → BLOCK; a shield-dome/missile-slot count the snapshot didn't report → BLOCK |
+| 4 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
+| 5 | `abi_hash` | live `deploymentAbiHash` == pinned | `Snapshot.deployment_abi_hash` | missing or mismatched → BLOCK **all** writes |
+| 6 | `health` | `/health` reported `ok && readiness.ready` | `Snapshot.health_ok` (never `None`) | n/a |
+| 7 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
+| 8 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
+| 9 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
+| 10 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
+| 11 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
+| 12 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
+| 13 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
+| 14 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
+| 15 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
+| 16 | `idempotency` | no pending tx for the same `(planet, function, entity)` key | `AgentState.pending` | n/a — presence/absence is always knowable |
+| 17 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
+
+**`prerequisites` is new (this work package) and independently re-derives its inputs from
+`Snapshot`, never trusts `plan.py`'s own filtering** — the same posture `_gate_energy`
+already takes toward re-deriving the energy invariant rather than calling `plan.py`. It
+closes a real, previously-live bug: nothing in `plan.py` or `guard.py` checked an on-chain
+prerequisite of any kind before this change, so a fresh planet's rung-7 research pick
+(Energy Technology, lowest level, tie-break by id) could be proposed and executed against
+a planet with no Research Lab — a guaranteed on-chain revert the first time tier ≥ 2
+actually tried it, since Energy Technology requires Research Lab ≥ 1
+(`VeydriftDependencies.sol`'s `requireResearch`, composed from
+`VeydriftCatalog.researchLabRequirement`). The same hole let rung 8 propose a Rocket
+Launcher on a planet with no Shipyard (`requireDefense`'s unconditional
+`shipyardLevel == 0` revert). `plan.py` is now filtered to never emit such a proposal in
+the first place (see `references/strategy-playbook.md`); `prerequisites` is the
+independent second check, exactly as `_gate_energy` is a second look at the energy
+invariant `plan.py` already computed. **The tech-tree table itself is transcribed from
+contract source and has never been validated against a live revert** — see
+`techtree.py`'s own module docstring for the exact transcription methodology and
+`tests/test_techtree.py` for the spot-checks pinned against the Solidity.
 
 **`affordability`'s BLOCK detail includes a per-resource ETA.** For each resource short of
 the proposed cost, the detail string now also states an estimated "affordable in ~Xh Ym"
@@ -156,6 +176,10 @@ engine is ever re-pinned or its tier map changes, both copies need updating toge
 | `storage.hours_to_cap_trigger` | `storage_overflow` |
 | `escalation.on_revert_count` | `revert_streak` |
 | `tier` | `tier` |
+
+`prerequisites` has no policy knob — it is derived entirely from `Snapshot` (building/
+technology levels) against the fixed `techtree.py` table, the same posture `abi_hash`
+takes toward its pinned constant.
 
 ## Offline testing: `vd guard run`
 

@@ -11,6 +11,61 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-16
+
+### Added
+- New module `techtree.py`: the full on-chain prerequisite table for buildings, ships,
+  defenses and research (transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`
+  at the pinned commit `701bed3578cff4d134657c714c599dbdb55a4b6a`), plus the shield-dome
+  per-planet cap and missile-silo slot capacity. `unmet()` fails closed on absent data: a
+  building/technology level the snapshot didn't report is treated as *not satisfying* a
+  requirement, never assumed high enough — the same no-vacuous-pass posture as every
+  existing guard. A new `prerequisites` gate in `guard.py`, slotted immediately after
+  `tier` and before `address`, independently re-derives the same check from `Snapshot`
+  rather than trusting `plan.py`'s own filtering (the same defense-in-depth posture
+  `_gate_energy` already takes toward the energy invariant) and additionally BLOCKs a
+  shield-dome/missile-silo cap violation. `GuardReport.verdicts` is now a fixed 17-entry
+  list, up from 16. `unmet()` reports only the strictest unmet requirement per target: the
+  contract genuinely checks some targets twice (every defense carries a blanket
+  `Shipyard >= 1` on top of its own `Shipyard >= N`), and reporting both rendered as
+  `"needs Shipyard 1 (have 0); needs Shipyard 8 (have 0)"` — two clauses for one problem.
+  The tables still mirror the contract verbatim; the collapse happens at the output, and
+  never turns a locked entity into an empty result.
+- `plan.py` now filters every building/ship/defense/research candidate through
+  `techtree.unmet()` before returning it as a proposal. Where the ladder's first-choice
+  candidate is locked but a lower-priority one is not (e.g. Laser Technology locked on
+  Energy tech level, Combustion Drive available at the same Research Lab level), the
+  planner skips to the next unlocked candidate rather than silently falling through to a
+  rung-9 NOOP.
+
+### Fixed
+- **The live bug this phase exists to close**: `plan.py`'s rung 7
+  (`_next_research_action`) picked `min(snapshot.technologies, key=lambda t: ((t.level or
+  0), t.id))` with no regard for whether the pick's prerequisites were met — on a fresh
+  planet this resolved to Energy Technology (id 0), which requires Research Lab ≥ 1. On a
+  fresh planet at tier ≥ 2 that was a guaranteed on-chain revert, paid in real gas, the
+  first time the ladder's own default pick was ever submitted. The same hole let rung 8
+  propose a Rocket Launcher on a planet with no Shipyard (`requireDefense`'s unconditional
+  `shipyardLevel == 0` revert). Both are now filtered through `techtree.unmet()` before a
+  proposal can be returned; `tests/test_plan.py::test_research_not_proposed_when_research_lab_is_zero_the_bug_this_wp_fixes`
+  pins the fix down directly, and
+  `tests/test_plan.py::test_rocket_launcher_not_proposed_without_a_shipyard` pins the
+  Rocket Launcher case.
+
+### Not covered by this change
+- **`techtree.py`'s table is transcribed from contract source and has never been
+  validated against a live revert.** This account has taken zero on-chain actions, so no
+  proposal this table declares "unlocked" has ever actually been submitted and observed
+  to succeed, and none it declares "locked" has been confirmed to revert for exactly the
+  stated reason. See `docs/SPEC.md` §11.
+- **No cost-scaling formula was added anywhere.** `techtree.py` is a *requirements*
+  (level-comparison) table only — it never computes or scales a cost. Live cost stays the
+  API's `cost` object, unchanged from every prior release; `calc.py`'s "no cost-scaling
+  function" constraint is untouched by this change.
+- **The shield-dome/missile-silo cap check can undercount a real queue backlog.**
+  `PlanetSnapshot` carries a single `QueueEntry` per queue kind, not a backlog list
+  (`models.py` is frozen); the cap check accounts for at most one queued item.
+
 ## [0.2.0] - 2026-08-15
 
 ### Added
