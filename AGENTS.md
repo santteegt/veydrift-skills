@@ -242,6 +242,11 @@ insurance, not ceremony.
 
 ## 10. Known gaps — the places most likely to hide the next bug
 
+For the full, function-by-function ledger of what's implemented/planned/deferred/out of
+scope — derived from the pinned ABI, not hand-maintained — see `docs/COVERAGE.md` rather than
+expecting this section to enumerate it; the bullets below are the handful of gaps significant
+enough to call out here specifically, not a duplicate of that ledger.
+
 - **`skills/veydrift-agent/src/veydrift_agent/tick.py`'s tier≥2 send path
   (`_send_and_await`) has never run against a real chain.** It's unit-tested by
   monkeypatching the `walletctl` subprocess boundary, which is real coverage of the
@@ -285,6 +290,11 @@ insurance, not ceremony.
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.
+- `docs/COVERAGE.md` — the standing coverage ledger: every pinned-ABI write entrypoint
+  (implemented / planned / deferred / out of scope, with why), the game surfaces not yet
+  reduced to a single entrypoint, and the verified-but-unused `calc.py` formulas. Regenerated
+  against the pinned ABI, not hand-maintained; guarded against silently going stale by
+  `skills/veydrift-agent/tests/test_coverage_doc.py`.
 
 **Maintenance note — read this before changing `docs/SPEC.md`.**
 `docs/PLAYER-GUIDE.md` and `docs/TECHNICAL-WALKTHROUGH.md` both restate spec content in
