@@ -998,13 +998,15 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
       <div class="ladder-badge">3</div>
       <div>
         <div class="ladder-name">Operator</div>
-        <div class="ladder-desc">Everything tier 2 can, plus non-combat fleet missions — Transport, Deploy, Harvest only.</div>
+        <div class="ladder-desc">Everything tier 2 can, plus non-combat fleet missions — Transport, Deploy, Colonize, Harvest.</div>
         <div class="ladder-meta">
           <div class="ladder-meta-item"><span class="lm-k">Gate to enter</span>≥7 days clean tier-2, manual edit</div>
         </div>
       </div>
     </div>
   </div>
+
+  <p><strong>What operator actually does now, not just allows.</strong> Before this release, tier 3 was real at the wallet-engine layer (the allowlist always accepted Transport/Deploy/Harvest) but the agent itself never proposed one — promoting to operator bought you nothing beyond <code>resolveFleetMission</code>. That has changed: with <code>policy.actions.allow_fleet_noncombat</code> set to <code>true</code> (it defaults to <code>false</code> — promoting to operator alone does <strong>not</strong> turn this on), the agent can now propose two kinds of fleet mission on its own. <strong>Transport</strong> moves a surplus resource from a planet holding more than your configured <code>reserves</code> floor to whichever of your other planets holds the least of it, using ships you've already built — it never proposes building one to enable this. <strong>Harvest</strong> recovers debris on one of your own planets using a Recycler you've already built; this path is implemented and tested but not live in practice yet, since the agent has no reliable way to learn about debris on a planet from the live API today. <strong>Colonisation</strong> (<code>launchFleetMission</code> mission type <code>Colonize</code>) is allowed at both enforcement layers as of this release, but the agent does not yet propose <em>where</em> to colonise — if you want to colonise, build and send that transaction through <code>walletctl</code> directly. Both fleet-mission paths run behind the same guardrail evaluation as everything else, including a new gate, <code>mission_type</code>, that independently re-checks the mission type against the same allowed set the wallet engine enforces.</p>
 
   <p>Before promoting, always check the actual evidence:</p>
   <div class="codeblock">
@@ -1033,7 +1035,7 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
         <tr><td>Health nulls, readiness not ready</td><td>Almost always transient backend replica lag, not an outage — already handled correctly</td></tr>
         <tr><td><code>walletctl status</code> refuses to run</td><td>Expected with no provider configured — not a bug</td></tr>
         <tr><td><code>verify-abi</code> shows a mismatch</td><td>The deployed contract's ABI changed. Every write is blocked until resolved — deliberate</td></tr>
-        <tr><td>Guards read 14/17 at tier 1</td><td>Correct and expected — see §9</td></tr>
+        <tr><td>Guards read 15/18 at tier 1</td><td>Correct and expected — see §9</td></tr>
         <tr><td><code>policy.json</code> edits rejected</td><td>Schema validated strictly — the error names the exact field</td></tr>
       </tbody>
     </table>

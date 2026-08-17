@@ -81,7 +81,7 @@ import typer
 from rich.console import Console
 
 from veydrift_agent import guard as guard_mod
-from veydrift_agent import http, log, read
+from veydrift_agent import http, ids, log, read
 from veydrift_agent import plan as plan_mod
 from veydrift_agent.models import (
     Action,
@@ -149,18 +149,15 @@ def init(force: bool = typer.Option(False, "--force", help="Overwrite an existin
 
 
 def _warn_dead_policy_keys(policy: Policy) -> None:
-    """Fix 4: `actions.allow_fleet_noncombat` is read by no code path -- the planner has
-    no fleet rung (deliberately: building one is out of scope for this fix, per the
-    brief). Rather than let the key keep misleading a human the way `allow_ships` used to
-    before it grew a rung, surface its dead-ness explicitly on every load. `cli.py`'s
-    `doctor` command is frozen and cannot be extended to report this instead, so policy
-    load time is the next best place a human will actually see it."""
-    if policy.actions.allow_fleet_noncombat:
-        _console.print(
-            "[yellow]warning:[/yellow] policy.actions.allow_fleet_noncombat=true has no effect -- "
-            "no planner rung proposes non-combat fleet missions yet. This key is currently dead "
-            "config; do not rely on it."
-        )
+    """Fix 4 (pre-Phase-5c) warned that `actions.allow_fleet_noncombat` was dead config --
+    the planner had no fleet rung yet. Phase 5c (docs/SPEC.md §5.4) gave it one
+    (`plan.py`'s band 5, `candidates.select_logistics_candidate`), so the key is live now
+    and this function has nothing left to warn about. Kept as a hook (rather than deleted
+    outright) for the same reason it existed in the first place: a future dead policy key
+    should surface here, at load time, the same way `allow_ships` and
+    `allow_fleet_noncombat` each did before they grew a rung -- `cli.py`'s `doctor`
+    command is frozen and cannot be extended to report this instead."""
+    return
 
 
 def _load_policy(path: Path) -> Policy:
@@ -267,17 +264,166 @@ def _run_walletctl(*args: str, timeout: int = _WALLETCTL_TIMEOUT_S) -> subproces
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
-def _action_to_walletctl_json(action: Action) -> dict[str, Any]:
+#: Both overloaded forms of `launchFleetMission` on the deployed ABI (AGENTS.md §7 trap
+#: #2). Must match `veydrift-wallet/src/allowlist.ts`'s `LAUNCH_FLEET_MISSION_SIGNATURES`
+#: character-for-character -- these are what disambiguates the overload for
+#: `veydrift-wallet/src/tx.ts`'s `buildTx` (`resolveFunctionAbi` throws on the bare name
+#: "launchFleetMission" because it is ambiguous on the pinned ABI; a full signature is the
+#: only way to select one). Confirmed against the deployed contract source directly:
+#: `VeydriftGameplayModule.sol:44-59` (6-arg, no `speedPercent` -- hardcodes
+#: `FULL_MISSION_SPEED_PERCENT`) and `:63-79` (7-arg, explicit `speedPercent`).
+_LAUNCH_FLEET_MISSION_7ARG_SIGNATURE = (
+    "launchFleetMission(uint256,uint256,uint8,"
+    "(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),"
+    "(uint128,uint128,uint128),uint16,uint256)"
+)
+_LAUNCH_FLEET_MISSION_6ARG_SIGNATURE = (
+    "launchFleetMission(uint256,uint256,uint8,"
+    "(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),"
+    "(uint128,uint128,uint128),uint256)"
+)
+
+#: The Colonize-only `targetPlanetId` encoding. Confirmed directly against
+#: `VeydriftColonizationModule.sol:42-46,472-479` (`_encodeColonyTarget`) -- a new colony
+#: has no planet id yet, so this argument carries `(galaxy, system, position)` packed into
+#: a `uint256` with a high-bit flag instead, decoded again on resolution via
+#: `_decodeColonyTarget`. See docs/RESEARCH-ADDENDUM.md §4 / references/contract-writes.md
+#: §1.2.
+_COLONIZATION_COORDINATE_FLAG = 1 << 255
+_COLONIZATION_GALAXY_SHIFT = 24
+_COLONIZATION_SYSTEM_SHIFT = 8
+
+
+def _encode_colony_target(coordinates: str) -> int:
+    galaxy, system, position = (int(p) for p in coordinates.split(":"))
+    return (
+        _COLONIZATION_COORDINATE_FLAG
+        | (galaxy << _COLONIZATION_GALAXY_SHIFT)
+        | (system << _COLONIZATION_SYSTEM_SHIFT)
+        | position
+    )
+
+
+def _ship_counts_to_fleet_tuple(ships: dict[int, int]) -> list[int]:
+    """`Action.ships` (Ship id -> count, `models.py`'s deliberate sparse-map shape) -> the
+    14-slot tuple `launchFleetMission` expects, in `ids.FLEET_TUPLE_ORDER` -- the same
+    shifted order `veydrift-wallet`'s `shipCountsToFleetTuple()` (`fleet.ts`) produces
+    (AGENTS.md §7 trap #1: Destroyer sits at tuple index 9, not 10). Mirrors that
+    function's own refusal: a non-flyable ship id (SolarSatellite, Crawler) present in
+    `ships` -- even at count 0 -- raises, the same "a caller who put one there thinks it
+    belongs in a fleet" reasoning `fleet.ts`'s own docstring gives."""
+    for ship_id in ships:
+        if ship_id in ids.NON_FLYABLE_SHIPS:
+            raise ValueError(
+                f"_ship_counts_to_fleet_tuple: Ship id {ship_id} ({ids.ship_name(ship_id)}) cannot "
+                "fly and has no slot in the 14-slot fleet tuple"
+            )
+        if ship_id not in ids.FLEET_TUPLE_ORDER:
+            raise ValueError(f"_ship_counts_to_fleet_tuple: unknown Ship id {ship_id}")
+    return [ships.get(int(ship_id), 0) for ship_id in ids.FLEET_TUPLE_ORDER]
+
+
+def _resolve_target_planet_id(action: Action, snapshot: Snapshot) -> int:
+    """The real on-chain `targetPlanetId` a non-Colonize `launchFleetMission` needs.
+    `VeydriftGameplayModule.sol`'s `_launchFleetMission` requires
+    `_planets[targetPlanetId].owner != address(0)` (and, for Transport/Deploy,
+    `_requirePlanetOwner(targetPlanetId)`) -- an actual planet id, never coordinates. But
+    `Action.target_coordinates` only ever carries a `"G:S:P"` string (`models.py`, frozen
+    for this phase) -- so this resolves it against the wallet's own planets in `snapshot`,
+    the only planets this codebase's planner (`candidates.py`'s logistics generators,
+    Phase 5c) ever targets: Transport between own planets, and local Harvest where
+    target == origin. A local Harvest with `target_coordinates` left unset needs no
+    lookup: the contract's own special case (`originPlanetId == targetPlanetId &&
+    missionType == Harvest`) makes `origin_planet_id` the correct target directly."""
+    if action.target_coordinates is None:
+        if action.mission_type == ids.FleetMissionType.HARVEST and action.origin_planet_id is not None:
+            return action.origin_planet_id
+        raise ValueError("launchFleetMission action has no target_coordinates")
+    for planet in snapshot.planets:
+        if planet.coordinates == action.target_coordinates:
+            return planet.planet_id
+    raise ValueError(
+        "tick.py can only resolve a launchFleetMission target among the wallet's own "
+        f"planets in the snapshot; no planet at {action.target_coordinates!r} was found "
+        "(a foreign-planet target is out of scope for this codebase's planner today)"
+    )
+
+
+def _fleet_mission_args(action: Action, snapshot: Snapshot) -> tuple[str, list[Any]]:
+    """`(signature, args)` for a `launchFleetMission` `Action` -- resolves the overload
+    (Trap #2) and the target-planet-id encoding (Colonize's packed-coordinate special
+    case vs. every other mission type's real planet id) together, since both depend on
+    `action.mission_type`.
+
+    `speed_pct is None` selects the 6-arg overload (the contract's own default,
+    `FULL_MISSION_SPEED_PERCENT` == 100 -- `VeydriftGameplayModule.sol:44-59`) rather than
+    this encoder substituting `100` itself: `models.py`'s own comment on `speed_pct`
+    ("never silently substitute a default at the encoder") is honoured by *choosing the
+    overload that omits the argument*, not by inventing a value for it.
+
+    The trailing `uint256` both overloads share is `randomnessRequestId` in the deployed
+    source (`VeydriftGameplayModule.sol`/`VeydriftColonizationModule.sol`) -- confirmed
+    directly. It is only ever meaningfully set by the contract itself, for `Attack`
+    (`_requestAttackBattleRandomness`) and for the two counterplay mission types
+    (AcsDefend/Intercept, neither reachable from this codebase). For every mission type
+    this codebase can produce, the contract either ignores the caller-supplied value
+    (Transport/Deploy/Harvest) or requires it to be exactly `0`
+    (`VeydriftColonizationModule.sol`'s `_launchColonizeFleetMission`: `if
+    (randomnessRequestId != 0) revert InvalidId();`) -- so
+    `action.randomness_request_id` is encoded as-is (defaulting to `0`, never fabricated)
+    and is expected to always be `None`/unset from every generator this codebase ships
+    today. The field was briefly named `holding_seconds` on a guess about its meaning;
+    it was renamed once the source was read, so that nobody sets a duration here and hits
+    Colonize's revert.
+    """
+    if action.mission_type is None:
+        raise ValueError("launchFleetMission action has no mission_type")
+    ships_tuple = _ship_counts_to_fleet_tuple(action.ships)
+    cargo_tuple = [action.cargo.metal, action.cargo.crystal, action.cargo.deuterium]
+    trailing = int(action.randomness_request_id or 0)
+
+    if action.mission_type == ids.FleetMissionType.COLONIZE:
+        if action.target_coordinates is None:
+            raise ValueError("launchFleetMission Colonize action has no target_coordinates")
+        target_planet_id = _encode_colony_target(action.target_coordinates)
+    else:
+        target_planet_id = _resolve_target_planet_id(action, snapshot)
+
+    origin = action.origin_planet_id
+    if origin is None:
+        raise ValueError("launchFleetMission action has no origin_planet_id")
+
+    if action.speed_pct is not None:
+        args = [origin, target_planet_id, int(action.mission_type), ships_tuple, cargo_tuple, action.speed_pct, trailing]
+        return _LAUNCH_FLEET_MISSION_7ARG_SIGNATURE, args
+    args = [origin, target_planet_id, int(action.mission_type), ships_tuple, cargo_tuple, trailing]
+    return _LAUNCH_FLEET_MISSION_6ARG_SIGNATURE, args
+
+
+def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) -> dict[str, Any]:
     """`Action` (this package's pydantic model) -> the `{function, args, purpose}` shape
     `walletctl build --action` expects (`veydrift-wallet/src/tx.ts`'s `Action` interface).
-    Positional `args` match the ABI's declared input order exactly."""
+    Positional `args` match the ABI's declared input order exactly.
+
+    `snapshot` is only required for `launchFleetMission` (to resolve
+    `target_coordinates` -> a real on-chain planet id, see `_resolve_target_planet_id`) --
+    every other branch ignores it, so callers building a non-fleet action (still the vast
+    majority in this codebase today) need not supply one."""
     fn = action.function
     if fn == "startBuildingUpgrade" or fn == "startResearch":
         args = [action.planet_id, action.entity_id]
-    elif fn == "startShipProduction" or fn == "startDefenseProduction":
+        return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
+    if fn == "startShipProduction" or fn == "startDefenseProduction":
         args = [action.planet_id, action.entity_id, action.quantity or 0]
-    elif fn == "resolveFleetMission":
+        return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
+    if fn == "resolveFleetMission":
         args = [action.mission_id]
+        return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
+    if fn == "launchFleetMission":
+        if snapshot is None:
+            raise ValueError("tick.py needs a Snapshot to build launchFleetMission calldata")
+        signature, args = _fleet_mission_args(action, snapshot)
+        return {"function": signature, "args": args, "purpose": (action.rationale or "")[:200]}
     # `settlePlanet` had a branch here through Phase 4. Removed in Phase 5
     # (docs/SPEC.md §5.4/§9): its body at the pinned commit
     # (`_touchPlayer(msg.sender); _collectPlanetResources(planetId);`) is byte-identical
@@ -287,12 +433,12 @@ def _action_to_walletctl_json(action: Action) -> dict[str, Any]:
     # only ever burn gas for zero effect. See guard.py's `_MIN_TIER_FOR_FUNCTION` and
     # veydrift-wallet's `allowlist.ts` `ECONOMY_SIGNATURES`, both updated in the same
     # change.
-    else:
-        raise ValueError(f"tick.py does not know how to build calldata for function {fn!r}")
-    return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
+    raise ValueError(f"tick.py does not know how to build calldata for function {fn!r}")
 
 
-def _walletctl_build(action: Action, *, provider: str) -> tuple[UnsignedTx | None, int | None, str | None, Path | None]:
+def _walletctl_build(
+    action: Action, *, provider: str, snapshot: Snapshot | None = None
+) -> tuple[UnsignedTx | None, int | None, str | None, Path | None]:
     """Returns `(unsigned_tx, gas_cost_wei, error, built_tx_path)`. Never raises -- a
     build failure (e.g. `walletctl` unreachable, or a live /runtime-config fetch failing
     inside it) is reported back as `error` so the tick can still produce a report with
@@ -319,7 +465,7 @@ def _walletctl_build(action: Action, *, provider: str) -> tuple[UnsignedTx | Non
     action_file = tmp_dir / "action.json"
     out_file = tmp_dir / "tx.json"
     try:
-        action_file.write_text(json.dumps(_action_to_walletctl_json(action)))
+        action_file.write_text(json.dumps(_action_to_walletctl_json(action, snapshot)))
     except ValueError as exc:
         return None, None, str(exc), None
     try:
@@ -897,7 +1043,9 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
     built_tx_path: Path | None = None
     gas_cost_wei: int | None = None
     if action.is_onchain():
-        unsigned_tx, gas_cost_wei, build_error, built_tx_path = _walletctl_build(action, provider=policy_model.wallet_engine.provider)
+        unsigned_tx, gas_cost_wei, build_error, built_tx_path = _walletctl_build(
+            action, provider=policy_model.wallet_engine.provider, snapshot=snapshot
+        )
         live_addresses = _live_addresses()
         if policy_model.tier is not Tier.ADVISOR:
             eth_balance_wei = _walletctl_eth_balance_wei(provider=policy_model.wallet_engine.provider)

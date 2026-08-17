@@ -149,9 +149,9 @@ verification.
 | `read.py` | 830 | One `vd read` subcommand per API route (18 targets). `--summary` mode is the default and is capped near 2KB; `battle-reports`/`highscores` refuse to print to stdout at all — `--out` is mandatory, since they run 60KB–2.2MB uncompressed. |
 | `calc.py` | 737 | Pure formulas, no network calls, one docstring citation per function. Contains **no cost-scaling function** by design — live cost always comes from the API's own `cost` field, since the per-building factors are unpublished rationals and recomputing them is exactly how affordability checks go wrong silently. |
 | `plan.py` | ~320 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's four-band precedence calling into `candidates.py`. As of 2026-08-16 (Phase 2 of the general-strategy-engine program) it no longer decides *which entity*; that moved out. Phase 4 (same date) adds rung `8b`, the ladder's fourth and final band. |
-| `candidates.py` | ~1750 | New in Phase 2, roughly doubled in Phase 3, gained a fifth family in Phase 4 (all 2026-08-16, general-strategy-engine program). The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`, Phase 3's `infrastructure` and `crawler`, Phase 4's `unlock`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order when nothing new is configured. The energy-first invariant lives here: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. Phase 3 adds declared-target stock-keeping for ships/defenses (`ship_targets`/`defense_targets`), priority ordering for research/infrastructure (`research_priority`/`building_priority`), and two new scored/unscored families (Crawler, proactive storage) — every one of the four new `StrategyCfg` fields defaults empty and reproduces Phase 2's output exactly when left unset. Phase 4 adds `generate_unlock_chain_candidates`/`select_unlock_chain_candidate`, `score=None` always, driven by `techtree.next_step_toward` rather than any new policy field. |
+| `candidates.py` | ~2000 | New in Phase 2, roughly doubled in Phase 3, gained a fifth family in Phase 4 and a sixth in Phase 5c (all general-strategy-engine program). The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`, Phase 3's `infrastructure` and `crawler`, Phase 4's `unlock`, Phase 5c's `logistics`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order when nothing new is configured. The energy-first invariant lives here: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. Phase 3 adds declared-target stock-keeping for ships/defenses (`ship_targets`/`defense_targets`), priority ordering for research/infrastructure (`research_priority`/`building_priority`), and two new scored/unscored families (Crawler, proactive storage) — every one of the four new `StrategyCfg` fields defaults empty and reproduces Phase 2's output exactly when left unset. Phase 4 adds `generate_unlock_chain_candidates`/`select_unlock_chain_candidate`, `score=None` always, driven by `techtree.next_step_toward` rather than any new policy field. Phase 5c adds `generate_transport_candidates`/`generate_harvest_candidates`/`select_logistics_candidate` — non-combat `launchFleetMission` proposals, gated on `policy.actions.allow_fleet_noncombat` (default `false`), using a new `calc.py` ship-movement-stats layer (`SHIP_CARGO_CAPACITY`, `ship_fuel_consumption`, `ship_speed`). |
 | `techtree.py` | ~640 | On-chain prerequisite table for all four entity families, transcribed from the deployed contract (Phase 1). `unmet()` is the fail-closed core every other module's legality checks build on (`plan.py`/`candidates.py` never propose a locked entity; `guard.py`'s `prerequisites` gate independently re-checks). Phase 4 adds `next_step_toward` — a breadth-first walk of `unmet()`'s own output, backwards, to find the shallowest currently-buildable prerequisite toward a locked target; no cost math, same "compare levels only" discipline as `unmet()`. |
-| `guard.py` | 640 | 16 guardrail gates, every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. |
+| `guard.py` | ~800 | **18** guardrail gates (17 through Phase 4; Phase 5c, 2026-08-17, added `mission_type` — a default-deny check on `launchFleetMission`'s mission type, independent of `tier`), every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. |
 | `state.py` | 287 | `$VEYDRIFT_HOME` resolution, `AgentState` (pending txs, cumulative gas, revert counts), the tick lockfile, `KILLSWITCH` detection. |
 | `tick.py` | 978 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`. The single largest module, and where both criticals a first-pass judge review found actually lived (§10, §11). |
 | `log.py` | 377 | Four log sinks, secret scrubbing (`0x[0-9a-fA-F]{64}` patterns that aren't a known tx hash never get written), the pretty-report renderer, `--digest`. |
@@ -161,7 +161,7 @@ verification.
 | Module | Lines | Role |
 | --- | --: | --- |
 | `abi.ts` | 225 | Loads the pinned ABI, resolves a function by **full canonical signature** (never a bare name — `launchFleetMission` is overloaded on the deployed contract), computes selectors. |
-| `allowlist.ts` | 214 | `checkAllowlist` — five checks, always all five evaluated and reported: destination against a **live** `/runtime-config` fetch, selector against the tier's set (computed from the pinned ABI, never a hand-typed hex constant), `value == 0`, `chainId == 8453`, and at `operator` tier, the `launchFleetMission` mission-type argument decoded from calldata and restricted to Transport/Deploy/Harvest. |
+| `allowlist.ts` | ~245 | `checkAllowlist` — five checks, always all five evaluated and reported: destination against a **live** `/runtime-config` fetch, selector against the tier's set (computed from the pinned ABI, never a hand-typed hex constant), `value == 0`, `chainId == 8453`, and at `operator` tier, the `launchFleetMission` mission-type argument decoded from calldata and restricted to `OPERATOR_ALLOWED_MISSION_TYPES` — Transport/Deploy/Harvest, **plus Colonize (2) as of Phase 5b, 2026-08-17** (the one allowlist widening this project has had, added in the same change as `guard.py`'s matching `mission_type` gate). |
 | `tx.ts` | 400 | `build`/`simulate`/`send`/`receipt`. `build` emits `estimatedCostWei` (gas units × live `maxFeePerGas`), not a bare gas-unit number — see §10 for why that distinction is load-bearing. `receipt` reports real `status: "success" \| "reverted"` from the actual receipt, never synthesized. RPC target is `VEYDRIFT_RPC_URL` (default `https://mainnet.base.org`), the one chokepoint every read and write resolve through — swap in a dedicated endpoint (Alchemy etc.) to avoid the public endpoint's rate limits. |
 | `fleet.ts` | 147 | `shipCountsToFleetTuple()` — the one function permitted to build the 14-slot fleet-mission tuple; see §9. |
 | `policy.ts` | 116 | Reads `tier` from `$VEYDRIFT_HOME/policy.json` rather than trusting a caller-supplied flag; refuses (exit 4) on disagreement or a malformed file rather than falling back to a permissive default. |
@@ -180,7 +180,7 @@ verification.
 4. snapshot                     →  read.py: /health, /infrastructure, /research, /shipyard,
                                     /defenses, /fleet-visibility -- composed into one Snapshot
 5. plan                         →  plan.py: the decision ladder, zero or one Action out
-6. guard                        →  guard.py: all 17 gates, full verdict list, one Decision
+6. guard                        →  guard.py: all 18 gates, full verdict list, one Decision
 7. if ALLOW and tier>=2         →  walletctl build -> simulate -> send, await receipt,
    and not --dry-run               THEN await INDEXED (a confirmed receipt is not the
                                     same as indexed state -- no dependent action follows
@@ -193,9 +193,9 @@ verification.
 ```
 
 The decision ladder inside step 5, first match wins. Rungs 0-4 are vetoes; rungs 5-9 are
-a four-band candidate pipeline (`candidates.py`, added 2026-08-16, Phase 2 of the
-general-strategy-engine program, extended to a fourth band by Phase 4, same date — see
-§5's module table):
+a **five**-band candidate pipeline (`candidates.py`, added 2026-08-16, Phase 2 of the
+general-strategy-engine program, extended to a fourth band by Phase 4 and a fifth
+(logistics, rung `8c`) by Phase 5c, 2026-08-17 — see §5's module table):
 
 ```
 0. KILLSWITCH present               -> HALT
@@ -290,6 +290,15 @@ names on each side if they ever disagree again. This is deliberately not a
 "remember to update both" comment — a comment doesn't run in CI. If you're adding a new
 tier-gated function, that test is the one to run before you're done, not just the two
 suites separately.
+
+**The same duplication exists one level deeper, as of Phase 5c (2026-08-17).**
+`launchFleetMission` being allowlisted at `operator` only says the *function* is
+reachable — which *mission types* it may carry is a second restriction, enforced by
+`guard.py`'s new `mission_type` gate (`_ALLOWED_MISSION_TYPES`) and `allowlist.ts`'s
+existing calldata-level check (`OPERATOR_ALLOWED_MISSION_TYPES`). The same test now
+parses and diffs both mission-type sets too, not just the function-name sets — added
+in the same change that added the gate, on the theory that a second duplication without
+a second test is exactly how the first one drifted.
 
 ## 9. Silent-corruption traps (and how each is closed)
 

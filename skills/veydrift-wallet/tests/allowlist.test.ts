@@ -113,14 +113,22 @@ describe("checkAllowlist", () => {
   });
 
   describe("operator tier's launchFleetMission mission-type restriction", () => {
-    it.each([0, 1, 4])("allows mission type %i (Transport/Deploy/Harvest)", async (missionType) => {
+    // Was `it.each([0, 1, 4])` until 2026-08-17 (Phase 5b, docs/SPEC.md §9): mission type 2
+    // (Colonize) added -- the only widening OPERATOR_ALLOWED_MISSION_TYPES has had, added in the
+    // same change as veydrift-agent's guard.py mission_type gate (see allowlist.ts's own comment
+    // on the constant for the confirmation that Colonize is a genuine colonisation entrypoint,
+    // not combat-adjacent).
+    it.each([0, 1, 2, 4])("allows mission type %i (Transport/Deploy/Colonize/Harvest)", async (missionType) => {
       const result = await checkAllowlist(launchFleetMissionTx(missionType), "operator", {
         fetchConfig: async () => fixtureConfig(),
       });
       expect(result.ok).toBe(true);
     });
 
-    it.each([2, 3, 5, 6, 7, 8, 9])("rejects mission type %i even though the selector is allowed", async (missionType) => {
+    // Was `it.each([2, 3, 5, 6, 7, 8, 9])` until 2026-08-17 (Phase 5b): 2 (Colonize) moved to the
+    // "allows" list above. The remaining six are combat mission types and stay refused
+    // unconditionally -- AGENTS.md §5's "combat stays unreachable by code, not by config."
+    it.each([3, 5, 6, 7, 8, 9])("rejects mission type %i even though the selector is allowed", async (missionType) => {
       const result = await checkAllowlist(launchFleetMissionTx(missionType), "operator", {
         fetchConfig: async () => fixtureConfig(),
       });

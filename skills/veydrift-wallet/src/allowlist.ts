@@ -66,8 +66,33 @@ const LAUNCH_FLEET_MISSION_SIGNATURES = [
   "launchFleetMission(uint256,uint256,uint8,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint256)",
 ] as const;
 
-/** FleetMissionType: 0 Transport, 1 Deploy, 4 Harvest. VeydriftGameStorage.sol:174-184. */
-export const OPERATOR_ALLOWED_MISSION_TYPES: ReadonlySet<number> = new Set([0, 1, 4]);
+/**
+ * FleetMissionType values `launchFleetMission` may submit at `operator` tier.
+ * VeydriftGameStorage.sol:166-177 declares the full enum (10 members); this set is a
+ * deliberate default-deny allowlist of it, not "everything the enum has," mirrored
+ * exactly by `veydrift-agent`'s `guard.py` `_ALLOWED_MISSION_TYPES` (Phase 5c,
+ * docs/SPEC.md §5.5) -- `test_tier_map_agrees_with_the_wallet_engines_allowlist`
+ * (agent-side) parses both and fails naming the diff if they ever drift.
+ *
+ * - **0 Transport, 1 Deploy, 4 Harvest** — non-combat logistics between/around the
+ *   player's own planets. Present since this constant was introduced.
+ * - **2 Colonize** — added 2026-08-17 (Phase 5b, docs/SPEC.md §9). The only widening
+ *   this allowlist has ever had. Confirmed as a genuine colonisation entrypoint, not
+ *   combat-adjacent: `VeydriftGame.sol`'s `launchFleetMission` facade dispatches
+ *   `missionType == Colonize` to `VeydriftColonizationModule`;
+ *   `_launchColonizeFleetMission` -> `_validateColonyCreation` ->
+ *   `_requireShips(originPlanetId, Ship.ColonyShip, 1)` (docs/RESEARCH-ADDENDUM.md §4,
+ *   `veydrift-agent/references/contract-writes.md` §1). Widened here only in the same
+ *   change that adds `guard.py`'s `mission_type` gate -- widening this set first, before
+ *   that Python-side gate existed, would have reopened the single-layer-enforcement gap
+ *   this allowlist alone used to cover (AGENTS.md §5).
+ * - **3 Attack, 5 AcsDefend, 6 Intercept, 7 MissileAttack, 8 AcsAttack, 9 DefenseHold**
+ *   — combat, and stay refused unconditionally. `AGENTS.md` §5: "combat stays
+ *   unreachable by code, not by config" -- `policy.json`'s `allow_combat` is read and
+ *   ignored everywhere; enabling any of these requires an actual source change to both
+ *   this set and `guard.py`'s, never a policy flag.
+ */
+export const OPERATOR_ALLOWED_MISSION_TYPES: ReadonlySet<number> = new Set([0, 1, 2, 4]);
 
 /** Tier -> allowed 4-byte selectors, computed from the pinned ABI (never a hardcoded hex list).
  *  `advisor` is deliberately empty: it may build and simulate, but the empty set means the
@@ -202,7 +227,7 @@ export async function checkAllowlist(
         if (!OPERATOR_ALLOWED_MISSION_TYPES.has(missionType)) {
           fail(
             "launchFleetMission.missionType",
-            `missionType=${missionType} is not in the operator-allowed set {0 Transport, 1 Deploy, 4 Harvest}`,
+            `missionType=${missionType} is not in the operator-allowed set {0 Transport, 1 Deploy, 2 Colonize, 4 Harvest}`,
           );
         } else {
           pass("launchFleetMission.missionType", String(missionType));

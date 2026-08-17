@@ -1753,6 +1753,248 @@ def select_shipyard_candidate(
 
 
 # --------------------------------------------------------------------------------------
+# Logistics family (Phase 5c of the general-strategy-engine program, docs/SPEC.md §5.4):
+# non-combat `launchFleetMission` candidates -- Transport between the player's own
+# planets, and Harvest of a planet's own local debris field. Both gated, once each, on
+# `policy.actions.allow_fleet_noncombat` (defaults `False` -- returns `[]` immediately
+# when unset, so with the default policy this whole family is dead weight, identical to
+# every other Phase 5c/5b safety property). Both use already-built, idle ships only --
+# neither ever proposes building a ship to enable a mission.
+#
+# `calc.distance`/`calc.travel_seconds`/`calc.mission_fuel`/`calc.available_cargo`/
+# `calc.ship_movement_stats` are the verified formula layer this generator is built on
+# (calc.py, cited to `VeydriftAntiRaidPrimitives.sol`/`VeydriftCatalog.sol` at the pinned
+# commit) -- never a recomputed cost, and never a guess at a ship's cargo/speed/fuel
+# numbers (calc.py's own module docstring bans exactly that class of guess for *cost*;
+# ship movement stats are a different, fully-published lookup table -- see calc.py's own
+# comment on `SHIP_CARGO_CAPACITY` for why that distinction is not the cost-scaling ban in
+# disguise).
+# --------------------------------------------------------------------------------------
+
+
+def _drive_tech_levels(snapshot: Snapshot) -> tuple[int, int, int]:
+    """`(combustion_drive_level, impulse_drive_level, hyperspace_drive_level)`, the three
+    inputs `calc.ship_movement_stats` needs -- `0` for any technology the snapshot doesn't
+    report, the same "absent means level 0 for a produced-side input" posture
+    `_energy_technology_level` already takes."""
+    combustion = _entity(snapshot.technologies, ids.Technology.COMBUSTION_DRIVE)
+    impulse = _entity(snapshot.technologies, ids.Technology.IMPULSE_DRIVE)
+    hyperspace = _entity(snapshot.technologies, ids.Technology.HYPERSPACE_DRIVE)
+    return (
+        combustion.level if combustion is not None and combustion.level is not None else 0,
+        impulse.level if impulse is not None and impulse.level is not None else 0,
+        hyperspace.level if hyperspace is not None and hyperspace.level is not None else 0,
+    )
+
+
+def _cargo_ships(planet: PlanetSnapshot) -> list[tuple[int, int]]:
+    """`(ship_id, count)` for every ship type already built on `planet` with a nonzero
+    count AND a nonzero cargo capacity (`calc.SHIP_CARGO_CAPACITY`) -- SolarSatellite and
+    Crawler have capacity `0` in that table and are excluded by this filter alone (on top
+    of being non-flyable at all, `ids.NON_FLYABLE_SHIPS`), so this function can never hand
+    a non-flyable ship id to `calc.ship_movement_stats`, which would raise."""
+    return [
+        (entity.id, entity.count)
+        for entity in planet.ships
+        if entity.count and calc.SHIP_CARGO_CAPACITY.get(entity.id, 0) > 0
+    ]
+
+
+def generate_transport_candidates(
+    snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot, target_planets: list[PlanetSnapshot]
+) -> list[Candidate]:
+    """`FleetMissionType.Transport` (0): move `planet`'s surplus -- holdings above
+    `policy.reserves` -- to whichever other of the player's own planets currently holds
+    the least of that resource (a simple, deterministic "send it where it's needed most"
+    heuristic, not a claimed-optimal multi-resource allocation -- this generator always
+    picks the single largest-surplus resource and moves only that one).
+
+    Never scored (`score=None`): this is a logistics opportunity, not a
+    `calc.production_per_hour`-comparable investment (module docstring's scoring rule)."""
+    if not policy.actions.allow_fleet_noncombat or planet.coordinates is None:
+        return []
+    destinations = [p for p in target_planets if p.planet_id != planet.planet_id and p.coordinates]
+    if not destinations:
+        return []
+    cargo_ships = _cargo_ships(planet)
+    if not cargo_ships:
+        return []
+
+    holdings = planet.resources_as_of_now
+    reserves = policy.reserves
+    surplus_by_label = {
+        "metal": max(0, holdings.metal - reserves.metal),
+        "crystal": max(0, holdings.crystal - reserves.crystal),
+        "deuterium": max(0, holdings.deuterium - reserves.deuterium),
+    }
+    label, amount = max(surplus_by_label.items(), key=lambda kv: kv[1])
+    if amount <= 0:
+        return []
+
+    destination = min(destinations, key=lambda p: getattr(p.resources_as_of_now, label))
+
+    combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
+    distance = calc.distance(planet.coordinates, destination.coordinates)
+    ship_stats = [
+        (ship_id, count, *calc.ship_movement_stats(ship_id, combustion, impulse, hyperspace)[1:])
+        for ship_id, count in cargo_ships
+    ]  # (ship_id, count, fuel_consumption, speed)
+    slowest_speed = min(speed for _, _, _, speed in ship_stats)
+    fuel = calc.mission_fuel(
+        [(fuel_consumption, count, speed) for _, count, fuel_consumption, speed in ship_stats],
+        distance,
+        slowest_speed,
+    )
+    total_capacity = sum(count * calc.SHIP_CARGO_CAPACITY[ship_id] for ship_id, count in cargo_ships)
+    available = calc.available_cargo(total_capacity, fuel)
+    if available <= 0:
+        return []
+    send_amount = min(amount, available)
+    cargo = Resources(**{label: send_amount})
+    travel_secs = calc.travel_seconds(distance, slowest_speed)
+
+    action = Action(
+        kind=ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=planet.planet_id,
+        mission_type=ids.FleetMissionType.TRANSPORT,
+        origin_planet_id=planet.planet_id,
+        target_coordinates=destination.coordinates,
+        ships=dict(cargo_ships),
+        cargo=cargo,
+        rationale=(
+            f"policy.actions.allow_fleet_noncombat=true; planet {planet.planet_id} holds "
+            f"{getattr(holdings, label)} {label} above the reserve floor of {getattr(reserves, label)} "
+            f"({amount} surplus). Sending {send_amount} {label} to planet {destination.planet_id} "
+            f"({destination.coordinates}, {distance} distance, ~{travel_secs}s travel, {fuel} fuel)."
+        ),
+        expected_effect=f"planet {destination.planet_id} gains {send_amount} {label}; planet {planet.planet_id} loses it plus {fuel} deuterium fuel.",
+    )
+    return [
+        Candidate(
+            action=action,
+            family="logistics-transport",
+            score=None,
+            score_basis=f"surplus {label} above reserve floor, sent to own planet {destination.planet_id}",
+        )
+    ]
+
+
+#: VeydriftGameStorage.sol:52 (`LOCAL_HARVEST_DISTANCE`). A same-planet Harvest
+#: (`originPlanetId == targetPlanetId`) uses this fixed distance instead of
+#: `calc.distance`, which is undefined for two identical coordinates in the sense the
+#: contract means here (`VeydriftGameplayModule.sol`'s `_launchFleetMission`: `distance =
+#: originPlanetId == targetPlanetId && missionType == Harvest ? LOCAL_HARVEST_DISTANCE :
+#: _planetDistance(...)`).
+_LOCAL_HARVEST_DISTANCE = 5
+
+
+def generate_harvest_candidates(
+    snapshot: Snapshot,
+    policy: Policy,
+    planet: PlanetSnapshot,
+    *,
+    own_planet_debris: dict[int, Resources] | None = None,
+) -> list[Candidate]:
+    """`FleetMissionType.Harvest` (4), restricted to the contract's own local special case
+    -- harvesting `planet`'s own debris field, never a foreign one (`origin_planet_id ==
+    target`, `target_coordinates` left unset; `tick.py`'s encoder resolves that straight
+    to `origin_planet_id`, no snapshot lookup needed). Requires at least one built
+    Recycler (`ships.recycler == 0` reverts on the deployed contract).
+
+    **Known gap, documented rather than guessed around**: the frozen `Snapshot` model
+    (`models.py`) carries no debris-field data at all -- no wallet-scoped route this
+    codebase reads ever reports it; the one route that does
+    (`/universe/galaxies/{g}/systems/{s}`'s `debrisField` per planet slot) is fetched only
+    for `archetype` today (`read._universe_archetype_for_planet`), and every live sample
+    observed of that field is `null` (docs/RESEARCH-ADDENDUM.md §6.4: zero combat on this
+    account/universe) -- so its populated shape has never actually been seen, and guessing
+    its keys would be exactly the "don't model an unconfirmed shape" mistake
+    `PlanetSnapshot.raidable_resources`/`protected_resources` already carry an explicit
+    warning about. This generator therefore takes `own_planet_debris` as an explicit,
+    caller-supplied parameter -- mirroring `tick.py`'s `_resolvable_mission_ids` /
+    `_maybe_check_human_activity`, which bypass the frozen `Snapshot` the same way for the
+    same reason -- rather than fetching or guessing anything itself. No caller wires a
+    live source for it yet (`plan.py`/`tick.py`, this same change), so this generator is
+    logic-complete and unit-tested but not live-reachable until that shape is confirmed
+    and wired -- an honest, narrower gap than the mission-type/tuple-encoding work this
+    phase's brief calls "most important," not a substitute for it.
+    """
+    if not policy.actions.allow_fleet_noncombat or planet.coordinates is None:
+        return []
+    debris = (own_planet_debris or {}).get(planet.planet_id)
+    if debris is None or (debris.metal <= 0 and debris.crystal <= 0):
+        return []
+    recycler = _entity(planet.ships, ids.Ship.RECYCLER)
+    if recycler is None or not recycler.count:
+        return []
+
+    combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
+    capacity, fuel_consumption, speed = calc.ship_movement_stats(ids.Ship.RECYCLER, combustion, impulse, hyperspace)
+    fuel = calc.mission_fuel([(fuel_consumption, recycler.count, speed)], _LOCAL_HARVEST_DISTANCE, speed)
+    available = calc.available_cargo(recycler.count * capacity, fuel)
+    if available <= 0:
+        return []
+    metal = min(debris.metal, available)
+    crystal = min(debris.crystal, available - metal)
+    cargo = Resources(metal=metal, crystal=crystal)
+
+    action = Action(
+        kind=ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=planet.planet_id,
+        mission_type=ids.FleetMissionType.HARVEST,
+        origin_planet_id=planet.planet_id,
+        target_coordinates=None,  # local harvest: target IS origin (contract special case)
+        ships={ids.Ship.RECYCLER: recycler.count},
+        cargo=cargo,
+        rationale=(
+            f"policy.actions.allow_fleet_noncombat=true; planet {planet.planet_id} has its own "
+            f"debris field (M{debris.metal} C{debris.crystal}); harvesting with "
+            f"{recycler.count} Recycler(s) (~{fuel} fuel, {available} available cargo)."
+        ),
+        expected_effect=f"planet {planet.planet_id} gains up to M{metal} C{crystal} from its own debris field.",
+    )
+    return [
+        Candidate(
+            action=action,
+            family="logistics-harvest",
+            score=None,
+            score_basis="local debris field on the player's own planet",
+        )
+    ]
+
+
+def select_logistics_candidate(
+    snapshot: Snapshot,
+    policy: Policy,
+    target_planets: list[PlanetSnapshot],
+    *,
+    own_planet_debris: dict[int, Resources] | None = None,
+) -> tuple[Candidate | None, list[Candidate]]:
+    """Transport then Harvest, per target planet, first selectable candidate wins -- the
+    same "generate every family for this planet, first hit wins" shape
+    `select_shipyard_candidate` already uses. Both generators are gated (once each) on
+    `policy.actions.allow_fleet_noncombat`, so with the default policy (`False`) this
+    returns `(None, [])` on the first planet without doing any real work, matching every
+    other Phase 5c/5b safety property."""
+    if not target_planets:
+        return None, []
+    alternatives: list[Candidate] = []
+    for planet in target_planets:
+        transports = generate_transport_candidates(snapshot, policy, planet, target_planets)
+        if transports:
+            harvests = generate_harvest_candidates(snapshot, policy, planet, own_planet_debris=own_planet_debris)
+            return transports[0], rank_candidates(alternatives + transports[1:] + harvests)
+        harvests = generate_harvest_candidates(snapshot, policy, planet, own_planet_debris=own_planet_debris)
+        if harvests:
+            return harvests[0], rank_candidates(alternatives + harvests[1:])
+        alternatives.extend(transports)
+        alternatives.extend(harvests)
+    return None, []
+
+
+# --------------------------------------------------------------------------------------
 # Ranking — shared by every `select_*` function's alternatives list. Scored candidates
 # sort ascending by payback hours (cheapest first); unscored candidates are always
 # ranked after every scored one, in generation order among themselves. This is purely

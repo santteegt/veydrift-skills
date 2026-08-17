@@ -41,13 +41,18 @@ class QueueKind(str, Enum):
 
 
 class ActionKind(str, Enum):
-    """What the planner decided. Only the first five map to a contract call."""
+    """What the planner decided. Only the first six map to a contract call."""
 
     BUILD = "build"                      # startBuildingUpgrade(uint256,uint8)
     RESEARCH = "research"                # startResearch(uint256,uint8)
     SHIP = "ship"                        # startShipProduction(uint256,uint8,uint32)
     DEFENSE = "defense"                  # startDefenseProduction(uint256,uint8,uint32)
     RESOLVE_MISSION = "resolve_mission"  # resolveFleetMission(uint256)
+    #: launchFleetMission — **overloaded on the deployed ABI** (a 7-arg and a 6-arg form).
+    #: Always resolve it by full canonical signature, never by name (AGENTS.md §7 trap 2).
+    #: Non-combat mission types only; combat types are refused independently by
+    #: `guard.py`'s mission-type gate and `allowlist.ts`'s OPERATOR_ALLOWED_MISSION_TYPES.
+    FLEET_MISSION = "fleet_mission"
     NOOP = "noop"
     ESCALATE = "escalate"
     HALT = "halt"
@@ -376,6 +381,46 @@ class Action(Base):
     #: only (docs/SPEC.md §5.4 Phase 2) — never an ROI verdict, never consulted by
     #: `guard.py` or any `Decision` logic.
     alternatives: list[AlternativeNote] = Field(default_factory=list)
+
+    # ----------------------------------------------------------------------------------
+    # Fleet-mission fields (Phase 5c). All `None`/empty for every other `ActionKind` —
+    # only `FLEET_MISSION` populates them.
+    # ----------------------------------------------------------------------------------
+    #: `ids.FleetMissionType`. Non-combat only in practice: `guard.py`'s mission-type gate
+    #: and `allowlist.ts`'s OPERATOR_ALLOWED_MISSION_TYPES each refuse combat types
+    #: independently. Deliberately typed as a plain int, not the enum — the enum is
+    #: complete and auditable (it *lists* combat types), and narrowing the type here would
+    #: imply an enforcement this field does not provide. Both gates default-deny.
+    mission_type: int | None = None
+    #: The planet the fleet departs from. Distinct from `planet_id`, which for a fleet
+    #: mission names the *subject* planet of the action for logging/idempotency purposes.
+    origin_planet_id: int | None = None
+    #: Destination as "G:S:P", the same shape `PlanetSnapshot.coordinates` carries.
+    target_coordinates: str | None = None
+    #: Ship id -> count. **Not a fleet tuple.** The deployed contract takes a 14-slot
+    #: tuple that omits the two non-flyable ships (SolarSatellite id 9, Crawler id 15), so
+    #: tuple indices 9–13 map to Ship ids 10–14 — Destroyer sits at index 9, not 10
+    #: (AGENTS.md §7 trap 1). Conversion happens at the encoder boundary and must agree
+    #: with `veydrift-wallet`'s `shipCountsToFleetTuple`; never index a tuple with a raw
+    #: Ship id.
+    ships: dict[int, int] = Field(default_factory=dict)
+    #: Resources loaded onto the fleet. Bounded by `calc.available_cargo` (capacity minus
+    #: fuel), never by capacity alone.
+    cargo: Resources = Field(default_factory=Resources)
+    #: Percentage of full speed, contract-side `uint16`. `None` means "not specified by
+    #: the planner" — never silently substitute a default at the encoder.
+    speed_pct: int | None = None
+    #: The trailing `uint256` both `launchFleetMission` overloads share. It is
+    #: `randomnessRequestId` in the deployed source, **not** a holding duration — an
+    #: earlier draft of this field guessed the latter and was wrong. The contract sets it
+    #: itself for `Attack` and the two counterplay types (none reachable here); for every
+    #: mission type this codebase can produce it is either ignored
+    #: (Transport/Deploy/Harvest) or **required to be exactly 0** — Colonize reverts with
+    #: `InvalidId` on anything else (`VeydriftColonizationModule._launchColonizeFleetMission`).
+    #: So it is encoded as-is, defaulting to 0, and is expected to stay unset. Naming it
+    #: after the guessed meaning would invite someone to set a duration here and hit a
+    #: silent Colonize revert.
+    randomness_request_id: int | None = None
 
     def is_onchain(self) -> bool:
         return self.function is not None

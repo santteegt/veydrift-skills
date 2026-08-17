@@ -11,14 +11,72 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
-Phase 5 of the general-strategy-engine program (docs/SPEC.md §5.4/§9). **Left under
-`[Unreleased]` deliberately**: this phase's brief asked for veydrift-agent 1.0.0, but
-`pyproject.toml` (and `models.py`) are frozen for this work package (see AGENTS.md §4 and
-the WP report) and a version bump without the models.py-dependent half of this phase
-landing would overstate what shipped. A maintainer who can edit those two files should
-finish 5c/5b (below) and cut 1.0.0 in one change, not bump the version here first.
+## [1.0.0] - 2026-08-17
 
-### Added
+Phase 5 of the general-strategy-engine program (docs/SPEC.md §5.4/§9), and the release
+that closes it. Major rather than minor because of two breaking changes: `settlePlanet`
+is removed from both enforcement layers, and `OPERATOR_ALLOWED_MISSION_TYPES` is widened
+to admit Colonize (2) — the only allowlist widening in the entire program.
+
+### Added — 5c/5b: non-combat fleet missions and colonisation (this change)
+
+The `models.py` block below was the reason a prior pass of this phase stopped
+short (see "Not done this phase" further down, kept for history): the orchestrator
+has since unfrozen and extended `models.py` with `ActionKind.FLEET_MISSION` and
+`Action.mission_type`/`.origin_planet_id`/`.target_coordinates`/`.ships`/`.cargo`/
+`.speed_pct`/`.randomness_request_id`. This change is everything downstream of that.
+
+- **`guard.py` gains an 18th gate, `mission_type`** (was 17) — a default-deny check on
+  `launchFleetMission`'s mission-type argument, independent of and in addition to the
+  `tier` gate. Fails closed (`BLOCK`) on `mission_type is None`. Mirrors
+  `veydrift-wallet`'s `allowlist.ts` `OPERATOR_ALLOWED_MISSION_TYPES` exactly —
+  `test_tier_map_agrees_with_the_wallet_engines_allowlist` now also compares the two
+  mission-type sets, not just the function-name sets, and fails naming the diff if they
+  ever drift. Allowed: Transport (0), Deploy (1), Colonize (2, new — see below),
+  Harvest (4). Combat types (3, 5, 6, 7, 8, 9) are never added, by design (AGENTS.md
+  §5's "combat stays unreachable by code, not by config").
+- **`tick.py`'s `_action_to_walletctl_json` gains a `launchFleetMission` branch.**
+  Resolves the overload by **full canonical signature**, never by name (AGENTS.md §7
+  trap #2): the 7-arg form (explicit `speedPercent`) is used when `Action.speed_pct` is
+  set; the 6-arg form (contract-side default 100% speed) is used when it is `None` —
+  chosen *by overload*, never by fabricating a speed value at the encoder. The 14-slot
+  fleet tuple is built via a new `_ship_counts_to_fleet_tuple`, mirroring `ids.
+  FLEET_TUPLE_ORDER` / `ids.NON_FLYABLE_SHIPS` (AGENTS.md §7 trap #1 — Destroyer at
+  tuple index 9, not 10; raises on a non-flyable ship id even at count 0). Colonize's
+  `targetPlanetId` argument is a packed `(galaxy, system, position)` coordinate
+  (`_encode_colony_target`, confirmed against `VeydriftColonizationModule.sol:472-479`),
+  never a real planet id; every other mission type's target is resolved to a real
+  on-chain planet id by matching `target_coordinates` against the wallet's own planets
+  in the snapshot (the only planets this codebase's planner ever targets).
+  **Correction to this phase's own docs/COVERAGE.md row**: the trailing `uint256` both
+  overloads share is `randomnessRequestId` in the deployed source, not a "holding
+  duration" — confirmed directly (`VeydriftGameplayModule.sol`/
+  `VeydriftColonizationModule.sol`); it is meaningfully set by the contract only for
+  `Attack` and the two counterplay mission types, none reachable here, and
+  Colonize hard-reverts (`InvalidId`) unless it is exactly `0`. `Action.randomness_request_id`
+  is encoded as-is (default `0`, never fabricated) despite its name.
+- **`candidates.py` gains a logistics family**: `generate_transport_candidates` (move a
+  planet's surplus above `policy.reserves` to whichever other own planet holds the
+  least of it, using already-built cargo-capable ships only) and
+  `generate_harvest_candidates` (local harvest of a planet's own debris field only —
+  the contract's `originPlanetId == targetPlanetId` special case; the frozen `Snapshot`
+  carries no debris data at all, so this generator takes an explicit
+  `own_planet_debris` parameter rather than guessing the unconfirmed live shape of
+  `/universe/...`'s `debrisField` field — see the generator's own docstring; no caller
+  wires a live source yet). Both gated on `policy.actions.allow_fleet_noncombat`
+  (**defaults `false`**), wired into `plan.py` as a new band 5 (`8c:logistics-*`),
+  reached only after bands 1-4 produce nothing. `calc.py` gained the ship-movement-stats
+  formula layer this needed (`SHIP_CARGO_CAPACITY`, `ship_fuel_consumption`,
+  `ship_speed`, `ship_movement_stats`) — a fixed, fully-published lookup table from
+  `VeydriftCatalog.sol`, not the banned "cost-scaling" category (see calc.py's own
+  comment on the distinction).
+- **`allowlist.ts`'s `OPERATOR_ALLOWED_MISSION_TYPES` widened to include Colonize (2)**
+  — the only widening in this program, added only in the same change as `guard.py`'s
+  `mission_type` gate (never before it, per this phase's own brief: widening the
+  allowlist first would have reopened the single-layer-enforcement gap the new gate
+  closes). See `veydrift-wallet`'s own `[Unreleased]` entry.
+
+### Added — prior pass (kept)
 - **`PlanetSnapshot.archetype` is now populated** (was permanently `None` before this).
   `read.snapshot` gained an opt-in `--universe-cadence-hours` flag (default: unset, no
   new network call) that fetches `/universe/galaxies/{g}/systems/{s}` for each planet's
@@ -59,20 +117,24 @@ finish 5c/5b (below) and cut 1.0.0 in one change, not bump the version here firs
   real colonisation (`launchFleetMission` mission type 2) is a different entrypoint
   entirely, not a `settlePlanet` variant.
 
-### Not done this phase (blocked on `models.py`)
-- **Non-combat fleet-mission planning (5c) and real colonisation (5b) are NOT
-  implemented.** Both require `ActionKind.FLEET_MISSION` and new `Action` fields
-  (`mission_type`, `origin_planet_id`, `target_coordinates`, `ships`, `cargo`,
-  `speed_pct`, `holding_seconds`) on `models.py`, which is this work package's frozen
-  interface (AGENTS.md §4). Everything downstream of that — `guard.py`'s mission-type
-  gate, `tick.py`'s `launchFleetMission` overload resolution and 14-slot fleet-tuple
-  encoding, the planner's logistics/colonisation generators, and the extension of
-  `test_tier_map_agrees_with_the_wallet_engines_allowlist` to compare mission-type sets
-  — was left undone rather than built against a workaround that doesn't actually touch
-  the frozen contract. See the WP report for the colonisation-entrypoint contract
-  evidence gathered in the course of this phase (also recorded in
-  `veydrift-wallet`'s CHANGELOG.md v0.2.0 entry), which a maintainer who can edit
-  `models.py` can use directly rather than re-deriving it.
+### Changed
+- **`_warn_dead_policy_keys` no longer warns on `actions.allow_fleet_noncombat=true`.**
+  The key stopped being dead config in this change (see "5c/5b" above) — the "no
+  effect" warning would now be false. The function is kept as a hook for a future dead
+  key, per its own docstring.
+
+### Historical note — "not done this phase" (superseded, kept for the record)
+> Non-combat fleet-mission planning (5c) and real colonisation (5b) were NOT
+> implemented in an earlier pass of this phase. Both required `ActionKind.FLEET_MISSION`
+> and new `Action` fields (`mission_type`, `origin_planet_id`, `target_coordinates`,
+> `ships`, `cargo`, `speed_pct`, `holding_seconds`) on `models.py`, which was this work
+> package's frozen interface at the time (AGENTS.md §4). Everything downstream of that
+> — `guard.py`'s mission-type gate, `tick.py`'s `launchFleetMission` overload
+> resolution and 14-slot fleet-tuple encoding, the planner's logistics/colonisation
+> generators, and the extension of `test_tier_map_agrees_with_the_wallet_engines_
+> allowlist` to compare mission-type sets — was left undone rather than built against a
+> workaround that doesn't actually touch the frozen contract. The orchestrator has since
+> unfrozen `models.py` for exactly this purpose; the "5c/5b" entry above is the result.
 
 ## [0.6.0] - 2026-08-16
 

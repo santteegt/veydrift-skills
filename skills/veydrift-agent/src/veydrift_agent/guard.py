@@ -1,10 +1,10 @@
-"""`vd guard` — the 17-gate guardrail evaluator (docs/SPEC.md §5.5).
+"""`vd guard` — the 18-gate guardrail evaluator (docs/SPEC.md §5.5).
 
 `evaluate_guardrails()` is the pure core: given an `Action`, the `Snapshot` it was
 planned from, the `Policy`, the persisted `AgentState`, and a handful of caller-supplied
 facts that don't live on any of those frozen/local models (live contract addresses, the
 live ABI hash, a built `UnsignedTx` + gas estimate, the wallet's ETH balance), it returns
-a `GuardReport` with **all 17 gates evaluated, never short-circuited** — the full
+a `GuardReport` with **all 18 gates evaluated, never short-circuited** — the full
 `GuardReport.verdicts` list is the audit artifact (docs/SPEC.md §5.5), so a passing tick
 is exactly as informative as a blocked one.
 
@@ -103,6 +103,39 @@ _MIN_TIER_FOR_FUNCTION: dict[str, Tier] = {
 
 _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR: 3}
 
+#: `FleetMissionType` values `launchFleetMission` may submit (Phase 5c, docs/SPEC.md §5.5).
+#: Default-deny: any `mission_type` not in this set BLOCKs at the `mission_type` gate,
+#: independently of the `tier` gate above. Mirrors `allowlist.ts`'s
+#: `OPERATOR_ALLOWED_MISSION_TYPES` constant exactly --
+#: `test_tier_map_agrees_with_the_wallet_engines_allowlist` parses both and fails naming
+#: the diff if they ever drift (AGENTS.md §5: "the two tier-enforcement layers must
+#: agree"). Before this gate existed, `allowlist.ts`'s set was the *only* place this
+#: restriction was enforced at all -- harmless only because nothing ever proposed
+#: `launchFleetMission` (docs/COVERAGE.md); Phase 5c's planner rungs change that, so a
+#: second, independent enforcement point is no longer optional.
+#:
+#: Combat types (3 Attack, 5 AcsDefend, 6 Intercept, 7 MissileAttack, 8 AcsAttack,
+#: 9 DefenseHold) are never added here -- AGENTS.md §5's "combat stays unreachable by
+#: code, not by config" rule; enabling any of them requires an actual source change here
+#: AND in `allowlist.ts`, never a policy flag.
+#:
+#: Colonize (2) added 2026-08-17 (Phase 5b, docs/SPEC.md §9) -- the only widening in this
+#: program, added in the same change as this gate itself (never before it -- widening
+#: `allowlist.ts` first would have reintroduced the single-layer gap this gate closes).
+#: `VeydriftGame.sol`'s `launchFleetMission` facade dispatches `missionType == Colonize`
+#: to `VeydriftColonizationModule`; `_launchColonizeFleetMission` ->
+#: `_validateColonyCreation` -> `_requireShips(originPlanetId, Ship.ColonyShip, 1)`
+#: confirms it as a real colonisation entrypoint, not combat-adjacent (docs/
+#: RESEARCH-ADDENDUM.md §4, `references/contract-writes.md` §1).
+_ALLOWED_MISSION_TYPES: frozenset[int] = frozenset(
+    {
+        ids.FleetMissionType.TRANSPORT,
+        ids.FleetMissionType.DEPLOY,
+        ids.FleetMissionType.COLONIZE,
+        ids.FleetMissionType.HARVEST,
+    }
+)
+
 _MINE_ENTITY_IDS = {ids.Building.METAL_MINE, ids.Building.CRYSTAL_MINE, ids.Building.DEUTERIUM_SYNTHESIZER}
 _ENERGY_FIX_BUILDINGS = {ids.Building.SOLAR_PLANT, ids.Building.FUSION_REACTOR}
 
@@ -159,7 +192,7 @@ def is_structural_tier_block(non_passing_gates: list[tuple[str, str]]) -> bool:
 
     This is not a guess: a routine tier-1 proposal on an unlocked entity (the
     `prerequisites` gate PASSes -- nothing about a plain mine upgrade is locked) shows
-    exactly `guards: 14/17 pass (block)`, and the 3 gates that don't pass there are
+    exactly `guards: 15/18 pass (block)`, and the 3 gates that don't pass there are
     precisely `tier` (BLOCK), `gas` (ESCALATE, no estimate), `eth_floor` (ESCALATE,
     balance never checked at tier 1) -- this predicate is written to recognise exactly
     that cluster as carrying zero promotion-relevant information, matching what
@@ -211,6 +244,47 @@ def _gate_tier(action: Action, policy: Policy) -> GuardVerdict:
             f"{action.function} requires tier >= {min_tier.value}; policy tier is {policy.tier.value}",
         )
     return _verdict("tier", GuardStatus.PASS, f"{action.function} allowed at tier {policy.tier.value}")
+
+
+def _gate_mission_type(action: Action) -> GuardVerdict:
+    """Phase 5c (docs/SPEC.md §5.5): default-deny gate for `launchFleetMission`'s
+    `mission_type` argument, independent of and in addition to the `tier` gate above.
+    Mirrors `allowlist.ts`'s calldata-level mission-type check -- defense in depth, not a
+    single point of truth (same posture every other duplicated check in this module
+    takes).
+
+    Fails closed on `action.mission_type is None`: a `launchFleetMission` action with no
+    mission type set is not "nothing to check" (the `prerequisites`/`energy`/etc. gates'
+    "no target" PASS), it is a malformed action that must never reach the wallet engine --
+    AGENTS.md §5's "a guardrail must never pass vacuously on absent data," applied to this
+    gate's own input rather than to snapshot data. Any action that is not
+    `launchFleetMission` PASSes trivially, same as every other function-specific gate in
+    this module (`address`/`abi_hash`/`gas`/`eth_floor` all take this shape toward
+    `action.is_onchain()`).
+    """
+    if action.function != "launchFleetMission":
+        return _verdict("mission_type", GuardStatus.PASS, "action is not launchFleetMission")
+    if action.mission_type is None:
+        return _verdict(
+            "mission_type",
+            GuardStatus.BLOCK,
+            "launchFleetMission action has no mission_type set -- cannot verify it against "
+            "the allowed set; a malformed action, not nothing to check",
+        )
+    if action.mission_type not in _ALLOWED_MISSION_TYPES:
+        name = ids.mission_type_name(action.mission_type)
+        allowed = sorted(_ALLOWED_MISSION_TYPES)
+        return _verdict(
+            "mission_type",
+            GuardStatus.BLOCK,
+            f"mission_type {action.mission_type} ({name}) is not in the allowed set {allowed} "
+            "(Transport/Deploy/Colonize/Harvest only -- combat is refused unconditionally)",
+        )
+    return _verdict(
+        "mission_type",
+        GuardStatus.PASS,
+        f"mission_type {action.mission_type} ({ids.mission_type_name(action.mission_type)}) is allowed",
+    )
 
 
 def _defense_count(planet: PlanetSnapshot, defense_id: int) -> int | None:
@@ -705,7 +779,7 @@ def _gate_revert_streak(action: Action, agent_state: AgentState, policy: Policy)
 
 
 # --------------------------------------------------------------------------------------
-# The full 17-gate evaluation.
+# The full 18-gate evaluation.
 # --------------------------------------------------------------------------------------
 
 
@@ -722,7 +796,7 @@ def evaluate_guardrails(
     eth_balance_wei: int | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 17 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 18 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -737,6 +811,7 @@ def evaluate_guardrails(
     verdicts = [
         _gate_killswitch(killswitch_active=killswitch_active),
         _gate_tier(action, policy),
+        _gate_mission_type(action),
         _gate_prerequisites(action, snapshot),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),
         _gate_abi_hash(action, snapshot),

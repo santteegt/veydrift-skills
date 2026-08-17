@@ -29,8 +29,8 @@ editing `$VEYDRIFT_HOME/policy.json` does.
 | Tier | May propose | May submit | Gate to enter |
 | --- | --- | --- | --- |
 | 1 `advisor` (current) | everything in scope | **nothing** | default |
-| 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `settlePlanet`, `startDefenseProduction`, `startShipProduction` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
-| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Harvest(4) only | ≥7 days clean T2, human edit |
+| 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
+| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) only | ≥7 days clean T2, human edit |
 
 Combat (`Attack`, `AcsAttack`, `MissileAttack`, `Intercept`) is unreachable **in code**, at
 every tier — `policy.json`'s `allow_combat` key is deliberately ignored everywhere it's
@@ -128,13 +128,13 @@ $ uv run --directory skills/veydrift-agent vd tick --dry-run
 │     why:    Metal Mine 0->1 would need 11 energy against 0 produced.         │
 │ Energy-first invariant: Solar Plant's marginal cost per energy point is      │
 │ cheaper here than one more Solar Satellite (satellite energy/unit=4).        │
-│     guards: 14/17 pass (block)                                               │
+│     guards: 15/18 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-`guards: 14/17 pass (block)` is expected and correct at tier 1: the `tier` gate itself
+`guards: 15/18 pass (block)` is expected and correct at tier 1: the `tier` gate itself
 blocks, which is exactly the mechanism that makes tier 1 safe by construction rather than
 by discipline. Nothing downstream of the guard ever runs. `$VEYDRIFT_HOME` defaults to
 `~/.veydrift` for every invocation on a given machine regardless of which harness runs it —

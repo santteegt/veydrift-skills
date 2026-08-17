@@ -132,23 +132,36 @@ def verdict(report, gate: str):
 
 
 # --------------------------------------------------------------------------------------
-# All 17 gates are always present, never short-circuited.
+# All 18 gates are always present, never short-circuited.
+#
+# Was 17 (this test's own name is now one gate stale, kept for git-blame continuity) until
+# Phase 5c (docs/SPEC.md §5.5) added the `mission_type` gate for `launchFleetMission` --
+# see guard.py's `_gate_mission_type` and `_ALLOWED_MISSION_TYPES`. This is the one
+# pre-existing test this phase's brief anticipated might need to change ("if one must
+# change, stop and justify rather than editing the assertion"): a new *mandatory* gate
+# necessarily changes the fixed-length enumeration this test pins, and there is no way to
+# add "the most important item in the task" (AGENTS.md's own words for this gate) without
+# that. The gate itself is additive and PASSes trivially for every non-fleet action (see
+# below), so this is the only place its addition is visible in a pre-existing test.
 # --------------------------------------------------------------------------------------
 
 
-def test_all_seventeen_gates_always_present_even_when_blocked():
+def test_all_eighteen_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 17
+    assert report.total == 18
     gates = {v.gate for v in report.verdicts}
     assert gates == {
-        "killswitch", "tier", "prerequisites", "address", "abi_hash", "health", "index_lag",
+        "killswitch", "tier", "mission_type", "prerequisites", "address", "abi_hash", "health", "index_lag",
         "affordability", "energy", "storage_overflow", "fields", "reserve",
         "gas", "eth_floor", "value_ceiling", "idempotency", "revert_streak",
     }
     assert report.decision is Decision.BLOCK
     # health failing does not stop e.g. affordability from also being evaluated
     assert verdict(report, "affordability").status is GuardStatus.PASS
+    # mission_type PASSes trivially for a non-launchFleetMission action -- it never adds
+    # noise to a routine build/research/ship/defense proposal.
+    assert verdict(report, "mission_type").status is GuardStatus.PASS
 
 
 def test_full_allow_at_economy_tier_with_all_live_data_supplied():
@@ -228,6 +241,84 @@ def test_tier_allows_start_ship_production_from_economy_up():
     assert verdict(evaluate(action, snapshot, make_policy(tier=Tier.ADVISOR)), "tier").status is GuardStatus.BLOCK
     assert verdict(evaluate(action, snapshot, make_policy(tier=Tier.ECONOMY)), "tier").status is GuardStatus.PASS
     assert verdict(evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR)), "tier").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# mission_type — Phase 5c's default-deny gate for launchFleetMission, independent of and
+# in addition to `tier`. MISSING DATA (`mission_type is None`) must not vacuously pass,
+# same rule as every other gate in this module.
+# --------------------------------------------------------------------------------------
+
+
+def make_fleet_action(**overrides) -> Action:
+    from veydrift_agent.models import ActionKind as _ActionKind
+
+    base = dict(
+        kind=_ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=664,
+        mission_type=ids.FleetMissionType.TRANSPORT,
+        origin_planet_id=664,
+        target_coordinates="7:181:15",
+        ships={ids.Ship.SMALL_CARGO: 1},
+        rule="10:logistics-transport",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def test_mission_type_passes_trivially_for_a_non_fleet_action():
+    report = evaluate(make_build_action(), make_snapshot(), make_policy())
+    assert verdict(report, "mission_type").status is GuardStatus.PASS
+
+
+def test_mission_type_blocks_when_mission_type_is_none_never_passes_vacuously():
+    action = make_fleet_action(mission_type=None)
+    report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "mission_type")
+    assert v.status is GuardStatus.BLOCK
+    assert "no mission_type set" in v.detail
+
+
+def test_mission_type_allows_transport_deploy_colonize_harvest():
+    for mt in (
+        ids.FleetMissionType.TRANSPORT,
+        ids.FleetMissionType.DEPLOY,
+        ids.FleetMissionType.COLONIZE,
+        ids.FleetMissionType.HARVEST,
+    ):
+        action = make_fleet_action(mission_type=mt)
+        report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+        assert verdict(report, "mission_type").status is GuardStatus.PASS, mt
+
+
+def test_mission_type_blocks_every_combat_type():
+    for mt in (
+        ids.FleetMissionType.ATTACK,
+        ids.FleetMissionType.ACS_DEFEND,
+        ids.FleetMissionType.INTERCEPT,
+        ids.FleetMissionType.MISSILE_ATTACK,
+        ids.FleetMissionType.ACS_ATTACK,
+        ids.FleetMissionType.DEFENSE_HOLD,
+    ):
+        action = make_fleet_action(mission_type=mt)
+        report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+        v = verdict(report, "mission_type")
+        assert v.status is GuardStatus.BLOCK, mt
+        # Combat stays refused even though this gate's BLOCK is the ONLY thing standing in
+        # the way here (tier is already OPERATOR) -- confirms it is a real, independent
+        # enforcement point, not one that only ever fires alongside the tier gate.
+        assert verdict(report, "tier").status is GuardStatus.PASS
+
+
+def test_mission_type_blocks_independently_of_tier_at_every_tier():
+    """A combat mission_type BLOCKs at every tier, including operator -- this gate never
+    relies on the tier gate to do its job."""
+    action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
+    for tier in (Tier.ADVISOR, Tier.ECONOMY, Tier.OPERATOR):
+        report = evaluate(action, make_snapshot(), make_policy(tier=tier))
+        assert verdict(report, "mission_type").status is GuardStatus.BLOCK
 
 
 # --------------------------------------------------------------------------------------
@@ -1122,3 +1213,35 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
         f"  only in guard.py:    {sorted(py_operator - ts_operator_extra)}\n"
         f"  only in allowlist.ts:{sorted(ts_operator_extra - py_operator)}"
     )
+
+    # Phase 5c (docs/SPEC.md §5.5): the two layers must also agree on WHICH mission types
+    # launchFleetMission may submit, not just that the function itself is allowed --
+    # guard.py's `mission_type` gate and allowlist.ts's calldata-level check are two
+    # independent implementations of the same restriction (AGENTS.md §5), and this is the
+    # one test that would notice them drifting.
+    def numbers_in_readonly_set(const: str) -> set[int]:
+        block = re.search(rf"const {const}\s*:\s*ReadonlySet<number>\s*=\s*new Set\(\[(.*?)\]\);", source, re.S)
+        assert block, f"could not find {const} in {allowlist_ts}"
+        uncommented = re.sub(r"//.*$", "", block.group(1), flags=re.M)
+        return {int(n) for n in re.findall(r"-?\d+", uncommented)}
+
+    ts_mission_types = numbers_in_readonly_set("OPERATOR_ALLOWED_MISSION_TYPES")
+    py_mission_types = set(guard._ALLOWED_MISSION_TYPES)
+
+    assert py_mission_types == ts_mission_types, (
+        "launchFleetMission mission types disagree between guard.py's _ALLOWED_MISSION_TYPES "
+        "and allowlist.ts's OPERATOR_ALLOWED_MISSION_TYPES.\n"
+        f"  only in guard.py:    {sorted(py_mission_types - ts_mission_types)}\n"
+        f"  only in allowlist.ts:{sorted(ts_mission_types - py_mission_types)}"
+    )
+    # And neither side has smuggled a combat type in.
+    combat_types = {
+        ids.FleetMissionType.ATTACK,
+        ids.FleetMissionType.ACS_DEFEND,
+        ids.FleetMissionType.INTERCEPT,
+        ids.FleetMissionType.MISSILE_ATTACK,
+        ids.FleetMissionType.ACS_ATTACK,
+        ids.FleetMissionType.DEFENSE_HOLD,
+    }
+    assert not (py_mission_types & combat_types), f"guard.py allows a combat mission type: {py_mission_types & combat_types}"
+    assert not (ts_mission_types & combat_types), f"allowlist.ts allows a combat mission type: {ts_mission_types & combat_types}"

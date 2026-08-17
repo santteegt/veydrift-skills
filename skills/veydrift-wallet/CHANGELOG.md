@@ -11,6 +11,24 @@ lockstep.
 
 ## [Unreleased]
 
+### Changed (breaking — allowlist widening)
+- **`OPERATOR_ALLOWED_MISSION_TYPES` widened to include Colonize (2).** Was withheld in
+  0.2.0 (see that version's "Not done this phase" note, kept below for the record)
+  pending the matching independent Python-side gate. `veydrift-agent`'s `models.py` has
+  since been unfrozen and extended with `ActionKind.FLEET_MISSION` and the `Action`
+  fields `launchFleetMission` needs; `guard.py` now has its own `mission_type` gate
+  (Phase 5c, an 18th gate, was 17), added in **the same change** as this widening —
+  never before it, per the phase 5b brief's own ordering requirement (widening this
+  allowlist first would have reopened the single-layer-enforcement gap the new gate
+  closes). `test_tier_map_agrees_with_the_wallet_engines_allowlist` (agent-side) now
+  also compares the two mission-type sets and fails naming the diff if they ever drift.
+  Confirmed as a genuine colonisation entrypoint (not combat-adjacent) — see 0.2.0's
+  entry below for the contract evidence, unchanged. See `references/tx-safety.md`'s
+  mission-type section for the updated allowed set.
+  - `tests/allowlist.test.ts`: the `it.each([2, 3, 5, 6, 7, 8, 9])("rejects mission
+    type...")` case moved `2` into the `it.each([0, 1, 4])("allows mission type...")`
+    case above it — the one pre-existing test this widening necessarily changes.
+
 ## [0.2.0] - 2026-08-17
 
 ### Removed (breaking)

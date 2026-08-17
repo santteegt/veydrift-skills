@@ -506,7 +506,7 @@ it off at this tier. Real output, captured against this repo's reference planet:
 │     alts:   1 considered and not selected --                                │
 │              [energy] Solar Satellite (unscored) -- locked: needs Shipyard   │
 │ 1 (have 0)                                                                   │
-│     guards: 14/17 pass (block)                                               │
+│     guards: 15/18 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -536,10 +536,13 @@ knowing before you move on to §10's scheduling options:
 
 A few things worth understanding about that block before you trust it:
 
-- **`guards: 14/17 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
+- **`guards: 15/18 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
   itself blocks — every onchain proposal is blocked at tier 1 by design, since advisor
   mode may never submit. That's what makes tier 1 safe *by construction*, not by
   discipline: the decision genuinely is `BLOCK`, so nothing past that point ever runs.
+  (18 gates, not 17, since a fleet-mission proposal added an 18th — `mission_type` — see
+  §12's note on operator tier below; it passes trivially for every non-fleet proposal, so
+  a routine building/research tick still shows exactly one more `pass` than before.)
 - **`why:`** states the actual numbers behind the decision, not a canned explanation. If
   it says a mine upgrade needs 11 energy against 0 produced, that's a live comparison
   against your planet's current state, computed fresh every tick — not a rule of thumb.
@@ -610,11 +613,39 @@ resolved; the digest tells them apart.
 | --- | --- | --- |
 | 1 `advisor` (you start here) | Everything in scope | Nothing, ever |
 | 2 `economy` | Everything in scope | Building upgrades, research, defense/ship production, permissionless mission resolution |
-| 3 `operator` | Everything in scope | Everything tier 2 can, plus non-combat fleet missions (Transport/Deploy/Harvest only) |
+| 3 `operator` | Everything in scope | Everything tier 2 can, plus non-combat fleet missions (Transport/Deploy/Colonize/Harvest) |
 
 Nothing in this codebase ever advances the tier on its own. It is **always** a manual edit
 of `policy.json`'s `tier` field, by you, and it should be treated as a real decision, not a
 config toggle.
+
+**What operator actually does now, not just allows.** Before this release, tier 3 was real
+at the wallet-engine layer (the allowlist had always accepted Transport/Deploy/Harvest) but
+the agent itself never proposed one — promoting to operator bought you nothing beyond
+`resolveFleetMission`. That has changed: with `policy.actions.allow_fleet_noncombat` set to
+`true` (it defaults to `false` — promoting to operator alone does **not** turn this on),
+the agent can now propose two kinds of fleet mission on its own:
+
+- **Transport** — moving a surplus resource from a planet that has more of it than your
+  configured `reserves` floor to whichever of your other planets currently holds the
+  least, using ships you've already built. It never proposes building a ship to make this
+  possible.
+- **Harvest** — recovering debris sitting on one of your own planets, using a Recycler
+  you've already built. This one is implemented but not live yet in practice: the agent
+  has no reliable way to learn about debris on a planet from the live API today, so this
+  path exists and is tested but won't actually fire until that's wired up.
+
+**Colonisation** (`launchFleetMission` mission type `Colonize`) is allowed at both
+enforcement layers as of this release — the wallet-engine allowlist and the agent's own
+`mission_type` guard both accept it at operator tier — but the agent does not yet propose
+*where* to colonise on its own. If you want to colonise, you'd build and send that
+transaction through `walletctl` directly rather than waiting for a tick to suggest it;
+picking a target is a judgement call this codebase leaves to you for now.
+
+Both of these only ever fire at `operator` tier, behind the same guardrail evaluation as
+everything else — including a new gate, `mission_type`, that independently re-checks the
+mission type against the same allowed set the wallet engine enforces (§9 covers what
+`guards: N/18` means).
 
 **Before you promote from `advisor` to `economy`:**
 
@@ -658,7 +689,7 @@ room, not less.
 | `vd tick` says `readiness.ready` is not true, or health nulls | Almost always transient backend replica lag, not an outage — the agent already treats this correctly and will retry. If it persists past `on_health_unhealthy_minutes` (default 30), it escalates instead of retrying forever. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
-| Guards read `14/17 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |
+| Guards read `15/18 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 

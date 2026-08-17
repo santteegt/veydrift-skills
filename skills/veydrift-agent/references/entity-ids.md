@@ -158,9 +158,17 @@ undocumented anywhere.
 `Attack` (3), `AcsAttack` (8), `MissileAttack` (7) and `Intercept` (6) require a code
 change to reach, not a `policy.json` edit (`allow_combat` is deliberately ignored by every
 code path). `DefenseHold` (9) is stationing, not an attack, but is likewise out of scope
-for this codebase. `plan.py` never constructs an `Action` with
-`function="launchFleetMission"` at all in this pass — the only fleet-adjacent function it
-can propose is the permissionless `resolveFleetMission` (ladder rung 3).
+for this codebase.
+
+**Since 2026-08-17 (Phase 5c/5b), `plan.py` can construct a `launchFleetMission`
+`Action`** for the non-combat types: `candidates.generate_transport_candidates`/
+`generate_harvest_candidates` (Transport/Harvest, gated on
+`policy.actions.allow_fleet_noncombat`, default `false`), and `Colonize` (2) is allowlisted
+and gated at both enforcement layers though no generator proposes it yet (see
+`references/contract-writes.md`'s colonisation note). `Deploy` (1) is allowlisted but has
+no generator either — a deliberate scope limit, not a gap in enforcement.
+`resolveFleetMission` (ladder rung 3) remains the only *permissionless* fleet-adjacent
+function.
 
 ## 6. `Resource`
 
@@ -212,13 +220,14 @@ tuple slot from index 9 onward is shifted down by one relative to the `Ship` enu
 Indexing the tuple directly with a `Ship` id is the trap: `tuple[9]` is **not** Solar
 Satellite (it has no slot at all) — it is Destroyer, one id higher than a naive reader
 would guess. `ids.py` records this table (`FLEET_TUPLE_ORDER`, `NON_FLYABLE_SHIPS`) for
-documentation, but **does not implement the conversion function.** That belongs to
-`veydrift-wallet` — `shipCountsToFleetTuple()` — which is also where the dedicated test
-lives ("Destroyer lands at tuple index 9, not 10"). This module only owns the enums; the
-encoder that must not get this wrong is the wallet skill's, not this one's. `plan.py` in
-this pass never constructs a fleet-mission action at all (see §5 above), so the trap is
-currently unreachable from this codebase's write path — documented here anyway because the
-next work package to touch fleet actions will need it immediately.
+documentation, but **does not implement the conversion function itself** — `tick.py`'s
+`_ship_counts_to_fleet_tuple` (Python, added Phase 5c) and `veydrift-wallet`'s
+`shipCountsToFleetTuple()` (TypeScript) each do, independently, both built from this same
+table, each with its own dedicated test pinning "Destroyer lands at tuple index 9, not
+10" (`tests/test_tick.py`'s `test_fleet_mission_ship_tuple_pins_destroyer_at_index_nine_
+not_ten` and `fleet.test.ts`'s equivalent). This module only owns the enums; the two
+places that must not get the conversion wrong are `tick.py` and `fleet.ts`, not this one
+— and as of Phase 5c, both are live, not just one.
 
 ## 8. How to use these from Python
 

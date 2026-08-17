@@ -64,7 +64,7 @@ reproduce Phase 3's behaviour exactly (Phase 4's own acceptance criterion).
 
 ## Part 1 — Write entrypoints (from the pinned ABI)
 
-### 1.1 Implemented (5 functions, 5 rows)
+### 1.1 Implemented (6 functions, 7 rows — `launchFleetMission`'s two overloads added 2026-08-17, Phase 5c/5b)
 
 | Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
 | --- | --- | --- | --- | --- | --- |
@@ -73,19 +73,21 @@ reproduce Phase 3's behaviour exactly (Phase 4's own acceptance criterion).
 | `startShipProduction` | Yes — `candidates.select_building_candidate`'s energy-fallback branch and `candidates.select_shipyard_candidate` (moved from `plan.py`'s `_next_building_action`/`_shipyard_action` in Phase 2). **Phase 3** adds `generate_crawler_candidates` (scored) and `generate_ship_target_candidates` (stock-keeping toward `Policy.strategy.ship_targets`, any of the 16 ships) — Solar Satellite's separate energy-driven path is unchanged and untouched by either addition | ECONOMY (`guard.py:83`, added 2026-08-12 — see comment there for the dead-config history) | ECONOMY (`allowlist.ts:49`) | implemented | — |
 | `startDefenseProduction` | Yes — `candidates.select_shipyard_candidate` (moved from `plan.py`'s `_shipyard_action`, `allow_defense`, in Phase 2). **Phase 3** adds `generate_defense_target_candidates` (stock-keeping toward `Policy.strategy.defense_targets`, any of the 10 defenses, respecting the shield-dome/missile-silo caps via a new independent `candidates._defense_capacity_reason`) — declaring `defense_targets` supersedes the pre-Phase-3 hardcoded Rocket-Launcher-only default; an empty list reproduces it exactly | ECONOMY (`guard.py:77`) | ECONOMY (`allowlist.ts:43`) | implemented | — |
 | `resolveFleetMission` | **Live since 2026-08-17 (Phase 5, docs/SPEC.md §5.4).** `tick.py`'s wired caller (`_run_tick`) now computes `resolvable_mission_ids` via a new `_resolvable_mission_ids()` — reads `/wallet/{addr}/fleet-visibility` directly (raw dict, bypassing `models.py`, same posture `_maybe_check_human_activity` already takes toward `/activity`) and finds the player's own `outgoing` missions still `Outbound`, `needsResolution`, and >60s past `arrivalAt` — and passes it into `plan_next_action`, so rung 3 fires from the real entrypoint. Verified against the live API (`vd tick --dry-run`, scratch `VEYDRIFT_HOME`) 2026-08-17. Root cause of the prior dormancy stands as documented below (`Snapshot`, frozen, carries no mission list) — this fix works *around* that constraint rather than through it. | ECONOMY (`guard.py:75`) | ECONOMY (`allowlist.ts:41`) | **implemented (live)** | — |
+| `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` (7-arg) | **Live since 2026-08-17 (Phase 5c, this change).** `candidates.generate_transport_candidates`/`generate_harvest_candidates` (gated on `policy.actions.allow_fleet_noncombat`, default `false`) construct the `Action`; `tick.py`'s `_action_to_walletctl_json` selects this overload when `Action.speed_pct` is explicitly set (never fabricated) | OPERATOR (`guard.py`'s `_MIN_TIER_FOR_FUNCTION`) **+** `mission_type` gate, default-deny (`guard.py`'s `_ALLOWED_MISSION_TYPES = {0, 1, 2, 4}`, new in this change) | OPERATOR, mission types **0/1/2/4** (Colonize added this change, `allowlist.ts`'s `OPERATOR_ALLOWED_MISSION_TYPES`, decoded from calldata at `allowlist.ts`'s calldata-level check) | **implemented (live) — planner reaches Transport/Harvest; Colonize allowlisted+gated but not yet planner-proposed (§1.5)** | — |
+| `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` (6-arg) | Same generators; `tick.py` selects this overload when `Action.speed_pct` is `None` (the contract's own 100%-speed default) | Same as above | Same as above | **implemented (live)**, same caveat as the 7-arg row | — |
 
-### 1.2 Planned (2 rows — one function, two overloads)
+### 1.2 Planned (0 rows — was 2; both moved to §1.1, 2026-08-17)
 
-| Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
-| --- | --- | --- | --- | --- | --- |
-| `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` (7-arg) | No — no rung in `plan.py` constructs it | OPERATOR (`guard.py:84`) | OPERATOR, mission types 0/1/4 only (`allowlist.ts:55-58`, decoded from calldata at `allowlist.ts:180-205`) | **still planned P5c — blocked on `models.py`** | `tick.py:277-278`'s `_action_to_walletctl_json` has no branch for it — hits the `else: raise ValueError`. Needs `ActionKind.FLEET_MISSION` + new `Action` fields (`mission_type`, `origin_planet_id`, `target_coordinates`, `ships`, `cargo`, `speed_pct`, `holding_seconds`) on `models.py`, frozen for the Phase 5 work package that attempted this (2026-08-17) — see `veydrift-agent`'s `CHANGELOG.md` `[Unreleased]` entry. Colonize (mission type 2) specifically was investigated and confirmed as this same entrypoint (not a separate function) — see §1.3 below — but is equally blocked. |
-| `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` (6-arg) | No | OPERATOR (`guard.py:84`) | OPERATOR, mission types 0/1/4 only (`allowlist.ts:55-58`) | **still planned P5c — blocked on `models.py`** | Same as above; both overloads are allowlisted together, resolved by full signature never by name (`abi.ts`'s `resolveFunctionAbi`) — see `AGENTS.md` §7 trap #2. |
+Empty as of this change. `launchFleetMission`'s two overloads (the only rows this section ever
+held) moved to §1.1 once `models.py` was unfrozen and `guard.py`'s `mission_type` gate /
+`tick.py`'s encoder / `candidates.py`'s logistics generators landed — see that section and
+`veydrift-agent`'s `CHANGELOG.md` `[Unreleased]` entry for the full writeup.
 
 ### 1.3 Removed (1 row)
 
 | Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
 | --- | --- | --- | --- | --- | --- |
-| `settlePlanet` | No — grepped `plan.py` and `candidates.py`, no rung/generator emits it | ~~ECONOMY~~ — **removed 2026-08-17** (was `guard.py:76`) | ~~ECONOMY~~ — **removed 2026-08-17** (was `allowlist.ts:42`) | **removed, Phase 5 (docs/SPEC.md §5.4/§9) — `veydrift-wallet` v0.2.0, breaking** | Was: body identical to `collectResources` at the pinned commit — `VeydriftGame.sol:120-128`: both are exactly `_touchPlayer(msg.sender); _collectPlanetResources(planetId);`. `collectResources` is correctly refused as a disguised read (`abi.ts`'s `NONPAYABLE_READ_FUNCTIONS`, §1.4 below); `settlePlanet` was the same operation but allowlisted at ECONOMY on both sides with a live `tick.py` encoder branch despite no planner rung ever proposing it. Removed from `guard.py`'s `_MIN_TIER_FOR_FUNCTION`, `allowlist.ts`'s `ECONOMY_SIGNATURES`, and `tick.py`'s `_action_to_walletctl_json` together, in the same change — `test_tier_map_agrees_with_the_wallet_engines_allowlist` (agent-side) verifies the first two still agree. Real colonisation — what a human might have expected `settlePlanet` to be — is `launchFleetMission` mission type `Colonize` (2); see §1.2 and §1.5 below. |
+| `settlePlanet` | No — grepped `plan.py` and `candidates.py`, no rung/generator emits it | ~~ECONOMY~~ — **removed 2026-08-17** (was `guard.py:76`) | ~~ECONOMY~~ — **removed 2026-08-17** (was `allowlist.ts:42`) | **removed, Phase 5 (docs/SPEC.md §5.4/§9) — `veydrift-wallet` v0.2.0, breaking** | Was: body identical to `collectResources` at the pinned commit — `VeydriftGame.sol:120-128`: both are exactly `_touchPlayer(msg.sender); _collectPlanetResources(planetId);`. `collectResources` is correctly refused as a disguised read (`abi.ts`'s `NONPAYABLE_READ_FUNCTIONS`, §1.4 below); `settlePlanet` was the same operation but allowlisted at ECONOMY on both sides with a live `tick.py` encoder branch despite no planner rung ever proposing it. Removed from `guard.py`'s `_MIN_TIER_FOR_FUNCTION`, `allowlist.ts`'s `ECONOMY_SIGNATURES`, and `tick.py`'s `_action_to_walletctl_json` together, in the same change — `test_tier_map_agrees_with_the_wallet_engines_allowlist` (agent-side) verifies the first two still agree. Real colonisation — what a human might have expected `settlePlanet` to be — is `launchFleetMission` mission type `Colonize` (2), live and allowlisted since 2026-08-17 (§1.1's `launchFleetMission` rows). |
 
 ### 1.4 Correctly excluded — disguised reads (6 rows)
 
@@ -207,10 +209,13 @@ belongs to.
 | `requestMarketResourceWithdrawal` | `VeydriftGame.sol:464` |
 | `finishMarketResourceWithdrawal` | `VeydriftGame.sol:469` |
 
-**Row count check**: 5 (§1.1) + 1 (§1.2, one unique name — `launchFleetMission` — spread across
-2 overload rows) + 1 (§1.3) + 6 (§1.4) + 6 (§1.5) + 6 (§1.6) + 13 (§1.7) + 19 (§1.8) + 3 (§1.9)
+**Row count check** (updated 2026-08-17, Phase 5c/5b — `launchFleetMission` moved from §1.2 to
+§1.1): 6 (§1.1, unique names — `launchFleetMission` counted once despite its 2 overload rows) + 0
+(§1.2, now empty) + 1 (§1.3) + 6 (§1.4) + 6 (§1.5) + 6 (§1.6) + 13 (§1.7) + 19 (§1.8) + 3 (§1.9)
 = **60 unique function names**, matching the `jq -u` count above. Counting table *rows* instead
-(§1.2 contributing 2 rows for its 2 overloads) gives **61**, matching the raw ABI entry count.
+(§1.1 contributing 7 rows — 5 single-row functions plus `launchFleetMission`'s 2 overloads) gives
+6 - 1 + 2 = 7 for §1.1, so 7 + 0 + 1 + 6 + 6 + 6 + 13 + 19 + 3 = **61**, matching the raw ABI
+entry count.
 
 ---
 
@@ -276,11 +281,18 @@ ladder rung today.
 | `production_per_hour` | Full per-hour Metal/Crystal/Deuterium output, applying multiplier → crawler boost → fusion upkeep → energy throttle in the contract's own order | A full economic simulator / lookahead planner (note: this row predates Phase 2/3 and is stale — `candidates.py` already calls this directly, both for `score_payback`'s before/after delta since Phase 2 and for `generate_crawler_candidates` since Phase 3; not corrected here, out of this pass's scope) |
 | `ship_seconds` | Ship-production queue duration | A fleet-mission / shipyard planning phase (P5c and beyond) |
 | `research_seconds` | Research queue duration | Already covered live by `vd calc verify`'s duration cross-check; not used for planning decisions |
-| `distance` | Coordinate-pair distance (`"G:S:P"` or tuple) | Any planner path that ranks candidate mission targets — colonization, P5c fleet missions |
-| `travel_seconds` | Mission travel time from distance + speed | P5c fleet-mission planning |
-| `mission_fuel` | Deuterium fuel cost for a mission | P5c fleet-mission planning (affordability of the mission itself, not just the ships) |
-| `available_cargo` | Cargo capacity minus fuel cost | P5c fleet-mission planning |
-| `max_planets` | `1 + astrophysics_level` colony cap | A colonization-planning phase (`startPlanet`, §1.5 — itself blocked structurally on `value == 0` until a payable-action design exists) |
+| ~~`distance`~~ | Coordinate-pair distance (`"G:S:P"` or tuple) | **Live since 2026-08-17 (Phase 5c, this change)** — `candidates.generate_transport_candidates` calls it to compute the origin→destination distance for `mission_fuel`/`travel_seconds`. Moved to §1.1's `launchFleetMission` rows; kept struck through here rather than deleted, matching this table's own "reconstructed once" convention. |
+| ~~`travel_seconds`~~ | Mission travel time from distance + speed | **Live since 2026-08-17** — `candidates.generate_transport_candidates`, informational-only (feeds `Action.rationale`, not a guard/plan decision). |
+| ~~`mission_fuel`~~ | Deuterium fuel cost for a mission | **Live since 2026-08-17** — both logistics generators (`generate_transport_candidates`/`generate_harvest_candidates`), to bound cargo via `available_cargo`. |
+| ~~`available_cargo`~~ | Cargo capacity minus fuel cost | **Live since 2026-08-17** — same two generators; the actual cap on `Action.cargo`. |
+| `max_planets` | `1 + astrophysics_level` colony cap | **Still unused.** Colonize (`launchFleetMission` mission type 2) is now allowlisted and gated at both enforcement layers (§1.1), but no planner rung *proposes* a colonisation `Action` yet — that needs a "where to colonise" target-selection policy this pass's brief did not ask for (see docs/SPEC.md §1's Phase 5c/5b status note). `max_planets` is exactly what such a generator would need to bound the proposal against `planetCountOf`. |
+
+**New in Phase 5c, not in this table because they're used, not unused**: `calc.py` gained
+`SHIP_CARGO_CAPACITY` (a fixed lookup table), `ship_fuel_consumption`, `ship_speed`,
+`ship_movement_stats` — all called by both logistics generators to size a mission's fleet, fuel
+and cargo. Sourced directly from `VeydriftCatalog.sol` at the pinned commit, not the banned
+"cost-scaling function" category (see `calc.py`'s own comment on the distinction, and
+`docs/SPEC.md` §5.4's Phase 5c note).
 | `solar_crossover_table` | Smallest Solar Plant level whose energy alone covers same-level mines | Currently used only by the standalone `vd calc crossover` CLI command, not by the planner — `candidates._cheapest_energy_choice` (moved from `plan.py`'s `_energy_candidate` in Phase 2) already does a live, per-planet version of this comparison directly |
 | `deuterium_multiplier_bps` | Temperature-derived deuterium multiplier | Used only via `candidates.py`'s live-multiplier reads today (moved from `plan.py` in Phase 2; `PlanetSnapshot.deuterium_multiplier_bps`, sourced from the API); this pure recomputation isn't called because the live value is already provided (docs/SPEC.md §5.4: prefer live data over recomputing it) |
 | `max_temp_from_bps` | Inverse of `deuterium_multiplier_bps`, diagnostic only per its own docstring | Cross-checking a reported multiplier against a reported `temperature`, not planning |

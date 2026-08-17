@@ -530,6 +530,153 @@ def test_action_to_walletctl_json_raises_on_unknown_function():
 
 
 # --------------------------------------------------------------------------------------
+# launchFleetMission encoding (Phase 5c/5b, docs/SPEC.md §5.4/§9). AGENTS.md §7's two
+# traps are both directly in this path: the overload must be resolved by full canonical
+# signature (trap #2), and the 14-slot fleet tuple must shift ids > 9 down by one slot,
+# never index by raw Ship id (trap #1).
+# --------------------------------------------------------------------------------------
+
+
+def _fleet_snapshot() -> Snapshot:
+    """Two owned planets, 664 (origin) and 665 (a Transport destination)."""
+    return Snapshot(
+        taken_at=datetime(2026, 8, 17, 12, 0, tzinfo=UTC),
+        wallet=WALLET,
+        health_ok=True,
+        planets=[
+            PlanetSnapshot(planet_id=664, coordinates="7:181:14"),
+            PlanetSnapshot(planet_id=665, coordinates="7:181:15"),
+        ],
+    )
+
+
+def _fleet_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=664,
+        mission_type=0,  # Transport
+        origin_planet_id=664,
+        target_coordinates="7:181:15",
+        ships={0: 3},  # 3x Small Cargo
+        cargo=Resources(metal=100, crystal=0, deuterium=0),
+        rule="10:logistics-transport",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def test_fleet_mission_uses_the_six_arg_overload_when_speed_pct_is_none():
+    """`speed_pct is None` -> the encoder never fabricates a speed value; it selects the
+    overload the contract itself defaults to 100% speed for (`models.py`'s own comment on
+    `speed_pct`: "never silently substitute a default at the encoder")."""
+    action = _fleet_action(speed_pct=None)
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    assert built["function"] == tick._LAUNCH_FLEET_MISSION_6ARG_SIGNATURE
+    origin, target, mission_type, ships, cargo, trailing = built["args"]
+    assert origin == 664
+    assert target == 665  # resolved from target_coordinates via the snapshot
+    assert mission_type == 0
+    assert cargo == [100, 0, 0]
+    assert trailing == 0
+
+
+def test_fleet_mission_uses_the_seven_arg_overload_when_speed_pct_is_set():
+    action = _fleet_action(speed_pct=50)
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    assert built["function"] == tick._LAUNCH_FLEET_MISSION_7ARG_SIGNATURE
+    origin, target, mission_type, ships, cargo, speed_pct, trailing = built["args"]
+    assert speed_pct == 50
+    assert trailing == 0
+
+
+def test_fleet_mission_ship_tuple_pins_destroyer_at_index_nine_not_ten():
+    """Mirror-image of veydrift-wallet's `fleet.test.ts` pin (AGENTS.md §7 trap #1):
+    SolarSatellite (Ship id 9) cannot fly and has no tuple slot, so Destroyer (Ship id 10)
+    lands at tuple index 9, not 10."""
+    from veydrift_agent import ids
+
+    action = _fleet_action(ships={ids.Ship.DESTROYER: 5})
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    ships_tuple = built["args"][3]
+    assert len(ships_tuple) == 14
+    assert ships_tuple[9] == 5  # Destroyer
+    assert ships_tuple[10] == 0  # Deathstar, unaffected
+    assert all(count == 0 for i, count in enumerate(ships_tuple) if i != 9)
+
+
+def test_fleet_mission_ship_tuple_raises_on_non_flyable_ship_even_at_zero_count():
+    from veydrift_agent import ids
+
+    action = _fleet_action(ships={ids.Ship.SOLAR_SATELLITE: 0})
+    with pytest.raises(ValueError, match="cannot fly"):
+        tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
+def test_fleet_mission_colonize_encodes_the_packed_coordinate_target():
+    """VeydriftColonizationModule.sol:472-479 (`_encodeColonyTarget`):
+    `(1<<255) | (galaxy<<24) | (system<<8) | position`."""
+    from veydrift_agent import ids
+
+    action = _fleet_action(
+        mission_type=ids.FleetMissionType.COLONIZE,
+        target_coordinates="7:181:16",
+        ships={ids.Ship.COLONY_SHIP: 1},
+        cargo=Resources(),
+        speed_pct=None,
+    )
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    target = built["args"][1]
+    assert target == (1 << 255) | (7 << 24) | (181 << 8) | 16
+    # Colonize's trailing uint256 is randomnessRequestId -- the contract hard-reverts
+    # (InvalidId) unless it is exactly 0.
+    assert built["args"][-1] == 0
+
+
+def test_fleet_mission_local_harvest_targets_the_origin_planet_with_no_coordinate_lookup():
+    """The contract's own special case (`originPlanetId == targetPlanetId && missionType
+    == Harvest`) -- `target_coordinates` left unset resolves straight to `origin_planet_id`
+    with no snapshot lookup at all."""
+    from veydrift_agent import ids
+
+    action = _fleet_action(
+        mission_type=ids.FleetMissionType.HARVEST,
+        target_coordinates=None,
+        ships={ids.Ship.RECYCLER: 1},
+    )
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    assert built["args"][0] == 664
+    assert built["args"][1] == 664
+
+
+def test_fleet_mission_raises_when_mission_type_is_none():
+    action = _fleet_action(mission_type=None)
+    with pytest.raises(ValueError, match="mission_type"):
+        tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
+def test_fleet_mission_raises_when_target_coordinates_unresolvable():
+    """A Transport target that isn't among the wallet's own planets in the snapshot must
+    never silently build calldata against a guessed planet id."""
+    action = _fleet_action(target_coordinates="9:1:1")
+    with pytest.raises(ValueError, match="no planet at"):
+        tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
+def test_fleet_mission_raises_when_no_snapshot_supplied():
+    action = _fleet_action()
+    with pytest.raises(ValueError, match="Snapshot"):
+        tick._action_to_walletctl_json(action)
+
+
+def test_fleet_mission_raises_when_origin_planet_id_missing():
+    action = _fleet_action(origin_planet_id=None)
+    with pytest.raises(ValueError, match="origin_planet_id"):
+        tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
+# --------------------------------------------------------------------------------------
 # _resolvable_mission_ids (Phase 5, docs/SPEC.md §5.4) — revives plan.py's rung 3.
 # --------------------------------------------------------------------------------------
 
@@ -1197,7 +1344,15 @@ def test_run_walletctl_skips_the_check_when_no_wallet_dir_resolved(monkeypatch):
     assert result.returncode == 0
 
 
-def test_load_policy_warns_when_allow_fleet_noncombat_is_dead_config(isolated_home, capsys):
+def test_load_policy_no_longer_warns_when_allow_fleet_noncombat_is_true(isolated_home, capsys):
+    """Was `test_load_policy_warns_when_allow_fleet_noncombat_is_dead_config` until Phase
+    5c (docs/SPEC.md §5.4) gave `allow_fleet_noncombat` a real planner rung
+    (`plan.py`'s band 5, `candidates.select_logistics_candidate`) -- the "no effect, dead
+    config" warning this test used to assert is no longer true, so asserting it would now
+    be asserting a lie. This is the second pre-existing test this phase's brief
+    anticipated might legitimately need to change, for the same reason
+    `test_action_to_walletctl_json_raises_on_settle_planet` already documents for a prior
+    phase: the key this test exercises stopped being dead in this exact change."""
     from veydrift_agent.state import policy_path
 
     policy = json.loads((Path(__file__).parent.parent / "assets" / "policy.example.json").read_text())
@@ -1207,8 +1362,7 @@ def test_load_policy_warns_when_allow_fleet_noncombat_is_dead_config(isolated_ho
 
     tick._load_policy(policy_path())
     captured = capsys.readouterr()
-    assert "allow_fleet_noncombat" in captured.out
-    assert "no effect" in captured.out
+    assert "no effect" not in captured.out
 
 
 def test_load_policy_is_silent_when_allow_fleet_noncombat_is_false(isolated_home, capsys):
@@ -1229,8 +1383,9 @@ def test_load_policy_is_silent_when_allow_fleet_noncombat_is_false(isolated_home
 def test_structural_tier_block_alone_does_not_append_to_strategy_md(isolated_home, monkeypatch):
     """At tier 1 with no wallet configured, a routine onchain proposal's only non-passing
     gates are `tier` (BLOCK) + `gas`/`eth_floor` (ESCALATE, missing data) -- exactly the
-    `14/17 pass (block)` cluster README.md's worked example shows. That is expected noise,
-    not new information, so it must not accrue a strategy.md entry every single tick."""
+    `15/18 pass (block)` cluster README.md's worked example shows (`14/17` before Phase
+    5c added the `mission_type` gate). That is expected noise, not new information, so it
+    must not accrue a strategy.md entry every single tick."""
     _write_policy()  # tier advisor
     tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
     _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx)  # gas=None -> gas gate ESCALATEs too

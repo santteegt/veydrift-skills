@@ -40,7 +40,7 @@ includes each one:
 | Research | `startResearch(uint256,uint8)` | 220 | economy, operator |
 | Defense production | `startDefenseProduction(uint256,uint8,uint32)` | 176 | economy, operator |
 | Permissionless resolve | `resolveFleetMission(uint256)` | 425 | economy, operator (permissionless — costs no allowlist-gated capability at all, but still goes through `walletctl` like everything else so it's still logged). Live since 2026-08-17: `tick.py`'s `_resolvable_mission_ids` now computes this rung's argument from `/wallet/{addr}/fleet-visibility` — previously implemented but unreachable, see docs/COVERAGE.md |
-| Fleet launch (7-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` | 358 | operator only, and only for mission types Transport(0)/Deploy(1)/Harvest(4) — §3 |
+| Fleet launch (7-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` | 358 | operator only, and only for mission types Transport(0)/Deploy(1)/**Colonize(2)**/Harvest(4) — §3. Colonize added 2026-08-17 (Phase 5b) |
 | Fleet launch (6-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` | 325 | operator only, same mission-type restriction |
 | Ship production | `startShipProduction(uint256,uint8,uint32)` | 186 | `economy` — granted 2026-08-12, see §8 |
 | Fleet return | `completeFleetMissionReturn(uint256)` | 442 | **none** — not in any tier's table, and not in `allowlist.ts`'s selector sets. `plan.py` never constructs this action |
@@ -65,10 +65,20 @@ without also giving it a real proposer — see `guard.py`'s `_MIN_TIER_FOR_FUNCT
 `targetPlanetId` argument is not a real planet id — it's `_encodeColonyTarget(galaxy,
 system, position)` = `(1 << 255) | (galaxy << 24) | (system << 8) | position`
 (`VeydriftColonizationModule.sol:472-479`), decoded again on resolution via
-`_decodeColonyTarget`. **Not yet wired into this codebase's planner or the wallet
-allowlist** — see docs/COVERAGE.md and this package's `CHANGELOG.md` `[Unreleased]`
-entry for why (blocked on a `models.py` change out of scope for the work package that
-did this verification).
+`_decodeColonyTarget`. Its trailing `uint256` (both overloads) is `randomnessRequestId`,
+not a holding duration — `_launchColonizeFleetMission` reverts (`InvalidId`) unless it is
+exactly `0`.
+
+**Live in both enforcement layers since 2026-08-17 (Phase 5b, docs/SPEC.md §9)**:
+`guard.py`'s `mission_type` gate and `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES`
+both allow mission type 2 at `operator` tier, widened together in the same change (never
+one before the other — widening the wallet-side allowlist alone would have reopened the
+single-layer-enforcement gap the Python-side gate exists to close). **Not yet planner-
+proposed**: no `candidates.py` generator constructs a Colonize `Action` — that needs a
+"where to colonise" target-selection policy this phase's brief did not ask for. The
+entrypoint is implemented, encoded (`tick.py`'s `_action_to_walletctl_json`) and gated;
+only the "which coordinates" decision is left to a human via `walletctl` directly, or to
+a future planner generator. See docs/COVERAGE.md §1.1 and this package's `CHANGELOG.md`.
 
 The tier column is read straight from `allowlist.ts`'s `ECONOMY_SIGNATURES` and
 `LAUNCH_FLEET_MISSION_SIGNATURES` constants (`skills/veydrift-wallet/references/tx-safety.md`
@@ -100,13 +110,22 @@ flyable ship with id > 9 is shifted down by exactly one tuple slot:
 | 13 | 14 | Pathfinder |
 
 `shipCountsToFleetTuple()` (`skills/veydrift-wallet/src/fleet.ts`) is the single
-conversion function that must never be reimplemented at a call site. It throws — not
-silently zeroes — if asked to place `SolarSatellite` or `Crawler` in a fleet, even at
-count zero, and `tests/fleet.test.ts` asserts a Destroyer lands at tuple index 9. This
-codebase's `plan.py` never constructs a `launchFleetMission` action at all (`ids.py`'s
-own reference notes this — `references/entity-ids.md` §7), so the trap is currently
-unreachable from the read/plan side; it's load-bearing for whoever adds fleet actions
-next, and it's already built and tested on the wallet side today.
+conversion function that must never be reimplemented at a call site on the TypeScript
+side. It throws — not silently zeroes — if asked to place `SolarSatellite` or `Crawler`
+in a fleet, even at count zero, and `tests/fleet.test.ts` asserts a Destroyer lands at
+tuple index 9.
+
+**Live on the Python side since 2026-08-17 (Phase 5c)**: `plan.py`'s `candidates.py`
+generators (`generate_transport_candidates`/`generate_harvest_candidates`) now construct
+`launchFleetMission` actions, and `tick.py`'s `_action_to_walletctl_json` has its own
+mirror conversion, `_ship_counts_to_fleet_tuple` — built from `ids.FLEET_TUPLE_ORDER`/
+`ids.NON_FLYABLE_SHIPS` (the same shifted order this table documents, not a
+reimplementation of `fleet.ts`'s logic, since that module is TypeScript and this package
+never imports it), with a Python-side test pinning the same Destroyer-at-index-9 fact
+(`tests/test_tick.py::test_fleet_mission_ship_tuple_pins_destroyer_at_index_nine_not_ten`)
+mirroring `fleet.test.ts`'s pin. Both sides independently agree with this table — the
+trap is no longer unreachable on the read/plan side, and both implementations were built
+and tested against it, not just one.
 
 ## 3. Trap: `launchFleetMission` is overloaded
 

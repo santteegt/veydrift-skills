@@ -253,6 +253,20 @@ def plan_next_action(
     if unlock_winner is not None:
         return _finalize(unlock_winner, unlock_alternatives, "8b:unlock-chain", policy)
 
+    # Band 5 (Phase 5c of the general-strategy-engine program, docs/SPEC.md §5.4):
+    # non-combat fleet logistics -- Transport between the player's own planets, local
+    # Harvest of a planet's own debris. Gated on `policy.actions.allow_fleet_noncombat`
+    # (defaults False, so this band produces nothing at all under the default policy,
+    # identical to pre-Phase-5c behaviour). Reached only after bands 1-4 produced nothing
+    # for any target planet, same precedence rule band 4 (`8b:unlock-chain`) already
+    # documents for itself: logistics is an "idle capacity" opportunity, never something
+    # that should outrank a scored economic pick, a policy-declared research/ship/defense
+    # target, or the storage-overflow deadline.
+    logistics_winner, logistics_alternatives = candidates.select_logistics_candidate(snapshot, policy, target_planets)
+    if logistics_winner is not None:
+        rule = "8c:logistics-transport" if logistics_winner.family == "logistics-transport" else "8c:logistics-harvest"
+        return _finalize(logistics_winner, logistics_alternatives, rule, policy)
+
     return Action(
         kind=ActionKind.NOOP,
         rule="9:no-match",

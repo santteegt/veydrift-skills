@@ -948,3 +948,207 @@ def test_generate_unlock_chain_candidates_respects_allow_research_and_research_q
 
     elevated_snapshot.research_queue = QueueEntry(kind=QueueKind.RESEARCH, entity_id=ids.Technology.ENERGY, entity_name="Energy Technology")
     assert candidates.generate_unlock_chain_candidates(elevated_snapshot, allowed_policy, elevated) == []
+
+
+# --------------------------------------------------------------------------------------
+# Logistics family (Phase 5c, docs/SPEC.md §5.4): Transport between the player's own
+# planets, local Harvest of a planet's own debris. Both gated on
+# policy.actions.allow_fleet_noncombat (defaults False).
+# --------------------------------------------------------------------------------------
+
+
+def _origin_planet(**overrides) -> PlanetSnapshot:
+    base = dict(
+        planet_id=664,
+        coordinates="7:181:14",
+        resources_as_of_now=Resources(metal=5000, crystal=0, deuterium=0),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        buildings=[],
+        ships=[Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=2, cost=Resources(metal=2000, crystal=2000))],
+        defenses=[],
+    )
+    base.update(overrides)
+    return PlanetSnapshot(**base)
+
+
+def _destination_planet(**overrides) -> PlanetSnapshot:
+    base = dict(
+        planet_id=665,
+        coordinates="7:181:15",
+        resources_as_of_now=Resources(metal=0, crystal=0, deuterium=0),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        buildings=[],
+        ships=[],
+        defenses=[],
+    )
+    base.update(overrides)
+    return PlanetSnapshot(**base)
+
+
+def _two_planet_snapshot(*, origin=None, destination=None) -> Snapshot:
+    return Snapshot(
+        taken_at="2026-08-17T12:00:00Z",
+        wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        health_ok=True,
+        planets=[origin or _origin_planet(), destination or _destination_planet()],
+    )
+
+
+def test_generate_transport_candidates_empty_by_default_policy():
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(planets=[664, 665])  # allow_fleet_noncombat defaults False
+    origin = snapshot.planet(664)
+    result = candidates.generate_transport_candidates(snapshot, policy, origin, snapshot.planets)
+    assert result == []
+
+
+def test_generate_transport_candidates_moves_surplus_to_the_planet_that_needs_it_most():
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(
+        planets=[664, 665],
+        actions=ActionsCfg(allow_fleet_noncombat=True),
+        reserves=Resources(metal=100),
+    )
+    origin = snapshot.planet(664)
+    result = candidates.generate_transport_candidates(snapshot, policy, origin, snapshot.planets)
+    assert len(result) == 1
+    winner = result[0]
+    assert winner.family == "logistics-transport"
+    action = winner.action
+    assert action.kind == ActionKind.FLEET_MISSION
+    assert action.function == "launchFleetMission"
+    assert action.mission_type == ids.FleetMissionType.TRANSPORT
+    assert action.origin_planet_id == 664
+    assert action.target_coordinates == "7:181:15"  # planet 665 -- the only other own planet
+    assert action.ships == {ids.Ship.SMALL_CARGO: 2}
+    # holdings (5000) - reserve floor (100) = 4900 surplus; 2 Small Cargo give 9997
+    # available cargo at this distance/speed (verified against calc.py directly) -- surplus
+    # is the binding constraint, not cargo capacity.
+    assert action.cargo.metal == 4900
+    assert action.cargo.crystal == 0
+    assert action.cargo.deuterium == 0
+
+
+def test_generate_transport_candidates_empty_without_cargo_ships():
+    snapshot = _two_planet_snapshot(origin=_origin_planet(ships=[]))
+    policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True))
+    origin = snapshot.planet(664)
+    assert candidates.generate_transport_candidates(snapshot, policy, origin, snapshot.planets) == []
+
+
+def test_generate_transport_candidates_empty_without_surplus():
+    snapshot = _two_planet_snapshot(origin=_origin_planet(resources_as_of_now=Resources(metal=50)))
+    policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), reserves=Resources(metal=100))
+    origin = snapshot.planet(664)
+    assert candidates.generate_transport_candidates(snapshot, policy, origin, snapshot.planets) == []
+
+
+def test_generate_transport_candidates_empty_without_another_own_planet():
+    snapshot = Snapshot(
+        taken_at="2026-08-17T12:00:00Z",
+        wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        health_ok=True,
+        planets=[_origin_planet()],
+    )
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    origin = snapshot.planet(664)
+    assert candidates.generate_transport_candidates(snapshot, policy, origin, snapshot.planets) == []
+
+
+def _debris_planet(**overrides) -> PlanetSnapshot:
+    base = dict(
+        planet_id=664,
+        coordinates="7:181:14",
+        resources_as_of_now=Resources(),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        buildings=[],
+        ships=[Entity(id=ids.Ship.RECYCLER, name="Recycler", count=1, cost=Resources(metal=10_000, crystal=6_000, deuterium=2_000))],
+        defenses=[],
+    )
+    base.update(overrides)
+    return PlanetSnapshot(**base)
+
+
+def test_generate_harvest_candidates_empty_by_default_policy():
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664])  # allow_fleet_noncombat defaults False
+    result = candidates.generate_harvest_candidates(
+        snapshot, policy, planet, own_planet_debris={664: Resources(metal=25_000, crystal=5_000)}
+    )
+    assert result == []
+
+
+def test_generate_harvest_candidates_empty_without_a_recycler():
+    planet = _debris_planet(ships=[])
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    result = candidates.generate_harvest_candidates(
+        snapshot, policy, planet, own_planet_debris={664: Resources(metal=25_000, crystal=5_000)}
+    )
+    assert result == []
+
+
+def test_generate_harvest_candidates_empty_without_known_debris():
+    """`own_planet_debris` unset (the default, honest-today state -- see the generator's
+    own docstring on why no caller wires a live source yet) means no debris is known, not
+    that there is none: this must never fabricate a harvest out of absent data."""
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    assert candidates.generate_harvest_candidates(snapshot, policy, planet) == []
+    assert candidates.generate_harvest_candidates(snapshot, policy, planet, own_planet_debris={}) == []
+
+
+def test_generate_harvest_candidates_produces_a_local_harvest_action():
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    result = candidates.generate_harvest_candidates(
+        snapshot, policy, planet, own_planet_debris={664: Resources(metal=25_000, crystal=5_000)}
+    )
+    assert len(result) == 1
+    winner = result[0]
+    assert winner.family == "logistics-harvest"
+    action = winner.action
+    assert action.kind == ActionKind.FLEET_MISSION
+    assert action.mission_type == ids.FleetMissionType.HARVEST
+    assert action.origin_planet_id == 664
+    assert action.target_coordinates is None  # local harvest: target IS origin
+    assert action.ships == {ids.Ship.RECYCLER: 1}
+    # 1 Recycler at drive-tech 0: cargo 20000, fuel_consumption 300, speed 2000 (calc.py) --
+    # local harvest fuel at distance 5 is 1, so available cargo is 19999; debris (25000
+    # metal) exceeds it, so the harvest is capacity-bound, not debris-bound.
+    assert action.cargo.metal == 19_999
+    assert action.cargo.crystal == 0
+
+
+def test_select_logistics_candidate_returns_none_with_default_policy():
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(planets=[664, 665])
+    winner, alternatives = candidates.select_logistics_candidate(snapshot, policy, snapshot.planets)
+    assert winner is None
+    assert alternatives == []
+
+
+def test_select_logistics_candidate_prefers_transport_over_harvest_on_the_same_planet():
+    """Both Transport and local Harvest could fire on planet 664 here (cargo ships +
+    surplus for Transport, a Recycler + known debris for Harvest); `select_logistics_
+    candidate` checks Transport first per planet, so it wins."""
+    origin = _origin_planet(
+        ships=[
+            Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=2, cost=Resources()),
+            Entity(id=ids.Ship.RECYCLER, name="Recycler", count=1, cost=Resources()),
+        ]
+    )
+    snapshot = _two_planet_snapshot(origin=origin)
+    policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), reserves=Resources(metal=100))
+    winner, alternatives = candidates.select_logistics_candidate(
+        snapshot, policy, snapshot.planets, own_planet_debris={664: Resources(metal=1000)}
+    )
+    assert winner is not None
+    assert winner.family == "logistics-transport"
+    assert any(alt.family == "logistics-harvest" for alt in alternatives)

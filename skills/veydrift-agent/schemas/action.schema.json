@@ -1,13 +1,14 @@
 {
   "$defs": {
     "ActionKind": {
-      "description": "What the planner decided. Only the first five map to a contract call.",
+      "description": "What the planner decided. Only the first six map to a contract call.",
       "enum": [
         "build",
         "research",
         "ship",
         "defense",
         "resolve_mission",
+        "fleet_mission",
         "noop",
         "escalate",
         "halt"
@@ -90,6 +91,9 @@
       "title": "Alternatives",
       "type": "array"
     },
+    "cargo": {
+      "$ref": "#/$defs/Resources"
+    },
     "cost": {
       "$ref": "#/$defs/Resources"
     },
@@ -149,6 +153,30 @@
       "default": null,
       "title": "Mission Id"
     },
+    "mission_type": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mission Type"
+    },
+    "origin_planet_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Origin Planet Id"
+    },
     "planet_id": {
       "anyOf": [
         {
@@ -173,6 +201,18 @@
       "default": null,
       "title": "Quantity"
     },
+    "randomness_request_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Randomness Request Id"
+    },
     "rationale": {
       "default": "",
       "title": "Rationale",
@@ -182,6 +222,37 @@
       "default": "",
       "title": "Rule",
       "type": "string"
+    },
+    "ships": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Ships",
+      "type": "object"
+    },
+    "speed_pct": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Speed Pct"
+    },
+    "target_coordinates": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Coordinates"
     },
     "target_level": {
       "anyOf": [

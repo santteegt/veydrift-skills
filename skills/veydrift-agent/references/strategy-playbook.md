@@ -349,6 +349,27 @@ where it moved.
    candidate (rung 6) or a policy-declared research/ship/defense pick (rungs 7-8) — giving
    it the final rung makes that a property of the ladder's control flow, not a flag this
    function has to remember to check.
+8c. **(Phase 5c, 2026-08-17) Nothing above fired -> propose non-combat fleet logistics.**
+   New rung, `candidates.select_logistics_candidate`, checked only after rungs 5-8b above
+   have all found nothing for every target planet — same "never outrank a scored
+   economic pick or the storage-overflow deadline" precedence rule rung 8b already uses,
+   extended by one more rung. Two generators, first selectable one per planet wins:
+   - **Transport** (`generate_transport_candidates`): moves whichever resource is
+     furthest above `policy.reserves` on the origin planet to whichever other own planet
+     currently holds the least of it, using already-built cargo-capable ships only.
+     Bounded by `calc.available_cargo` (capacity minus `calc.mission_fuel`'s fuel cost),
+     never by surplus alone.
+   - **Harvest** (`generate_harvest_candidates`): the contract's own local special case
+     (`originPlanetId == targetPlanetId`) — a planet's own debris field, never a foreign
+     one. Requires an already-built Recycler. Not live-reachable today: no caller wires a
+     live debris source into it yet (the frozen `Snapshot` carries none, and the one live
+     route that might is unconfirmed in shape — see the generator's own docstring).
+   - Both gated, independently, on `policy.actions.allow_fleet_noncombat` (default
+     `false`) — with the default policy this rung never fires, same safety property
+     every earlier phase's new rung shipped with.
+   - Always `score=None`, same reasoning as rung 8b: this is an opportunity to use idle
+     capacity, not something comparable to `calc.production_per_hour`'s payback-hours
+     scoring.
 9. **Otherwise -> NO-OP with an explicit reason.** Always reachable; `Action.rationale`
    is never empty.
 

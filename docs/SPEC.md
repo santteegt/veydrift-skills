@@ -104,6 +104,43 @@ correspondingly still out of scope in practice, not by non-goal but by this bloc
 `veydrift-agent`'s `CHANGELOG.md` `[Unreleased]` entry and `docs/COVERAGE.md` §1.2 for
 the full state and what a maintainer who can edit `models.py` needs to do to finish it.
 
+### Phase 5c/5b status update (2026-08-17, this change) — Goal 1's T3 claim is now real
+
+The orchestrator unfroze `models.py` for exactly the blocker described above and added
+`ActionKind.FLEET_MISSION` plus the `Action` fields `launchFleetMission` needs. This
+change is everything downstream of that:
+
+- **Goal 1's "T3 Operator (adds non-combat fleet)" is no longer aspirational.**
+  `candidates.py` gained a logistics family (`generate_transport_candidates`,
+  `generate_harvest_candidates`, wired into `plan.py` as a new band, gated on
+  `policy.actions.allow_fleet_noncombat`, default `false`) that can actually produce a
+  `launchFleetMission` `Action`; `guard.py` gained an 18th gate (`mission_type`,
+  default-deny, independent of `tier`); `tick.py` can now build calldata for it,
+  resolving the overload by full signature (AGENTS.md §7 trap #2) and the 14-slot fleet
+  tuple correctly (trap #1). See §5.4, §5.5, §9 below and `veydrift-agent`'s
+  `CHANGELOG.md`.
+- **Colonisation is now in scope and implemented**, revising the non-goals list below:
+  `launchFleetMission` mission type `Colonize` (2) is allowed at both enforcement
+  layers (`guard.py`'s `mission_type` gate and `veydrift-wallet`'s
+  `OPERATOR_ALLOWED_MISSION_TYPES`, widened together in the same change, never one
+  before the other — see §6.4). No planner rung *proposes* a colonisation `Action`
+  yet (that would need a "where to colonise" target-selection policy this phase's
+  brief did not ask for) — the entrypoint is implemented and both-layers-gated, ready
+  for a future colonisation-target generator, the same "capacity exists, planner
+  doesn't reach for it yet" shape `resolveFleetMission` had before the prior pass of
+  this phase revived it.
+- **Revised non-goals, restated**: combat, alliances, ACS, migration, referrals, NFT
+  burns, and the ERC-20 market bridge remain fully out of scope, unconditionally
+  (unchanged from the original list above). A raid-profitability model remains out of
+  scope (`protectedResources` semantics still unconfirmed). Colonisation is **no
+  longer** a non-goal, per the above. Non-combat fleet logistics (Transport/Harvest) is
+  **no longer** a non-goal either, though the generators are intentionally
+  conservative: Transport only ever considers the wallet's own planets, using
+  already-built ships; Harvest only ever considers a planet's own local debris field
+  (never a foreign one), and is not live-reachable yet because no live source for
+  debris-field data is wired in (`candidates.generate_harvest_candidates`'s own
+  docstring explains the unconfirmed-API-shape reason why not).
+
 ---
 
 ## 2. Repository layout
@@ -517,6 +554,54 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 > queued); no change to `policy.strategy.building_priority`'s own reachability path or
 > precedence.
 
+> **Phase 5c, 2026-08-17 (this change) — a fifth band, logistics.** Rungs 5-9 are now a
+> **five**-band pipeline, not four: a new `plan.py` rung `8c` (`candidates.
+> select_logistics_candidate`) runs after band 4 (unlock-chain), reached only when bands
+> 1-4 produce nothing at all for any target planet — the same "never outranks a scored
+> economic pick or the storage-overflow deadline" precedence rule §5.4's Phase 4 note
+> above already states for band 4, extended by one more band on the same principle.
+>
+> - **`generate_transport_candidates`** — `FleetMissionType.Transport` (0) between the
+>   player's own planets. Moves whichever single resource is furthest above
+>   `policy.reserves` on the origin planet to whichever other own planet currently holds
+>   the least of it (a simple, deterministic heuristic, not a claimed-optimal multi-
+>   resource allocation), using only already-built cargo-capable ships (never proposes
+>   building a ship to enable a mission). Cargo amount is bounded by `calc.
+>   available_cargo` (capacity minus `calc.mission_fuel`'s own fuel cost at the computed
+>   `calc.distance`/`calc.ship_movement_stats`-derived slowest speed), never by surplus
+>   alone.
+> - **`generate_harvest_candidates`** — `FleetMissionType.Harvest` (4), restricted to the
+>   contract's own local special case (`originPlanetId == targetPlanetId`,
+>   `LOCAL_HARVEST_DISTANCE = 5`): a planet's own debris field, never a foreign one.
+>   Requires an already-built Recycler (the contract reverts on `ships.recycler == 0`).
+>   **Not live-reachable today**: the frozen `Snapshot` model carries no debris-field
+>   data on any route this codebase reads, so this generator takes an explicit
+>   `own_planet_debris` parameter rather than fetch-or-guess it — no live source is
+>   wired to it yet, because the one route that does carry `debrisField`
+>   (`/universe/galaxies/{g}/systems/{s}`) has never been observed with a populated
+>   (non-`null`) sample, and guessing its keys would repeat the "don't model an
+>   unconfirmed shape" mistake `PlanetSnapshot.raidable_resources`/`protected_resources`
+>   already carry a warning about. Logic-complete and unit-tested; wiring a live source
+>   is future work.
+> - Both gated, independently, once each, on **`policy.actions.allow_fleet_noncombat`**
+>   (defaults `false`) — with the default policy this band produces nothing at all,
+>   identical to pre-Phase-5c behaviour, the same safety property every prior phase's
+>   new capability has shipped with.
+> - `calc.py` gained the ship-movement-stats formula layer this band needed:
+>   `SHIP_CARGO_CAPACITY` (a fixed table), `ship_fuel_consumption`, `ship_speed`,
+>   `ship_movement_stats` — all read directly from `VeydriftCatalog.sol` at the pinned
+>   commit. **Not the banned "cost-scaling function" category** (§5.3/calc.py's own
+>   module docstring): that ban is specifically about per-building/tech/ship/defense
+>   *cost* factors, which really are unpublished rationals; cargo capacity, fuel
+>   consumption and speed are a small, fully-published, `pure` lookup table with no
+>   live/per-account state, and no live API route ever reports them (`/shipyard` gives
+>   only `cost`/`durationSeconds`/`count`) — there is no "prefer the live value" option
+>   the way `Entity.cost` has.
+> - `guard.py`'s `mission_type` gate and `tick.py`'s `launchFleetMission` encoder (§5.5,
+>   §6.7) are what let a `launchFleetMission` `Action` this band produces actually reach
+>   `walletctl` — see those sections for the enforcement and encoding side of this
+>   capability.
+
 ### 5.5 `vd guard` — guardrail evaluation
 
 Returns `ALLOW` / `BLOCK` / `ESCALATE` with a per-gate verdict list. **Every gate is evaluated and
@@ -526,6 +611,7 @@ reported**, never short-circuited — the full verdict list is the audit artifac
 | --- | --- |
 | `killswitch` | `$VEYDRIFT_HOME/KILLSWITCH` absent |
 | `tier` | action's function ∈ tier's allowed set |
+| `mission_type` | (Phase 5c, 2026-08-17) for `launchFleetMission` only: `Action.mission_type` ∈ the allowed set {Transport, Deploy, Colonize, Harvest} — default-deny, `mission_type is None` **BLOCK**s (never "nothing to check"); mirrors `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES` exactly, independent of and in addition to `tier` |
 | `prerequisites` | proposed entity's on-chain requirements (`techtree.py`) are met on the target planet — a level the snapshot didn't report is treated as unmet, never assumed high enough; also enforces shield-dome/missile-slot caps |
 | `address` | destination ∈ **live** `/runtime-config` address set |
 | `abi_hash` | live `deploymentAbiHash` == pinned → else **BLOCK all writes** |
@@ -541,6 +627,18 @@ reported**, never short-circuited — the full verdict list is the audit artifac
 | `value_ceiling` | spend > `escalate_above_pct_of_resources` (default 25%) → **ESCALATE** |
 | `idempotency` | no pending tx for the same `(planet, action, entity)` |
 | `revert_streak` | same action reverted < 2× |
+
+> **18 gates total as of Phase 5c (2026-08-17)**, not 17 — `mission_type` (above) is the
+> addition. `AGENTS.md` §5's "the two tier-enforcement layers must agree" now covers two
+> independent duplications: `guard._MIN_TIER_FOR_FUNCTION` vs. `allowlist.ts`'s
+> `ECONOMY_SIGNATURES`/`LAUNCH_FLEET_MISSION_SIGNATURES` (function-level, unchanged), and
+> `guard._ALLOWED_MISSION_TYPES` vs. `allowlist.ts`'s `OPERATOR_ALLOWED_MISSION_TYPES`
+> (mission-type-level, new) — both checked by the same test,
+> `test_tier_map_agrees_with_the_wallet_engines_allowlist`, extended in this change.
+> Every place this spec (and `references/guardrails.md`, `README.md`,
+> `docs/PLAYER-GUIDE.md`) previously said `14/17 pass (block)` for a routine tier-1
+> proposal now reads `15/18 pass (block)` — `mission_type` PASSes trivially for every
+> non-`launchFleetMission` action, so it adds one more PASS, never new noise.
 
 > **Gap closed, 2026-08-16 (legality layer, phase 1 of the general-strategy-engine
 > program).** Nothing in `plan.py` or `guard.py` checked an on-chain prerequisite of any
@@ -885,6 +983,20 @@ Defence in depth: a fully compromised `veydrift-agent` still cannot make `wallet
 > as the *sole* enforcement layer for a launchable mission type, which is exactly the asymmetry this
 > project's two-layer design exists to avoid. See `veydrift-wallet`'s `CHANGELOG.md` v0.2.0 entry.
 
+> **`OPERATOR_ALLOWED_MISSION_TYPES` widened to include Colonize (2), 2026-08-17 (Phase
+> 5b, this change), `veydrift-wallet` `[Unreleased]`.** This is the widening the note
+> above describes as withheld — done now, in **the same change** as `guard.py`'s new
+> `mission_type` gate (§5.5), never before it: `models.py` was unfrozen and extended
+> with `ActionKind.FLEET_MISSION` and the `Action` fields `launchFleetMission` needs, so
+> the Python-side counterpart the prior note names as the blocker now exists.
+> `OPERATOR_ALLOWED_MISSION_TYPES` is `{0, 1, 2, 4}`; `guard.py`'s `_ALLOWED_MISSION_TYPES`
+> is the same set, and `test_tier_map_agrees_with_the_wallet_engines_allowlist`
+> (agent-side) now parses and compares both, extended from function-name sets to also
+> cover mission-type sets. Combat types (3, 5, 6, 7, 8, 9) are unaffected — never added
+> to either set, by design (this is still the *only* widening; every other mission type
+> stays refused unconditionally at both layers, per AGENTS.md §5's "combat stays
+> unreachable by code, not by config").
+
 ### 6.5 Deferred research — `docs/wallet-provider-research.md` (WP4b)
 
 A document, not code. Deliverable of this pass; the decision comes later.
@@ -1130,11 +1242,77 @@ proposes its own unlock chain (§5.4):**
     contains its selector at any tier) — `tests/test_guard.py::test_tier_map_agrees_with_...`
     (agent-side, still passes after the removal),
     `veydrift-wallet/tests/allowlist.test.ts`'s `"settlePlanet is no longer allowlisted at any tier"`.
-47. **Not met** (documented, not silently dropped): a non-combat fleet-mission `Action` (Transport/
-    Deploy/Harvest) and a colonisation `Action` (`launchFleetMission` mission type 2) can be
-    constructed by the planner and encoded by `tick.py`. Blocked on `models.py` being frozen for
-    the Phase 5 work package — see the "Phase 5 status note" in §1 and `veydrift-agent`'s
-    `CHANGELOG.md` for the full accounting.
+47. **Now met** (was "not met," documented as blocked on `models.py` above — see the "Phase 5
+    status note" in §1). A non-combat fleet-mission `Action` (Transport/Harvest) can be constructed
+    by the planner (`candidates.generate_transport_candidates`/`generate_harvest_candidates`,
+    gated on `policy.actions.allow_fleet_noncombat`) and encoded by `tick.py`
+    (`_action_to_walletctl_json`'s `launchFleetMission` branch) — see criteria 48-56 below for the
+    specific tests. Deploy (mission type 1) is allowlisted at both layers but has no generator
+    (no rung proposes it) — a deliberate scope limit of this pass, not a gap in enforcement.
+
+**Phase 5c/5b of the general-strategy-engine program, added 2026-08-17 — non-combat fleet
+missions and colonisation (§5.4/§5.5/§6.4):**
+
+48. `guard.py`'s `mission_type` gate default-denies: `mission_type is None` on a `launchFleetMission`
+    action **BLOCK**s (never treated as "nothing to check"), and every combat type (3, 5, 6, 7, 8, 9)
+    **BLOCK**s independently of the `tier` gate (still `BLOCK`s at every tier, including operator) —
+    `tests/test_guard.py::test_mission_type_blocks_when_mission_type_is_none_never_passes_vacuously`,
+    `::test_mission_type_blocks_every_combat_type`,
+    `::test_mission_type_blocks_independently_of_tier_at_every_tier`.
+49. Transport (0), Deploy (1), Colonize (2), Harvest (4) all **PASS** the `mission_type` gate; every
+    non-`launchFleetMission` action PASSes it trivially, adding no noise to a routine proposal
+    (18 gates total now, `mission_type` PASSing is the 15th of 15 passing in the routine tier-1
+    case, `15/18` not `14/17`) —
+    `tests/test_guard.py::test_mission_type_allows_transport_deploy_colonize_harvest`,
+    `::test_mission_type_passes_trivially_for_a_non_fleet_action`,
+    `::test_all_eighteen_gates_always_present_even_when_blocked`.
+50. `guard._ALLOWED_MISSION_TYPES` and `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES` are
+    identical sets, parsed from both real files (not hardcoded in the test), and neither contains a
+    combat type — `tests/test_guard.py::test_tier_map_agrees_with_the_wallet_engines_allowlist`
+    (extended this phase to cover mission-type sets, not just function-name sets).
+51. `tick.py` resolves `launchFleetMission`'s overload by full canonical signature, never by name:
+    `Action.speed_pct is not None` selects the 7-arg form; `None` selects the 6-arg form (the
+    contract's own 100%-speed default) rather than fabricating a speed value at the encoder —
+    `tests/test_tick.py::test_fleet_mission_uses_the_six_arg_overload_when_speed_pct_is_none`,
+    `::test_fleet_mission_uses_the_seven_arg_overload_when_speed_pct_is_set`.
+52. The 14-slot fleet tuple is built correctly: a Destroyer (Ship id 10) lands at tuple index 9, not
+    10 (AGENTS.md §7 trap #1) — the Python-side mirror of `veydrift-wallet`'s `fleet.test.ts` pin —
+    and a non-flyable ship id (SolarSatellite/Crawler) in `Action.ships` raises, even at count 0 —
+    `tests/test_tick.py::test_fleet_mission_ship_tuple_pins_destroyer_at_index_nine_not_ten`,
+    `::test_fleet_mission_ship_tuple_raises_on_non_flyable_ship_even_at_zero_count`.
+53. Colonize encodes `targetPlanetId` as the packed `(1<<255) | (galaxy<<24) | (system<<8) |
+    position` coordinate, not a real planet id, and its trailing `uint256` (`randomnessRequestId`
+    in the deployed source, carried by `Action.randomness_request_id`) is always `0` — the contract
+    hard-reverts (`InvalidId`) otherwise —
+    `tests/test_tick.py::test_fleet_mission_colonize_encodes_the_packed_coordinate_target`.
+54. A local Harvest (`target_coordinates` unset) resolves straight to `origin_planet_id` with no
+    snapshot lookup, matching the contract's own `originPlanetId == targetPlanetId` special case; a
+    Transport/Deploy target not among the wallet's own planets in the snapshot raises rather than
+    building calldata against a guessed planet id —
+    `tests/test_tick.py::test_fleet_mission_local_harvest_targets_the_origin_planet_with_no_coordinate_lookup`,
+    `::test_fleet_mission_raises_when_target_coordinates_unresolvable`.
+55. `candidates.generate_transport_candidates` returns `[]` with the default policy
+    (`allow_fleet_noncombat=false`), without cargo-capable ships, or without surplus above
+    `policy.reserves`; with all three satisfied it proposes a `launchFleetMission` Transport to
+    whichever other own planet holds the least of the surplus resource, bounded by
+    `calc.available_cargo` —
+    `tests/test_candidates.py::test_generate_transport_candidates_empty_by_default_policy`,
+    `::test_generate_transport_candidates_empty_without_cargo_ships`,
+    `::test_generate_transport_candidates_empty_without_surplus`,
+    `::test_generate_transport_candidates_moves_surplus_to_the_planet_that_needs_it_most`.
+56. `candidates.generate_harvest_candidates` returns `[]` with the default policy, without a built
+    Recycler, or without a caller-supplied `own_planet_debris` entry for the planet (absent debris
+    data is never treated as "no debris," and never as "harvest anyway") —
+    `tests/test_candidates.py::test_generate_harvest_candidates_empty_by_default_policy`,
+    `::test_generate_harvest_candidates_empty_without_a_recycler`,
+    `::test_generate_harvest_candidates_empty_without_known_debris`,
+    `::test_generate_harvest_candidates_produces_a_local_harvest_action`.
+57. With the default policy (`allow_fleet_noncombat=false`), a real `vd tick --dry-run` against the
+    live API behaves identically to Phase 4: `plan.py`'s new band 5 never fires, and every
+    pre-existing test in `test_guard.py`/`test_tick.py`/`test_candidates.py`/`test_plan.py` passes
+    unmodified except the two documented, justified exceptions (the 17→18 gate-count assertion in
+    `test_guard.py`, and the now-stale `allow_fleet_noncombat` "dead config" warning assertion in
+    `test_tick.py` — both described in `veydrift-agent`'s `CHANGELOG.md`).
 
 ---
 

@@ -631,6 +631,146 @@ def max_planets(astrophysics_level: int) -> int:
 
 
 # --------------------------------------------------------------------------------------
+# Ship movement stats (Phase 5c, docs/SPEC.md §5.4) — fixed lookup tables straight from
+# `packages/contracts/src/libraries/VeydriftCatalog.sol` (pinned commit 701bed35). This is
+# NOT the banned "cost-scaling function" category above: that ban is specifically about
+# per-building/tech/ship/defense *cost* factors, which really are unpublished rationals
+# (`buildingCostFactor`, `VeydriftCatalog.sol:34-45`) that must be read live, never
+# recomputed. Cargo capacity, fuel consumption and speed are a different kind of number —
+# a small, fully-published, `pure` lookup table with no live/per-account state at all
+# (`shipCargoCapacity`/`_shipFuelConsumption`/`_shipSpeed`/`_driveSpeed`,
+# `VeydriftCatalog.sol:146-227,497-503`) — reading it once from source is exactly what
+# this module already does for every other formula it carries (see module docstring).
+# No live API route ever reports these (`/shipyard` gives only `cost`/`durationSeconds`/
+# `count`, references/api-routes.md §3.9), so there is no "prefer the live value" option
+# the way `Entity.cost` has.
+# --------------------------------------------------------------------------------------
+
+#: Ship id -> cargo capacity, level/tech-independent (`shipCargoCapacity`,
+#: `VeydriftCatalog.sol:146-163`). Non-flyable ships (SolarSatellite, Crawler) are `0`,
+#: matching the contract, but they must still never appear in a fleet tuple
+#: (`ids.NON_FLYABLE_SHIPS`, AGENTS.md §7 trap 1) — a `0` capacity here is not permission
+#: to fly them.
+SHIP_CARGO_CAPACITY: dict[int, int] = {
+    ids.Ship.SMALL_CARGO: 5_000,
+    ids.Ship.LIGHT_FIGHTER: 50,
+    ids.Ship.RECYCLER: 20_000,
+    ids.Ship.COLONY_SHIP: 7_500,
+    ids.Ship.LARGE_CARGO: 25_000,
+    ids.Ship.HEAVY_FIGHTER: 100,
+    ids.Ship.CRUISER: 800,
+    ids.Ship.BATTLESHIP: 1_500,
+    ids.Ship.BOMBER: 500,
+    ids.Ship.SOLAR_SATELLITE: 0,
+    ids.Ship.DESTROYER: 2_000,
+    ids.Ship.DEATHSTAR: 1_000_000,
+    ids.Ship.BATTLECRUISER: 750,
+    ids.Ship.REAPER: 7_000,
+    ids.Ship.PATHFINDER: 12_000,
+    ids.Ship.CRAWLER: 0,
+}
+
+_SHIP_FUEL_CONSUMPTION_FLAT: dict[int, int] = {
+    ids.Ship.LIGHT_FIGHTER: 20,
+    ids.Ship.RECYCLER: 300,
+    ids.Ship.COLONY_SHIP: 1_000,
+    ids.Ship.LARGE_CARGO: 50,
+    ids.Ship.HEAVY_FIGHTER: 75,
+    ids.Ship.CRUISER: 300,
+    ids.Ship.BATTLESHIP: 500,
+    ids.Ship.BOMBER: 1_000,
+    ids.Ship.DESTROYER: 1_000,
+    ids.Ship.DEATHSTAR: 1,
+    ids.Ship.BATTLECRUISER: 250,
+    ids.Ship.REAPER: 1_000,
+    ids.Ship.PATHFINDER: 300,
+}
+
+
+def ship_fuel_consumption(ship_id: int, impulse_drive_level: int) -> int:
+    """`VeydriftCatalog.sol:176-193` (`_shipFuelConsumption`). Only Small Cargo's
+    consumption depends on drive tech (Impulse Drive >= 5 switches it from 10 to 20 — the
+    contract's own note is that this reflects the faster Impulse-Drive route, not a
+    scaling formula). Raises `ValueError` for a non-flyable ship id (SolarSatellite,
+    Crawler) or an unknown id, matching the contract's `revert InvalidId()` — never
+    silently returns 0, which would look like "free fuel" rather than "cannot fly"."""
+    if ship_id == ids.Ship.SMALL_CARGO:
+        return 20 if impulse_drive_level >= 5 else 10
+    if ship_id in _SHIP_FUEL_CONSUMPTION_FLAT:
+        return _SHIP_FUEL_CONSUMPTION_FLAT[ship_id]
+    raise ValueError(f"ship id {ship_id} cannot fly (no fuel consumption defined) or is unknown")
+
+
+def _drive_speed(base_speed: int, drive_level: int, percent_per_level: int) -> int:
+    """`VeydriftCatalog.sol:497-503` (`_driveSpeed`): ``base * (100 + level *
+    percent_per_level) / 100``, integer division matching Solidity's toward-zero `/` for
+    these always-non-negative inputs."""
+    return (base_speed * (100 + drive_level * percent_per_level)) // 100
+
+
+def ship_speed(
+    ship_id: int,
+    combustion_drive_level: int,
+    impulse_drive_level: int,
+    hyperspace_drive_level: int,
+) -> int:
+    """`VeydriftCatalog.sol:194-227` (`_shipSpeed`). Each flyable ship's base speed scales
+    with exactly one drive technology (Small Cargo and Bomber each have a tech-level
+    threshold that switches which drive applies — reproduced exactly, not approximated).
+    Raises `ValueError` for a non-flyable or unknown ship id, matching the contract's
+    `revert InvalidId()`."""
+    if ship_id == ids.Ship.SMALL_CARGO:
+        if impulse_drive_level >= 5:
+            return _drive_speed(10_000, impulse_drive_level, 20)
+        return _drive_speed(5_000, combustion_drive_level, 10)
+    if ship_id == ids.Ship.LIGHT_FIGHTER:
+        return _drive_speed(12_500, combustion_drive_level, 10)
+    if ship_id == ids.Ship.RECYCLER:
+        return _drive_speed(2_000, combustion_drive_level, 10)
+    if ship_id == ids.Ship.COLONY_SHIP:
+        return _drive_speed(2_500, impulse_drive_level, 20)
+    if ship_id == ids.Ship.LARGE_CARGO:
+        return _drive_speed(7_500, combustion_drive_level, 10)
+    if ship_id == ids.Ship.HEAVY_FIGHTER:
+        return _drive_speed(10_000, impulse_drive_level, 20)
+    if ship_id == ids.Ship.CRUISER:
+        return _drive_speed(15_000, impulse_drive_level, 20)
+    if ship_id == ids.Ship.BATTLESHIP:
+        return _drive_speed(10_000, hyperspace_drive_level, 30)
+    if ship_id == ids.Ship.BOMBER:
+        if hyperspace_drive_level >= 8:
+            return _drive_speed(5_000, hyperspace_drive_level, 30)
+        return _drive_speed(4_000, impulse_drive_level, 20)
+    if ship_id == ids.Ship.DESTROYER:
+        return _drive_speed(5_000, hyperspace_drive_level, 30)
+    if ship_id == ids.Ship.DEATHSTAR:
+        return _drive_speed(100, hyperspace_drive_level, 30)
+    if ship_id == ids.Ship.BATTLECRUISER:
+        return _drive_speed(10_000, hyperspace_drive_level, 30)
+    if ship_id == ids.Ship.REAPER:
+        return _drive_speed(7_000, hyperspace_drive_level, 30)
+    if ship_id == ids.Ship.PATHFINDER:
+        return _drive_speed(12_000, hyperspace_drive_level, 30)
+    raise ValueError(f"ship id {ship_id} cannot fly (no speed formula defined) or is unknown")
+
+
+def ship_movement_stats(
+    ship_id: int,
+    combustion_drive_level: int,
+    impulse_drive_level: int,
+    hyperspace_drive_level: int,
+) -> tuple[int, int, int]:
+    """``(cargo_capacity, fuel_consumption, speed)`` — `VeydriftCatalog.sol:166-172`
+    (`shipMovementStats`), the single entry point `candidates.py`'s logistics generators
+    use rather than calling the three lookups above separately."""
+    return (
+        SHIP_CARGO_CAPACITY[ship_id],
+        ship_fuel_consumption(ship_id, impulse_drive_level),
+        ship_speed(ship_id, combustion_drive_level, impulse_drive_level, hyperspace_drive_level),
+    )
+
+
+# --------------------------------------------------------------------------------------
 # `vd calc verify` — the one command in this module that touches the network. Re-runs
 # docs/NOTES.md §12.4's three duration checks (research / ship / building divisors) live,
 # using each entity's *live* cost and level from the API — never a recomputed cost.
