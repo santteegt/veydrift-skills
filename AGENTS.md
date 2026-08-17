@@ -272,11 +272,21 @@ enough to call out here specifically, not a duplicate of that ledger.
   emit it, not just the shipyard-idle rung — it missed one path once already
   (`test_plan.py::test_planet_hot_falls_back_to_solar_plant_when_ships_disallowed` pins
   the fix). If you add a new path that can produce a `ShipAction`, gate it explicitly.
-- **Cost scaling, queue behaviour, and lazy settlement above level 0 are unobserved.**
-  The account this was built and tested against has taken zero on-chain actions — every
-  level is 0, every queue is idle. Formulas are verified against contract source and
-  live level-0 data only. Any planner path that assumes a populated queue or a
-  non-trivial cost curve is correct by derivation, not by observation.
+- **Cost scaling, queue behaviour, and lazy settlement above level 0 are unobserved by
+  this codebase** — not because the account is at zero state; it isn't. Verified on-chain
+  2026-08-17 (`cast call buildingLevel(uint256,uint8)` against the deployed contract,
+  planet 664): Metal Mine 10, Crystal Mine 9, Deuterium Synthesizer 5, Solar Plant 11,
+  Robotics Factory 2, Shipyard 1, Research Lab 1; `cast call technologyLevel(address,uint8)`
+  gives Energy Technology 2, Computer 0. That account was played by hand through the game
+  UI, not through this codebase's `walletctl` — the separate claim that this codebase has
+  never itself submitted a transaction remains true (`docs/SPEC.md` §11's first bullet,
+  `README.md`'s status section). What actually remains unverified: this system has never
+  proposed, guarded or sent an action that resolved above level 0, so any planner path
+  that assumes a populated queue or a non-trivial cost curve is correct by derivation, not
+  by this system's own observation. (`vd calc verify` does cross-check three duration
+  formulas against live API data at whatever level the account is currently at and passes
+  — confirmed 2026-08-17 — so that narrow slice is live-verified; the broader claim about
+  queues, cost scaling and lazy settlement above level 0 stands.)
 
 ## 11. Pointers into `docs/`
 

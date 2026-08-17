@@ -830,8 +830,8 @@ Rendered with `rich`:
   PROPOSE   startBuildingUpgrade(664, 3 SolarPlant)  ->  level 3 → 4
     cost:   M 225  C 75  D 0        (affordable, 12% of holdings)
     why:    mines at 3 require 157 energy; solar 3 produces 79. Energy-first invariant.
-    guards: 15/16 substantive pass · tier: block (structural — advisor never submits)
-    tx:     to 0xf397…755d  data 0x…  (NOT SUBMITTED — tier 1)
+    guards: 15/18 pass (block)
+    tx:     to 0xf397…755d  data 0x…  (NOT SUBMITTED — tier advisor)
   next:     Metal Mine 3→4, blocked on energy until Solar 5
 ```
 
@@ -847,6 +847,22 @@ Rendered with `rich`:
 > firing** (affordability, energy, storage, gas, reserve…). The full verdict list still goes to
 > `proposals.jsonl` — that remains the audit artifact — but the human-facing summary must not treat
 > "tier 1 declined to submit, as designed" as evidence of anything.
+>
+> **Correction, 2026-08-17.** The example above previously read `guards: 15/16 substantive pass ·
+> tier: block (structural — advisor never submits)` and `tx: ... (NOT SUBMITTED — tier 1)`. Both
+> numbers and the wording were stale on two counts. First, the gate total has grown from 16 to 18
+> since this example was last touched (`prerequisites` added Phase 1, `mission_type` added Phase
+> 5c — §5.5). Second, `tick.py`'s actual renderer (`tick.py:985`,
+> `f"  guards: {guard_report.passed}/{guard_report.total} pass ({guard_report.decision.value})"`)
+> has never split "substantive" from "structural" in the printed line itself — that distinction
+> lives in `guard.is_structural_tier_block`, not in this string. Confirmed against a live
+> `vd tick --dry-run` run 2026-08-17 (prints `guards: 12/18 pass (block)` and
+> `NOT SUBMITTED -- tier advisor` for a real, differently-shaped proposal) and against
+> `guard.py`'s own `is_structural_tier_block` docstring, which documents the canonical routine
+> tier-1 case on an unlocked entity as exactly `guards: 15/18 pass (block)` — `tier` (BLOCK),
+> `gas` and `eth_floor` (ESCALATE, no estimate/balance available yet at tier 1) are the 3 gates
+> that don't pass. The example above now uses that exact figure and the real `tier {value}`
+> wording rather than the historical `16/16`-derived `15/16`/`tier 1` phrasing.
 
 | Sink | Contents | Mutability |
 | --- | --- | --- |
@@ -1330,11 +1346,27 @@ missions and colonisation (§5.4/§5.5/§6.4):**
 | --- | --- |
 | Contract upgraded mid-build (UUPS) | `verify-abi` every tick; blocks writes on drift |
 | API shape changes | Summaries degrade rather than crash; unknown fields ignored, missing required fields → explicit error |
-| Zero-state account | Cost scaling, queue behaviour and lazy settlement are **unobserved**. Every planner path depending on level >0 is fixture-tested and marked unverified-against-live in `strategy-playbook.md` |
+| Formulas unverified by this codebase above level 0 | Cost scaling, queue behaviour and lazy settlement above level 0 are **unobserved by this system acting** — this codebase has never itself proposed, guarded or sent an action that resolved above level 0. Every planner path depending on level >0 is fixture-tested and marked unverified-against-live in `strategy-playbook.md` |
 | `skills add` copy semantics bite | Criteria 13 and 17 test it directly |
 | Keystore password handling | Never in argv, never logged, prompt by default; env var documented as the weaker option |
 | Provider research goes stale | Dated, with the address-binding constraint as the durable filter |
 | Overconfidence from advisory ticks | `vd readiness` reports guardrail fires and proposal/execution *divergence*, not a green count |
+
+> **Correction, 2026-08-17.** This row previously read "Zero-state account" and asserted the
+> account itself was at level 0 ("every level is 0, every queue is idle"). That is stale.
+> Verified on-chain 2026-08-17 via `cast call buildingLevel(uint256,uint8)`/
+> `technologyLevel(address,uint8)` against the deployed contract (planet 664, wallet
+> `0x224aba5d489675a7bd3ce07786fada466b46fa0f`): Metal Mine 10, Crystal Mine 9, Deuterium
+> Synthesizer 5, Solar Plant 11, Robotics Factory 2, Shipyard 1, Research Lab 1, Energy
+> Technology 2, Computer 0 — the account has been played by hand through the game UI at tier
+> 1. The distinct, still-true claim is that *this codebase* has never submitted a transaction
+> or observed its own proposals resolve above level 0 (§11's first bullet below) — hand-played
+> state and this-codebase-verified state are two different facts, and only the second was ever
+> the one this project depends on. `vd calc verify` does cross-check three duration formulas
+> against live API data at the account's current (non-zero) level and passes, confirmed
+> 2026-08-17 — narrower live evidence than "unverified above level 0" alone conveys, though it
+> covers only those three formulas, not cost scaling, queue behaviour or lazy settlement
+> generally (see §11's bullet on this, also corrected 2026-08-17).
 
 ---
 
@@ -1346,7 +1378,15 @@ missions and colonisation (§5.4/§5.5/§6.4):**
 - ~~EIP-7702 support on Base is inferred from a block header field~~ — **resolved 2026-08-12**:
   confirmed by a landed type-0x04 transaction (§6.1). Nothing in this codebase uses 7702; it is a
   future option, not a dependency.
-- **Cost scaling, queue behaviour and lazy settlement are unobserved** — the account is at zero state.
+- **Cost scaling, queue behaviour and lazy settlement above level 0 have never been observed
+  by this codebase acting.** Not because the account is at zero state — it isn't; see the
+  correction under §10's risk table — but because no proposal this codebase generated has
+  ever been submitted and watched resolve above level 0. `vd calc verify` does cross-check
+  three duration formulas (Energy Technology research, Small Cargo ship production, Metal
+  Mine building) against live API data every run and passes, confirmed 2026-08-17, so those
+  three specifically are now live-verified beyond level 0; the broader claim — cost scaling,
+  queue behaviour, lazy settlement, and every other formula above level 0 — still holds
+  unverified by this codebase.
 - **`protectedResources` semantics remain unconfirmed**; no loot model is built on them.
 - **No wallet provider beyond local key custody has been evaluated in depth** — that is WP4b's output,
   and it is a research document, not a recommendation to deploy.
@@ -1355,10 +1395,12 @@ missions and colonisation (§5.4/§5.5/§6.4):**
   revert.** Every table entry was read from source, spot-checked in `tests/test_techtree.py`
   against the Solidity, and cross-checked for the two known transcription traps (the
   9-arg vs. 5-arg `requireBuilding` overload; conjunction vs. disjunction in the source's
-  `||` clauses) — but this account has taken zero on-chain actions (§10's "Zero-state
-  account" risk), so no proposal this table declares "unlocked" has ever actually been
-  submitted and observed to succeed, and no proposal it declares "locked" has been
-  confirmed to revert for exactly the stated reason. The shield-dome/missile-silo cap
+  `||` clauses) — but no proposal this table declares "unlocked" or "locked" has ever
+  actually been submitted *through this codebase* and observed to succeed or revert for
+  exactly the stated reason (§10's corrected risk-table row above). The account itself has
+  since been played by hand to non-trivial levels outside this codebase, but that play was
+  never mediated by `veydrift-agent`/`veydrift-wallet`, so it provides no evidence about this
+  system's own correctness here. The shield-dome/missile-silo cap
   arithmetic carries the same caveat, plus a narrower one of its own: it is derived from a
   single `QueueEntry` per `PlanetSnapshot` (no backlog list — `models.py` is frozen), so a
   real queue backlog deeper than one entry would be undercounted, not overcounted.
@@ -1366,7 +1408,9 @@ missions and colonisation (§5.4/§5.5/§6.4):**
   live-verified.** `generate_ship_target_candidates`/`generate_defense_target_candidates`/
   `generate_infrastructure_candidates` are exercised only against synthetic fixtures
   (`tests/test_candidates.py`'s `_ready_snapshot`), never a live account with a Shipyard ≥ 5 or a
-  Missile Silo ≥ 2 — the zero-state account this project was built against (§10) has neither. The
+  Missile Silo ≥ 2 — the account this project was built against has neither (verified on-chain
+  2026-08-17: Shipyard 1, Missile Silo 0; no longer the zero-state account of §10's original
+  framing, but still short of both thresholds). The
   crawler boost formula (`calc.crawler_boost_bps`) and the 8-per-mine-level/5,000-bps caps are
   contract-derived and unit-tested, but no crawler has ever actually been produced and observed to
   move real `productionPerHour`.
