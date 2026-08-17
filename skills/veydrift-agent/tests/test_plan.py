@@ -628,5 +628,90 @@ def test_empty_strategy_targets_reproduce_phase_2_hot_planet_output_exactly():
     assert action.quantity == 1
 
 
+# --------------------------------------------------------------------------------------
+# Phase 4 of the general-strategy-engine program (docs/SPEC.md §5.4 "Phase 4"): the new
+# rung 8b, at the `plan_next_action` ladder level. planet_664.json is unsuitable here --
+# its Solar Plant is always a legal, unlocked band-2 candidate, which would win before
+# rung 8b is ever reached -- so this uses a deliberately minimal planet with *no* mine,
+# energy, research, ship or defense data at all, only the single building the unlock
+# chain needs, so bands 1-3 all naturally produce nothing and rung 8b is genuinely
+# reached, not merely reachable in isolation.
+# --------------------------------------------------------------------------------------
+
+
+def _minimal_planet_for_unlock_chain_only() -> PlanetSnapshot:
+    return PlanetSnapshot(
+        planet_id=42,
+        buildings=[
+            Entity(id=ids.Building.ROBOTICS_FACTORY, name="Robotics Factory", level=0, cost=Resources(metal=400, crystal=120, deuterium=200)),
+        ],
+        # A live (count-reported) Small Cargo entity is required for
+        # `generate_ship_target_candidates`'s -- and `generate_unlock_chain_candidates`'s
+        # own, identical -- fail-closed-on-absent-entity rule: a `ship_targets` entry the
+        # snapshot never reported a count for is skipped, not treated as "0 built".
+        ships=[Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=0, cost=Resources(metal=2_000, crystal=2_000))],
+        defenses=[],
+    )
+
+
+def test_unlock_chain_rung_fires_only_when_bands_1_through_3_find_nothing():
+    from veydrift_agent.models import EntityTarget, StrategyCfg
+
+    planet = _minimal_planet_for_unlock_chain_only()
+    snapshot = Snapshot(taken_at="2026-08-16T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(
+        planets=[42],
+        actions=ActionsCfg(allow_building=True, allow_research=False, allow_defense=False, allow_ships=False),
+        strategy=StrategyCfg(ship_targets=[EntityTarget(name="Small Cargo", count=1)]),
+    )
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "8b:unlock-chain"
+    assert action.kind == ActionKind.BUILD
+    assert action.function == "startBuildingUpgrade"
+    assert action.entity_id == ids.Building.ROBOTICS_FACTORY
+    assert action.target_level == 1
+    assert "Small Cargo" in action.rationale
+
+
+def test_unlock_chain_rung_never_fires_with_no_declared_targets():
+    """Same minimal, otherwise-empty planet as the previous test, but with no
+    `ship_targets`/`defense_targets`/`research_priority` declared -- proves rung 8b is
+    reachable in principle here (nothing else on this planet ever produces a winner) and
+    still correctly falls through to the final explicit NO-OP when there is nothing to
+    unlock toward, exactly the Phase 2/3 empty-targets safety property extended to
+    Phase 4."""
+    planet = _minimal_planet_for_unlock_chain_only()
+    snapshot = Snapshot(taken_at="2026-08-16T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(
+        planets=[42],
+        actions=ActionsCfg(allow_building=True, allow_research=False, allow_defense=False, allow_ships=False),
+    )
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "9:no-match"
+    assert action.kind == ActionKind.NOOP
+
+
+def test_unlock_chain_rung_never_reached_when_an_economic_candidate_exists():
+    """A locked ship target coexists with planet_664's always-available Solar Plant
+    pick -- band 2 must win, rung 8b must never even be consulted (docs/SPEC.md §5.4
+    Phase 4: "must not displace a scored economic candidate")."""
+    from veydrift_agent.models import EntityTarget, StrategyCfg
+
+    snapshot = load_snapshot("planet_664.json")
+    policy = make_policy(
+        planets=[664],
+        strategy=StrategyCfg(ship_targets=[EntityTarget(name="Small Cargo", count=1)]),
+    )
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "6:building-queue-empty"
+    assert action.entity_id == ids.Building.SOLAR_PLANT
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

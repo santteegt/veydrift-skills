@@ -148,8 +148,9 @@ verification.
 | `http.py` | 199 | The API client: `httpx`, `tenacity` retry (5xx/network only, never 4xx), a disk cache under `$VEYDRIFT_HOME/cache/` honoring per-route max-age. |
 | `read.py` | 830 | One `vd read` subcommand per API route (18 targets). `--summary` mode is the default and is capped near 2KB; `battle-reports`/`highscores` refuse to print to stdout at all — `--out` is mandatory, since they run 60KB–2.2MB uncompressed. |
 | `calc.py` | 737 | Pure formulas, no network calls, one docstring citation per function. Contains **no cost-scaling function** by design — live cost always comes from the API's own `cost` field, since the per-building factors are unpublished rationals and recomputing them is exactly how affordability checks go wrong silently. |
-| `plan.py` | ~250 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's three-band precedence calling into `candidates.py`. As of 2026-08-16 (Phase 2 of the general-strategy-engine program) it no longer decides *which entity*; that moved out. |
-| `candidates.py` | ~1400 | New in Phase 2, roughly doubled in Phase 3 (2026-08-16, general-strategy-engine program). The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`, plus Phase 3's `infrastructure` and `crawler`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order when nothing new is configured. The energy-first invariant lives here: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. Phase 3 adds declared-target stock-keeping for ships/defenses (`ship_targets`/`defense_targets`), priority ordering for research/infrastructure (`research_priority`/`building_priority`), and two new scored/unscored families (Crawler, proactive storage) — every one of the four new `StrategyCfg` fields defaults empty and reproduces Phase 2's output exactly when left unset. |
+| `plan.py` | ~320 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's four-band precedence calling into `candidates.py`. As of 2026-08-16 (Phase 2 of the general-strategy-engine program) it no longer decides *which entity*; that moved out. Phase 4 (same date) adds rung `8b`, the ladder's fourth and final band. |
+| `candidates.py` | ~1750 | New in Phase 2, roughly doubled in Phase 3, gained a fifth family in Phase 4 (all 2026-08-16, general-strategy-engine program). The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`, Phase 3's `infrastructure` and `crawler`, Phase 4's `unlock`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order when nothing new is configured. The energy-first invariant lives here: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. Phase 3 adds declared-target stock-keeping for ships/defenses (`ship_targets`/`defense_targets`), priority ordering for research/infrastructure (`research_priority`/`building_priority`), and two new scored/unscored families (Crawler, proactive storage) — every one of the four new `StrategyCfg` fields defaults empty and reproduces Phase 2's output exactly when left unset. Phase 4 adds `generate_unlock_chain_candidates`/`select_unlock_chain_candidate`, `score=None` always, driven by `techtree.next_step_toward` rather than any new policy field. |
+| `techtree.py` | ~640 | On-chain prerequisite table for all four entity families, transcribed from the deployed contract (Phase 1). `unmet()` is the fail-closed core every other module's legality checks build on (`plan.py`/`candidates.py` never propose a locked entity; `guard.py`'s `prerequisites` gate independently re-checks). Phase 4 adds `next_step_toward` — a breadth-first walk of `unmet()`'s own output, backwards, to find the shallowest currently-buildable prerequisite toward a locked target; no cost math, same "compare levels only" discipline as `unmet()`. |
 | `guard.py` | 640 | 16 guardrail gates, every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. |
 | `state.py` | 287 | `$VEYDRIFT_HOME` resolution, `AgentState` (pending txs, cumulative gas, revert counts), the tick lockfile, `KILLSWITCH` detection. |
 | `tick.py` | 978 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`. The single largest module, and where both criticals a first-pass judge review found actually lived (§10, §11). |
@@ -192,8 +193,9 @@ verification.
 ```
 
 The decision ladder inside step 5, first match wins. Rungs 0-4 are vetoes; rungs 5-9 are
-a three-band candidate pipeline (`candidates.py`, added 2026-08-16, Phase 2 of the
-general-strategy-engine program — see §5's module table):
+a four-band candidate pipeline (`candidates.py`, added 2026-08-16, Phase 2 of the
+general-strategy-engine program, extended to a fourth band by Phase 4, same date — see
+§5's module table):
 
 ```
 0. KILLSWITCH present               -> HALT
@@ -201,7 +203,7 @@ general-strategy-engine program — see §5's module table):
 2. pending tx unreconciled          -> NO-OP, reconcile first
 3. mission Resolving > 60s          -> resolveFleetMission (permissionless, free)
 4. incoming hostile fleet           -> ESCALATE, no proposal at all
-5-9. generate -> filter -> score -> select, three bands in order:
+5-9. generate -> filter -> score -> select, four bands in order:
      1. deadline-driven      -- storage overflow: spend it, or build the matching storage
                                  (plus, Phase 3: proactive storage as an always-visible
                                  Band-2 alternative, not a Band-1 winner)
@@ -213,6 +215,10 @@ general-strategy-engine program — see §5's module table):
                                  fallback), then ships/defense (Phase 3: `ship_targets`/
                                  `defense_targets` stock-keeping, plus scored Crawler),
                                  gated on economy-on-track
+     4. unlock-chain (8b)    -- Phase 4: the shallowest buildable prerequisite toward a
+                                 locked `ship_targets`/`defense_targets`/`research_priority`
+                                 entry, `score=None`, reached only when bands 1-3 found
+                                 nothing for any target planet
      else                    -> NO-OP, explicit reason
 ```
 
@@ -233,6 +239,31 @@ economically comparable (`score_payback`), and the policy declares intent for ev
 else. `[]` on all four is this phase's own acceptance criterion: byte-identical output to
 Phase 2 on the same fixtures, pinned in `tests/test_candidates.py`/`tests/test_plan.py`
 and by every pre-Phase-3 test passing unmodified.
+
+**Phase 4 (2026-08-16) — a locked declared target proposes its own build-up.** Phase 3
+made every entity reachable *once its prerequisites are already met*; a `ship_targets`/
+`defense_targets`/`research_priority` entry the account cannot build **yet** was still a
+dead end — legal to want, correctly never proposed (every generator refuses an entity the
+contract would revert on), and nothing ever proposed the prerequisite that would unlock
+it. New `techtree.next_step_toward(family, entity_id, *, building_levels,
+technology_levels) -> UnlockStep | None` walks `unmet()`'s output backwards, breadth-first,
+to find the shallowest requirement in the chain that is itself buildable right now — its
+own `unmet()` is empty *and* its own current level is known (an
+`UnmetRequirement(have=None)` can never become a confidently-chosen step; the design
+brief's "fails closed on absent data" invariant, extended to graph traversal). Cycle-safe
+(a `visited` node set) and depth-bounded defensively, though the real tables are asserted
+acyclic by test. `candidates.generate_unlock_chain_candidates` / `select_unlock_chain_
+candidate` turn the result into ladder rung `8b`, `score=None` always — an unlock step's
+value is entirely in what it eventually enables, which this codebase has already refused
+to price three times over (no cost-scaling function, no ROI verdict on `alternatives`, no
+activity-classification score). Deliberately the *last* rung: it must never outrank the
+storage-overflow deadline and must never displace a scored economic or policy-declared
+candidate, so it is checked only once every earlier rung has produced nothing at all — not
+folded into `building_priority`'s own higher-precedence path, which is unaffected.
+`guard.py`'s `prerequisites` gate needed no code change (it keys off `Action.kind`, not the
+generator that produced it), confirmed by a new test rather than merely assumed. Empty
+`ship_targets`/`defense_targets`/`research_priority` reproduces Phase 3's output exactly —
+this phase's own acceptance criterion.
 
 `--dry-run` is the default at tier 1 and cannot be disabled there — `tick._effective_dry_run()`
 forces it regardless of the flag whenever `policy.tier is Tier.ADVISOR`. It's doubly

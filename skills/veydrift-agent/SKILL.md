@@ -93,7 +93,7 @@ which is `veydrift-wallet`'s decision, not this skill's.
 
 `vd plan run` evaluates these in order; the **first match wins**, and the pipeline always
 falls back to an explicit NO-OP if nothing matched (`Action.rationale` is never empty).
-Rungs 0-4 are vetoes; rungs 5-9 are a three-band candidate pipeline (`candidates.py`,
+Rungs 0-4 are vetoes; rungs 5-9 are a four-band candidate pipeline (`candidates.py`,
 2026-08-16 — see `references/strategy-playbook.md` for the full derivation):
 
 0. KILLSWITCH present → HALT
@@ -101,10 +101,13 @@ Rungs 0-4 are vetoes; rungs 5-9 are a three-band candidate pipeline (`candidates
 2. pending tx unreconciled → NO-OP, reconcile first
 3. a mission has been Resolving > 60s → `resolveFleetMission` (permissionless, free)
 4. incoming hostile fleet → ESCALATE, no proposal
-5-9. generate → filter → score → select, three bands in order:
+5-9. generate → filter → score → select, four bands in order:
      1. deadline-driven — storage overflow: spend it, or build the matching storage
      2. economically scored — building upgrade, ascending payback hours
      3. policy-declared — research, then ships/defense, gated on economy-on-track
+     4. unlock-chain (rung 8b) — the shallowest buildable prerequisite toward a locked
+        `ship_targets`/`defense_targets`/`research_priority` entry, only when nothing
+        above found anything at all — see `references/strategy-playbook.md` §12
      else → NO-OP with an explicit reason
 
 The economic band's actual choices — which mine, which energy source — are **derived from

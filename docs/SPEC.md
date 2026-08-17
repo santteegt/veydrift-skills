@@ -312,7 +312,8 @@ asserts universe speed is still 1. Non-zero exit on drift.
 
 Input: snapshot + policy. Output: **zero or one** `Action` (pydantic model) plus a machine-readable
 rationale. Rungs 0-4 are vetoes (safety, not strategy) and always run first, first match wins; rungs
-5-9 are a three-band candidate pipeline (below):
+5-9 are a four-band candidate pipeline (below — a fourth band, "unlock-chain," was added in Phase 4;
+see the Phase 4 note further down):
 
 ```
 0. KILLSWITCH present                -> HALT
@@ -320,10 +321,15 @@ rationale. Rungs 0-4 are vetoes (safety, not strategy) and always run first, fir
 2. pending tx unreconciled           -> NO-OP, reconcile first
 3. mission Resolving > 60s           -> resolveFleetMission   (permissionless, free)
 4. incoming hostile fleet            -> ESCALATE, no proposal (fleet-visibility.incoming)
-5-9. generate -> filter -> score -> select over three bands, in order:
+5-9. generate -> filter -> score -> select over four bands, in order:
      1. deadline-driven      -- storage overflow: spend it, or build the matching storage
      2. economically scored  -- building upgrade, ascending payback hours
+        (also carries policy.strategy.building_priority infrastructure picks, which win
+        outright over a scored candidate when declared)
      3. policy-declared      -- research, then ships/defense, gated on economy-on-track
+     4. unlock-chain (rung 8b) -- the shallowest buildable prerequisite toward a locked
+        ship_targets/defense_targets/research_priority entry, only when bands 1-3 found
+        nothing at all
      else                    -> NO-OP with an explicit reason
 ```
 
@@ -411,6 +417,74 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 > defaults to empty, and empty reproduces Phase 2's planner output exactly — pinned directly in
 > `tests/test_candidates.py`/`tests/test_plan.py` and implicitly by every pre-Phase-3 test passing
 > unmodified (§9 AC25-31).
+
+> **Phase 4 of the general-strategy-engine program, 2026-08-16 — the engine works out the
+> build-up, not just the final entity.** Phase 3 made every entity *reachable when its
+> prerequisites are already met*, but a declared `ship_targets`/`defense_targets`/
+> `research_priority` entry the account cannot build **yet** (e.g. Small Cargo, which
+> needs Shipyard 2 and Combustion Drive 2 on a fresh planet) was declared, legal to want,
+> and permanently unreachable — every generator correctly refuses to propose it (never
+> propose an entity the contract would revert on), and nothing ever proposed the
+> *prerequisite* that would unlock it. Phase 4 closes that loop:
+>
+> - **`techtree.next_step_toward(family, entity_id, *, building_levels, technology_levels)
+>   -> UnlockStep | None`** — new pure function, `techtree.py`. Breadth-first walk of
+>   `unmet()`'s output *backwards*: given a locked target, finds the shallowest requirement
+>   in its dependency chain that is itself buildable right now (its own `unmet()` is empty
+>   AND its own current level is known — an `UnmetRequirement(have=None)` can never become
+>   a confidently-chosen step, "surface it as unresolvable rather than acting on it").
+>   Cycle-safe (a `visited` node set) and depth-bounded (`_MAX_UNLOCK_DEPTH = 32`) against a
+>   malformed table, though the real tables are asserted acyclic by test rather than merely
+>   assumed so. Returns `None` when the target is already unlocked, or when every branch
+>   bottoms out unresolvable. No cost math, no `resource_weights` — this function only
+>   compares levels, same discipline `unmet()` itself already follows.
+> - **`candidates.generate_unlock_chain_candidates`** — new generator. For every *locked*
+>   declared target in `ship_targets`/`defense_targets`/`research_priority` (not
+>   `building_priority`, which already has its own first-class reachability path), walks
+>   `next_step_toward` and emits the result as a `Candidate`, `score=None` always — an
+>   unlock step's value is entirely in what it eventually enables, exactly the unbounded-
+>   future-plan assumption this codebase has already refused three times over (no cost-
+>   scaling function, no ROI verdict, no activity-classification score). Two declared
+>   targets sharing one unmet prerequisite are proposed once, deduplicated by the step's
+>   own `(family, entity_id)`. Gated on the matching `policy.actions.allow_building`/
+>   `allow_research` flag and the matching queue being idle, same as every other family
+>   that can emit that action kind. Ordered by weighted cost ascending
+>   (`policy.strategy.resource_weights`, live `Entity.cost` only, never recomputed) when
+>   more than one locked target resolves to a different step; a step whose cost is
+>   unavailable sorts after every known-cost one, never guessed.
+> - **`candidates.select_unlock_chain_candidate` / `plan.py` rung `8b`** — a fourth ladder
+>   band, reached *only* when bands 1-3 (storage overflow, economically-scored building/
+>   infrastructure, policy-declared research/ships/defense) produced nothing at all for any
+>   target planet. This is deliberate and load-bearing, not incidental: an unlock-chain
+>   candidate must never outrank the deadline-driven storage-overflow band and must never
+>   displace a scored economic candidate — folding it into rung 6's `building_priority`
+>   branch (which *does* win outright over a scored candidate, by design, for a declared
+>   `building_priority`) would violate that. Giving it its own rung, checked last, makes the
+>   precedence a property of the ladder's control flow rather than a flag this function
+>   would have to remember to check.
+> - **`Action.expected_effect`** carries the *remaining* chain after this step (e.g. what
+>   else is still needed toward the declared target), so `strategy.md`/`proposals.jsonl`
+>   show the multi-tick plan implied by a declared target without the engine ever
+>   committing to it — every tick re-derives from live state from scratch, same as every
+>   other rung.
+> - **`guard.py`'s `prerequisites` gate needed no change.** It derives `family` from
+>   `Action.kind` (`BUILD -> BUILDING`, `RESEARCH -> RESEARCH`), not from which
+>   `candidates.py` generator produced the action, so it already independently re-verifies
+>   an unlock-chain step's legality — confirmed by test, not merely assumed
+>   (`tests/test_guard.py::test_prerequisites_gate_passes_an_unlock_chain_step_from_
+>   candidates_py`).
+>
+> **This phase's own acceptance criterion, again zero behaviour change with empty
+> targets**: with no declared `ship_targets`/`defense_targets`/`research_priority`,
+> `generate_unlock_chain_candidates` returns `[]` and rung 8b never fires — pinned directly
+> in `tests/test_candidates.py`/`tests/test_plan.py`, and every pre-Phase-4 test in
+> `test_plan.py`/`test_candidates.py`/`test_guard.py`/`test_tick.py` passes unmodified
+> (§9 AC33-41).
+>
+> **Not delivered by this phase, on purpose**: no ROI number for an unlock step (see
+> above); no commitment to the rest of a multi-tick plan (re-derived live every tick, never
+> queued); no change to `policy.strategy.building_priority`'s own reachability path or
+> precedence.
 
 ### 5.5 `vd guard` — guardrail evaluation
 
@@ -545,6 +619,12 @@ never mean silence" posture `Policy`'s `extra="forbid"` already takes at the key
 target *values*. `research_priority`/`building_priority` are plain ordered name lists, resolved the
 same way. All four default to `[]`, and `[]` reproduces Phase 2's behaviour byte-for-byte — this is
 Phase 3's own acceptance criterion (§9 AC25).
+
+Since Phase 4 (2026-08-16), a `ship_targets`/`defense_targets`/`research_priority` entry the account
+cannot build *yet* is no longer a dead end: `plan.py` rung `8b` proposes the shallowest unmet
+prerequisite toward it instead, when nothing else on the ladder found anything (see §5.4's Phase 4
+note). `building_priority` is unaffected — it already has its own reachability path and does not feed
+rung `8b`.
 
 ### 5.7 `vd tick` — the loop entrypoint
 
@@ -930,6 +1010,48 @@ reachable (§5.4/§5.6):**
 32. `missile_silo_level is None` is never read as `0` by the new `candidates.py` cap-check code (a
     separate failure mode from `guard.py`'s own, already-covered, building-level-sourced check) —
     `tests/test_candidates.py::test_defense_target_missile_silo_level_none_fails_closed_not_as_zero`.
+
+**Phase 4 of the general-strategy-engine program, added 2026-08-16 — a locked declared target
+proposes its own unlock chain (§5.4):**
+
+33. `techtree.next_step_toward` returns the shallowest currently-buildable prerequisite for a
+    hand-worked chain (Small Cargo -> Shipyard 2 + Combustion Drive 2 -> Shipyard needs Robotics
+    Factory 2 -> Robotics Factory needs nothing), not the locked immediate requirement and not the
+    original target — `tests/test_techtree.py::test_next_step_toward_hand_worked_small_cargo_chain`.
+34. Once the deeper prerequisite is already satisfied, the walk returns the *nearer* unmet link
+    instead, proving it is "shallowest," not "deepest" or "first-declared" —
+    `tests/test_techtree.py::test_next_step_toward_returns_first_step_not_final_target_when_shallower`.
+35. An already-unlocked target returns `None` —
+    `tests/test_techtree.py::test_next_step_toward_already_unlocked_target_returns_none`.
+36. The real requirement graph (all four `_TABLES`) is asserted acyclic by test, not merely assumed;
+    a synthetic cycle injected into a *copy* of `BUILDING_REQUIREMENTS` (monkeypatched, never
+    mutating the real table) cannot hang the walk — `_MAX_UNLOCK_DEPTH` bounds it and it returns
+    `None` — `tests/test_techtree.py::test_real_requirement_graph_is_acyclic`,
+    `::test_next_step_toward_is_depth_bounded_against_a_synthetic_cycle`.
+37. When two locked declared targets resolve to two different unlock steps,
+    `generate_unlock_chain_candidates` orders them by weighted cost ascending
+    (`policy.strategy.resource_weights`, live `Entity.cost` only); a step whose cost cannot be
+    determined sorts after every known-cost one, never interleaved —
+    `tests/test_candidates.py::test_generate_unlock_chain_candidates_ties_broken_by_weighted_cost_ascending`,
+    `tests/test_candidates.py::test_unlock_weighted_cost_orders_unknown_cost_after_every_known_cost`.
+38. A chain that bottoms out in a node whose own current level was never reported yields no
+    confidently-chosen step (`None`), even though the node's own requirements (or lack thereof) would
+    otherwise qualify it —
+    `tests/test_techtree.py::test_next_step_toward_absent_level_data_yields_no_confidently_chosen_step`.
+39. The walk correctly switches between a building lookup and a technology lookup mid-chain
+    (`ReqSource.BUILDING -> EntityFamily.BUILDING`, `ReqSource.TECHNOLOGY -> EntityFamily.RESEARCH`)
+    for both a ship target and a defense target —
+    `tests/test_techtree.py::test_next_step_toward_cross_family_walk_can_resolve_to_a_technology`,
+    `::test_next_step_toward_defense_target_crosses_into_technology`.
+40. With no declared `ship_targets`/`defense_targets`/`research_priority`,
+    `generate_unlock_chain_candidates` returns `[]` and `plan_next_action` never reaches rung `8b`;
+    when a scored economic candidate exists on any target planet, rung `8b` is never even consulted —
+    `tests/test_candidates.py::test_generate_unlock_chain_candidates_empty_with_no_declared_targets`,
+    `tests/test_plan.py::test_unlock_chain_rung_never_fires_with_no_declared_targets`,
+    `::test_unlock_chain_rung_never_reached_when_an_economic_candidate_exists`.
+41. `guard.py`'s `prerequisites` gate independently re-derives an unlock-chain step's legality (it
+    keys off `Action.kind`, not which generator produced the action) and PASSes it —
+    `tests/test_guard.py::test_prerequisites_gate_passes_an_unlock_chain_step_from_candidates_py`.
 
 ---
 

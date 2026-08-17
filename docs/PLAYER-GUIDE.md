@@ -256,7 +256,7 @@ change called out:
   "strategy": {
     "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },   // added 2026-08-16
     "max_alternatives": 5,            // caps how many runner-up options each proposal lists
-    "ship_targets": [],               // added 2026-08-16, e.g. [{"name": "Crawler", "count": 20}]
+    "ship_targets": [{"name": "Small Cargo", "count": 1}],  // a target not yet buildable now drives its own build-up (see below)
     "defense_targets": [],            // same shape, e.g. [{"name": "Small Shield Dome", "count": 1}]
     "research_priority": [],          // ordered technology names, e.g. ["Energy Technology"]
     "building_priority": []           // ordered infrastructure names (Robotics Factory etc.)
@@ -290,6 +290,28 @@ None of this is a fleet doctrine or a threat model. The planner still only enfor
 is legal (on-chain prerequisites, shield-dome/missile-silo caps) and, where a number is
 genuinely comparable, what is economical (Crawler's production-boost payback) — *how
 many* Crawlers or Small Shield Domes you actually want is your call, expressed here.
+
+**Declaring a target you can't build yet, and the agent working out the build-up
+(2026-08-16).** You can name a target your account isn't ready for. The shipped example
+policy above does exactly this: `ship_targets: [{"name": "Small Cargo", "count": 1}]`. On
+a fresh planet, Small Cargo needs Shipyard level 2 and Combustion Drive level 2 — neither
+of which exists yet. Before this addition, that entry would have sat there, legal to
+want, doing nothing: the agent correctly refuses to propose a ship the contract would
+reject, but nothing ever proposed what would unlock it. Now, once nothing more urgent or
+more directly profitable is available to propose, the agent walks the requirement chain
+backwards and proposes the nearest thing standing in the way instead — on a truly fresh
+planet that's Robotics Factory (Shipyard's own prerequisite), then Shipyard itself once
+Robotics Factory clears, and so on, tick by tick, until Small Cargo itself becomes
+buildable and the ordinary `ship_targets` stock-keeping takes over.
+
+Two things this deliberately is *not*: it is not a queued multi-step plan — every tick
+re-derives the next step from your account's live levels, so if you build something by
+hand in between ticks, the next proposal reflects that. And it is not scored against your
+other options the way a mine or energy upgrade is (you'll see `score: null` and
+`rule: "8b:unlock-chain"` on the proposal) — it only ever fires once nothing better is
+available on the ordinary ladder, so it can't crowd out a genuinely profitable upgrade or
+the storage-overflow safety check ahead of it. Read the proposal's `rationale` for which
+target it's working toward and `expected_effect` for what's still left after this step.
 
 **Two fields you must edit before anything downstream makes sense:**
 

@@ -118,6 +118,31 @@ class UnmetRequirement(NamedTuple):
     have: int | None
 
 
+class UnlockStep(NamedTuple):
+    """The result of :func:`next_step_toward` — the shallowest currently-buildable
+    prerequisite on the path toward some locked `(family, entity_id)` target, plus enough
+    context to render a rationale without a second walk.
+
+    `family`/`entity_id` name the step itself — always `EntityFamily.BUILDING` or
+    `EntityFamily.RESEARCH` (a `Ship`/`Defense` id is never itself a prerequisite of
+    anything in the source tables, so a step can never resolve to one — see the module
+    docstring's `ReqSource` note).
+
+    `chain` is the path of hops walked from the *original* target down to this step,
+    target-first, step-last: `chain[0]` is one of the target's own immediate
+    `unmet()` entries, `chain[-1]` is the `UnmetRequirement` whose `requirement.entity_id`
+    equals this step's `entity_id` (so `chain[-1].have` is this step's own current level —
+    never `None`, by construction; see :func:`next_step_toward`'s "confidently chosen"
+    rule). `depth == len(chain)`: `1` means the step is a direct requirement of the
+    original target, `2` means it is a requirement of a requirement, and so on.
+    """
+
+    family: EntityFamily
+    entity_id: int
+    depth: int
+    chain: tuple[UnmetRequirement, ...]
+
+
 # --------------------------------------------------------------------------------------
 # Requirement tables. Each keyed by the contract's own enum id (`ids.Building` /
 # `ids.Ship` / `ids.Defense` / `ids.Technology`). An id with no entry has no
@@ -502,3 +527,138 @@ def describe(unmet_requirement: UnmetRequirement) -> str:
     if unmet_requirement.have is None:
         return f"needs {name} >= {min_level} (level not reported)"
     return f"needs {name} {min_level} (have {unmet_requirement.have})"
+
+
+# --------------------------------------------------------------------------------------
+# next_step_toward — Phase 4 of the general-strategy-engine program (docs/SPEC.md §5.4
+# "Phase 4"). Walks `unmet()`'s output *backwards*: given a locked target, finds the
+# shallowest requirement in its dependency chain that is itself buildable right now, so a
+# caller (`candidates.generate_unlock_chain_candidates`) can propose *that* instead of
+# silently giving up on a target the account cannot reach yet.
+#
+# This is graph traversal over `_TABLES`, nothing more — no cost math (`calc.py`'s ban
+# restated: this function never computes a cost, only compares levels, same as `unmet()`),
+# and no commitment to any step beyond the very next one: `plan.py`/`tick.py` re-derive
+# from live state every tick, so this function is stateless and re-walks from scratch
+# every call.
+# --------------------------------------------------------------------------------------
+
+#: Every requirement in the source tables is either a per-*planet* building level or a
+#: per-*player* technology level (module docstring's `ReqSource` note) — so a walk down
+#: from any target can only ever land on `EntityFamily.BUILDING` or `EntityFamily.RESEARCH`
+#: nodes, never `SHIP`/`DEFENSE` (nothing in the source tables lists a ship or a defense as
+#: somebody else's prerequisite). `next_step_toward`'s *target* may be any of the four
+#: families; every *step* it can return is one of these two.
+_STEP_FAMILY_FOR_SOURCE: dict[ReqSource, EntityFamily] = {
+    ReqSource.BUILDING: EntityFamily.BUILDING,
+    ReqSource.TECHNOLOGY: EntityFamily.RESEARCH,
+}
+
+#: Defensive depth cap (see module docstring point 2's design constraint, restated for
+#: this function): the real tables are a DAG, five hops deep at most (verified by
+#: `tests/test_techtree.py::test_real_requirement_graph_is_acyclic` and the deepest-chain
+#: spot check), so 32 is generous headroom, not a tuned constant — it exists purely so a
+#: malformed table (see the depth-bound test's injected cycle) can never hang the planner,
+#: never so a legitimate real chain could plausibly hit it.
+_MAX_UNLOCK_DEPTH = 32
+
+
+def next_step_toward(
+    family: EntityFamily,
+    entity_id: int,
+    *,
+    building_levels: Mapping[int, int | None],
+    technology_levels: Mapping[int, int | None],
+) -> UnlockStep | None:
+    """The shallowest currently-buildable prerequisite on the path toward unlocking
+    `(family, entity_id)`, or `None` when there is no step to take — either the target is
+    already unlocked (`unmet(family, entity_id, ...) == ()`), or every branch of its
+    dependency chain bottoms out in something that cannot currently be acted on
+    confidently (see the "confidently chosen" rule below).
+
+    **Algorithm.** Breadth-first over `UnmetRequirement` chains, one depth level (`unmet()`
+    call) at a time:
+
+    1. Start from `unmet(family, entity_id, ...)` — the target's own immediate unmet
+       requirements. Empty means already unlocked -> `None`.
+    2. At each depth, a node (`requirement.source`/`requirement.entity_id`, converted to
+       an `EntityFamily` via `_STEP_FAMILY_FOR_SOURCE`) **qualifies as the step** if both:
+       (a) *its own* `unmet()` is empty — "never emit a step that is itself locked," the
+       base case this function exists to find; and
+       (b) the `UnmetRequirement` that led to it has `have is not None` — we know this
+       node's own current level and can therefore confidently propose the next one,
+       matching the fail-closed rule `unmet()` itself already applies to every level
+       comparison (AGENTS.md §5). A node meeting (a) but not (b) is a dead end: it has no
+       requirements of its own to expand into, but it is never chosen either — "surface it
+       as unresolvable rather than acting on it," per the design brief.
+    3. If any node at the current depth qualifies, the first one found (stable
+       left-to-right order — see the module-level note on tie-breaking below) is the
+       answer; the walk stops there without going any deeper — "shallowest," not "any."
+    4. Otherwise, every non-qualifying, non-dead-end node's own `unmet()` requirements
+       become the next depth's frontier, and the walk continues.
+
+    **Cycle-safe and depth-bounded**, defensively — the real tables are asserted acyclic
+    by test, not merely assumed so here. A `visited` set of `(family, entity_id)` node
+    keys ensures each node is expanded at most once regardless of how many parents lead to
+    it (a legitimate diamond dependency, e.g. Research Lab gating both Combustion Drive and
+    Energy); `_MAX_UNLOCK_DEPTH` caps the walk so a malformed (cyclic) table can never hang
+    the caller.
+
+    **No cost-based tie-breaking here.** This function has no `resource_weights` and no
+    live `Entity.cost` — both are `candidates.py`'s concern, not this module's (`calc.py`'s
+    "never recompute a cost" ban extends to "never even receive one" here). Where two
+    branches would both qualify at the same shallowest depth, this function resolves the
+    tie by table declaration order (deterministic, not random, but not cost-aware) — the
+    caller that *does* have cost data orders its *own* candidates across multiple declared
+    targets by weighted cost separately; see
+    `candidates.generate_unlock_chain_candidates`.
+    """
+    target_unmet = unmet(family, entity_id, building_levels=building_levels, technology_levels=technology_levels)
+    if not target_unmet:
+        return None  # already unlocked
+
+    visited: set[tuple[EntityFamily, int]] = {(family, entity_id)}
+    frontier: list[tuple[UnmetRequirement, ...]] = [(u,) for u in target_unmet]
+    depth = 0
+
+    while frontier and depth < _MAX_UNLOCK_DEPTH:
+        depth += 1
+        qualifying: list[tuple[UnmetRequirement, ...]] = []
+        next_frontier: list[tuple[UnmetRequirement, ...]] = []
+
+        for chain in frontier:
+            last = chain[-1]
+            node_family = _STEP_FAMILY_FOR_SOURCE[last.requirement.source]
+            node_id = last.requirement.entity_id
+            key = (node_family, node_id)
+            if key in visited:
+                continue  # cycle guard / diamond-dependency dedup — already handled
+            visited.add(key)
+
+            node_unmet = unmet(
+                node_family, node_id, building_levels=building_levels, technology_levels=technology_levels
+            )
+            if not node_unmet:
+                if last.have is not None:
+                    qualifying.append(chain)
+                # else: base case reached, but the node's own level is unreported -- a
+                # dead end, per the "confidently chosen" rule. No requirements of its own
+                # to expand into either way, so nothing is added to next_frontier.
+                continue
+
+            for requirement in node_unmet:
+                next_frontier.append((*chain, requirement))
+
+        if qualifying:
+            chosen = qualifying[0]
+            last = chosen[-1]
+            return UnlockStep(
+                family=_STEP_FAMILY_FOR_SOURCE[last.requirement.source],
+                entity_id=last.requirement.entity_id,
+                depth=len(chosen),
+                chain=chosen,
+            )
+
+        frontier = next_frontier
+
+    return None  # depth-bounded out, or every branch dead-ended unresolvable

@@ -17,6 +17,7 @@ import pytest
 
 from veydrift_agent import candidates, ids
 from veydrift_agent.models import (
+    ActionKind,
     ActionsCfg,
     CrawlerProduction,
     EnergyBalance,
@@ -25,6 +26,8 @@ from veydrift_agent.models import (
     Limits,
     PlanetSnapshot,
     Policy,
+    QueueEntry,
+    QueueKind,
     Resources,
     Snapshot,
     StorageCfg,
@@ -743,3 +746,205 @@ def test_empty_strategy_targets_select_building_candidate_matches_phase_2_exactl
     assert winner is not None
     assert winner.action.entity_id == ids.Building.SOLAR_PLANT
     assert winner.family == "energy"
+
+
+# --------------------------------------------------------------------------------------
+# generate_unlock_chain_candidates / select_unlock_chain_candidate (Phase 4 of the
+# general-strategy-engine program, docs/SPEC.md §5.4 "Phase 4"). planet_664.json is
+# zero-state on every axis, which is exactly the fixture the WP4 brief's hand-worked
+# chain uses (Small Cargo -> Shipyard 2 + Combustion Drive 2 -> Shipyard needs Robotics
+# Factory 2 -> Robotics Factory needs nothing).
+# --------------------------------------------------------------------------------------
+
+
+def test_generate_unlock_chain_candidates_empty_with_no_declared_targets():
+    """The Phase 2/3 safety property, restated for Phase 4: no declared targets means
+    nothing for this generator to unlock toward."""
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=True, allow_research=True, allow_defense=True, allow_ships=True))
+
+    assert candidates.generate_unlock_chain_candidates(snapshot, policy, planet) == []
+    winner, alternatives = candidates.select_unlock_chain_candidate(snapshot, policy, [planet])
+    assert winner is None
+    assert alternatives == []
+
+
+def test_generate_unlock_chain_candidates_proposes_shallowest_prerequisite_for_locked_ship_target():
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=True, allow_ships=False),
+        strategy=StrategyCfg(ship_targets=[EntityTarget(name="Small Cargo", count=1)]),
+    )
+
+    result = candidates.generate_unlock_chain_candidates(snapshot, policy, planet)
+
+    assert len(result) == 1
+    winner = result[0]
+    assert winner.family == "unlock"
+    assert winner.score is None
+    assert winner.action.kind == ActionKind.BUILD
+    assert winner.action.function == "startBuildingUpgrade"
+    assert winner.action.entity_id == ids.Building.ROBOTICS_FACTORY
+    assert winner.action.target_level == 1
+    assert "Small Cargo" in winner.action.rationale
+    assert "Shipyard" in winner.action.rationale
+
+
+def test_generate_unlock_chain_candidates_already_unlocked_target_proposes_nothing():
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    unlocked = planet.model_copy(
+        update={
+            "buildings": [
+                b.model_copy(update={"level": 2}) if b.id in (ids.Building.SHIPYARD, ids.Building.ROBOTICS_FACTORY) else b
+                for b in planet.buildings
+            ]
+        }
+    )
+    technologies = [t.model_copy(update={"level": 2}) if t.id == ids.Technology.COMBUSTION_DRIVE else t for t in snapshot.technologies]
+    unlocked_snapshot = snapshot.model_copy(update={"technologies": technologies, "planets": [unlocked]})
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=True, allow_ships=True),
+        strategy=StrategyCfg(ship_targets=[EntityTarget(name="Small Cargo", count=1)]),
+    )
+
+    result = candidates.generate_unlock_chain_candidates(unlocked_snapshot, policy, unlocked)
+
+    assert result == []
+
+
+def test_generate_unlock_chain_candidates_dedups_two_targets_sharing_one_prerequisite():
+    """Two locked declared targets (a ship and a defense) that both bottom out on the
+    same Robotics Factory prerequisite must be proposed once, not twice."""
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=True),
+        strategy=StrategyCfg(
+            ship_targets=[EntityTarget(name="Small Cargo", count=1)],
+            defense_targets=[EntityTarget(name="Small Shield Dome", count=1)],
+        ),
+    )
+
+    result = candidates.generate_unlock_chain_candidates(snapshot, policy, planet)
+
+    assert len(result) == 1
+    assert result[0].action.entity_id == ids.Building.ROBOTICS_FACTORY
+
+
+def test_generate_unlock_chain_candidates_ties_broken_by_weighted_cost_ascending():
+    """With Robotics Factory already at 2, Small Cargo's Shipyard branch and Weapons
+    Technology's Research Lab branch resolve to two *different* depth-1 steps (Shipyard,
+    cost 700 unweighted; Research Lab, cost 800) -- ordered cheapest first."""
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    elevated = planet.model_copy(
+        update={"buildings": [b.model_copy(update={"level": 2}) if b.id == ids.Building.ROBOTICS_FACTORY else b for b in planet.buildings]}
+    )
+    elevated_snapshot = snapshot.model_copy(update={"planets": [elevated]})
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=True, allow_research=True),
+        strategy=StrategyCfg(
+            ship_targets=[EntityTarget(name="Small Cargo", count=1)],
+            research_priority=["Weapons Technology"],
+        ),
+    )
+
+    result = candidates.generate_unlock_chain_candidates(elevated_snapshot, policy, elevated)
+
+    assert [c.action.entity_id for c in result] == [ids.Building.SHIPYARD, ids.Building.RESEARCH_LAB]
+    shipyard_cost = result[0].action.cost
+    research_lab_cost = result[1].action.cost
+    assert shipyard_cost.metal + shipyard_cost.crystal + shipyard_cost.deuterium < (
+        research_lab_cost.metal + research_lab_cost.crystal + research_lab_cost.deuterium
+    )
+
+    winner, alternatives = candidates.select_unlock_chain_candidate(elevated_snapshot, policy, [elevated])
+    assert winner is not None
+    assert winner.action.entity_id == ids.Building.SHIPYARD
+    assert [c.action.entity_id for c in alternatives] == [ids.Building.RESEARCH_LAB]
+
+
+def test_unlock_weighted_cost_orders_unknown_cost_after_every_known_cost():
+    weights = Resources(metal=1, crystal=1, deuterium=1)
+    cheap = candidates._unlock_weighted_cost(Resources(metal=10), weights)
+    expensive = candidates._unlock_weighted_cost(Resources(metal=1_000_000), weights)
+    unknown = candidates._unlock_weighted_cost(None, weights)
+
+    ordered = sorted([unknown, expensive, cheap])
+    assert ordered == [cheap, expensive, unknown]
+
+
+def test_generate_unlock_chain_candidates_respects_allow_building_false():
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=False),
+        strategy=StrategyCfg(ship_targets=[EntityTarget(name="Small Cargo", count=1)]),
+    )
+
+    assert candidates.generate_unlock_chain_candidates(snapshot, policy, planet) == []
+
+
+def test_generate_unlock_chain_candidates_respects_building_queue_busy():
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+
+    busy = planet.model_copy(
+        update={"queues": {QueueKind.BUILDING: QueueEntry(kind=QueueKind.BUILDING, entity_id=ids.Building.SOLAR_PLANT, entity_name="Solar Plant")}}
+    )
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=True),
+        strategy=StrategyCfg(ship_targets=[EntityTarget(name="Small Cargo", count=1)]),
+    )
+
+    assert candidates.generate_unlock_chain_candidates(snapshot, policy, busy) == []
+
+
+def test_generate_unlock_chain_candidates_respects_allow_research_and_research_queue():
+    """Weapons Technology's own unmet is only Research Lab -- a BUILDING step -- so to
+    exercise the research-kind gating we need a target whose resolved step is itself a
+    technology: with Research Lab already at 1, Laser Technology's own Energy Technology
+    branch resolves directly (Energy only needs Research Lab, already satisfied)."""
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    elevated = planet.model_copy(
+        update={"buildings": [b.model_copy(update={"level": 1}) if b.id == ids.Building.RESEARCH_LAB else b for b in planet.buildings]}
+    )
+    elevated_snapshot = snapshot.model_copy(update={"planets": [elevated]})
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=True, allow_research=False),
+        strategy=StrategyCfg(research_priority=["Laser Technology"]),
+    )
+
+    assert candidates.generate_unlock_chain_candidates(elevated_snapshot, policy, elevated) == []
+
+    allowed_policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=True, allow_research=True),
+        strategy=StrategyCfg(research_priority=["Laser Technology"]),
+    )
+    result = candidates.generate_unlock_chain_candidates(elevated_snapshot, allowed_policy, elevated)
+    assert len(result) == 1
+    assert result[0].action.kind == ActionKind.RESEARCH
+    assert result[0].action.entity_id == ids.Technology.ENERGY
+
+    elevated_snapshot.research_queue = QueueEntry(kind=QueueKind.RESEARCH, entity_id=ids.Technology.ENERGY, entity_name="Energy Technology")
+    assert candidates.generate_unlock_chain_candidates(elevated_snapshot, allowed_policy, elevated) == []

@@ -11,7 +11,9 @@ inputs were incomplete.
 
 from __future__ import annotations
 
-from veydrift_agent import ids
+import pytest
+
+from veydrift_agent import ids, techtree
 from veydrift_agent.techtree import (
     BUILDING_REQUIREMENTS,
     DEFENSE_REQUIREMENTS,
@@ -22,9 +24,11 @@ from veydrift_agent.techtree import (
     EntityFamily,
     ReqSource,
     Requirement,
+    UnlockStep,
     describe,
     graviton_energy_requirement,
     missile_silo_capacity,
+    next_step_toward,
     unmet,
 )
 
@@ -343,3 +347,220 @@ def test_describe_absent_level():
         technology_levels={ids.Technology.ENERGY: 1, ids.Technology.LASER: 3},
     )[0]
     assert describe(u) == "needs Shipyard >= 2 (level not reported)"
+
+
+# --------------------------------------------------------------------------------------
+# next_step_toward() — Phase 4 of the general-strategy-engine program (docs/SPEC.md §5.4
+# "Phase 4"). Walks unmet()'s output backwards, one depth level at a time, to find the
+# shallowest currently-buildable prerequisite toward a locked target.
+# --------------------------------------------------------------------------------------
+
+#: A fresh-planet, fresh-player level vector: every building and every technology known
+#: (level 0, not absent). Small Cargo -> Shipyard 2 + Combustion Drive 2 -> Shipyard needs
+#: Robotics Factory 2 (Robotics Factory itself has no entry in BUILDING_REQUIREMENTS, so
+#: it's the base case) is the hand-worked chain the WP4 brief specifies; Combustion Drive's
+#: own branch (Research Lab 1, Energy 1 -- Energy itself needs Research Lab 1) is strictly
+#: deeper (depth 3), so Robotics Factory at depth 2 must win.
+_ALL_ZERO_BUILDING_LEVELS: dict[int, int | None] = {b.value: 0 for b in ids.Building}
+_ALL_ZERO_TECHNOLOGY_LEVELS: dict[int, int | None] = {t.value: 0 for t in ids.Technology}
+
+
+def test_next_step_toward_hand_worked_small_cargo_chain():
+    """Small Cargo -> {Shipyard 2, Combustion Drive 2} -> Shipyard's own gate (Robotics
+    Factory 2) is shallower than Combustion Drive's own gate (Research Lab 1 AND Energy
+    1, itself gated on Research Lab), and Robotics Factory has no requirement of its own
+    -- it is the shallowest buildable step, not Shipyard (still locked) and not Small
+    Cargo (the final target, several hops further down)."""
+    step = next_step_toward(
+        EntityFamily.SHIP,
+        ids.Ship.SMALL_CARGO,
+        building_levels=_ALL_ZERO_BUILDING_LEVELS,
+        technology_levels=_ALL_ZERO_TECHNOLOGY_LEVELS,
+    )
+
+    assert step is not None
+    assert step.family is EntityFamily.BUILDING
+    assert step.entity_id == ids.Building.ROBOTICS_FACTORY
+    assert step.depth == 2
+    assert [u.requirement.entity_id for u in step.chain] == [ids.Building.SHIPYARD, ids.Building.ROBOTICS_FACTORY]
+    assert step.chain[-1].have == 0  # Robotics Factory's own current level, known
+
+
+def test_next_step_toward_returns_first_step_not_final_target_when_shallower():
+    """Once Robotics Factory is already >= 2, Shipyard's own gate is satisfied, so
+    Shipyard itself (not Robotics Factory, and not Small Cargo) is the shallowest
+    buildable step -- proves the walk returns the *nearest* unmet link, not the deepest
+    ancestor and not the original target."""
+    building_levels = {**_ALL_ZERO_BUILDING_LEVELS, ids.Building.ROBOTICS_FACTORY: 2}
+
+    step = next_step_toward(
+        EntityFamily.SHIP,
+        ids.Ship.SMALL_CARGO,
+        building_levels=building_levels,
+        technology_levels=_ALL_ZERO_TECHNOLOGY_LEVELS,
+    )
+
+    assert step is not None
+    assert step.family is EntityFamily.BUILDING
+    assert step.entity_id == ids.Building.SHIPYARD
+    assert step.depth == 1
+    assert step.entity_id != ids.Ship.SMALL_CARGO
+
+
+def test_next_step_toward_already_unlocked_target_returns_none():
+    building_levels = {**_ALL_ZERO_BUILDING_LEVELS, ids.Building.SHIPYARD: 2, ids.Building.ROBOTICS_FACTORY: 2}
+    technology_levels = {**_ALL_ZERO_TECHNOLOGY_LEVELS, ids.Technology.COMBUSTION_DRIVE: 2}
+
+    step = next_step_toward(
+        EntityFamily.SHIP,
+        ids.Ship.SMALL_CARGO,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+    )
+
+    assert step is None
+
+
+def test_next_step_toward_cross_family_walk_can_resolve_to_a_technology():
+    """When Small Cargo's Shipyard branch is already satisfied, the only remaining branch
+    is Combustion Drive (a technology), which itself needs Research Lab (building,
+    already met here) and Energy (technology, not met) -- Energy has no requirement of
+    its own beyond Research Lab, so it is the shallowest step, proving the walk correctly
+    switches from a BUILDING lookup to a RESEARCH lookup (ReqSource.TECHNOLOGY ->
+    EntityFamily.RESEARCH) and back."""
+    building_levels = {**_ALL_ZERO_BUILDING_LEVELS, ids.Building.SHIPYARD: 2, ids.Building.RESEARCH_LAB: 1}
+    technology_levels = {**_ALL_ZERO_TECHNOLOGY_LEVELS}
+
+    step = next_step_toward(
+        EntityFamily.SHIP,
+        ids.Ship.SMALL_CARGO,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+    )
+
+    assert step is not None
+    assert step.family is EntityFamily.RESEARCH
+    assert step.entity_id == ids.Technology.ENERGY
+    assert [u.requirement.entity_id for u in step.chain] == [ids.Technology.COMBUSTION_DRIVE, ids.Technology.ENERGY]
+
+
+def test_next_step_toward_defense_target_crosses_into_technology():
+    """Small Shield Dome needs Shipyard >= 1 (building) AND Shielding >= 2 (technology).
+    With Shipyard already built, Shielding -- which itself needs Research Lab 6 and
+    Energy 3 -- is the remaining branch; Research Lab (building, unmet) is shallower than
+    Shielding itself, so Research Lab wins."""
+    building_levels = {
+        **_ALL_ZERO_BUILDING_LEVELS,
+        ids.Building.SHIPYARD: 1,
+        # Research Lab's own gate (Robotics Factory >= 1) is pre-satisfied so it qualifies
+        # directly, rather than the walk needing a fourth hop down into Robotics Factory.
+        ids.Building.ROBOTICS_FACTORY: 1,
+    }
+    technology_levels = {**_ALL_ZERO_TECHNOLOGY_LEVELS}
+
+    step = next_step_toward(
+        EntityFamily.DEFENSE,
+        ids.Defense.SMALL_SHIELD_DOME,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+    )
+
+    assert step is not None
+    assert step.family is EntityFamily.BUILDING
+    assert step.entity_id == ids.Building.RESEARCH_LAB
+
+
+def test_next_step_toward_absent_level_data_yields_no_confidently_chosen_step():
+    """Robotics Factory has no requirement of its own (the base case), but if its *own*
+    current level was never reported, proposing "upgrade it by one" is a guess -- the
+    walk must refuse it and, finding nothing else resolvable either, return `None` rather
+    than act on an `UnmetRequirement(have=None)`."""
+    building_levels: dict[int, int | None] = {ids.Building.SHIPYARD: 0}  # Robotics Factory absent
+    technology_levels: dict[int, int | None] = {}  # everything absent
+
+    step = next_step_toward(
+        EntityFamily.SHIP,
+        ids.Ship.SMALL_CARGO,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+    )
+
+    assert step is None
+
+
+def test_real_requirement_graph_is_acyclic():
+    """The design brief's own instruction: assert this rather than assume it. Builds a
+    directed graph from all four requirement tables (edges point from an entity to each
+    of its prerequisites) and runs a recursion-stack DFS looking for a back edge."""
+    edges: dict[tuple[EntityFamily, int], set[tuple[EntityFamily, int]]] = {}
+
+    def add_edges(source_family: EntityFamily, table: dict[int, tuple[Requirement, ...]]) -> None:
+        for entity_id, requirements in table.items():
+            node = (source_family, entity_id)
+            for requirement in requirements:
+                target_family = EntityFamily.BUILDING if requirement.source is ReqSource.BUILDING else EntityFamily.RESEARCH
+                edges.setdefault(node, set()).add((target_family, requirement.entity_id))
+
+    add_edges(EntityFamily.BUILDING, BUILDING_REQUIREMENTS)
+    add_edges(EntityFamily.SHIP, SHIP_REQUIREMENTS)
+    add_edges(EntityFamily.DEFENSE, DEFENSE_REQUIREMENTS)
+    add_edges(EntityFamily.RESEARCH, RESEARCH_REQUIREMENTS)
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[tuple[EntityFamily, int], int] = {}
+
+    def visit(node: tuple[EntityFamily, int]) -> None:
+        color[node] = GRAY
+        for neighbor in edges.get(node, ()):
+            state = color.get(neighbor, WHITE)
+            if state == GRAY:
+                raise AssertionError(f"cycle detected: {node} -> {neighbor}")
+            if state == WHITE:
+                visit(neighbor)
+        color[node] = BLACK
+
+    for node in list(edges):
+        if color.get(node, WHITE) == WHITE:
+            visit(node)
+
+
+def test_next_step_toward_is_depth_bounded_against_a_synthetic_cycle(monkeypatch):
+    """Injects a two-node cycle into a *copy* of the building-requirement table (never
+    mutating the real `BUILDING_REQUIREMENTS`/`_TABLES` module objects -- `monkeypatch`
+    reverts this automatically at teardown) and asserts the walk still terminates rather
+    than hanging, returning `None` because no node in the cycle ever satisfies its own
+    `unmet()`."""
+    CYCLE_A = 9001
+    CYCLE_B = 9002
+    cyclic_building_table = dict(BUILDING_REQUIREMENTS)
+    cyclic_building_table[CYCLE_A] = (Requirement(ReqSource.BUILDING, CYCLE_B, 1),)
+    cyclic_building_table[CYCLE_B] = (Requirement(ReqSource.BUILDING, CYCLE_A, 1),)
+    patched_tables = dict(techtree._TABLES)
+    patched_tables[EntityFamily.BUILDING] = cyclic_building_table
+    monkeypatch.setattr(techtree, "_TABLES", patched_tables)
+
+    step = next_step_toward(
+        EntityFamily.BUILDING,
+        CYCLE_A,
+        building_levels={CYCLE_A: 0, CYCLE_B: 0},
+        technology_levels={},
+    )
+
+    assert step is None  # never hangs; every node in the cycle stays permanently unmet
+
+    # The real table object is untouched -- `cyclic_building_table` was a shallow copy of
+    # `BUILDING_REQUIREMENTS`, never that dict itself, so the module-level table used by
+    # every other caller never saw the injected cycle even while this test's monkeypatch
+    # of `_TABLES` was active.
+    assert CYCLE_A not in BUILDING_REQUIREMENTS
+
+
+def test_next_step_toward_returns_unlockstep_namedtuple_shape():
+    step = next_step_toward(
+        EntityFamily.SHIP,
+        ids.Ship.SMALL_CARGO,
+        building_levels=_ALL_ZERO_BUILDING_LEVELS,
+        technology_levels=_ALL_ZERO_TECHNOLOGY_LEVELS,
+    )
+    assert isinstance(step, UnlockStep)
+    assert step.depth == len(step.chain)

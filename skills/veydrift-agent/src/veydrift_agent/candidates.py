@@ -60,8 +60,10 @@ from veydrift_agent.techtree import (
     MAX_DEFENSE_PER_PLANET,
     MISSILE_SLOTS,
     EntityFamily,
+    UnlockStep,
     describe,
     missile_silo_capacity,
+    next_step_toward,
     unmet,
 )
 
@@ -736,6 +738,257 @@ def generate_infrastructure_candidates(snapshot: Snapshot, policy: Policy, plane
             )
         )
     return out
+
+
+# --------------------------------------------------------------------------------------
+# Unlock-chain family (Phase 4 of the general-strategy-engine program, docs/SPEC.md §5.4
+# "Phase 4"). A declared `ship_targets`/`defense_targets`/`research_priority` entry that
+# is currently *locked* (`techtree.unmet()` non-empty) is, before this family existed,
+# permanently unreachable: `generate_ship_target_candidates`/`generate_defense_target_
+# candidates`/`generate_research_candidates` all correctly refuse to propose it (never
+# propose an entity the contract would revert on), but nothing ever proposed the
+# *prerequisite* that would unlock it either. This family closes that loop by walking
+# `techtree.next_step_toward` for every locked declared target and proposing the
+# shallowest buildable prerequisite instead.
+#
+# **`score=None`, always** -- same rule the whole "policy-declared" side of this module
+# already follows for research/ship-target/defense-target stock-keeping: an unlock step's
+# value is entirely in what it eventually enables, which this codebase has already
+# refused to score three times over (no cost-scaling function, no ROI verdict, no
+# activity-classification score) -- inventing a payback number for "one step toward a
+# multi-tick plan that gets re-derived from scratch every tick anyway" would be exactly
+# that same mistake a fourth time.
+#
+# **Only `ship_targets`/`defense_targets`/`research_priority` feed this family --
+# `building_priority` does not.** `generate_infrastructure_candidates` above already gives
+# `building_priority` its own first-class, high-precedence reachability path; folding it
+# into this family too would double up two different declared-intent mechanisms for the
+# same six buildings. See `select_unlock_chain_candidate`'s docstring and `plan.py`'s
+# ladder comment for why this family's *precedence*, not just its inputs, is deliberately
+# narrower than infrastructure's.
+# --------------------------------------------------------------------------------------
+
+
+def _target_label(family: EntityFamily, entity_id: int) -> str:
+    if family is EntityFamily.SHIP:
+        return ids.ship_name(entity_id)
+    if family is EntityFamily.DEFENSE:
+        return ids.defense_name(entity_id)
+    if family is EntityFamily.RESEARCH:
+        return ids.technology_name(entity_id)
+    return ids.building_name(entity_id)  # pragma: no cover -- defensive; no BUILDING target feeds this family today
+
+
+def _step_entity(step: UnlockStep, snapshot: Snapshot, planet: PlanetSnapshot) -> Entity | None:
+    """The live `Entity` for a step -- `techtree.next_step_toward` only ever returns
+    `EntityFamily.BUILDING` (planet-scoped) or `EntityFamily.RESEARCH` (account-wide,
+    `snapshot.technologies`) steps, per the source tables' own shape (module docstring's
+    `ReqSource` note -- a ship/defense id is never anybody's prerequisite)."""
+    if step.family == EntityFamily.BUILDING:
+        return _entity(planet.buildings, step.entity_id)
+    return _entity(snapshot.technologies, step.entity_id)
+
+
+def _unlock_step_name(step: UnlockStep, entity: Entity) -> str:
+    if entity.name:
+        return entity.name
+    return ids.building_name(step.entity_id) if step.family == EntityFamily.BUILDING else ids.technology_name(step.entity_id)
+
+
+def _unlock_chain_rationale(target_label: str, target_immediate: tuple, step: UnlockStep, step_name: str) -> str:
+    """`"Shipyard 2 is the next unmet prerequisite for your Small Cargo target (Small
+    Cargo needs Shipyard 2, Combustion Drive 2; you have Shipyard 0, Combustion Drive
+    0)."`-shaped for a direct (depth-1) prerequisite; names the whole walked chain via
+    `techtree.describe()` for a deeper one, so a human reading `proposals.jsonl` never has
+    to reconstruct *why* this particular building is being proposed toward a target that
+    isn't even mentioned in `Action.entity_name`."""
+    immediate_desc = "; ".join(describe(u) for u in target_immediate)
+    if step.depth == 1:
+        return f"{step_name} is the next unmet prerequisite for your {target_label} target ({target_label} {immediate_desc})."
+    chain_desc = " -> ".join(describe(u) for u in step.chain)
+    return (
+        f"{step_name} is the next unmet prerequisite for your {target_label} target, "
+        f"{step.depth} step(s) down its dependency chain ({target_label} {immediate_desc}; chain: {chain_desc})."
+    )
+
+
+def _unlock_chain_remaining_note(target_label: str, target_immediate: tuple, step: UnlockStep) -> str:
+    """The *remaining* chain after this step -- `Action.expected_effect`, surfaced in
+    `strategy.md`/`proposals.jsonl` (docs/SPEC.md §5.4 Phase 4) so a human can see the
+    multi-tick plan implied by a declared target without this generator ever committing to
+    it: every tick re-derives from live state, so "remaining" here is informational, not a
+    queued plan."""
+    remaining_hops = step.chain[:-1]
+    other_branches = [u for u in target_immediate if u not in step.chain]
+    parts = []
+    if remaining_hops:
+        parts.append("; ".join(describe(u) for u in remaining_hops))
+    if other_branches:
+        parts.append("; ".join(describe(u) for u in other_branches))
+    if not parts:
+        return f"Once built, {target_label} should be directly buildable (re-checked live next tick, not committed)."
+    return "Still needed toward " + target_label + " after this step: " + "; ".join(parts) + " (re-derived live every tick, not a committed plan)."
+
+
+def _unlock_weighted_cost(cost: Resources | None, weights: Resources) -> tuple[int, int]:
+    """`(0, weighted_cost)` ascending among candidates with a known live cost; `(1, 0)` --
+    always sorting after every known-cost candidate, regardless of its own weighted value
+    -- when cost is unavailable. `cost` is always a live `Entity.cost` here (never
+    recomputed, per `calc.py`'s own ban), and in practice `Action.cost` is never `None` on
+    this codebase's frozen `models.py` -- but this helper accepts `None` defensively and is
+    tested directly against it (`tests/test_candidates.py`), since "do not guess" is the
+    rule the design brief states, not merely a property of today's inputs."""
+    if cost is None:
+        return (1, 0)
+    return (0, cost.metal * weights.metal + cost.crystal * weights.crystal + cost.deuterium * weights.deuterium)
+
+
+def generate_unlock_chain_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """One `Candidate` per *locked* declared target (`ship_targets`/`defense_targets`
+    below its count, or a named `research_priority` technology), each the shallowest
+    buildable prerequisite toward that target (`techtree.next_step_toward`). Two declared
+    targets that share the same unmet prerequisite (e.g. two ships both gated on the same
+    Shipyard level) are proposed once, not once per target -- deduplicated by the step's
+    own `(family, entity_id)`. Empty `ship_targets`/`defense_targets`/`research_priority`
+    (the default) returns `[]`, same reachability-switch convention every other Phase 3/4
+    family already follows.
+
+    A target that is already unlocked, or whose chain bottoms out unresolvable (absent
+    level data -- see `next_step_toward`'s "confidently chosen" rule), contributes nothing
+    here -- this generator never guesses and never duplicates the `"locked: ..."`
+    alternative `generate_ship_target_candidates`/`generate_defense_target_candidates`/
+    `generate_research_candidates` already produce for the same target; those stay exactly
+    as they were.
+
+    Ordered by weighted cost ascending (`policy.strategy.resource_weights`, the same
+    weights `score_payback` uses) so that when more than one declared target is locked,
+    `select_unlock_chain_candidate` picks the cheapest unlock step across all of them as
+    its winner -- not an ROI comparison (every candidate here is `score=None`), just a
+    tie-break among otherwise-incomparable proposals."""
+    targets: list[tuple[EntityFamily, int]] = []
+    for target in policy.strategy.ship_targets:
+        entity_id = _resolve_target_id(target, ids.ship_id)
+        entity = _entity(planet.ships, entity_id)
+        if entity is None or entity.count is None or entity.count >= target.count:
+            continue
+        targets.append((EntityFamily.SHIP, entity_id))
+    for target in policy.strategy.defense_targets:
+        entity_id = _resolve_target_id(target, ids.defense_id)
+        entity = _entity(planet.defenses, entity_id)
+        if entity is None or entity.count is None or entity.count >= target.count:
+            continue
+        targets.append((EntityFamily.DEFENSE, entity_id))
+    for name in policy.strategy.research_priority:
+        entity_id = _resolve_name_id(name, ids.technology_id)
+        targets.append((EntityFamily.RESEARCH, entity_id))
+
+    if not targets:
+        return []
+
+    building_levels = _level_vector(planet.buildings)
+    technology_levels = _level_vector(snapshot.technologies)
+    weights = policy.strategy.resource_weights
+
+    out: list[Candidate] = []
+    seen_steps: set[tuple[EntityFamily, int]] = set()
+    for target_family, target_id in targets:
+        target_immediate = unmet(
+            target_family, target_id, building_levels=building_levels, technology_levels=technology_levels
+        )
+        if not target_immediate:
+            continue  # already unlocked -- nothing for this generator to propose
+
+        step = next_step_toward(
+            target_family, target_id, building_levels=building_levels, technology_levels=technology_levels
+        )
+        if step is None:
+            continue  # chain bottoms out unresolvable (absent data) -- never guess
+
+        # An unlock step is either a building upgrade or a research start -- gate on the
+        # matching `policy.actions.allow_*` flag and the matching queue being idle, same
+        # as every other family that can emit that action kind (`generate_infrastructure_
+        # candidates` / `select_building_candidate`'s building-queue check in `plan.py`,
+        # `generate_research_candidates` / the research-queue check in `plan.py`). Nothing
+        # here recomputes `techtree.unmet()`'s own filtering; this is *legality*, not a
+        # second locked-check.
+        if step.family == EntityFamily.BUILDING:
+            if not policy.actions.allow_building or planet.queues.get(QueueKind.BUILDING) is not None:
+                continue
+        elif not policy.actions.allow_research or snapshot.research_queue is not None:
+            continue
+
+        step_key = (step.family, step.entity_id)
+        if step_key in seen_steps:
+            continue  # two declared targets sharing one unmet prerequisite -- propose it once
+        seen_steps.add(step_key)
+
+        entity = _step_entity(step, snapshot, planet)
+        if entity is None or entity.level is None:
+            continue  # can't confidently construct an Action without a live current level
+
+        target_label = _target_label(target_family, target_id)
+        step_name = _unlock_step_name(step, entity)
+        action_kind = ActionKind.BUILD if step.family == EntityFamily.BUILDING else ActionKind.RESEARCH
+        function = "startBuildingUpgrade" if step.family == EntityFamily.BUILDING else "startResearch"
+
+        action = Action(
+            kind=action_kind,
+            function=function,
+            planet_id=planet.planet_id,
+            entity_id=step.entity_id,
+            entity_name=step_name,
+            target_level=entity.level + 1,
+            cost=entity.cost,
+            rationale=_unlock_chain_rationale(target_label, target_immediate, step, step_name),
+            expected_effect=_unlock_chain_remaining_note(target_label, target_immediate, step),
+        )
+        out.append(
+            Candidate(
+                action=action,
+                family="unlock",
+                score=None,
+                score_basis=(
+                    f"unlock-chain step (depth {step.depth}) toward your {target_label} target -- "
+                    "not an ROI verdict, not a commitment to the rest of the chain"
+                ),
+            )
+        )
+
+    out.sort(key=lambda c: _unlock_weighted_cost(c.action.cost, weights))
+    return out
+
+
+def select_unlock_chain_candidate(
+    snapshot: Snapshot, policy: Policy, target_planets: list[PlanetSnapshot]
+) -> tuple[Candidate | None, list[Candidate]]:
+    """The unlock-chain family's own rung: across every target planet, the cheapest
+    (weighted) unlock-chain step becomes the winner; every other unlock-chain candidate
+    generated becomes a ranked alternative.
+
+    **Deliberately not folded into `select_building_candidate`'s `building_priority`
+    branch.** That branch treats a declared `building_priority` as intent strong enough to
+    win outright over a scored mine/energy candidate (see its own docstring); this family
+    must NOT do that -- the design brief is explicit that an unlock-chain candidate must
+    never displace a scored economic candidate. Giving it its own rung, called by
+    `plan.py` only after bands 1-3 (storage overflow, economically-scored building/
+    infrastructure, policy-declared research/ships/defense) have all been tried and found
+    nothing, is what guarantees that ordering by construction rather than by a flag this
+    function would have to remember to check: if any earlier band already produced a
+    winner, the ladder returns before this function is ever called at all."""
+    alternatives: list[Candidate] = []
+    winner: Candidate | None = None
+    for planet in target_planets:
+        planet_candidates = generate_unlock_chain_candidates(snapshot, policy, planet)
+        if not planet_candidates:
+            continue
+        if winner is None:
+            winner = planet_candidates[0]
+            alternatives.extend(planet_candidates[1:])
+        else:
+            alternatives.extend(planet_candidates)
+    if winner is None:
+        return None, []
+    return winner, rank_candidates(alternatives)
 
 
 # --------------------------------------------------------------------------------------

@@ -43,6 +43,7 @@ enough to check it by hand.
 - [9. There is no exit — why compounding is the only strategy here](#9-there-is-no-exit--why-compounding-is-the-only-strategy-here)
 - [10. What is unobserved, and which planner paths that leaves untested](#10-what-is-unobserved-and-which-planner-paths-that-leaves-untested)
 - [11. Checklist: sanity-checking a proposal by hand](#11-checklist-sanity-checking-a-proposal-by-hand)
+- [12. Working out the build-up: the unlock-chain rung](#12-working-out-the-build-up-the-unlock-chain-rung)
 
 ---
 
@@ -336,6 +337,18 @@ where it moved.
      explicit defense intent has superseded the "reasonable policy-driven default in the
      absence of a threat model" the pre-Phase-3 comment describes. Left unset, the old
      default fires exactly as before.
+8b. **(Phase 4, 2026-08-16) Nothing above fired -> propose the unlock chain.** New rung,
+   `candidates.select_unlock_chain_candidate`, checked only after rungs 5-8 above have all
+   found nothing at all for every target planet. For every *locked* declared
+   `ship_targets`/`defense_targets`/`research_priority` entry, walks
+   `techtree.next_step_toward` and proposes the shallowest currently-buildable
+   prerequisite instead of the (still-locked) target itself — see §12 for the full
+   mechanism and a worked example. Always `score=None`. Deliberately placed *last*, not
+   folded into rung 6's `building_priority` precedence: an unlock step must never outrank
+   the storage-overflow deadline (rung 5) and must never displace a scored economic
+   candidate (rung 6) or a policy-declared research/ship/defense pick (rungs 7-8) — giving
+   it the final rung makes that a property of the ladder's control flow, not a flag this
+   function has to remember to check.
 9. **Otherwise -> NO-OP with an explicit reason.** Always reachable; `Action.rationale`
    is never empty.
 
@@ -451,3 +464,89 @@ Given a `vd plan run` proposal, in order:
    reason. This is informational only: it should never look like an ROI verdict
    overriding the actual proposal, and a locked alternative's reason should match what
    `techtree.unmet()` would report for that entity's current levels.
+7. **If the rule is `"8b:unlock-chain"`:** see §12 — the proposed entity should be
+   *unlocked* right now (`techtree.unmet()` on it directly returns `()`), and it should be
+   the shallowest such entity on the path toward whichever declared target the rationale
+   names, not the target itself.
+
+## 12. Working out the build-up: the unlock-chain rung
+
+**The problem this rung exists for.** A policy can declare `ship_targets: [{"name":
+"Small Cargo", "count": 1}]` on a fresh planet. Small Cargo needs Shipyard 2 and
+Combustion Drive 2 — neither of which exist yet. Before Phase 4 (2026-08-16), every
+generator correctly refused to propose Small Cargo itself (§8's rung 8 filters it through
+`techtree.unmet()`, same as everything else), which is right — proposing it would be a
+guaranteed on-chain revert — but nothing ever proposed *what would unlock it*. The target
+was declared, legal to want, and permanently unreachable. A human would have to work out
+"first raise Shipyard, which needs Robotics Factory" by hand and separately populate
+`building_priority` to make any progress at all.
+
+**The mechanism.** `techtree.next_step_toward(family, entity_id, *, building_levels,
+technology_levels) -> UnlockStep | None` walks `unmet()`'s output *backwards*: breadth-
+first, one requirement-table lookup ("depth") at a time, starting from the target's own
+immediate unmet requirements. A node at the current depth *qualifies* as the answer when
+both are true: its own `unmet()` is empty (nothing further blocks it), and its own current
+level is known (an `UnmetRequirement(have=None)` — the snapshot never reported this
+entity's level — can never become a confidently-chosen step; the walk treats that branch
+as a dead end rather than guessing). The first depth at which anything qualifies wins —
+"shallowest," never "deepest" and never "first-declared." `candidates.
+generate_unlock_chain_candidates` then turns that `UnlockStep` into an ordinary
+`Candidate` (`score=None` — see below), gated on the matching `policy.actions.allow_*`
+flag and queue idleness like any other family that can emit that action kind.
+
+**Worked example, planet 664 at its zero-state baseline** (every building and technology
+level 0 and known — see `tests/fixtures/planet_664.json`, and
+`tests/test_techtree.py::test_next_step_toward_hand_worked_small_cargo_chain` for the pinned
+assertion):
+
+```
+Small Cargo
+├── needs Shipyard 2 (have 0)             -- depth 1, itself locked (needs Robotics Factory 2)
+│   └── needs Robotics Factory 2 (have 0) -- depth 2, UNLOCKED (no entry in BUILDING_REQUIREMENTS
+│                                             at all) -- this is the answer
+└── needs Combustion Drive 2 (have 0)     -- depth 1, itself locked (needs Research Lab 1, Energy 1)
+    ├── needs Research Lab 1 (have 0)     -- depth 2, still locked (needs Robotics Factory 1)
+    └── needs Energy Technology 1 (have 0)-- depth 2, still locked (needs Research Lab 1)
+```
+
+Robotics Factory qualifies at depth 2 (its own `unmet()` returns `()` — it has no entry in
+`BUILDING_REQUIREMENTS` at all — and its current level, 0, is known); nothing on the
+Combustion Drive branch qualifies until *after* Research Lab is raised, which is itself
+gated on Robotics Factory. The proposal: `startBuildingUpgrade(Robotics Factory, 0 -> 1)`,
+with `Action.rationale` naming the whole chain ("Robotics Factory is the next unmet
+prerequisite for your Small Cargo target...") and `Action.expected_effect` naming what is
+still needed *after* this step (Shipyard 2, Combustion Drive 2's own branch) — informational
+only, re-derived from live state on the next tick, never a committed multi-tick plan.
+
+**Why `score=None`, always.** An unlock step's value is entirely in what it eventually
+enables — Small Cargo, several ticks away, contingent on levels the account doesn't have
+yet. `calc.production_per_hour` cannot price that (Robotics Factory doesn't move it
+directly), and inventing a number for "how much is a step toward an unbuilt ship worth"
+would be exactly the kind of unbounded-future-plan assumption this codebase has already
+refused three times over: no cost-scaling function (`calc.py`), no ROI verdict on
+`alternatives` (Phase 2), no activity-classification score (`tick.py`'s log-reading code).
+An unlock-chain candidate is always ranked in `alternatives` the same way every other
+unscored candidate is — after every scored one, in generation order among themselves.
+
+**Why this is the *last* rung, not folded into rung 6.** `policy.strategy.building_priority`
+(§8, rung 6) is a declared human intent that wins outright over a scored mine/energy
+candidate — that is deliberate for `building_priority` specifically. An unlock-chain step
+must **not** get the same treatment: it must never outrank the deadline-driven storage
+overflow (rung 5) and must never displace a scored economic candidate (rung 6) or a
+policy-declared research/ship/defense pick (rungs 7-8). Placing it as the final rung, only
+ever reached once every earlier one has produced nothing at all, makes that ordering a
+structural property of the ladder rather than something `generate_unlock_chain_candidates`
+would have to know about `building_priority` to respect.
+
+**Cross-family walks are normal, not an edge case.** A ship's chain can pass through a
+building (Shipyard) and a technology (Combustion Drive) in the same walk; a defense's
+chain can too (Small Shield Dome needs both Shipyard and Shielding Technology). The walk
+switches lookup tables (`ReqSource.BUILDING -> BUILDING_REQUIREMENTS`,
+`ReqSource.TECHNOLOGY -> RESEARCH_REQUIREMENTS`) transparently — there is nothing
+building-specific or research-specific about `next_step_toward` itself.
+
+**What this rung is not.** Not a fleet doctrine, not a build-order planner beyond the very
+next step, not a commitment: every tick re-derives from scratch, so if the account's
+levels change between ticks (including from a human's own manual play), the next proposed
+step reflects that, never a queue laid down in advance. `building_priority` is unaffected
+by any of this — it keeps its own, separate, higher-precedence reachability path.

@@ -28,7 +28,7 @@
   "strategy": {
     "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },
     "max_alternatives": 5,
-    "ship_targets": [],
+    "ship_targets": [{ "name": "Small Cargo", "count": 1 }],
     "defense_targets": [],
     "research_priority": [],
     "building_priority": []

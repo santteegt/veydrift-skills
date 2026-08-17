@@ -464,6 +464,48 @@ def test_prerequisites_allows_a_multi_unit_missile_request_within_remaining_silo
     assert verdict(report, "prerequisites").status is GuardStatus.PASS
 
 
+# --------------------------------------------------------------------------------------
+# prerequisites x candidates.generate_unlock_chain_candidates (Phase 4 of the
+# general-strategy-engine program, docs/SPEC.md §5.4 "Phase 4"). The new candidate family
+# is constructed to only ever propose an already-unlocked step -- this confirms that
+# holds through the *independent* re-derivation `_gate_prerequisites` performs, rather
+# than merely assuming `candidates.py`'s own filtering is trustworthy.
+# --------------------------------------------------------------------------------------
+
+
+def test_prerequisites_gate_passes_an_unlock_chain_step_from_candidates_py():
+    """Research Lab already at 1 satisfies both Laser Technology's own building gate
+    (dropped from its `unmet()`) and Energy Technology's only requirement -- so Laser's
+    remaining branch (Energy >= 2) resolves directly to Energy Technology as the
+    shallowest buildable step, a `startResearch` action `_gate_prerequisites` must
+    independently re-derive as unlocked."""
+    from veydrift_agent import candidates
+    from veydrift_agent.models import StrategyCfg
+
+    planet = make_planet(
+        buildings=[
+            Entity(id=ids.Building.RESEARCH_LAB, name="Research Lab", level=1, cost=Resources(metal=200, crystal=400, deuterium=200)),
+        ]
+    )
+    snapshot = make_snapshot(
+        planets=[planet],
+        technologies=[Entity(id=ids.Technology.ENERGY, name="Energy Technology", level=0, cost=Resources(crystal=200))],
+    )
+    policy = make_policy(
+        actions=ActionsCfg(allow_research=True),
+        strategy=StrategyCfg(research_priority=["Laser Technology"]),
+    )
+
+    result = candidates.generate_unlock_chain_candidates(snapshot, policy, planet)
+    assert len(result) == 1
+    unlock_action = result[0].action
+    assert unlock_action.kind == ActionKind.RESEARCH
+    assert unlock_action.entity_id == ids.Technology.ENERGY
+
+    report = evaluate(unlock_action, snapshot, policy)
+    assert verdict(report, "prerequisites").status is GuardStatus.PASS
+
+
 def test_defense_cap_violation_blocks_on_a_missile_silo_level_the_snapshot_never_reported():
     """Whitebox test of `guard._defense_cap_violation`'s own fail-closed branch directly:
     through the full `prerequisites` gate this path is currently unreachable (every
