@@ -6,15 +6,17 @@
  */
 
 import { EnvKeyProvider } from "./envkey.js";
+import { ForkImpersonateProvider } from "./fork-impersonate.js";
 import { KeystoreProvider } from "./keystore.js";
 import type { WalletProvider } from "./types.js";
 
 export * from "./types.js";
 export { EnvKeyProvider } from "./envkey.js";
+export { ForkImpersonateProvider } from "./fork-impersonate.js";
 export { KeystoreProvider } from "./keystore.js";
 
-export type ProviderName = "keystore" | "envkey";
-export const AVAILABLE_PROVIDERS: readonly ProviderName[] = ["keystore", "envkey"];
+export type ProviderName = "keystore" | "envkey" | "fork-impersonate";
+export const AVAILABLE_PROVIDERS: readonly ProviderName[] = ["keystore", "envkey", "fork-impersonate"];
 export const DEFAULT_PROVIDER: ProviderName = "keystore";
 
 export interface GetProviderOptions {
@@ -32,6 +34,8 @@ export function getProvider(opts: GetProviderOptions = {}): WalletProvider {
       return new KeystoreProvider(env);
     case "envkey":
       return new EnvKeyProvider(env);
+    case "fork-impersonate":
+      return new ForkImpersonateProvider(env);
     default:
       throw new Error(
         `Unknown wallet provider "${requested}". Available: ${AVAILABLE_PROVIDERS.join(", ")}.`,
