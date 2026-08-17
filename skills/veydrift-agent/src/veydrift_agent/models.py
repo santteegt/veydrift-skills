@@ -239,6 +239,22 @@ class WalletEngineCfg(Base):
     require_confirmation: bool = True
 
 
+class StrategyCfg(Base):
+    """Phase 2 of the general-strategy-engine program (docs/SPEC.md §5.4/§5.6):
+    generate/filter/score/select candidate pipeline config. Both fields are additive —
+    an older `policy.json` with no `strategy` key still loads (defaults below), but a
+    policy file that sets one is rejected by any agent build predating this field
+    (`Policy.model_config` is `extra="forbid"`)."""
+
+    #: Relative worth of one unit of each resource when collapsing a cost triple to a
+    #: scalar for payback scoring. Default 1:1:1 preserves the assumption plan.py's
+    #: `_energy_candidate` already made implicitly (it summed metal+crystal+deuterium
+    #: unweighted) before this field existed.
+    resource_weights: Resources = Field(default_factory=lambda: Resources(metal=1, crystal=1, deuterium=1))
+    #: Caps `Action.alternatives` so `proposals.jsonl` stays bounded.
+    max_alternatives: int = 5
+
+
 class Policy(Base):
     model_config = ConfigDict(extra="forbid")  # unknown keys are a hard error, never ignored
 
@@ -255,11 +271,25 @@ class Policy(Base):
     actions: ActionsCfg = Field(default_factory=ActionsCfg)
     escalation: EscalationCfg = Field(default_factory=EscalationCfg)
     wallet_engine: WalletEngineCfg = Field(default_factory=WalletEngineCfg)
+    strategy: StrategyCfg = Field(default_factory=StrategyCfg)
 
 
 # --------------------------------------------------------------------------------------
 # Planner output
 # --------------------------------------------------------------------------------------
+
+
+class AlternativeNote(Base):
+    """One candidate the strategy pipeline (`candidates.py`, docs/SPEC.md §5.4 Phase 2)
+    considered but did not select, alongside the `Action` it lost to. Purely informational
+    — never a `Decision` input, never re-derived by `guard.py`. `why_not` is free text:
+    an ROI comparison ("payback 47h vs 31h") for two scored candidates, or a
+    `techtree.describe()` string ("locked: needs Shipyard 2 (have 0)") for a locked one."""
+
+    family: str
+    entity_name: str | None = None
+    score: float | None = None
+    why_not: str = ""
 
 
 class Action(Base):
@@ -280,6 +310,11 @@ class Action(Base):
     rule: str = ""
     rationale: str = ""
     expected_effect: str = ""
+    #: Runner-up candidates from the same generate/filter/score/select pass that produced
+    #: this Action, ranked, capped at `policy.strategy.max_alternatives`. Informational
+    #: only (docs/SPEC.md §5.4 Phase 2) — never an ROI verdict, never consulted by
+    #: `guard.py` or any `Decision` logic.
+    alternatives: list[AlternativeNote] = Field(default_factory=list)
 
     def is_onchain(self) -> bool:
         return self.function is not None

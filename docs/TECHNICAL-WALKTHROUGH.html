@@ -390,7 +390,9 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   <div class="module-row"><div class="module-name">http.py</div><div class="module-lines">199</div><div class="module-desc">The API client: <code>httpx</code>, <code>tenacity</code> retry (5xx/network only), a disk cache honoring per-route max-age.</div></div>
   <div class="module-row"><div class="module-name">read.py</div><div class="module-lines">830</div><div class="module-desc">One <code>vd read</code> subcommand per route (18 targets). <code>--summary</code> is capped near 2KB; <code>battle-reports</code>/<code>highscores</code> refuse stdout entirely — up to 2.2MB uncompressed.</div></div>
   <div class="module-row"><div class="module-name">calc.py</div><div class="module-lines">737</div><div class="module-desc">Pure formulas, no network. Contains <strong>no cost-scaling function</strong> by design — live cost always comes from the API, since recomputing the unpublished per-building factors is exactly how affordability checks go wrong silently.</div></div>
-  <div class="module-row"><div class="module-name">plan.py</div><div class="module-lines">658</div><div class="module-desc">The decision ladder and the planet-trait-derived build order. Energy-first: post-upgrade <code>required</code> vs. current <code>produced</code>, computed fresh every tick — never a fixed offset.</div></div>
+  <div class="module-row"><div class="module-name">techtree.py</div><div class="module-lines">~500</div><div class="module-desc">The on-chain prerequisite table (buildings/ships/defenses/research), transcribed from <code>VeydriftDependencies.sol</code>/<code>VeydriftCatalog.sol</code>. <code>unmet()</code> fails closed on absent data — an unreported level is never assumed high enough.</div></div>
+  <div class="module-row"><div class="module-name">plan.py</div><div class="module-lines">~250</div><div class="module-desc">Rungs 0-4 of the decision ladder (vetoes) plus the three-band precedence calling into <code>candidates.py</code>. As of 2026-08-16 (Phase 2 of the general-strategy-engine program) it no longer decides <em>which entity</em>.</div></div>
+  <div class="module-row"><div class="module-name">candidates.py</div><div class="module-lines">~700</div><div class="module-desc">New in Phase 2. The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family, <code>score_payback</code> (payback-hours, scored iff a level change moves <code>calc.production_per_hour</code>'s output), a <code>select_*</code> function per rung. Energy-first lives here now: post-upgrade <code>required</code> vs. current <code>produced</code>, computed fresh every tick — never a fixed offset.</div></div>
   <div class="module-row"><div class="module-name">guard.py</div><div class="module-lines">640</div><div class="module-desc">17 gates, every one evaluated and reported — never short-circuited. Missing data resolves toward <code>BLOCK</code>/<code>ESCALATE</code>, never <code>PASS</code>.</div></div>
   <div class="module-row"><div class="module-name">state.py</div><div class="module-lines">287</div><div class="module-desc"><code>$VEYDRIFT_HOME</code> resolution, <code>AgentState</code>, the tick lockfile, <code>KILLSWITCH</code> detection.</div></div>
   <div class="module-row"><div class="module-name">tick.py</div><div class="module-lines">978</div><div class="module-desc">The orchestrator — the nine-step loop (§7), the <code>walletctl</code> subprocess bridge, <code>--readiness</code>. Largest module, and where both criticals in §10 actually lived.</div></div>
@@ -478,20 +480,22 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
     <p class="diagram-caption">tier 1 always exits step 7 without sending — the tier gate BLOCKs before ALLOW is ever true</p>
   </div>
 
-  <p>The decision ladder inside step 5, first match wins:</p>
+  <p>The decision ladder inside step 5, first match wins. Rungs 0-4 are vetoes; rungs 5-9 are a three-band candidate pipeline (<code>candidates.py</code>, added 2026-08-16, Phase 2 of the general-strategy-engine program — see §5):</p>
   <div class="codeblock">
-    <div class="codeblock-head"><span>plan.py — decision ladder</span></div>
+    <div class="codeblock-head"><span>plan.py + candidates.py — decision ladder</span></div>
     <div class="codeblock-body"><pre>0. KILLSWITCH present               → HALT
 1. /health not ok                   → NO-OP, reason recorded
 2. pending tx unreconciled          → NO-OP, reconcile first
 3. mission Resolving &gt; 60s          → resolveFleetMission <span class="c-comment">(permissionless, free)</span>
 4. incoming hostile fleet           → ESCALATE, no proposal at all
-5. a resource near its storage cap  → spend it, or build the matching storage
-6. building queue empty             → next build
-7. research queue empty             → next research
-8. shipyard idle, economy on track  → ships/defense, only if policy allows
-9. otherwise                        → NO-OP, explicit reason</pre></div>
+5-9. generate → filter → score → select, three bands in order:
+     1. deadline-driven      -- storage overflow: spend it, or build the matching storage
+     2. economically scored  -- building upgrade, ascending payback hours
+                                 (energy-first is a hard filter here, not a score)
+     3. policy-declared      -- research, then ships/defense, gated on economy-on-track
+     else                    → NO-OP, explicit reason</pre></div>
   </div>
+  <p>The winning <code>Action</code> also carries <code>alternatives</code> — the runner-up candidates from the same pass, ranked, each with a <code>why_not</code> (a payback-hours comparison, or a lock reason from <code>techtree.describe()</code>). Purely informational: never an ROI verdict, never read by <code>guard.py</code> or any <code>Decision</code> logic.</p>
   <p><code>--dry-run</code> is the default at tier 1 and cannot be disabled there — doubly enforced: even if it were somehow bypassed, <code>guard.py</code>'s own <code>tier</code> gate BLOCKs every onchain function below its minimum tier, so step 7's <code>ALLOW</code> condition is never true at tier 1 either. Two independent reasons landing on the same outcome is intentional redundancy, not accidental duplication.</p>
 </section>
 

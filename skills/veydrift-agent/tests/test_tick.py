@@ -28,6 +28,7 @@ from veydrift_agent import plan as plan_mod
 from veydrift_agent.models import (
     Action,
     ActionKind,
+    AlternativeNote,
     EnergyBalance,
     Entity,
     GuardStatus,
@@ -298,6 +299,115 @@ def test_empty_expected_effect_omits_the_effect_line(isolated_home, monkeypatch)
     result = runner.invoke(tick.app, ["--dry-run"])
     assert result.exit_code == 0, result.output
     assert "effect:" not in result.output
+
+
+# --------------------------------------------------------------------------------------
+# Alternatives (Phase 2 of the general-strategy-engine program, docs/SPEC.md §5.4) — same
+# wiring `expected_effect` got in 0.2.0: printed report, proposals.jsonl, --format json.
+# Purely informational; never a Decision input.
+# --------------------------------------------------------------------------------------
+
+
+def test_alternatives_appear_in_report_and_proposal_record(isolated_home, monkeypatch):
+    action = _build_action().model_copy(
+        update={
+            "alternatives": [
+                AlternativeNote(family="mine", entity_name="Crystal Mine", score=47.3, why_not="payback 47.3h vs winner's 12.0h"),
+                AlternativeNote(family="ship", entity_name="Solar Satellite", score=None, why_not="locked: needs Shipyard 1 (have 0)"),
+            ]
+        }
+    )
+    _write_policy()
+    _patch_common(monkeypatch, action=action)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "2 considered and not selected" in result.output
+    assert "Crystal Mine" in result.output
+    assert "Solar Satellite" in result.output
+
+    proposals = log.read_proposals()
+    assert len(proposals[0]["alternatives"]) == 2
+    assert proposals[0]["alternatives"][0]["family"] == "mine"
+    assert proposals[0]["alternatives"][0]["why_not"] == "payback 47.3h vs winner's 12.0h"
+    assert proposals[0]["alternatives"][1]["score"] is None
+
+
+def test_alternatives_round_trip_through_format_json(isolated_home, monkeypatch):
+    action = _build_action().model_copy(
+        update={"alternatives": [AlternativeNote(family="mine", entity_name="Crystal Mine", score=47.3, why_not="payback 47.3h vs winner's 12.0h")]}
+    )
+    _write_policy()
+    _patch_common(monkeypatch, action=action)
+
+    result = runner.invoke(tick.app, ["--dry-run", "--format", "json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["action"]["alternatives"] == [
+        {"family": "mine", "entity_name": "Crystal Mine", "score": 47.3, "why_not": "payback 47.3h vs winner's 12.0h"}
+    ]
+
+
+def test_empty_alternatives_omits_the_alts_line(isolated_home, monkeypatch):
+    _write_policy()
+    _patch_common(monkeypatch)  # default _build_action() has no alternatives
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "considered and not selected" not in result.output
+
+    proposals = log.read_proposals()
+    assert proposals[0]["alternatives"] == []
+
+
+def test_two_identical_ticks_with_alternatives_attached_still_dedup_once(isolated_home, monkeypatch):
+    """The critical interaction this phase's brief calls out: `alternatives` must
+    participate in `_fingerprint_proposal` (it is NOT in `_FINGERPRINT_EXCLUDED_KEYS`),
+    so two ticks whose action -- alternatives included -- is content-identical must still
+    dedup to a single logged proposal, exactly like every other field."""
+    action = _build_action().model_copy(
+        update={"alternatives": [AlternativeNote(family="mine", entity_name="Crystal Mine", score=47.3, why_not="payback 47.3h vs winner's 12.0h")]}
+    )
+    _write_policy()
+    _patch_common(monkeypatch, action=action)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    assert r2.exit_code == 0, r2.output
+
+    assert load_agent_state().tick_count == 1
+    assert len(log.read_proposals()) == 1
+    assert "duplicate" in r2.output.lower()
+
+
+def test_ticks_whose_only_difference_is_alternatives_are_not_deduped(isolated_home, monkeypatch):
+    """The other half of the interaction: if `alternatives` genuinely changed between two
+    ticks (a different runner-up considered, or a different lost-by margin) while every
+    other field stayed the same, that must be logged as a new tick, not silently
+    swallowed by dedup -- proof `alternatives` is actually part of the fingerprint, not
+    accidentally excluded alongside `human_activity_check`."""
+    _write_policy()
+    action_v1 = _build_action().model_copy(
+        update={"alternatives": [AlternativeNote(family="mine", entity_name="Crystal Mine", score=47.3, why_not="payback 47.3h vs winner's 12.0h")]}
+    )
+    _patch_common(monkeypatch, action=action_v1)
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+
+    action_v2 = _build_action().model_copy(
+        update={"alternatives": [AlternativeNote(family="mine", entity_name="Deuterium Synthesizer", score=90.0, why_not="payback 90.0h vs winner's 12.0h")]}
+    )
+    _patch_common(monkeypatch, action=action_v2)
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r2.exit_code == 0, r2.output
+
+    assert load_agent_state().tick_count == 2
+    assert len(log.read_proposals()) == 2
+
+
+def test_fingerprint_excluded_keys_does_not_contain_alternatives():
+    assert "alternatives" not in tick._FINGERPRINT_EXCLUDED_KEYS
 
 
 # --------------------------------------------------------------------------------------

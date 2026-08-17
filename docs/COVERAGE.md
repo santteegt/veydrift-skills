@@ -20,8 +20,9 @@ entries, 60 unique function names.** The gap is `launchFleetMission`, which is o
 the deployed ABI (a 7-arg and a 6-arg form — see `AGENTS.md` §7, trap #2); both forms are
 listed as separate rows below. Every claim in Part 1 traces to one of: `guard.py`'s
 `_MIN_TIER_FOR_FUNCTION` (`guard.py:72-85`), `allowlist.ts`'s `ECONOMY_SIGNATURES` /
-`LAUNCH_FLEET_MISSION_SIGNATURES` (`allowlist.ts:38-58`), a grep of `plan.py` for
-`Action(function=...)`, `tick.py`'s `_action_to_walletctl_json` (`tick.py:265-280`), or the
+`LAUNCH_FLEET_MISSION_SIGNATURES` (`allowlist.ts:38-58`), a grep of `plan.py` and (as of
+Phase 2, 2026-08-16) `candidates.py` for `Action(function=...)`, `tick.py`'s
+`_action_to_walletctl_json` (`tick.py:265-280`), or the
 deployed contract source at commit `701bed3578cff4d134657c714c599dbdb55a4b6a`
 (`/Users/santteegt/GitRepositories/clones/veydrift`).
 
@@ -37,12 +38,15 @@ modules"* (`VeydriftGame.sol:12-13`). A long tail of ABI entries being untouched
 of this codebase is partly a reflection of that upstream architecture, not purely a gap in
 this repo.
 
-**A note on `startResearch`'s planner logic** (see §1.1 below): `plan.py`'s research rung is
-implemented but deliberately simple — lowest-level-account-wide, no prerequisite awareness.
-**Phase 1 is in progress, in a parallel work package**, adding a `techtree.py` module and a
-guard `prerequisites` gate to close this gap. As of this ledger entry that work has not
-landed in this package's `src/` — this document records the gap and the fact that it's being
-worked, not that it's resolved.
+**A note on `startResearch`'s planner logic** (see §1.1 below): the research rung is
+lowest-level-account-wide, tie-broken by ascending id — deliberately simple, not a
+tech-tree strategy. **Phase 1 landed** (`techtree.py` plus a guard `prerequisites` gate):
+a locked candidate is skipped in favour of the next unlocked one, on both sides
+independently. **Phase 2 landed 2026-08-16** (the general-strategy-engine program): the
+entity-selection logic for rungs 5-9, including this research rung, moved out of `plan.py`
+into a new `candidates.py` generate/filter/score/select pipeline — see `docs/SPEC.md`
+§5.4. Function names below are updated accordingly; behaviour is unchanged (Phase 2's own
+acceptance criterion).
 
 ---
 
@@ -52,11 +56,11 @@ worked, not that it's resolved.
 
 | Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
 | --- | --- | --- | --- | --- | --- |
-| `startBuildingUpgrade` | Yes — `plan.py`'s `_next_building_action` / `_storage_overflow_action` | ECONOMY (`guard.py:73`) | ECONOMY (`allowlist.ts:39`) | implemented | — |
-| `startResearch` | Yes — `plan.py`'s `_next_research_action`, lowest-level-account-wide tie-break | ECONOMY (`guard.py:74`) | ECONOMY (`allowlist.ts:40`) | implemented, but prerequisite-blind | `_next_research_action`'s own docstring: *"prerequisite/tier awareness (`researchLabRequirement` in `VeydriftCatalog.sol`) is not modelled here"* (`plan.py`, rung-7 docstring). **Phase 1, in progress (parallel work package)**: a new `techtree.py` module plus a guard `prerequisites` gate are being added to close this. Not yet landed in this package as of this entry — status here is "in progress," not "done." |
-| `startShipProduction` | Yes — `_next_building_action`'s energy-fallback branch and `_shipyard_action` (rung 8) | ECONOMY (`guard.py:83`, added 2026-08-12 — see comment there for the dead-config history) | ECONOMY (`allowlist.ts:49`) | implemented | — |
-| `startDefenseProduction` | Yes — `_shipyard_action` (rung 8, `allow_defense`) | ECONOMY (`guard.py:77`) | ECONOMY (`allowlist.ts:43`) | implemented | — |
-| `resolveFleetMission` | Yes in code (`plan_next_action` rung 3), **but dormant** — `tick.py`'s wired caller (`_run_tick`, ~line 773) never passes `resolvable_mission_ids` to `plan_next_action`, so the parameter defaults to `[]` and rung 3 never fires from the real entrypoint. Root cause: `Snapshot` (frozen, `models.py`) carries no list of the player's own fleet missions, so there is nothing to check "Resolving > 60s" against — see `plan.py`'s module docstring, lines 19-25. | ECONOMY (`guard.py:75`) | ECONOMY (`allowlist.ts:41`) | **implemented (dormant)** | Populate `Snapshot`/a caller-supplied list from `/wallet/{addr}/missions` and wire it into `tick.py`'s `plan_next_action` call — tracked informally as the natural "Phase 5a" alongside 5b/5c below. |
+| `startBuildingUpgrade` | Yes — `candidates.select_building_candidate` / `select_storage_candidate` (moved from `plan.py`'s `_next_building_action` / `_storage_overflow_action` in Phase 2) | ECONOMY (`guard.py:73`) | ECONOMY (`allowlist.ts:39`) | implemented | — |
+| `startResearch` | Yes — `candidates.select_research_candidate` (moved from `plan.py`'s `_next_research_action` in Phase 2), lowest-level-account-wide tie-break, filtered through `techtree.unmet()` (Phase 1) | ECONOMY (`guard.py:74`) | ECONOMY (`allowlist.ts:40`) | implemented | — |
+| `startShipProduction` | Yes — `candidates.select_building_candidate`'s energy-fallback branch and `candidates.select_shipyard_candidate` (moved from `plan.py`'s `_next_building_action`/`_shipyard_action` in Phase 2) | ECONOMY (`guard.py:83`, added 2026-08-12 — see comment there for the dead-config history) | ECONOMY (`allowlist.ts:49`) | implemented | — |
+| `startDefenseProduction` | Yes — `candidates.select_shipyard_candidate` (moved from `plan.py`'s `_shipyard_action`, `allow_defense`, in Phase 2) | ECONOMY (`guard.py:77`) | ECONOMY (`allowlist.ts:43`) | implemented | — |
+| `resolveFleetMission` | Yes in code (`plan_next_action` rung 3, unchanged by Phase 2 — a veto rung, not part of the candidate pipeline), **but dormant** — `tick.py`'s wired caller (`_run_tick`, ~line 773) never passes `resolvable_mission_ids` to `plan_next_action`, so the parameter defaults to `[]` and rung 3 never fires from the real entrypoint. Root cause: `Snapshot` (frozen, `models.py`) carries no list of the player's own fleet missions, so there is nothing to check "Resolving > 60s" against — see `plan.py`'s module docstring. | ECONOMY (`guard.py:75`) | ECONOMY (`allowlist.ts:41`) | **implemented (dormant)** | Populate `Snapshot`/a caller-supplied list from `/wallet/{addr}/missions` and wire it into `tick.py`'s `plan_next_action` call — tracked informally as the natural "Phase 5a" alongside 5b/5c below. |
 
 ### 1.2 Planned (2 rows — one function, two overloads)
 
@@ -69,7 +73,7 @@ worked, not that it's resolved.
 
 | Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
 | --- | --- | --- | --- | --- | --- |
-| `settlePlanet` | No — grepped `plan.py`, no rung emits it | ECONOMY (`guard.py:76`) | ECONOMY (`allowlist.ts:42`) | **to remove, P5b** | Body is identical to `collectResources` at the pinned commit — `VeydriftGame.sol:120-128`: both are exactly `_touchPlayer(msg.sender); _collectPlanetResources(planetId);`. `collectResources` is correctly refused as a disguised read (`abi.ts`'s `NONPAYABLE_READ_FUNCTIONS`, §1.4 below); `settlePlanet` is the same operation but is allowlisted at ECONOMY on both sides and has a live `tick.py` encoder branch (`tick.py:276`) despite no planner rung ever proposing it. Remove the guard/allowlist/encoder entries together (keeping either without the others reopens the tier-map-agreement gap `test_tier_map_agrees_with_the_wallet_engines_allowlist` exists to catch). |
+| `settlePlanet` | No — grepped `plan.py` and `candidates.py`, no rung/generator emits it | ECONOMY (`guard.py:76`) | ECONOMY (`allowlist.ts:42`) | **to remove, P5b** | Body is identical to `collectResources` at the pinned commit — `VeydriftGame.sol:120-128`: both are exactly `_touchPlayer(msg.sender); _collectPlanetResources(planetId);`. `collectResources` is correctly refused as a disguised read (`abi.ts`'s `NONPAYABLE_READ_FUNCTIONS`, §1.4 below); `settlePlanet` is the same operation but is allowlisted at ECONOMY on both sides and has a live `tick.py` encoder branch (`tick.py:276`) despite no planner rung ever proposing it. Remove the guard/allowlist/encoder entries together (keeping either without the others reopens the tier-map-agreement gap `test_tier_map_agrees_with_the_wallet_engines_allowlist` exists to catch). |
 
 ### 1.4 Correctly excluded — disguised reads (6 rows)
 
@@ -239,9 +243,12 @@ reads) never carries this data even though it is one CLI call away:
 ## Part 3 — Verified-but-unused `calc.py` functions
 
 Every function below is contract-derived and covered by `tests/test_calc.py`, but grepping
-`plan.py` for each name found no call site — `plan.py` only imports `calc.energy_balance` and
-`calc.scaled_level`, and calls `calc.build_seconds` once (for the informational build-time-
-savings note, not a decision). None of these participate in any ladder rung today.
+`plan.py`/`candidates.py` for each name found no call site beyond what's already wired —
+`candidates.py` (which now owns this logic, moved from `plan.py` in Phase 2) imports
+`calc.energy_balance`, `calc.scaled_level` and `calc.production_per_hour` (new in Phase 2,
+for `score_payback`), and calls `calc.build_seconds` once (for the informational
+build-time-savings note, not a decision). None of the functions below participate in any
+ladder rung today.
 
 | Function | What it computes | Plausible future consumer |
 | --- | --- | --- |
@@ -255,6 +262,6 @@ savings note, not a decision). None of these participate in any ladder rung toda
 | `mission_fuel` | Deuterium fuel cost for a mission | P5c fleet-mission planning (affordability of the mission itself, not just the ships) |
 | `available_cargo` | Cargo capacity minus fuel cost | P5c fleet-mission planning |
 | `max_planets` | `1 + astrophysics_level` colony cap | A colonization-planning phase (`startPlanet`, §1.5 — itself blocked structurally on `value == 0` until a payable-action design exists) |
-| `solar_crossover_table` | Smallest Solar Plant level whose energy alone covers same-level mines | Currently used only by the standalone `vd calc crossover` CLI command, not by the planner — `_energy_candidate` already does a live, per-planet version of this comparison directly |
-| `deuterium_multiplier_bps` | Temperature-derived deuterium multiplier | Used only via `plan.py`'s live-multiplier reads today (`PlanetSnapshot.deuterium_multiplier_bps`, sourced from the API); this pure recomputation isn't called because the live value is already provided (docs/SPEC.md §5.4: prefer live data over recomputing it) |
+| `solar_crossover_table` | Smallest Solar Plant level whose energy alone covers same-level mines | Currently used only by the standalone `vd calc crossover` CLI command, not by the planner — `candidates._cheapest_energy_choice` (moved from `plan.py`'s `_energy_candidate` in Phase 2) already does a live, per-planet version of this comparison directly |
+| `deuterium_multiplier_bps` | Temperature-derived deuterium multiplier | Used only via `candidates.py`'s live-multiplier reads today (moved from `plan.py` in Phase 2; `PlanetSnapshot.deuterium_multiplier_bps`, sourced from the API); this pure recomputation isn't called because the live value is already provided (docs/SPEC.md §5.4: prefer live data over recomputing it) |
 | `max_temp_from_bps` | Inverse of `deuterium_multiplier_bps`, diagnostic only per its own docstring | Cross-checking a reported multiplier against a reported `temperature`, not planning |

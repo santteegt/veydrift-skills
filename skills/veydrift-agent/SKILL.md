@@ -91,24 +91,28 @@ which is `veydrift-wallet`'s decision, not this skill's.
 
 ## The decision ladder
 
-`vd plan run` evaluates these in order; the **first match wins**, and rung 9 always fires
-if nothing above it did (`Action.rationale` is never empty):
+`vd plan run` evaluates these in order; the **first match wins**, and the pipeline always
+falls back to an explicit NO-OP if nothing matched (`Action.rationale` is never empty).
+Rungs 0-4 are vetoes; rungs 5-9 are a three-band candidate pipeline (`candidates.py`,
+2026-08-16 — see `references/strategy-playbook.md` for the full derivation):
 
 0. KILLSWITCH present → HALT
 1. `/health` not ok → NO-OP, reason recorded
 2. pending tx unreconciled → NO-OP, reconcile first
 3. a mission has been Resolving > 60s → `resolveFleetMission` (permissionless, free)
 4. incoming hostile fleet → ESCALATE, no proposal
-5. a resource is within N hours of its storage cap → spend it, or build the matching storage
-6. building queue empty → next build
-7. research queue empty → next research
-8. shipyard idle AND economy on track → ships/defense, only if policy allows
-9. otherwise → NO-OP with an explicit reason
+5-9. generate → filter → score → select, three bands in order:
+     1. deadline-driven — storage overflow: spend it, or build the matching storage
+     2. economically scored — building upgrade, ascending payback hours
+     3. policy-declared — research, then ships/defense, gated on economy-on-track
+     else → NO-OP with an explicit reason
 
-Rungs 6-8's actual choices — which mine, which energy source, which research — are
-**derived from the planet's live traits** (temperature, multipliers, current levels), not
-hardcoded per planet. `references/strategy-playbook.md` is the full walkthrough of that
-derivation, worth reading before second-guessing a specific proposal.
+The economic band's actual choices — which mine, which energy source — are **derived from
+the planet's live traits** (temperature, multipliers, current levels), not hardcoded per
+planet. `references/strategy-playbook.md` is the full walkthrough of that derivation,
+worth reading before second-guessing a specific proposal. Every proposal also carries
+`alternatives`: the runner-up options considered and why each lost — informational only,
+never a decision input.
 
 **The one invariant worth internalizing on its own:** before proposing any mine upgrade,
 the planner computes energy `required` at the *post-upgrade* level and compares it to

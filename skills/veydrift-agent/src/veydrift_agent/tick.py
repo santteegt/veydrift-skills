@@ -690,6 +690,12 @@ def _proposal_lines(
     lines.append(f"  why:    {action.rationale}")
     if action.expected_effect:
         lines.append(f"  effect: {action.expected_effect}")
+    if action.alternatives:
+        lines.append(f"  alts:   {len(action.alternatives)} considered and not selected --")
+        for alt in action.alternatives:
+            score_text = f"{alt.score:.1f}h payback" if alt.score is not None else "unscored"
+            name = alt.entity_name or alt.family
+            lines.append(f"          [{alt.family}] {name} ({score_text}) -- {alt.why_not}")
     lines.append(f"  guards: {guard_report.passed}/{guard_report.total} pass ({guard_report.decision.value})")
     if unsigned_tx is not None:
         submitted = "" if executed else f" (NOT SUBMITTED -- tier {tier.value})"
@@ -1045,6 +1051,7 @@ def _finish_tick(
         "cost": action.cost.model_dump(),
         "rationale": action.rationale,
         "expected_effect": action.expected_effect,
+        "alternatives": [alt.model_dump() for alt in action.alternatives],
         "guard_decision": guard_report.decision.value,
         "guard_verdicts": [v.model_dump() for v in guard_report.verdicts],
         "tx": unsigned_tx.model_dump() if unsigned_tx else None,

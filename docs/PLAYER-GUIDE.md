@@ -75,6 +75,7 @@ output — reads as plain English instead of jargon.
 | **Snapshot** | The live read of your planet — resources, queues, energy, incoming fleets — that a tick's decision is computed against. Always fetched fresh from Veydrift's own API at the start of the tick; a decision is never made against stale or cached numbers. |
 | **Proposal vs. action** | A *proposal* is what the agent decided it would do. An *action* is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction doesn't matter until tier 2, where it becomes the whole point of `logs/proposals.jsonl` vs. `logs/actions.jsonl` (§11). |
 | **Policy** | The one file, `policy.json`, that holds every setting governing what the agent's allowed to do for your account — tier, wallet, planet(s), spending limits, which action types are enabled. §6 walks through every field. |
+| **Alternatives** | The runner-up options the agent considered for a proposal but didn't pick, each with a one-line reason ("payback 47h vs 31h" for a worse economic option, or "locked: needs Shipyard 2 (have 0)" for one you can't build yet). Purely informational — it never overrides the actual proposal, and the agent never re-evaluates it as a decision. Shown in `vd tick`'s report and `proposals.jsonl` whenever there was more than one option to consider. |
 
 ### Entities have numbers, not just names
 
@@ -251,7 +252,11 @@ change called out:
     "on_incoming_fleet": true, "on_abi_hash_change": true,
     "on_health_unhealthy_minutes": 30, "on_revert_count": 2
   },
-  "wallet_engine": { "provider": "keystore", "require_confirmation": true }
+  "wallet_engine": { "provider": "keystore", "require_confirmation": true },
+  "strategy": {                      // added 2026-08-16; safe to leave at defaults
+    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },
+    "max_alternatives": 5             // caps how many runner-up options each proposal lists
+  }
 }
 ```
 
@@ -445,6 +450,9 @@ it off at this tier. Real output, captured against this repo's reference planet:
 │     why:    Metal Mine 0->1 would need 11 energy against 0 produced.         │
 │ Energy-first invariant: Solar Plant's marginal cost per energy point is      │
 │ cheaper here than one more Solar Satellite (satellite energy/unit=4).        │
+│     alts:   1 considered and not selected --                                │
+│              [energy] Solar Satellite (unscored) -- locked: needs Shipyard   │
+│ 1 (have 0)                                                                   │
 │     guards: 14/17 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │

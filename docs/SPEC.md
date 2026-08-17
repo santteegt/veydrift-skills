@@ -303,7 +303,8 @@ asserts universe speed is still 1. Non-zero exit on drift.
 ### 5.4 `vd plan` — decision engine
 
 Input: snapshot + policy. Output: **zero or one** `Action` (pydantic model) plus a machine-readable
-rationale. Ladder, first match wins:
+rationale. Rungs 0-4 are vetoes (safety, not strategy) and always run first, first match wins; rungs
+5-9 are a three-band candidate pipeline (below):
 
 ```
 0. KILLSWITCH present                -> HALT
@@ -311,20 +312,48 @@ rationale. Ladder, first match wins:
 2. pending tx unreconciled           -> NO-OP, reconcile first
 3. mission Resolving > 60s           -> resolveFleetMission   (permissionless, free)
 4. incoming hostile fleet            -> ESCALATE, no proposal (fleet-visibility.incoming)
-5. resource within N hours of cap    -> spend it, or build the matching storage
-6. building queue empty              -> next build
-7. research queue empty              -> next research
-8. shipyard idle AND economy on track-> ships/defense per policy
-9. otherwise                         -> NO-OP with an explicit reason
+5-9. generate -> filter -> score -> select over three bands, in order:
+     1. deadline-driven      -- storage overflow: spend it, or build the matching storage
+     2. economically scored  -- building upgrade, ascending payback hours
+     3. policy-declared      -- research, then ships/defense, gated on economy-on-track
+     else                    -> NO-OP with an explicit reason
 ```
 
-**Energy-first invariant.** Before any mine upgrade, compute `required` and `produced` explicitly at
-the *post-upgrade* level; if it would drive `required > produced`, propose the energy building
-instead. Never use a fixed solar-level offset — the gap widens from 2 levels at mine 3 to 4 at mine 10.
+> **Phase 2 of the general-strategy-engine program, 2026-08-16.** Before this change,
+> each of rungs 5-9 both decided the action *family* and hardcoded *which entity* inside
+> one function. A new module, `skills/veydrift-agent/src/veydrift_agent/candidates.py`,
+> splits that in two: one pure generator function per family (`mine`, `energy`,
+> `storage`, `research`, `ship`, `defense` — `infrastructure` is reserved for a future
+> family, unused so far), each `(snapshot, policy, planet) -> list[Candidate]`, plus a
+> `select_*` function per rung that replays the exact priority order the pre-Phase-2
+> ladder used. `plan.py`'s own `plan_next_action` now only calls the three `select_*`
+> functions in band order and attaches the runner-up `Candidate`s to the winning
+> `Action.alternatives` (§9 AC23). **This phase's own acceptance criterion is zero
+> behaviour change** — every pre-existing `test_plan.py`/`test_guard.py`/`test_tick.py`
+> test still passes, unmodified.
 
-**Build order is derived, not hardcoded.** `strategy-playbook.md` documents the derivation; `plan.py`
-implements it parametrically from planet traits (temperature, multipliers, `solarSatelliteEnergy`,
-fields, levels). Planet 664's deuterium-lean, no-satellite opener must *fall out of* its traits.
+**Scoring rule.** A `Candidate` is scored (`score: float | None`, payback hours) if and only if its
+level change moves `calc.production_per_hour`'s output — computed by calling that function twice
+(current levels, then with the candidate's one level incremented) and differencing, weighted by
+`policy.strategy.resource_weights` (default 1:1:1) and divided into the live `Entity.cost` (never
+recomputed — `calc.py`'s cost-scaling ban applies here too). Everything else — a storage building, a
+locked entity, every research/ship/defense pick — is `score=None` and ranked after every scored
+candidate within the same band, never above one.
+
+**Energy-first invariant, restated for the pipeline: a hard filter, not a score.** A mine candidate
+whose post-upgrade `required` energy would exceed `produced` is **never generated** by
+`generate_mine_candidates` — the cheaper of Solar Plant / Solar Satellite (`generate_energy_candidates`)
+is generated in its place. Compute `required`/`produced` explicitly at the *post-upgrade* level; never
+use a fixed solar-level offset — the gap widens from 2 levels at mine 3 to 4 at mine 10.
+
+**Build order is derived, not hardcoded.** `strategy-playbook.md` documents the derivation;
+`candidates.py` implements it parametrically from planet traits (temperature, multipliers,
+`solarSatelliteEnergy`, fields, levels). Planet 664's deuterium-lean, no-satellite opener must *fall
+out of* its traits.
+
+**`alternatives` is informational only.** It is never an ROI verdict, never a new entity family or new
+proposable behaviour (that's Phase 3), and never consulted by `guard.py` or any `Decision` logic — the
+winning `Action` is decided exactly the way it always was.
 
 ### 5.5 `vd guard` — guardrail evaluation
 
@@ -410,11 +439,21 @@ a hard stop — never a silent fallback to defaults.
     "on_incoming_fleet": true, "on_abi_hash_change": true,
     "on_health_unhealthy_minutes": 30, "on_revert_count": 2
   },
-  "wallet_engine": { "provider": "keystore", "require_confirmation": true }
+  "wallet_engine": { "provider": "keystore", "require_confirmation": true },
+  "strategy": { "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 }, "max_alternatives": 5 }
 }
 ```
 
 `"planets": []` means discover via `/wallet/{addr}/planets`.
+
+**`strategy`** (Phase 2 of the general-strategy-engine program, 2026-08-16): config for the
+`candidates.py` generate/filter/score/select pipeline (§5.4). `resource_weights` is the exchange rate
+`score_payback` uses to collapse a metal/crystal/deuterium cost triple to a scalar for payback-hours
+scoring — default 1:1:1 preserves the assumption the pre-Phase-2 `_energy_candidate` already made
+implicitly (it summed the three unweighted). `max_alternatives` caps `Action.alternatives` so
+`proposals.jsonl` stays bounded. Both fields are additive for an existing `policy.json` (absent
+`strategy` key -> default), but because `Policy` is `extra="forbid"`, a new policy file that sets
+`strategy` will not load on an agent build predating this field.
 
 ### 5.7 `vd tick` — the loop entrypoint
 
@@ -748,6 +787,16 @@ silent-failure risks, guardrail bypasses and spec defects. Triage, fix, repeat u
     `/defenses`, Defense and FleetMissionType enums match the contract.
 22. `wallet-provider-research.md` leads with the address-binding constraint (§6.1) and states plainly
     that Cobo and CDP are hosted, not open source.
+23. `vd tick`'s printed report and `proposals.jsonl` carry the winning `Action`'s ranked
+    `alternatives`, each with a stated reason it lost (a payback-hours comparison, or a
+    `techtree.describe()` lock reason) — added 2026-08-16 (Phase 2 of the
+    general-strategy-engine program).
+24. Two content-identical `vd tick` invocations (`alternatives` included) still dedup to one logged
+    `proposals.jsonl` entry; a tick whose only real change is a different runner-up in
+    `alternatives` is logged as a new tick, not suppressed — `tests/test_tick.py`'s
+    `test_two_identical_ticks_with_alternatives_attached_still_dedup_once` and
+    `test_ticks_whose_only_difference_is_alternatives_are_not_deduped` pin both halves. Added
+    2026-08-16 (Phase 2 of the general-strategy-engine program).
 
 ---
 

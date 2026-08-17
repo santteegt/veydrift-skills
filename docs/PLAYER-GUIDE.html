@@ -642,6 +642,7 @@ footer.doc-foot a { color: var(--ink-dim); }
         <tr><td><strong>Snapshot</strong></td><td>The live read of your planet — resources, queues, energy, incoming fleets — that a tick's decision is computed against. Always fetched fresh, never stale or cached numbers driving a decision.</td></tr>
         <tr><td><strong>Proposal vs. action</strong></td><td>A <em>proposal</em> is what the agent decided it would do. An <em>action</em> is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction becomes the whole point of <code>proposals.jsonl</code> vs. <code>actions.jsonl</code> at tier 2 — §11.</td></tr>
         <tr><td><strong>Policy</strong></td><td>The one file, <code>policy.json</code>, that holds every setting governing what the agent's allowed to do for your account — tier, wallet, planet(s), spending limits, which action types are enabled. §6 walks through every field.</td></tr>
+        <tr><td><strong>Alternatives</strong></td><td>The runner-up options the agent considered for a proposal but didn't pick, each with a one-line reason ("payback 47h vs 31h" for a worse economic option, or "locked: needs Shipyard 2 (have 0)" for one you can't build yet). Purely informational — it never overrides the actual proposal. Shown in <code>vd tick</code>'s report and <code>proposals.jsonl</code> whenever there was more than one option to consider.</td></tr>
       </tbody>
     </table>
   </div>
@@ -762,7 +763,8 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
     <span class="c-key">"allow_defense"</span>: false, <span class="c-key">"allow_ships"</span>: false,
     <span class="c-key">"allow_combat"</span>: false                     <span class="c-comment">// ignored everywhere, on purpose — see §14</span>
   },
-  <span class="c-key">"wallet_engine"</span>: { <span class="c-key">"provider"</span>: <span class="c-str">"keystore"</span>, <span class="c-key">"require_confirmation"</span>: true }
+  <span class="c-key">"wallet_engine"</span>: { <span class="c-key">"provider"</span>: <span class="c-str">"keystore"</span>, <span class="c-key">"require_confirmation"</span>: true },
+  <span class="c-key">"strategy"</span>: { <span class="c-key">"resource_weights"</span>: { <span class="c-key">"metal"</span>: 1, <span class="c-key">"crystal"</span>: 1, <span class="c-key">"deuterium"</span>: 1 }, <span class="c-key">"max_alternatives"</span>: 5 } <span class="c-comment">// added 2026-08-16, safe to leave default</span>
 }</pre></div>
   </div>
   <p><code>wallet</code> is the address that settled the planet(s) you want managed. <code>planets: []</code> auto-discovers every planet that wallet holds. This field only ever holds numeric ids — if you only know your coordinates (the <code>galaxy:system:position</code> shown in the game's UI, e.g. <code>7:181:14</code>), not the id, editing this file by hand means finding the id first: <code>vd read planets --wallet &lt;your address&gt;</code> lists every planet you own with both, so you can match yours by coordinates. Everything else shown is a reasonable default — don't loosen <code>limits</code> or flip on <code>allow_defense</code>/<code>allow_ships</code> until you've watched the agent for a while (§12).</p>
@@ -871,9 +873,10 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
         <div class="propose-body">
           <div class="propose-fn">startBuildingUpgrade(planet=664, entity=3)</div>
           <div class="propose-why"><strong>Cost:</strong> M 75 &nbsp;C 30 &nbsp;D 0 &nbsp;·&nbsp; <strong>Why:</strong> Metal Mine 0→1 would need 11 energy against 0 produced. Energy-first invariant: Solar Plant's marginal cost per energy point is cheaper here than one more Solar Satellite.</div>
+          <div class="propose-why"><strong>Alternatives (informational only):</strong> Solar Satellite — locked: needs Shipyard 1 (have 0)</div>
           <div class="guard-bar">
-            <div class="guard-track"><div class="guard-fill" style="width:81%"></div></div>
-            <span class="guard-label">13 / 16 guards pass</span>
+            <div class="guard-track"><div class="guard-fill" style="width:82%"></div></div>
+            <span class="guard-label">14 / 17 guards pass</span>
           </div>
           <div class="tx-line">
             <span>to 0xf397…3755d</span><span>·</span><span>data 0x165715e3…</span><span>·</span>

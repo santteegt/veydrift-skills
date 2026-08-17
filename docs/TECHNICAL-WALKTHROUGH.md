@@ -148,7 +148,8 @@ verification.
 | `http.py` | 199 | The API client: `httpx`, `tenacity` retry (5xx/network only, never 4xx), a disk cache under `$VEYDRIFT_HOME/cache/` honoring per-route max-age. |
 | `read.py` | 830 | One `vd read` subcommand per API route (18 targets). `--summary` mode is the default and is capped near 2KB; `battle-reports`/`highscores` refuse to print to stdout at all — `--out` is mandatory, since they run 60KB–2.2MB uncompressed. |
 | `calc.py` | 737 | Pure formulas, no network calls, one docstring citation per function. Contains **no cost-scaling function** by design — live cost always comes from the API's own `cost` field, since the per-building factors are unpublished rationals and recomputing them is exactly how affordability checks go wrong silently. |
-| `plan.py` | 658 | The decision ladder (§7 below) and the planet-trait-derived build order. The energy-first invariant lives here: before proposing a mine upgrade, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. |
+| `plan.py` | ~250 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's three-band precedence calling into `candidates.py`. As of 2026-08-16 (Phase 2 of the general-strategy-engine program) it no longer decides *which entity*; that moved out. |
+| `candidates.py` | ~700 | New in Phase 2. The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order. The energy-first invariant lives here now: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. |
 | `guard.py` | 640 | 16 guardrail gates, every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. |
 | `state.py` | 287 | `$VEYDRIFT_HOME` resolution, `AgentState` (pending txs, cumulative gas, revert counts), the tick lockfile, `KILLSWITCH` detection. |
 | `tick.py` | 978 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`. The single largest module, and where both criticals a first-pass judge review found actually lived (§10, §11). |
@@ -190,7 +191,9 @@ verification.
 9. pretty report                →  stdout + logs/ticks/<iso>.md
 ```
 
-The decision ladder inside step 5, first match wins:
+The decision ladder inside step 5, first match wins. Rungs 0-4 are vetoes; rungs 5-9 are
+a three-band candidate pipeline (`candidates.py`, added 2026-08-16, Phase 2 of the
+general-strategy-engine program — see §5's module table):
 
 ```
 0. KILLSWITCH present               -> HALT
@@ -198,12 +201,18 @@ The decision ladder inside step 5, first match wins:
 2. pending tx unreconciled          -> NO-OP, reconcile first
 3. mission Resolving > 60s          -> resolveFleetMission (permissionless, free)
 4. incoming hostile fleet           -> ESCALATE, no proposal at all
-5. a resource near its storage cap  -> spend it, or build the matching storage
-6. building queue empty             -> next build
-7. research queue empty             -> next research
-8. shipyard idle, economy on track  -> ships/defense, only if policy allows
-9. otherwise                        -> NO-OP, explicit reason
+5-9. generate -> filter -> score -> select, three bands in order:
+     1. deadline-driven      -- storage overflow: spend it, or build the matching storage
+     2. economically scored  -- building upgrade, ascending payback hours (energy-first
+                                 is a hard filter here, not a score)
+     3. policy-declared      -- research, then ships/defense, gated on economy-on-track
+     else                    -> NO-OP, explicit reason
 ```
+
+The winning `Action` also carries `alternatives` — the runner-up candidates from the same
+pass, ranked, each with a `why_not` (a payback-hours comparison, or a lock reason from
+`techtree.describe()`). Purely informational: never an ROI verdict, never read by
+`guard.py` or any `Decision` logic.
 
 `--dry-run` is the default at tier 1 and cannot be disabled there — `tick._effective_dry_run()`
 forces it regardless of the flag whenever `policy.tier is Tier.ADVISOR`. It's doubly

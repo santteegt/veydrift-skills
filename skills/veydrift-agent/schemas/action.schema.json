@@ -15,6 +15,49 @@
       "title": "ActionKind",
       "type": "string"
     },
+    "AlternativeNote": {
+      "description": "One candidate the strategy pipeline (`candidates.py`, docs/SPEC.md \u00a75.4 Phase 2)\nconsidered but did not select, alongside the `Action` it lost to. Purely informational\n\u2014 never a `Decision` input, never re-derived by `guard.py`. `why_not` is free text:\nan ROI comparison (\"payback 47h vs 31h\") for two scored candidates, or a\n`techtree.describe()` string (\"locked: needs Shipyard 2 (have 0)\") for a locked one.",
+      "properties": {
+        "entity_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entity Name"
+        },
+        "family": {
+          "title": "Family",
+          "type": "string"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Score"
+        },
+        "why_not": {
+          "default": "",
+          "title": "Why Not",
+          "type": "string"
+        }
+      },
+      "required": [
+        "family"
+      ],
+      "title": "AlternativeNote",
+      "type": "object"
+    },
     "Resources": {
       "description": "A metal/crystal/deuterium triple. Used for holdings, costs, caps and reserves.",
       "properties": {
@@ -40,6 +83,13 @@
   },
   "description": "Zero or one of these per tick. `function` is None for noop/escalate/halt.",
   "properties": {
+    "alternatives": {
+      "items": {
+        "$ref": "#/$defs/AlternativeNote"
+      },
+      "title": "Alternatives",
+      "type": "array"
+    },
     "cost": {
       "$ref": "#/$defs/Resources"
     },

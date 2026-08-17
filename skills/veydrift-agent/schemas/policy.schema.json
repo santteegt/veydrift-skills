@@ -159,6 +159,21 @@
       "title": "StorageCfg",
       "type": "object"
     },
+    "StrategyCfg": {
+      "description": "Phase 2 of the general-strategy-engine program (docs/SPEC.md \u00a75.4/\u00a75.6):\ngenerate/filter/score/select candidate pipeline config. Both fields are additive \u2014\nan older `policy.json` with no `strategy` key still loads (defaults below), but a\npolicy file that sets one is rejected by any agent build predating this field\n(`Policy.model_config` is `extra=\"forbid\"`).",
+      "properties": {
+        "max_alternatives": {
+          "default": 5,
+          "title": "Max Alternatives",
+          "type": "integer"
+        },
+        "resource_weights": {
+          "$ref": "#/$defs/Resources"
+        }
+      },
+      "title": "StrategyCfg",
+      "type": "object"
+    },
     "Tier": {
       "enum": [
         "advisor",
@@ -220,6 +235,9 @@
     },
     "storage": {
       "$ref": "#/$defs/StorageCfg"
+    },
+    "strategy": {
+      "$ref": "#/$defs/StrategyCfg"
     },
     "tier": {
       "$ref": "#/$defs/Tier",

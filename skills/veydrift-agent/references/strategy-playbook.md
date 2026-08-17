@@ -1,10 +1,21 @@
 # Strategy playbook — deriving a build order for ANY planet
 
 This is the document a human reads to check the planner's reasoning without reading
-`plan.py` itself. It generalizes an earlier manual, one-off derivation method ("how to
-re-derive a strategy for another planet") into the algorithm `plan.py` actually runs on
-every tick, for any planet the wallet holds — planet 664 appears in examples only because
-it is the account's real planet, never as a special case in code.
+`plan.py`/`candidates.py` itself. It generalizes an earlier manual, one-off derivation
+method ("how to re-derive a strategy for another planet") into the algorithm the planner
+actually runs on every tick, for any planet the wallet holds — planet 664 appears in
+examples only because it is the account's real planet, never as a special case in code.
+
+**2026-08-16 (Phase 2 of the general-strategy-engine program): the derivation below is
+unchanged, but the code that implements it moved.** Rungs 0-4 (vetoes) are still in
+`plan.py`. Rungs 5-9's actual entity selection — everything §3-§8 below describe — now
+lives in a new module, `src/veydrift_agent/candidates.py`, as a generate/filter/score/
+select pipeline: one pure generator per family (`mine`, `energy`, `storage`, `research`,
+`ship`, `defense`), a `score_payback` scorer, and a `select_*` function per rung. This is
+the same reasoning, restructured — every number and every branch condition below is
+still exactly what the code computes; only the function names changed (noted inline where
+it matters). See `docs/SPEC.md` §5.4 for the architecture and `plan.py`'s own module
+docstring for the three-band precedence.
 
 If you are reviewing a proposal `vd plan` made and want to know "is this right," this
 document plus `references/formulas.md` §9 (the worked energy-source example) should be
@@ -39,7 +50,7 @@ correspondence:
 | 4. `/wallet/{addr}/infrastructure` (levels, live costs, energyBalance) | `PlanetSnapshot.buildings`, `.energy` |
 | 5-6. `/research`, `/shipyard` | `Snapshot.technologies`, `PlanetSnapshot.ships` |
 | 8. Invert `maxTemp` from `deutMultBps`, cross-check | `calc.max_temp_from_bps` — a diagnostic only; `plan.py` reads `PlanetSnapshot.temperature` directly and never needs the inversion |
-| 9. Read `energyBalance.sources.solarSatelliteEnergy` — "decides the whole energy strategy" | `plan._satellite_energy_per_unit`: prefers `PlanetSnapshot.energy.solar_satellite_energy` (live), falls back to `calc.solar_satellite_energy(temperature)` only if absent |
+| 9. Read `energyBalance.sources.solarSatelliteEnergy` — "decides the whole energy strategy" | `candidates._satellite_energy_per_unit`: prefers `PlanetSnapshot.energy.solar_satellite_energy` (live), falls back to `calc.solar_satellite_energy(temperature)` only if absent |
 | 10. Generate the energy-crossover table | `calc.solar_crossover_table` — see `references/formulas.md` §8 |
 | 12. Re-run the three duration checks, confirm universe speed | `vd calc verify` |
 
@@ -203,7 +214,12 @@ be.
 ## 8. The full ladder, rung by rung
 
 This codebase's decision ladder, implemented exactly, first match wins
-(`plan.plan_next_action`):
+(`plan.plan_next_action`). Rungs 0-4 are vetoes, unchanged since before Phase 2. Rungs
+5-9 are described here exactly as before (same numbers, same branch conditions) — as of
+Phase 2 they are driven by `candidates.py`'s `select_storage_candidate` /
+`select_building_candidate` / `select_research_candidate` / `select_shipyard_candidate`
+rather than by four standalone functions in `plan.py`; each function name below is noted
+where it moved.
 
 0. **KILLSWITCH present -> HALT.** Not read from `$VEYDRIFT_HOME` by this module —
    `killswitch_active` is a parameter `tick.py` (WP3) is expected to pass in, since
@@ -238,25 +254,37 @@ This codebase's decision ladder, implemented exactly, first match wins
 
    This is a documented interpretation of the SPEC's terse rung 5 text ("spend it, or
    build the matching storage"), not a literal one — see the docstring on
-   `plan._storage_overflow_action` for the reasoning in full. An earlier version of this
-   rung attempted the storage-building fallback even when the queue was busy, which would
-   have produced a proposal that reverts on submission; caught while writing this
-   document and fixed before shipping (`tests/test_plan.py::test_storage_overflow_with_busy_queue_proposes_nothing_unsafe`).
+   `candidates.select_storage_candidate` (moved from `plan._storage_overflow_action` in
+   Phase 2) for the reasoning in full. An earlier version of this rung attempted the
+   storage-building fallback even when the queue was busy, which would have produced a
+   proposal that reverts on submission; caught while writing this document and fixed
+   before shipping (`tests/test_plan.py::test_storage_overflow_with_busy_queue_proposes_nothing_unsafe`).
+   Note that this band is deadline-driven, not economically scored — every candidate
+   `candidates.generate_storage_candidates` produces carries `score=None`.
 6. **Building queue empty -> next build.** §3-§5's derivation, run per target planet in
-   policy order.
+   policy order. As of Phase 2, `candidates.select_building_candidate` is the entity
+   picker: `candidates.generate_mine_candidates` never generates a mine candidate that
+   fails the energy-first check (§3) at all — the energy substitute
+   (`candidates.generate_energy_candidates`) is what fills that gap — and each generated
+   mine/energy candidate is scored (`candidates.score_payback`, payback hours) whenever
+   the level change actually moves `calc.production_per_hour`'s output. Runner-ups
+   populate the proposal's `alternatives` (informational; see docs/SPEC.md §5.4).
 7. **Research queue empty -> next research.** Deliberately the least-derived rung in this
    module: picks the technology with the lowest current level account-wide, ties broken
-   by ascending contract id. This is *not* as rich as the energy invariant on purpose —
-   the SPEC's rung 7 only asks for "next research," not a tech-tree strategy, and
-   `VeydriftCatalog.researchLabRequirement` (prerequisite tiers) is not modeled. Treat
-   this rung's output as a reasonable default, not a derived recommendation the way
-   rungs 6's mine/energy choice is.
+   by ascending contract id, filtered through `techtree.unmet()` (a locked candidate is
+   skipped in favour of the next unlocked one). This is *not* as rich as the energy
+   invariant on purpose — the SPEC's rung 7 only asks for "next research," not a
+   tech-tree strategy. `candidates.select_research_candidate` (Phase 2) always scores a
+   research candidate `None` — nothing in `calc.py` models a technology moving
+   `production_per_hour`.
 8. **Shipyard idle AND economy on track -> ships/defense per policy.** Fires only if
    `policy.actions.allow_ships` or `allow_defense` is true (both default `false` in
    `assets/policy.example.json`, so this rung rarely fires in practice) and something
-   else (building or research) is already actively progressing. If ships are allowed and
-   a satellite is currently the cheaper energy source on this planet (§5), proposes one;
-   if defense is allowed, proposes the cheapest defense entry (Rocket Launcher) as a
+   else (building or research) is already actively progressing
+   (`candidates.economy_on_track`). If ships are allowed and a satellite is currently the
+   cheaper energy source on this planet (§5, `candidates.generate_ship_candidates`),
+   proposes one; if defense is allowed, proposes the cheapest defense entry (Rocket
+   Launcher, `candidates.generate_defense_candidates`, always `score=None`) as a
    policy-driven default in the absence of any threat model.
 9. **Otherwise -> NO-OP with an explicit reason.** Always reachable; `Action.rationale`
    is never empty.
@@ -356,6 +384,12 @@ Given a `vd plan run` proposal, in order:
    proposal is a mine upgrade, this should be false; if it's an energy building or
    satellite, this should be true.
 5. **Rationale is legible.** `Action.rationale` should state the specific numbers that
-   drove the decision (this is by design — every branch in `_next_building_action`
+   drove the decision (this is by design — every candidate generator in `candidates.py`
    writes required/produced/satellite-energy into the rationale string precisely so a
    human doesn't have to re-run the code to check it).
+6. **Alternatives (Phase 2) make sense, if present.** `Action.alternatives` lists the
+   runner-ups from the same generate/filter/score/select pass, each with a `why_not` —
+   either a payback-hours comparison against the winner, or a `techtree.describe()` lock
+   reason. This is informational only: it should never look like an ROI verdict
+   overriding the actual proposal, and a locked alternative's reason should match what
+   `techtree.unmet()` would report for that entity's current levels.

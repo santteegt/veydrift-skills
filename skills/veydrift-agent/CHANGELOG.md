@@ -11,6 +11,55 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-16
+
+### Changed
+- **Rungs 5-9 of `plan.py`'s decision ladder are now a generate/filter/score/select
+  candidate pipeline** (new module `candidates.py`), replacing the old scheme where each
+  rung both decided the action *family* and hardcoded *which entity* in one function.
+  Rungs 0-4 (killswitch, health, pending-tx, mission-resolving, hostile-fleet — vetoes,
+  not strategy) are untouched. `candidates.py` provides one generator per family (`mine`,
+  `energy`, `storage`, `research`, `ship`, `defense`), a `score_payback` scorer (weighted
+  cost ÷ weighted marginal `calc.production_per_hour` delta, in payback hours — scored
+  iff the level change actually moves that function's output; a storage building, a
+  locked entity, and every research/ship/defense pick are `score=None`), and a `select_*`
+  function per rung that replays the exact priority order the pre-Phase-2 ladder used —
+  the energy-first invariant is still a **hard filter**, not a score: an energy-unsafe
+  mine is never generated as a candidate at all, and the cheaper of Solar Plant / Solar
+  Satellite is generated in its place, identical semantics to before. **This phase's own
+  acceptance criterion is zero behaviour change**: every pre-existing `test_plan.py`,
+  `test_guard.py` and `test_tick.py` test passes unmodified (342 -> 357, the 15 new ones
+  all additions — see `tests/test_candidates.py` and the new alternatives/dedup cases in
+  `tests/test_tick.py`).
+- `Action` gains `alternatives: list[AlternativeNote]` — the runner-up candidates from
+  the same pipeline pass that produced the winning action, ranked (scored ascending by
+  payback hours, unscored last), capped at `policy.strategy.max_alternatives` (default
+  5), each carrying a `why_not` ("payback 47.3h vs winner's 12.0h", or
+  `techtree.describe()`'s "locked: needs Shipyard 2 (have 0)" for a locked one). Wired
+  into the printed/`--format json` report and `proposals.jsonl`, same as `expected_effect`
+  got in 0.2.0. **`alternatives` participates in `_fingerprint_proposal`'s dedup hash** —
+  deliberately *not* added to `_FINGERPRINT_EXCLUDED_KEYS` — so two content-identical
+  ticks (alternatives included) still dedup to one logged proposal, and a tick whose only
+  real change is a different runner-up is correctly logged as new evidence, not
+  suppressed. Getting this backwards would have silently defeated dedup on nearly every
+  tick, the same bug class the 0.2.0 dedup fix (`fa06252`) closed.
+- New `Policy.strategy: StrategyCfg` (`resource_weights: Resources`, default 1:1:1;
+  `max_alternatives: int`, default 5). `resource_weights` is the exchange rate
+  `score_payback` uses to collapse a metal/crystal/deuterium cost triple to a scalar —
+  1:1:1 preserves the assumption `_energy_candidate` already made implicitly (it summed
+  the three unweighted) before this field existed. **Additive for existing policy
+  files** (absent `strategy` key -> default) but, because `Policy` is `extra="forbid"`, a
+  new policy file that sets `strategy` will not load on an agent build predating this
+  field.
+- **Disclaimer, stated once here rather than repeated at every call site**: `alternatives`
+  is informational only. It is never an ROI verdict (no "you should have built X
+  instead"), it does not add a new entity family or new proposable behaviour (Phase 3's
+  job), and it is never read by `guard.py` or any `Decision` logic — the winning `Action`
+  is decided exactly the way it always was; `alternatives` only explains what else was
+  considered and why it lost.
+- `schemas/policy.schema.json` / `schemas/action.schema.json` regenerated
+  (`scripts/generate_schemas.py`) for the new `StrategyCfg`/`AlternativeNote` fields.
+
 ## [0.3.0] - 2026-08-16
 
 ### Added
