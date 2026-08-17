@@ -39,7 +39,16 @@ const ECONOMY_SIGNATURES = [
   "startBuildingUpgrade(uint256,uint8)",
   "startResearch(uint256,uint8)",
   "resolveFleetMission(uint256)",
-  "settlePlanet(uint256)",
+  // settlePlanet(uint256) was here through the prior phase. Removed 2026-08-17 (Phase
+  // 5, docs/SPEC.md §5.4/§9 -- a breaking allowlist change): at the pinned commit its
+  // body is `_touchPlayer(msg.sender); _collectPlanetResources(planetId);`, byte-
+  // identical to `collectResources`, which `abi.ts`'s NONPAYABLE_READ_FUNCTIONS already
+  // refuses in `sendTx` as a disguised read. It was allowlisted here and in
+  // veydrift-agent's `guard.py` (`_MIN_TIER_FOR_FUNCTION`), with a live `tick.py`
+  // encoder branch, but no planner rung ever produced this action -- allowlisted
+  // capacity that could only ever burn gas for zero effect. Removed from all three
+  // together, or the agent-side test_tier_map_agrees_with_the_wallet_engines_allowlist
+  // fails.
   "startDefenseProduction(uint256,uint8,uint32)",
   // Added 2026-08-12. plan.py's rung 8 proposes ship production when policy.actions.allow_ships
   // is enabled, but no tier previously granted the selector, so such proposals could never be

@@ -137,18 +137,31 @@ describe("checkAllowlist", () => {
     });
   });
 
-  // Was 5 until 2026-08-12. startShipProduction was added because plan.py's rung 8 proposes
-  // ships when policy.actions.allow_ships is set, but no tier granted the selector -- making
-  // that knob dead config whose proposals could never be submitted. See docs/SPEC.md §4.
-  it("tierSelectors('economy') contains exactly the six spec'd selectors", () => {
+  // Was 5 until 2026-08-12 (startShipProduction added: plan.py's rung 8 proposes ships when
+  // policy.actions.allow_ships is set, but no tier granted the selector, making that knob dead
+  // config). Was 6 until 2026-08-17 (Phase 5, docs/SPEC.md §5.4/§9): settlePlanet removed -- its
+  // body at the pinned commit is byte-identical to collectResources, a disguised read this
+  // engine already refuses to send, and no planner rung ever produced the action.
+  it("tierSelectors('economy') contains exactly the five spec'd selectors", () => {
     const selectors = tierSelectors("economy");
-    expect(selectors.size).toBe(6);
+    expect(selectors.size).toBe(5);
   });
 
-  it("tierSelectors('operator') is economy's six plus both launchFleetMission overloads", () => {
+  it("tierSelectors('operator') is economy's five plus both launchFleetMission overloads", () => {
     const economy = tierSelectors("economy");
     const operator = tierSelectors("operator");
     expect(operator.size).toBe(economy.size + 2);
     for (const s of economy) expect(operator.has(s)).toBe(true);
+  });
+
+  it("settlePlanet is no longer allowlisted at any tier (Phase 5 removal)", async () => {
+    const fn = resolveFunctionAbi("settlePlanet(uint256)");
+    const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n] });
+    const tx: UnsignedTx = { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 };
+    for (const tier of ["advisor", "economy", "operator"] as const) {
+      const result = await checkAllowlist(tx, tier, { fetchConfig: async () => fixtureConfig() });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+    }
   });
 });

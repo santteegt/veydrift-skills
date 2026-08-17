@@ -73,6 +73,37 @@ it was what forced the hand-rolled YAML parser, and JSON + pydantic is strictly 
 - A raid-profitability model — `protectedResources` semantics are still unconfirmed.
 - A hosted/MPC/AA wallet provider. Deferred to `docs/wallet-provider-research.md` (§6).
 
+### Phase 5 status note (2026-08-17) — Goal 1's T3 claim is still partly aspirational
+
+Phase 5 of the general-strategy-engine program set out to make Goal 1's "T3 Operator
+(adds non-combat fleet)" literally true, and to bring colonisation into scope (revising
+the non-goals list above accordingly). **Only part of that landed.** What shipped:
+
+- `resolveFleetMission` (already ECONOMY-tier, already implemented in `plan.py`) is now
+  actually *reachable* — `tick.py` computes `resolvable_mission_ids` live and passes it
+  through. This was always in scope; it was dormant, not aspirational.
+- `PlanetSnapshot.archetype` is populated (opt-in, cadence-gated).
+- `settlePlanet` — allowlisted capacity that could never do anything useful — is removed
+  from both enforcement layers (a breaking change, `veydrift-wallet` v0.2.0).
+- The real colonisation entrypoint was identified and verified against contract source
+  (`launchFleetMission` mission type `Colonize`/2 — see §6.4 and
+  `references/contract-writes.md`), correcting a plausible false lead (`startPlanet`,
+  which is unrelated and out of scope regardless, being `payable`).
+
+**What did NOT ship, and why**: non-combat fleet-mission planning (Transport/Deploy/
+Harvest) and real colonisation both require a new `ActionKind.FLEET_MISSION` and new
+`Action` fields on `models.py` — the frozen interface contract for the work package that
+attempted this phase (`AGENTS.md` §4). That work package's own instructions treat
+`models.py` as not-to-be-edited, stop-and-report-if-blocked, rather than a same-session
+decision it could make unilaterally. So T3's fleet capability remains the operator tier
+*allowlisting* Transport(0)/Deploy(1)/Harvest(4) at the wallet-engine layer (true since
+before this phase — see §6.4) with **no planner path that can ever produce one** — the
+exact "allowlisted, unreachable" shape this phase found and fixed for
+`resolveFleetMission`, still true for fleet missions generally. Colonisation is
+correspondingly still out of scope in practice, not by non-goal but by this blocker. See
+`veydrift-agent`'s `CHANGELOG.md` `[Unreleased]` entry and `docs/COVERAGE.md` §1.2 for
+the full state and what a maintainer who can edit `models.py` needs to do to finish it.
+
 ---
 
 ## 2. Repository layout
@@ -835,6 +866,25 @@ Defence in depth: a fully compromised `veydrift-agent` still cannot make `wallet
 > `--confirm`, and refusal to send a nonpayable-read. State the distinction that way; a tier check
 > that reads as a security boundary when it is really a misconfiguration guard is worse than none.
 
+> **Allowlist change, Phase 5 (2026-08-17, docs/SPEC.md §5.4/§9), breaking, `veydrift-wallet`
+> v0.2.0.** `settlePlanet(uint256)` removed from `ECONOMY_SIGNATURES` — its body at the pinned
+> commit is byte-identical to `collectResources`, a disguised read `sendTx` already refuses, and no
+> `veydrift-agent` planner rung ever produced this action; it was allowlisted capacity that could
+> only ever burn gas. Removed from `guard.py`'s `_MIN_TIER_FOR_FUNCTION` in the same change.
+>
+> **`OPERATOR_ALLOWED_MISSION_TYPES` was deliberately NOT widened this phase**, despite Phase 5's
+> brief asking for Colonize (2) to be added. The colonisation entrypoint was verified first, per
+> that brief's own instruction: `VeydriftGame.sol`'s facade `launchFleetMission` (both overloads)
+> reads `missionType` via inline assembly and dispatches to `VeydriftColonizationModule` when it
+> equals `Colonize`, whose `_validateColonyCreation` calls `_requireShips(originPlanetId,
+> Ship.ColonyShip, 1)` — confirming `launchFleetMission` is genuinely the entrypoint, not a
+> different function. The widening itself was withheld because its Python-side counterpart (an
+> independent mission-type gate in `guard.py`, per AGENTS.md §5's two-layer-agreement invariant)
+> could not be built — it needs `Action` fields that don't exist on `models.py`, frozen for the
+> work package that attempted this. Widening this allowlist alone would have left the wallet engine
+> as the *sole* enforcement layer for a launchable mission type, which is exactly the asymmetry this
+> project's two-layer design exists to avoid. See `veydrift-wallet`'s `CHANGELOG.md` v0.2.0 entry.
+
 ### 6.5 Deferred research — `docs/wallet-provider-research.md` (WP4b)
 
 A document, not code. Deliverable of this pass; the decision comes later.
@@ -1052,6 +1102,39 @@ proposes its own unlock chain (§5.4):**
 41. `guard.py`'s `prerequisites` gate independently re-derives an unlock-chain step's legality (it
     keys off `Action.kind`, not which generator produced the action) and PASSes it —
     `tests/test_guard.py::test_prerequisites_gate_passes_an_unlock_chain_step_from_candidates_py`.
+
+**Phase 5 (2026-08-17, docs/SPEC.md §5.4/§9)**
+
+42. `plan.py` rung 3 (`resolveFleetMission`) fires from the real `vd tick` entrypoint, not just
+    from a directly-supplied `resolvable_mission_ids` argument: `tick._resolvable_mission_ids`
+    reads `/wallet/{addr}/fleet-visibility` and finds an own `outgoing` mission that is `Outbound`,
+    `needsResolution`, and >60s past `arrivalAt` —
+    `tests/test_tick.py::test_resolvable_mission_ids_finds_an_arrived_needs_resolution_outbound_mission`,
+    `::test_run_tick_wires_resolvable_mission_ids_into_the_planner`.
+43. A mission within the 60s grace window, not `needsResolution`, not `Outbound`, or missing
+    `arrivalAt` is never proposed for resolution — fails closed on absent/ambiguous data, the same
+    posture every other gate in this codebase takes —
+    `tests/test_tick.py::test_resolvable_mission_ids_skips_missions_within_the_grace_window`,
+    `::test_resolvable_mission_ids_skips_missions_that_do_not_qualify`.
+44. `PlanetSnapshot.archetype` is populated from `/universe/galaxies/{g}/systems/{s}` when
+    `read.snapshot` is called with `universe_cadence_hours` set (as `vd tick` always does, from
+    `policy.cadence.universe_hours`); a bare `vd read snapshot` with no flag makes no new network
+    call and leaves `archetype` `None`, byte-for-byte the pre-Phase-5 behaviour —
+    `tests/test_read.py::test_snapshot_populates_archetype_when_universe_cadence_is_set`,
+    `::test_snapshot_leaves_archetype_none_when_universe_cadence_is_not_requested`.
+45. A failed/unreachable universe-route fetch leaves `archetype` `None` rather than aborting the
+    snapshot — an enrichment field is never load-bearing for a guard/plan decision —
+    `tests/test_read.py::test_snapshot_archetype_stays_none_when_universe_route_errors`.
+46. `settlePlanet` is rejected at every tier by both enforcement layers (`guard.py`'s
+    `_MIN_TIER_FOR_FUNCTION` no longer contains it; `allowlist.ts`'s `tierSelectors` no longer
+    contains its selector at any tier) — `tests/test_guard.py::test_tier_map_agrees_with_...`
+    (agent-side, still passes after the removal),
+    `veydrift-wallet/tests/allowlist.test.ts`'s `"settlePlanet is no longer allowlisted at any tier"`.
+47. **Not met** (documented, not silently dropped): a non-combat fleet-mission `Action` (Transport/
+    Deploy/Harvest) and a colonisation `Action` (`launchFleetMission` mission type 2) can be
+    constructed by the planner and encoded by `tick.py`. Blocked on `models.py` being frozen for
+    the Phase 5 work package — see the "Phase 5 status note" in §1 and `veydrift-agent`'s
+    `CHANGELOG.md` for the full accounting.
 
 ---
 

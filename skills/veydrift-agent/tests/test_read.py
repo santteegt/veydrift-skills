@@ -25,7 +25,7 @@ import respx
 from typer.testing import CliRunner
 
 from veydrift_agent import http
-from veydrift_agent.read import app, fetch_activity
+from veydrift_agent.read import _parse_datetime, app, fetch_activity, fetch_fleet_visibility
 
 BASE = http.API_BASE_URL
 WALLET = "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
@@ -428,3 +428,121 @@ def test_fetch_activity_raises_on_http_error_rather_than_exiting():
 
     with pytest.raises(http.VeydriftHTTPError):
         fetch_activity(WALLET)
+
+
+# --------------------------------------------------------------------------------------
+# Phase 5 of the general-strategy-engine program (docs/SPEC.md §5.4): archetype
+# enrichment via /universe/galaxies/{g}/systems/{s}, gated behind --universe-cadence-hours
+# being explicitly set (opt-in, so a bare `vd read snapshot` gains no new network call).
+# --------------------------------------------------------------------------------------
+
+
+@respx.mock
+def test_snapshot_populates_archetype_when_universe_cadence_is_set():
+    _mock_snapshot_routes()
+    respx.get(f"{BASE}/universe/galaxies/7/systems/181").mock(
+        return_value=httpx.Response(200, json=load("universe_galaxy_system.json"))
+    )
+
+    result = runner.invoke(
+        app,
+        ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET), "--json", "--universe-cadence-hours", "24"],
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    # universe_galaxy_system.json's position-14 slot (planet 664's own coordinates,
+    # "7:181:14") carries archetype "frozen-ice" -- confirmed live 2026-08-17.
+    assert data["planets"][0]["archetype"] == "frozen-ice"
+
+
+@respx.mock
+def test_snapshot_leaves_archetype_none_when_universe_cadence_is_not_requested():
+    """Default (pre-Phase-5) behaviour, byte-for-byte: no --universe-cadence-hours flag
+    means no /universe/* call at all -- respx would raise on an unmocked request if one
+    were made, so this test doubles as a "no new network call by surprise" regression
+    guard."""
+    _mock_snapshot_routes()
+
+    result = runner.invoke(app, ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET), "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["planets"][0]["archetype"] is None
+
+
+@respx.mock
+def test_snapshot_archetype_stays_none_when_universe_route_errors():
+    """Missing/failed enrichment must never abort the whole snapshot -- archetype is
+    informational, never load-bearing for a guard/plan decision."""
+    _mock_snapshot_routes()
+    respx.get(f"{BASE}/universe/galaxies/7/systems/181").mock(return_value=httpx.Response(500, text="boom"))
+
+    result = runner.invoke(
+        app,
+        ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET), "--json", "--universe-cadence-hours", "24"],
+    )
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["planets"][0]["archetype"] is None
+
+
+# --------------------------------------------------------------------------------------
+# fetch_fleet_visibility() -- the internal, CLI-bypassing helper tick.py's revived
+# rung-3 wiring (`_resolvable_mission_ids`) calls directly, mirroring fetch_activity.
+# --------------------------------------------------------------------------------------
+
+
+@respx.mock
+def test_fetch_fleet_visibility_returns_the_raw_dict():
+    respx.get(f"{BASE}/wallet/{WALLET}/fleet-visibility").mock(
+        return_value=httpx.Response(200, json=load("wallet_fleet_visibility.json"))
+    )
+
+    data = fetch_fleet_visibility(WALLET)
+
+    assert data["wallet"] == WALLET
+    assert data["outgoing"] == []
+
+
+@respx.mock
+def test_fetch_fleet_visibility_raises_on_http_error_rather_than_exiting():
+    respx.get(f"{BASE}/wallet/{WALLET}/fleet-visibility").mock(return_value=httpx.Response(404, text="not found"))
+
+    with pytest.raises(http.VeydriftHTTPError):
+        fetch_fleet_visibility(WALLET)
+
+
+# --------------------------------------------------------------------------------------
+# _parse_datetime -- the live API's real timestamp shape is a decimal-string unix
+# epoch ("1786947731"), not ISO 8601. Confirmed live 2026-08-17 against
+# /wallet/{addr}/fleet-visibility and /wallet/{addr}/activity (wallet_activity.json's
+# real, non-synthetic fixture already carried this shape and nothing previously
+# exercised it through this parser). The two synthetic fixtures
+# (wallet_infrastructure_active_queue.json, wallet_overview_incoming.json) guessed ISO
+# instead -- both shapes must parse.
+# --------------------------------------------------------------------------------------
+
+
+def test_parse_datetime_accepts_decimal_string_epoch_seconds():
+    dt = _parse_datetime("1786947731")
+    assert dt is not None
+    assert dt.timestamp() == 1786947731
+
+
+def test_parse_datetime_still_accepts_iso_strings():
+    dt = _parse_datetime("2026-08-12T08:00:00.000Z")
+    assert dt is not None
+    assert dt.year == 2026 and dt.month == 8 and dt.day == 12
+
+
+def test_parse_datetime_accepts_raw_int_epoch_seconds():
+    dt = _parse_datetime(1786947731)
+    assert dt is not None
+    assert dt.timestamp() == 1786947731
+
+
+def test_parse_datetime_returns_none_for_garbage():
+    assert _parse_datetime("not-a-date") is None
+    assert _parse_datetime(None) is None

@@ -260,10 +260,31 @@ def _entities(
 
 
 def _parse_datetime(raw: Any) -> datetime | None:
+    """Accepts a raw int/float unix timestamp, a decimal-string unix timestamp (the
+    format the live API actually uses for `arrivalAt`/`returnAt`/`readyAt`/`occurredAt`
+    -- confirmed live 2026-08-17 against `/wallet/{addr}/fleet-visibility` and
+    `/wallet/{addr}/activity`, e.g. `"arrivalAt": "1786947731"`; `wallet_activity.json`'s
+    real, non-synthetic fixture already carried this shape in `transactionAt`/
+    `occurredAt` and nobody had generalised the parser to match it), or an ISO 8601
+    string (what the two *synthetic*, hand-built fixtures --
+    `wallet_infrastructure_active_queue.json`, `wallet_overview_incoming.json` -- guessed
+    before this was ever probed against a populated queue/fleet). Tries decimal-string-
+    as-epoch before falling back to `fromisoformat` so both shapes parse correctly;
+    previously a decimal-string epoch fell straight through to `fromisoformat`, raised
+    `ValueError`, and silently became `None` -- looking like "not reported" when the API
+    had reported it fine. `QueueEntry.ready_at`/`IncomingFleet.arrives_at` were the two
+    fields this silently affected."""
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
         return datetime.fromtimestamp(raw, tz=UTC)
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if stripped.lstrip("-").isdigit():
+            try:
+                return datetime.fromtimestamp(int(stripped), tz=UTC)
+            except (ValueError, OverflowError, OSError):
+                return None
     try:
         return datetime.fromisoformat(str(raw))
     except ValueError:
@@ -580,6 +601,67 @@ def activity(
     _emit(data, target="activity", json_output=json_output, out=out)
 
 
+def _maybe_int(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _universe_archetype_for_planet(coordinates: str | None, *, max_age: float | None) -> str | None:
+    """Best-effort: this planet's own `archetype`, sourced from
+    `/universe/galaxies/{g}/systems/{s}` -- the ONLY family of routes that ever reports it
+    (references/api-routes.md §3.16; confirmed live 2026-08-17 against galaxy 7 system
+    181 -- planet 664's own slot there carries `archetype: "frozen-ice"`, matching this
+    module's existing `universe_galaxy_system.json` fixture). No wallet route
+    (`overview`/`infrastructure`/etc.) ever carries `archetype`, which is why
+    `PlanetSnapshot.archetype` was hardwired `None` before this (Phase 5 of the general-
+    strategy-engine program, docs/SPEC.md §5.4).
+
+    `max_age` is the caller's cadence gate, in seconds (`tick.py` passes
+    `policy.cadence.universe_hours * 3600`) -- this function has no cadence opinion of its
+    own, it just forwards `max_age` to `http.fetch`'s existing disk cache. That cache,
+    not a new timer, is what keeps a 10-minute tick cadence from re-hitting this route
+    every tick: the same galaxy:system response is served from disk until it's
+    `max_age` seconds old.
+
+    Returns `None` on anything that isn't a clean hit -- unparseable coordinates, an
+    unreachable API, no matching `position` in the response. `archetype` is an
+    enrichment field, never load-bearing for a guard/plan decision, so a failure here
+    must never abort the rest of the snapshot."""
+    if not coordinates:
+        return None
+    parts = coordinates.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        galaxy, system, position = (int(p) for p in parts)
+    except ValueError:
+        return None
+    try:
+        data = http.fetch(f"/universe/galaxies/{galaxy}/systems/{system}", max_age=max_age)
+    except http.VeydriftAPIError:
+        return None
+    for slot in data.get("planets") or []:
+        if _maybe_int(slot.get("position")) == position:
+            archetype = slot.get("archetype")
+            return archetype if isinstance(archetype, str) else None
+    return None
+
+
+def fetch_fleet_visibility(wallet: str, *, max_age: float | None = None) -> dict[str, Any]:
+    """GET /wallet/{addr}/fleet-visibility, bypassing the CLI/`_emit` layer -- the same
+    "raw dict, not a `models.py` type" posture `fetch_activity` already takes, and for the
+    same reason: `tick.py`'s revived rung-3 wiring (`_resolvable_mission_ids`, Phase 5)
+    needs the player's own `outgoing` missions, and `Snapshot` (models.py, frozen for this
+    phase -- see the WP report) has no field to carry a mission list. Does NOT catch
+    `http.VeydriftAPIError` -- same contract as `fetch_activity`; the caller decides how
+    to degrade."""
+    return http.fetch(f"/wallet/{wallet}/fleet-visibility", max_age=max_age)
+
+
 @app.command()
 def universe(
     wallet: str | None = WalletOption,
@@ -660,6 +742,7 @@ def _planet_snapshot(
     shipyard_raw: dict[str, Any],
     defenses_raw: dict[str, Any],
     overview_planet: dict[str, Any] | None,
+    archetype: str | None = None,
 ) -> models.PlanetSnapshot:
     energy_raw = infrastructure_raw.get("energyBalance") or {}
     sources = energy_raw.get("sources") or {}
@@ -686,7 +769,7 @@ def _planet_snapshot(
         ),
     }
 
-    coordinates = name = archetype = None
+    coordinates = name = None
     fields_used = fields_total = temperature = None
     metal_mult = crystal_mult = deut_mult = 10_000
     if overview_planet:
@@ -719,7 +802,11 @@ def _planet_snapshot(
         planet_id=planet_id,
         coordinates=coordinates,
         name=name,
-        archetype=archetype,  # not present on any route `snapshot` composes; see api-routes.md
+        #: Phase 5: populated from `/universe/galaxies/{g}/systems/{s}` when the caller
+        #: opts in via `snapshot(..., universe_cadence_hours=...)` -- `None` otherwise
+        #: (no wallet route this function otherwise composes from ever reports it; see
+        #: api-routes.md §3.16).
+        archetype=archetype,
         temperature=temperature,
         fields_used=fields_used,
         fields_total=fields_total,
@@ -742,15 +829,6 @@ def _planet_snapshot(
     )
 
 
-def _maybe_int(raw: Any) -> int | None:
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
-
-
 @app.command()
 def snapshot(
     wallet: str | None = WalletOption,
@@ -758,6 +836,17 @@ def snapshot(
     json_output: bool = JsonSummaryOption,
     out: Path | None = OutOption,
     max_age: float | None = MaxAgeOption,
+    universe_cadence_hours: float | None = typer.Option(
+        None,
+        "--universe-cadence-hours",
+        help=(
+            "If set, also fetch each planet's archetype from "
+            "/universe/galaxies/{g}/systems/{s} (Phase 5), cached for this many hours "
+            "(policy.cadence.universe_hours from tick.py). Omit to skip the fetch "
+            "entirely, unchanged from pre-Phase-5 behaviour -- this is opt-in so a bare "
+            "`vd read snapshot` never gains a new network call by surprise."
+        ),
+    ),
 ) -> None:
     """Composed snapshot: health + overview + infrastructure + research + shipyard +
     defenses, one PlanetSnapshot per planet (all owned planets if --planet-id is
@@ -807,6 +896,12 @@ def snapshot(
                 overview_planet = p
                 break
 
+        archetype: str | None = None
+        if universe_cadence_hours is not None and overview_planet is not None:
+            archetype = _universe_archetype_for_planet(
+                overview_planet.get("coordinates"), max_age=universe_cadence_hours * 3600
+            )
+
         planet_snapshots.append(
             _planet_snapshot(
                 pid,
@@ -814,6 +909,7 @@ def snapshot(
                 shipyard_raw=shipyard_raw,
                 defenses_raw=defenses_raw,
                 overview_planet=overview_planet,
+                archetype=archetype,
             )
         )
 

@@ -192,6 +192,11 @@ def test_killswitch_halts_and_touches_only_health(isolated_home, monkeypatch):
 
 def _patch_common(monkeypatch, *, snapshot=None, action=None, live_addresses=None, unsigned_tx=None, gas=None, built_tx_path=None):
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: snapshot or _healthy_snapshot())
+    # Phase 5: `_resolvable_mission_ids` makes a live /wallet/{addr}/fleet-visibility
+    # call inside `_run_tick`'s normal (non-killswitch) path -- stubbed here so every
+    # test that goes through `_patch_common` stays hermetic, same posture already taken
+    # for `_fetch_snapshot`/`_live_addresses`/the walletctl_* functions below.
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: action or _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: live_addresses)
     monkeypatch.setattr(
@@ -254,6 +259,7 @@ def test_noop_action_produces_no_tx_and_no_extra_network_calls(isolated_home, mo
     noop = Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="nothing to do")
     live_addr_calls = []
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: noop)
     monkeypatch.setattr(tick, "_live_addresses", lambda: live_addr_calls.append(1) or None)
 
@@ -496,7 +502,6 @@ def test_missing_policy_is_a_hard_stop(isolated_home):
         ("startShipProduction", {"planet_id": 664, "entity_id": 9, "quantity": 2}, [664, 9, 2]),
         ("startDefenseProduction", {"planet_id": 664, "entity_id": 0, "quantity": 1}, [664, 0, 1]),
         ("resolveFleetMission", {"mission_id": 42}, [42]),
-        ("settlePlanet", {"planet_id": 664}, [664]),
     ],
 )
 def test_action_to_walletctl_json_maps_args_positionally(function, extra, expected_args):
@@ -506,10 +511,119 @@ def test_action_to_walletctl_json_maps_args_positionally(function, extra, expect
     assert built["args"] == expected_args
 
 
+def test_action_to_walletctl_json_raises_on_settle_planet():
+    """Phase 5 (docs/SPEC.md §5.4/§9): `settlePlanet` was removed from this encoder --
+    its body at the pinned commit is byte-identical to `collectResources`, a disguised
+    read `veydrift-wallet` already refuses to send, and no planner rung ever produced
+    this action. Was previously a positional-args case in the parametrize list above
+    (pre-Phase-5); this is the one pre-existing test this phase's brief anticipated might
+    legitimately need to change."""
+    action = Action(kind=ActionKind.BUILD, function="settlePlanet", planet_id=664, rule="x", rationale="x")
+    with pytest.raises(ValueError):
+        tick._action_to_walletctl_json(action)
+
+
 def test_action_to_walletctl_json_raises_on_unknown_function():
     action = Action(kind=ActionKind.BUILD, function="someUnknownFunction", rule="x", rationale="x")
     with pytest.raises(ValueError):
         tick._action_to_walletctl_json(action)
+
+
+# --------------------------------------------------------------------------------------
+# _resolvable_mission_ids (Phase 5, docs/SPEC.md §5.4) — revives plan.py's rung 3.
+# --------------------------------------------------------------------------------------
+
+
+def _outgoing_mission(**overrides):
+    base = {
+        "missionId": "42",
+        "status": "Outbound",
+        "needsResolution": True,
+        # 200s in the past relative to the frozen `NOW` used below -- past the 60s grace.
+        "arrivalAt": str(int(_RESOLVABLE_NOW.timestamp()) - 200),
+    }
+    base.update(overrides)
+    return base
+
+
+_RESOLVABLE_NOW = datetime(2026, 8, 17, 12, 0, tzinfo=UTC)
+
+
+def test_resolvable_mission_ids_finds_an_arrived_needs_resolution_outbound_mission(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_fleet_visibility", lambda wallet, **kw: {"outgoing": [_outgoing_mission()]})
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _RESOLVABLE_NOW
+
+    monkeypatch.setattr(tick, "datetime", _FrozenDatetime)
+
+    assert tick._resolvable_mission_ids(WALLET) == [42]
+
+
+def test_resolvable_mission_ids_skips_missions_within_the_grace_window(monkeypatch):
+    recent = _outgoing_mission(arrivalAt=str(int(_RESOLVABLE_NOW.timestamp()) - 10))  # only 10s ago
+    monkeypatch.setattr(tick.read, "fetch_fleet_visibility", lambda wallet, **kw: {"outgoing": [recent]})
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _RESOLVABLE_NOW
+
+    monkeypatch.setattr(tick, "datetime", _FrozenDatetime)
+
+    assert tick._resolvable_mission_ids(WALLET) == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"status": "Returning"},  # arrived but no longer Outbound -- not this rung's job
+        {"needsResolution": False},  # API says nothing to resolve yet
+        {"arrivalAt": None},  # missing data -- never guess
+    ],
+)
+def test_resolvable_mission_ids_skips_missions_that_do_not_qualify(monkeypatch, overrides):
+    monkeypatch.setattr(
+        tick.read, "fetch_fleet_visibility", lambda wallet, **kw: {"outgoing": [_outgoing_mission(**overrides)]}
+    )
+    assert tick._resolvable_mission_ids(WALLET) == []
+
+
+def test_resolvable_mission_ids_degrades_to_empty_on_fetch_failure(monkeypatch):
+    def _boom(wallet, **kw):
+        raise http.VeydriftHTTPError(500, "/fleet-visibility", "boom")
+
+    monkeypatch.setattr(tick.read, "fetch_fleet_visibility", _boom)
+    assert tick._resolvable_mission_ids(WALLET) == []
+
+
+def test_resolvable_mission_ids_empty_outgoing_returns_empty(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_fleet_visibility", lambda wallet, **kw: {"outgoing": []})
+    assert tick._resolvable_mission_ids(WALLET) == []
+
+
+def test_run_tick_wires_resolvable_mission_ids_into_the_planner(isolated_home, monkeypatch):
+    """End-to-end: `_run_tick` must actually pass what `_resolvable_mission_ids` finds
+    into `plan_next_action`'s `resolvable_mission_ids` kwarg -- the wiring this whole
+    Phase 5 fix is about, not just the helper function in isolation."""
+    _write_policy()
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [999])
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    captured = {}
+
+    def _capture(snapshot, policy, **kwargs):
+        captured.update(kwargs)
+        return Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x")
+
+    monkeypatch.setattr(plan_mod, "plan_next_action", _capture)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("resolvable_mission_ids") == [999]
 
 
 # --------------------------------------------------------------------------------------

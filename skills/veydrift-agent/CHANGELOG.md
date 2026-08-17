@@ -11,6 +11,69 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+Phase 5 of the general-strategy-engine program (docs/SPEC.md §5.4/§9). **Left under
+`[Unreleased]` deliberately**: this phase's brief asked for veydrift-agent 1.0.0, but
+`pyproject.toml` (and `models.py`) are frozen for this work package (see AGENTS.md §4 and
+the WP report) and a version bump without the models.py-dependent half of this phase
+landing would overstate what shipped. A maintainer who can edit those two files should
+finish 5c/5b (below) and cut 1.0.0 in one change, not bump the version here first.
+
+### Added
+- **`PlanetSnapshot.archetype` is now populated** (was permanently `None` before this).
+  `read.snapshot` gained an opt-in `--universe-cadence-hours` flag (default: unset, no
+  new network call) that fetches `/universe/galaxies/{g}/systems/{s}` for each planet's
+  own archetype; `vd tick` wires it automatically from `policy.cadence.universe_hours`
+  (default 24h — a previously dead policy field). Cadence-gating reuses `http.py`'s
+  existing disk cache rather than adding new state: the fetch is attempted every tick,
+  but only reaches the network once per `universe_hours` window.
+- **`plan.py`'s rung 3 (`resolveFleetMission`) is revived.** It has accepted
+  `resolvable_mission_ids` since Phase 1, but nothing ever computed the argument —
+  `tick.py` now does, via a new `_resolvable_mission_ids()` that reads
+  `/wallet/{addr}/fleet-visibility` directly (bypassing `models.py`, the same posture
+  `_maybe_check_human_activity` already takes toward `/activity`) and finds the
+  player's own `outgoing` missions that are still `"Outbound"`, `needsResolution`, and
+  more than 60s past `arrivalAt`.
+- `read.fetch_fleet_visibility()` — a new CLI-bypassing helper mirroring
+  `fetch_activity()`, used by the above.
+
+### Fixed
+- **`read._parse_datetime` no longer silently drops the live API's real timestamp
+  format.** Confirmed live 2026-08-17: `arrivalAt`/`returnAt`/`readyAt`/`occurredAt` all
+  arrive as a **decimal string of unix seconds** (e.g. `"1786947731"`), not ISO 8601 —
+  `wallet_activity.json`'s own real (non-synthetic) fixture already carried this shape
+  in `transactionAt`/`occurredAt`, but nothing had generalised the parser to match it.
+  A decimal-string epoch previously fell through to `datetime.fromisoformat`, raised,
+  and silently became `None` — indistinguishable from "the API didn't report this."
+  `QueueEntry.ready_at` and `IncomingFleet.arrives_at` were the two fields this
+  silently affected on real (non-synthetic-fixture) data. The two synthetic fixtures
+  (`wallet_infrastructure_active_queue.json`, `wallet_overview_incoming.json`) guessed
+  ISO instead of probing; both shapes now parse.
+
+### Removed (breaking)
+- **`settlePlanet` removed from `guard._MIN_TIER_FOR_FUNCTION` and `tick.py`'s
+  `_action_to_walletctl_json` encoder.** Its body at the pinned commit is
+  byte-identical to `collectResources`, a disguised read `veydrift-wallet`'s `abi.ts`
+  already refuses to send. No planner rung ever produced this action. Mirrors the
+  removal from `ECONOMY_SIGNATURES` in `veydrift-wallet`'s `allowlist.ts` (v0.2.0) —
+  see that package's changelog for the full writeup and the contract evidence for why
+  real colonisation (`launchFleetMission` mission type 2) is a different entrypoint
+  entirely, not a `settlePlanet` variant.
+
+### Not done this phase (blocked on `models.py`)
+- **Non-combat fleet-mission planning (5c) and real colonisation (5b) are NOT
+  implemented.** Both require `ActionKind.FLEET_MISSION` and new `Action` fields
+  (`mission_type`, `origin_planet_id`, `target_coordinates`, `ships`, `cargo`,
+  `speed_pct`, `holding_seconds`) on `models.py`, which is this work package's frozen
+  interface (AGENTS.md §4). Everything downstream of that — `guard.py`'s mission-type
+  gate, `tick.py`'s `launchFleetMission` overload resolution and 14-slot fleet-tuple
+  encoding, the planner's logistics/colonisation generators, and the extension of
+  `test_tier_map_agrees_with_the_wallet_engines_allowlist` to compare mission-type sets
+  — was left undone rather than built against a workaround that doesn't actually touch
+  the frozen contract. See the WP report for the colonisation-entrypoint contract
+  evidence gathered in the course of this phase (also recorded in
+  `veydrift-wallet`'s CHANGELOG.md v0.2.0 entry), which a maintainer who can edit
+  `models.py` can use directly rather than re-deriving it.
+
 ## [0.6.0] - 2026-08-16
 
 ### Added

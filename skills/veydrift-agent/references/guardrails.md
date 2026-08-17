@@ -115,9 +115,9 @@ without dramatizing a routine "no gas estimate yet" state as a hard BLOCK. `addr
 you this transaction is going to the right contract," which is categorically worse than
 "I don't yet know exactly how much gas this will cost."
 
-**`tier` allows `startShipProduction` from `economy` up, same as the other five economy
+**`tier` allows `startShipProduction` from `economy` up, same as the other four economy
 functions:** the project's tier table lists `startBuildingUpgrade`, `startResearch`,
-`resolveFleetMission`, `settlePlanet`, `startDefenseProduction`, and
+`resolveFleetMission`, `startDefenseProduction`, and
 **`startShipProduction`** as submittable from T2 (`economy`); T3 (`operator`) adds only
 `launchFleetMission`. This corrects an earlier version of this document that
 omitted `startShipProduction` from every tier's allowed set — a confirmed defect: `plan.py`

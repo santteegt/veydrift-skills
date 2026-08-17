@@ -83,7 +83,14 @@ _MIN_TIER_FOR_FUNCTION: dict[str, Tier] = {
     "startBuildingUpgrade": Tier.ECONOMY,
     "startResearch": Tier.ECONOMY,
     "resolveFleetMission": Tier.ECONOMY,
-    "settlePlanet": Tier.ECONOMY,
+    # `settlePlanet` removed 2026-08-17 (Phase 5, docs/SPEC.md §5.4/§9 -- a breaking
+    # allowlist change). Its body at the pinned commit is byte-identical to
+    # `collectResources`, a disguised read `veydrift-wallet`'s `abi.ts` already refuses in
+    # `sendTx` -- and no planner rung ever produced this action, so it was allowlisted
+    # capacity that could only ever burn gas for zero effect. Mirrors the removal from
+    # `ECONOMY_SIGNATURES` in veydrift-wallet/src/allowlist.ts and the encoder branch in
+    # tick.py's `_action_to_walletctl_json` -- all three together, or
+    # `test_tier_map_agrees_with_the_wallet_engines_allowlist` fails.
     "startDefenseProduction": Tier.ECONOMY,
     # Added 2026-08-12. plan.py rung 8 proposes ships when policy.actions.allow_ships is
     # set, but no tier granted the function, so the knob was dead config: every proposal

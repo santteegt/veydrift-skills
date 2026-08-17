@@ -1097,8 +1097,14 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
     def names_in(const: str) -> set[str]:
         block = re.search(rf"const {const}\s*=\s*\[(.*?)\]\s*as const;", source, re.S)
         assert block, f"could not find {const} in {allowlist_ts}"
+        # Strip `//` line comments first (Phase 5, 2026-08-17: a removal-note comment
+        # inside this exact array, quoting the signature it removed for context, was
+        # briefly miscounted as a live entry -- this regex has no comment awareness at
+        # all otherwise). A comment can't itself contain a "..." TS string literal in this
+        # file's style, so a blunt `//.*$` strip per line is safe here.
+        uncommented = re.sub(r"//.*$", "", block.group(1), flags=re.M)
         # Signatures are full: "startBuildingUpgrade(uint256,uint8)" -> bare name.
-        return {m.split("(", 1)[0] for m in re.findall(r'"([^"]+)"', block.group(1))}
+        return {m.split("(", 1)[0] for m in re.findall(r'"([^"]+)"', uncommented)}
 
     ts_economy = names_in("ECONOMY_SIGNATURES")
     ts_operator_extra = names_in("LAUNCH_FLEET_MISSION_SIGNATURES")

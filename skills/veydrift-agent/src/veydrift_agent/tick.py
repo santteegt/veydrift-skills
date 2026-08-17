@@ -116,6 +116,11 @@ _stderr_console = Console(stderr=True)
 _WALLETCTL_TIMEOUT_S = 60
 _INDEX_POLL_INTERVAL_S = 5
 _NPM_INSTALL_TIMEOUT_S = 300
+#: Phase 5 (docs/SPEC.md §5.4): how long past `arrivalAt` an own outbound mission must
+#: sit before `_resolvable_mission_ids` proposes resolving it -- matches plan.py's rung-3
+#: docstring ("mission Resolving > 60s"), a small grace window so the ladder doesn't race
+#: a transaction that would revert because it lands the same second as arrival.
+_RESOLVE_GRACE_S = 60
 
 
 # --------------------------------------------------------------------------------------
@@ -273,8 +278,15 @@ def _action_to_walletctl_json(action: Action) -> dict[str, Any]:
         args = [action.planet_id, action.entity_id, action.quantity or 0]
     elif fn == "resolveFleetMission":
         args = [action.mission_id]
-    elif fn == "settlePlanet":
-        args = [action.planet_id]
+    # `settlePlanet` had a branch here through Phase 4. Removed in Phase 5
+    # (docs/SPEC.md §5.4/§9): its body at the pinned commit
+    # (`_touchPlayer(msg.sender); _collectPlanetResources(planetId);`) is byte-identical
+    # to `collectResources`, which `veydrift-wallet/src/abi.ts`'s
+    # `NONPAYABLE_READ_FUNCTIONS` already refuses in `sendTx` as a disguised read. No
+    # planner rung ever produced this action -- it was allowlisted capacity that could
+    # only ever burn gas for zero effect. See guard.py's `_MIN_TIER_FOR_FUNCTION` and
+    # veydrift-wallet's `allowlist.ts` `ECONOMY_SIGNATURES`, both updated in the same
+    # change.
     else:
         raise ValueError(f"tick.py does not know how to build calldata for function {fn!r}")
     return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
@@ -426,12 +438,28 @@ def _live_addresses() -> set[str] | None:
 # --------------------------------------------------------------------------------------
 
 
-def _fetch_snapshot(wallet: str, policy_planets: list[int]) -> Snapshot | None:
+def _fetch_snapshot(
+    wallet: str, policy_planets: list[int], *, universe_cadence_hours: float | None = None
+) -> Snapshot | None:
+    """`universe_cadence_hours` (Phase 5, docs/SPEC.md §5.4) is forwarded straight to
+    `read.snapshot`'s own opt-in flag -- `None` here (the default, used by
+    `_await_indexed`'s polling loop, which only needs `latest_indexed_block`) skips the
+    archetype enrichment fetch entirely; `_run_tick`'s own call passes
+    `policy.cadence.universe_hours`, so the disk-cache TTL that flag drives (not a new
+    timer) is what keeps a 10-minute tick cadence from re-hitting `/universe/*` every
+    tick -- see `read._universe_archetype_for_planet`'s docstring."""
     planet_id = policy_planets[0] if len(policy_planets) == 1 else None
     tmp_dir = Path(tempfile.mkdtemp(prefix="vd-tick-snapshot-"))
     out_file = tmp_dir / "snapshot.json"
     try:
-        read.snapshot(wallet=wallet, planet_id=planet_id, json_output=False, out=out_file, max_age=None)
+        read.snapshot(
+            wallet=wallet,
+            planet_id=planet_id,
+            json_output=False,
+            out=out_file,
+            max_age=None,
+            universe_cadence_hours=universe_cadence_hours,
+        )
     except typer.Exit:
         pass  # health-not-ok / bad-args paths still write `out_file` first when they can
     if not out_file.exists():
@@ -621,6 +649,72 @@ def _maybe_check_human_activity(
     return record, line
 
 
+# --------------------------------------------------------------------------------------
+# Phase 5 (docs/SPEC.md §5.4): revives plan.py's rung 3 (`resolveFleetMission`).
+#
+# `plan_next_action` has accepted `resolvable_mission_ids` since Phase 1 -- rung 3 was
+# always implemented -- but nothing ever computed the argument, because `Snapshot`
+# (models.py, frozen for this phase; see this WP's own report) has no field for the
+# player's own outgoing/returning fleet missions. Rather than invent a home for that list
+# on the frozen model, this reads `/wallet/{addr}/fleet-visibility` directly and works
+# with the raw dict -- the exact same "bypass read.py's CLI layer, stay untyped" posture
+# `_maybe_check_human_activity` already takes toward `/activity` for the same reason
+# (reporting-only data that doesn't belong on the shared Action/Snapshot/GuardReport
+# contract).
+# --------------------------------------------------------------------------------------
+
+
+def _resolvable_mission_ids(wallet: str) -> list[int]:
+    """Which of the player's own `outgoing` fleet missions have been sitting at their
+    target past `arrivalAt` for more than `_RESOLVE_GRACE_S` without being resolved yet.
+
+    A mission qualifies when its `status` is still `"Outbound"` (the contract's
+    `FleetMissionStatus` enum -- `VeydriftGameStorage.sol:179-186` -- has no "Resolving"
+    member; an arrived-but-still-Outbound mission *is* what plan.py's rung-3 docstring
+    calls "Resolving") **and** the API's own `needsResolution` flag is true **and**
+    `arrivalAt` is more than `_RESOLVE_GRACE_S` seconds in the past. `needsResolution` is
+    the API's general "arrived, not yet settled" signal (apps/backend/src/evm.ts's
+    `FleetMissionSummary` -- the extra gate it documents for Attack's randomness
+    fulfilment is additive, not the only condition it ever reports true for), checked
+    together with -- not instead of -- the arrival-time math, since this codebase does not
+    trust a single upstream flag for anything gate-adjacent without an independent check.
+
+    Best-effort: never raises, degrades to `[]` (nothing resolvable this tick) on any
+    fetch/parse failure. `resolveFleetMission` is a ladder optimisation (permissionless,
+    free, and every gate downstream of it in guard.py still runs), not a safety-relevant
+    input, so a failure here must not abort the tick the way a snapshot-fetch failure
+    does."""
+    try:
+        data = read.fetch_fleet_visibility(wallet)
+    except http.VeydriftAPIError:
+        return []
+
+    now = datetime.now(UTC)
+    out: list[int] = []
+    for item in data.get("outgoing") or []:
+        if item.get("status") != "Outbound" or not item.get("needsResolution"):
+            continue
+        arrival_raw = item.get("arrivalAt")
+        if arrival_raw is None:
+            continue
+        try:
+            # The live API's own timestamp shape -- a decimal-string unix epoch, e.g.
+            # "1786947731" (confirmed live 2026-08-17; see read._parse_datetime's
+            # docstring for the same discrepancy against the synthetic ISO-format
+            # fixtures elsewhere in this package).
+            arrived_at = datetime.fromtimestamp(int(arrival_raw), tz=UTC)
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+        if (now - arrived_at).total_seconds() <= _RESOLVE_GRACE_S:
+            continue
+        mission_id = item.get("missionId")
+        try:
+            out.append(int(mission_id))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _await_indexed(*, wallet: str, policy_planets: list[int], target_block: int, max_wait_s: int) -> bool:
     """The mandatory post-receipt wait (docs/SPEC.md §5.7): polls a fresh snapshot's
     `latest_indexed_block` until it covers `target_block`, or `max_wait_s` elapses.
@@ -767,7 +861,9 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
     if pending_before:
         _reconcile_pending(agent_state, indexed_block=None, now=now)
 
-    snapshot = _fetch_snapshot(policy_model.wallet, policy_model.planets)
+    snapshot = _fetch_snapshot(
+        policy_model.wallet, policy_model.planets, universe_cadence_hours=policy_model.cadence.universe_hours
+    )
     if snapshot is None:
         _console.print("[red]tick aborted: could not fetch a snapshot (network/API failure before any usable response).[/red]")
         save_agent_state(agent_state)
@@ -775,8 +871,20 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
 
     pending_unreconciled = _reconcile_pending(agent_state, indexed_block=snapshot.latest_indexed_block, now=now)
 
+    # Phase 5 (docs/SPEC.md §5.4): revives plan.py's rung 3 (resolveFleetMission), dead
+    # since Phase 1 because Snapshot (models.py, frozen) has no field for the player's own
+    # missions -- see `_resolvable_mission_ids`'s docstring. Best-effort; never aborts the
+    # tick.
+    resolvable_mission_ids = _resolvable_mission_ids(policy_model.wallet)
+
     # Step 5: plan.
-    action = plan_mod.plan_next_action(snapshot, policy_model, killswitch_active=False, pending_tx_unreconciled=pending_unreconciled)
+    action = plan_mod.plan_next_action(
+        snapshot,
+        policy_model,
+        killswitch_active=False,
+        pending_tx_unreconciled=pending_unreconciled,
+        resolvable_mission_ids=resolvable_mission_ids,
+    )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an
     # off-chain action (noop/escalate/halt) needs none of this and triggers no extra

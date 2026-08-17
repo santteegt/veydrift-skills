@@ -39,12 +39,36 @@ includes each one:
 | Building upgrade | `startBuildingUpgrade(uint256,uint8)` | 131 | economy, operator |
 | Research | `startResearch(uint256,uint8)` | 220 | economy, operator |
 | Defense production | `startDefenseProduction(uint256,uint8,uint32)` | 176 | economy, operator |
-| Permissionless resolve | `resolveFleetMission(uint256)` | 425 | economy, operator (permissionless — costs no allowlist-gated capability at all, but still goes through `walletctl` like everything else so it's still logged) |
-| Settle production | `settlePlanet(uint256)` | 121 | economy, operator |
+| Permissionless resolve | `resolveFleetMission(uint256)` | 425 | economy, operator (permissionless — costs no allowlist-gated capability at all, but still goes through `walletctl` like everything else so it's still logged). Live since 2026-08-17: `tick.py`'s `_resolvable_mission_ids` now computes this rung's argument from `/wallet/{addr}/fleet-visibility` — previously implemented but unreachable, see docs/COVERAGE.md |
 | Fleet launch (7-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` | 358 | operator only, and only for mission types Transport(0)/Deploy(1)/Harvest(4) — §3 |
 | Fleet launch (6-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` | 325 | operator only, same mission-type restriction |
 | Ship production | `startShipProduction(uint256,uint8,uint32)` | 186 | `economy` — granted 2026-08-12, see §8 |
 | Fleet return | `completeFleetMissionReturn(uint256)` | 442 | **none** — not in any tier's table, and not in `allowlist.ts`'s selector sets. `plan.py` never constructs this action |
+
+**`settlePlanet(uint256)` (line 121) was removed from every tier's allowed set
+2026-08-17** (Phase 5, docs/SPEC.md §5.4/§9, breaking change — `veydrift-wallet` v0.2.0).
+Its body at the pinned commit is `_touchPlayer(msg.sender);
+_collectPlanetResources(planetId);` — byte-identical to `collectResources`, which §4
+below already documents as a disguised read `sendTx` refuses. It was allowlisted at
+economy/operator with a live `tick.py` encoder branch, but no planner rung ever produced
+this action; it was allowlisted capacity that could only ever burn gas. Do not re-add it
+without also giving it a real proposer — see `guard.py`'s `_MIN_TIER_FOR_FUNCTION` and
+`allowlist.ts`'s `ECONOMY_SIGNATURES` for where it used to live.
+
+**Real colonisation is `launchFleetMission` mission type `Colonize` (2), not
+`settlePlanet`.** Verified 2026-08-17 against
+[`VeydriftGame.sol`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol)'s facade `launchFleetMission` (both overloads): each reads the
+`missionType` argument via inline assembly at calldata offset `0x44` and, when it equals
+`Colonize`, dispatches to `VeydriftColonizationModule` instead of the play module.
+`VeydriftColonizationModule._launchColonizeFleetMission` → `_validateColonyCreation` →
+`_requireShips(originPlanetId, Ship.ColonyShip, 1)` confirms this. The colonize-specific
+`targetPlanetId` argument is not a real planet id — it's `_encodeColonyTarget(galaxy,
+system, position)` = `(1 << 255) | (galaxy << 24) | (system << 8) | position`
+(`VeydriftColonizationModule.sol:472-479`), decoded again on resolution via
+`_decodeColonyTarget`. **Not yet wired into this codebase's planner or the wallet
+allowlist** — see docs/COVERAGE.md and this package's `CHANGELOG.md` `[Unreleased]`
+entry for why (blocked on a `models.py` change out of scope for the work package that
+did this verification).
 
 The tier column is read straight from `allowlist.ts`'s `ECONOMY_SIGNATURES` and
 `LAUNCH_FLEET_MISSION_SIGNATURES` constants (`skills/veydrift-wallet/references/tx-safety.md`

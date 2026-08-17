@@ -157,6 +157,23 @@ and reported (never short-circuited in the report, only in the final `ok`):
 Any failure anywhere in the five checks: `sendTx` throws `SendRefusedError`, the CLI exits non-zero,
 nothing is signed, and the rejection reason is printed (not silently swallowed).
 
+### Phase 5 (2026-08-17, docs/SPEC.md §5.4/§9): `settlePlanet` removed, Colonize not added
+
+`ECONOMY_SIGNATURES` dropped `settlePlanet(uint256)` — a breaking change (v0.2.0). At the pinned
+commit its body is byte-identical to `collectResources`, one of the six disguised reads listed
+below; `settlePlanet` was allowlisted at ECONOMY on this side and on `veydrift-agent`'s `guard.py`,
+with a live `veydrift-agent` `tick.py` encoder branch, but no planner rung ever produced this
+action. Removed from all three places together.
+
+Separately, `OPERATOR_ALLOWED_MISSION_TYPES` was **not** widened to add Colonize (2), even though
+that was this phase's stated goal, once the entrypoint was confirmed (`launchFleetMission`, not a
+separate function — see `references/contract-writes.md` in the agent skill for the calldata-offset
+dispatch evidence). The counterpart Python-side mission-type gate this project's two-layer design
+requires (AGENTS.md §5 in the agent skill) could not be built in the same change — it needs new
+`Action` fields on a `models.py` that was frozen for that work package. Shipping the wallet-side
+widening alone would have made this engine the *sole* check on which mission types can launch,
+which is precisely the single-point-of-failure this allowlist's whole design avoids elsewhere.
+
 ## The two other traps `send` refuses outright, independent of the allowlist
 
 Beyond the allowlist, `sendTx` (`src/tx.ts`) has two more categorical refusals that run *before*
