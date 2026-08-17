@@ -11,6 +11,20 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-17
+
+The allowlist-widening change below shipped in the working tree without a version bump of
+its own; folded into this release now, alongside a docs-only fix, rather than left
+permanently unreleased.
+
+### Fixed (docs)
+- Stale mission-type-list comments corrected to mention Colonize (2): `allowlist.ts:57`
+  ("types 0/1/4" -> "0 Transport / 1 Deploy / 2 Colonize / 4 Harvest") and
+  `allowlist.ts:214-215` (same). No functional change — the actual
+  `OPERATOR_ALLOWED_MISSION_TYPES` set already included `2`; only the comments had
+  drifted. Found during a judge review of `veydrift-agent`'s general-strategy-engine
+  program (finding 5's stale-reference sweep, 2026-08-17).
+
 ### Changed (breaking — allowlist widening)
 - **`OPERATOR_ALLOWED_MISSION_TYPES` widened to include Colonize (2).** Was withheld in
   0.2.0 (see that version's "Not done this phase" note, kept below for the record)

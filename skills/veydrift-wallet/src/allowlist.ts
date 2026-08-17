@@ -54,7 +54,8 @@ const ECONOMY_SIGNATURES = [
   // is enabled, but no tier previously granted the selector, so such proposals could never be
   // submitted at any tier. Producing ships spends resources on your own planet -- the same risk
   // profile as startDefenseProduction above. Combat remains gated separately by mission type on
-  // launchFleetMission (operator only, types 0/1/4).
+  // launchFleetMission (operator only, types 0 Transport / 1 Deploy / 2 Colonize / 4 Harvest --
+  // see OPERATOR_ALLOWED_MISSION_TYPES below; Colonize added 2026-08-17, Phase 5b).
   "startShipProduction(uint256,uint8,uint32)",
 ] as const;
 
@@ -211,9 +212,10 @@ export async function checkAllowlist(
     pass("selector", `${selector} allowed at tier "${tier}"`);
   }
 
-  // Extra: operator's launchFleetMission is restricted to mission types 0/1/4. This is a
-  // calldata-level check -- the mission type is an ordinary argument, not part of the selector --
-  // so it only runs once we know the selector is one of the two launchFleetMission overloads.
+  // Extra: operator's launchFleetMission is restricted to mission types 0 Transport / 1 Deploy /
+  // 2 Colonize / 4 Harvest (OPERATOR_ALLOWED_MISSION_TYPES). This is a calldata-level check -- the
+  // mission type is an ordinary argument, not part of the selector -- so it only runs once we know
+  // the selector is one of the two launchFleetMission overloads.
   const launchFleetSelectors = launchFleetMissionSelectorSet();
   if (launchFleetSelectors.has(selector)) {
     if (tier !== "operator") {

@@ -90,15 +90,17 @@ the non-goals list above accordingly). **Only part of that landed.** What shippe
   `references/contract-writes.md`), correcting a plausible false lead (`startPlanet`,
   which is unrelated and out of scope regardless, being `payable`).
 
-**What did NOT ship, and why**: non-combat fleet-mission planning (Transport/Deploy/
-Harvest) and real colonisation both require a new `ActionKind.FLEET_MISSION` and new
-`Action` fields on `models.py` — the frozen interface contract for the work package that
-attempted this phase (`AGENTS.md` §4). That work package's own instructions treat
-`models.py` as not-to-be-edited, stop-and-report-if-blocked, rather than a same-session
-decision it could make unilaterally. So T3's fleet capability remains the operator tier
-*allowlisting* Transport(0)/Deploy(1)/Harvest(4) at the wallet-engine layer (true since
-before this phase — see §6.4) with **no planner path that can ever produce one** — the
-exact "allowlisted, unreachable" shape this phase found and fixed for
+**What did NOT ship, and why** *(historical — see the very next section, "Phase 5c/5b status
+update," which shipped exactly this; the mission-type list below is stale as a description of
+the codebase today, kept verbatim as the record of what was true at the time this section was
+written)*: non-combat fleet-mission planning (Transport/Deploy/Harvest) and real colonisation
+both require a new `ActionKind.FLEET_MISSION` and new `Action` fields on `models.py` — the
+frozen interface contract for the work package that attempted this phase (`AGENTS.md` §4). That
+work package's own instructions treat `models.py` as not-to-be-edited, stop-and-report-if-
+blocked, rather than a same-session decision it could make unilaterally. So T3's fleet capability
+remains the operator tier *allowlisting* Transport(0)/Deploy(1)/Harvest(4) at the wallet-engine
+layer (true since before this phase — see §6.4) with **no planner path that can ever produce
+one** — the exact "allowlisted, unreachable" shape this phase found and fixed for
 `resolveFleetMission`, still true for fleet missions generally. Colonisation is
 correspondingly still out of scope in practice, not by non-goal but by this blocker. See
 `veydrift-agent`'s `CHANGELOG.md` `[Unreleased]` entry and `docs/COVERAGE.md` §1.2 for
@@ -269,8 +271,14 @@ Tier is one field in `policy.json`. **No code path advances it** — only a huma
 | Tier | Name | May propose | May submit | Gate to enter |
 | --- | --- | --- | --- | --- |
 | 1 | `advisor` | everything in scope | **nothing** | default |
-| 2 | `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `settlePlanet`, `startDefenseProduction`, `startShipProduction` | ≥24 h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
-| 3 | `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0) / Deploy(1) / Harvest(4) only | ≥7 days clean T2, human edit |
+| 2 | `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24 h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
+| 3 | `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0) / Deploy(1) / Colonize(2) / Harvest(4) only | ≥7 days clean T2, human edit |
+
+> **Correction, 2026-08-17 (judge review of the general-strategy-engine program).** The T2 row
+> above previously still listed `settlePlanet` — removed from both enforcement layers in Phase 5
+> (see the correction below AC46, §9) — and the T3 row previously omitted Colonize(2), added at
+> both enforcement layers in Phase 5b (§6.4). Both are fixed here to match the code and
+> `docs/COVERAGE.md` §1.6/§1.2.
 
 Combat (`Attack`, `AcsAttack`, `MissileAttack`, `Intercept`) is **unreachable in code at every tier**.
 `policy.json` carries an `allow_combat` key that is deliberately ignored; enabling attacks requires a

@@ -259,7 +259,8 @@ change called out:
     "ship_targets": [{"name": "Small Cargo", "count": 1}],  // a target not yet buildable now drives its own build-up (see below)
     "defense_targets": [],            // same shape, e.g. [{"name": "Small Shield Dome", "count": 1}]
     "research_priority": [],          // ordered technology names, e.g. ["Energy Technology"]
-    "building_priority": []           // ordered infrastructure names (Robotics Factory etc.)
+    "building_priority": [],          // ordered infrastructure names (Robotics Factory etc.)
+    "enable_crawler": false           // opt-in for the scored Crawler family — see below
   }
 }
 ```
@@ -290,6 +291,15 @@ None of this is a fleet doctrine or a threat model. The planner still only enfor
 is legal (on-chain prerequisites, shield-dome/missile-silo caps) and, where a number is
 genuinely comparable, what is economical (Crawler's production-boost payback) — *how
 many* Crawlers or Small Shield Domes you actually want is your call, expressed here.
+
+**`enable_crawler`, added 2026-08-17.** Defaults `false`. This is a *separate* switch from
+naming `"Crawler"` in `ship_targets` above: `ship_targets` is always an unscored "keep
+building until N" declaration, no matter which entity you name. `enable_crawler` instead
+turns on a second, scored path — the planner comparing Crawler's production-boost payback
+against Solar Satellite and picking whichever is cheaper — that is *not* declared intent,
+so it stays off unless you opt in. Leave it `false` and nothing changes; set it `true` if
+you want the planner to consider Crawler on its own economic merits, not just when you've
+named a standing count for it.
 
 **Declaring a target you can't build yet, and the agent working out the build-up
 (2026-08-16).** You can name a target your account isn't ready for. The shipped example

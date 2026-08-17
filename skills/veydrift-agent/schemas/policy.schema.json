@@ -212,6 +212,11 @@
           "title": "Defense Targets",
           "type": "array"
         },
+        "enable_crawler": {
+          "default": false,
+          "title": "Enable Crawler",
+          "type": "boolean"
+        },
         "max_alternatives": {
           "default": 5,
           "title": "Max Alternatives",

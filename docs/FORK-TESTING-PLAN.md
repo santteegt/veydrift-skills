@@ -56,11 +56,12 @@ Key enablers found during research:
 ## What this closes, and what it deliberately doesn't
 
 **Closes:**
-- "Has never run against a real chain" for the entire reachable tier≥2 write surface: all 6
+- "Has never run against a real chain" for the entire reachable tier≥2 write surface: all 5
   `ECONOMY_SIGNATURES` (`startBuildingUpgrade`, `startResearch`, `resolveFleetMission`,
-  `settlePlanet`, `startDefenseProduction`, `startShipProduction`) plus both non-combat
-  `launchFleetMission` overloads (Transport/Deploy/Harvest — the only mission types
-  `OPERATOR_ALLOWED_MISSION_TYPES` permits).
+  `startDefenseProduction`, `startShipProduction` — `settlePlanet` was removed from this set in
+  Phase 5, docs/SPEC.md §5.4/§9; it is no longer allowlisted at any tier) plus both non-combat
+  `launchFleetMission` overloads (Transport/Deploy/Colonize/Harvest — the mission types
+  `OPERATOR_ALLOWED_MISSION_TYPES` permits as of Phase 5b).
 - "Cost scaling, queue behavior, lazy settlement above level 0 are unobserved" — by
   impersonating a real, *already-advanced* player address (not just the zero-state reference
   account) and using Anvil time-travel to force queue completions.
@@ -149,9 +150,12 @@ After sending a build/research/ship/defense action, use `anvil_increaseTime` + `
 to jump the fork's clock past that action's queue-completion time (durations already
 computable via `vd calc`), then call the lazy-settlement read-shaped functions
 (`collectResources` etc. — via `simulate`, never `send`, per the existing and correct
-`NONPAYABLE_READ_FUNCTIONS` restriction) or `settlePlanet` to confirm levels/resources/
-queues update as the formulas predict. This is the concrete mechanism for observing
-"queue behavior and lazy settlement above level 0" for the first time ever in this project.
+`NONPAYABLE_READ_FUNCTIONS` restriction) to confirm levels/resources/queues update as the
+formulas predict. (`settlePlanet` would have served the same purpose — its body is byte-
+identical to `collectResources` — but it was removed from both enforcement layers in Phase 5,
+docs/SPEC.md §5.4/§9, so it is no longer allowlisted or reachable at any tier; `collectResources`
+alone already covers this observation.) This is the concrete mechanism for observing "queue
+behavior and lazy settlement above level 0" for the first time ever in this project.
 
 ### 5. Execution runbook — new file `skills/veydrift-wallet/references/fork-testing.md`
 

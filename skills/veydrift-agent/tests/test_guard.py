@@ -1,4 +1,4 @@
-"""Tests for veydrift_agent.guard — the 17-gate guardrail evaluator.
+"""Tests for veydrift_agent.guard — the 18-gate guardrail evaluator.
 
 The most important tests here are the "missing data must not vacuously pass" ones (one
 per gate where that risk is real: `address`, `abi_hash`, `affordability`, `energy`,
@@ -319,6 +319,165 @@ def test_mission_type_blocks_independently_of_tier_at_every_tier():
     for tier in (Tier.ADVISOR, Tier.ECONOMY, Tier.OPERATOR):
         report = evaluate(action, make_snapshot(), make_policy(tier=tier))
         assert verdict(report, "mission_type").status is GuardStatus.BLOCK
+
+
+# --------------------------------------------------------------------------------------
+# mission_type — Colonize target-coordinate range check (judge finding 2, 2026-08-17).
+# An out-of-range galaxy/system/position doesn't fail on-chain; it silently corrupts the
+# packed target. This is guard.py's independent re-check of tick.py's own bounds check.
+# --------------------------------------------------------------------------------------
+
+
+def test_mission_type_blocks_an_out_of_range_colonize_position():
+    action = make_fleet_action(
+        mission_type=ids.FleetMissionType.COLONIZE, target_coordinates="1:2:300", ships={ids.Ship.COLONY_SHIP: 1}
+    )
+    report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "mission_type")
+    assert v.status is GuardStatus.BLOCK
+    assert "position" in v.detail
+
+
+def test_mission_type_blocks_an_out_of_range_colonize_system():
+    action = make_fleet_action(
+        mission_type=ids.FleetMissionType.COLONIZE, target_coordinates="1:70000:5", ships={ids.Ship.COLONY_SHIP: 1}
+    )
+    report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "mission_type")
+    assert v.status is GuardStatus.BLOCK
+    assert "system" in v.detail
+
+
+def test_mission_type_blocks_a_malformed_colonize_coordinate_string():
+    action = make_fleet_action(mission_type=ids.FleetMissionType.COLONIZE, target_coordinates=None, ships={ids.Ship.COLONY_SHIP: 1})
+    report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "mission_type")
+    assert v.status is GuardStatus.BLOCK
+    assert "target_coordinates" in v.detail
+
+
+def test_mission_type_allows_an_in_range_colonize_target():
+    action = make_fleet_action(
+        mission_type=ids.FleetMissionType.COLONIZE, target_coordinates="1:2:5", ships={ids.Ship.COLONY_SHIP: 1}
+    )
+    report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+    assert verdict(report, "mission_type").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# Fleet-mission spend derivation (judge finding 1, 2026-08-17). `generate_transport_
+# candidates`/`generate_harvest_candidates` built a FLEET_MISSION Action without setting
+# `Action.cost` -- exactly what `affordability`/`reserve`/`value_ceiling` read -- so a
+# real launch spend (cargo + fuel) evaluated as zero and every one of those gates passed
+# vacuously. Fixed on two independent layers: candidates.py now populates `cost`, AND
+# guard.py independently re-derives the true spend from `ships`/`cargo`/route rather than
+# trusting `action.cost` at all, so a planner that forgets `cost` again is still caught.
+# --------------------------------------------------------------------------------------
+
+
+def _hauler_planet(**overrides) -> PlanetSnapshot:
+    from veydrift_agent.models import Entity as _Entity
+
+    base = dict(ships=[_Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=1, cost=Resources())])
+    base.update(overrides)
+    return make_planet(**base)
+
+
+def test_reserve_gate_blocks_a_fleet_mission_breach_even_when_action_cost_is_left_zero():
+    """Reproduces the brief's own scenario: a planet holding 50,000 deuterium with a
+    40,000 reserve floor proposes a Transport of the 10,000 surplus. `Action.cost` is
+    left at the frozen model's zero default (as if the planner forgot to set it, or as
+    a hostile/buggy caller) -- the gate must derive the true spend independently and
+    still BLOCK the breach, never trust the (absent) `Action.cost`."""
+    planet = _hauler_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=50_000))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_fleet_action(cargo=Resources(deuterium=10_000), cost=Resources())
+    policy = make_policy(tier=Tier.OPERATOR, reserves=Resources(deuterium=40_000))
+    v = verdict(evaluate(action, snapshot, policy), "reserve")
+    assert v.status is GuardStatus.BLOCK
+    assert "deuterium" in v.detail
+
+
+def test_affordability_gate_sees_the_true_fleet_mission_spend_not_a_missing_cost():
+    """1 Small Cargo's fuel at this fixture's distance (~1005) is 2 deuterium (verified
+    against calc.py directly) -- with only 1 deuterium held and `Action.cost` left at
+    zero, the gate must still see the real 2-deuterium fuel spend and BLOCK."""
+    planet = _hauler_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=1))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_fleet_action(cost=Resources())
+    policy = make_policy(tier=Tier.OPERATOR)
+    v = verdict(evaluate(action, snapshot, policy), "affordability")
+    assert v.status is GuardStatus.BLOCK
+
+
+def test_value_ceiling_gate_sees_the_true_fleet_mission_spend():
+    """cargo (50) + fuel (2) = 52 against 100 held = 52% of holdings, above the default
+    25% escalate_above_pct_of_resources -- must ESCALATE even though `Action.cost` (left
+    at zero) would say the spend is nothing."""
+    planet = _hauler_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=100))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_fleet_action(cargo=Resources(deuterium=50), cost=Resources())
+    policy = make_policy(tier=Tier.OPERATOR)
+    v = verdict(evaluate(action, snapshot, policy), "value_ceiling")
+    assert v.status is GuardStatus.ESCALATE
+
+
+def test_fleet_mission_spend_unverifiable_blocks_never_passes_as_zero():
+    """No ships in the action at all -- the spend genuinely cannot be derived. This must
+    resolve to BLOCK on every gate that depends on it, never PASS-as-zero (AGENTS.md §5)."""
+    planet = _hauler_planet(resources_as_of_now=Resources(deuterium=50_000))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_fleet_action(ships={})
+    policy = make_policy(tier=Tier.OPERATOR)
+    report = evaluate(action, snapshot, policy)
+    for gate in ("affordability", "reserve", "value_ceiling"):
+        assert verdict(report, gate).status is GuardStatus.BLOCK, gate
+
+
+def test_fleet_mission_spend_derivation_is_a_passthrough_for_non_fleet_actions():
+    """Confirms the derivation helper changes nothing for the other five ActionKinds --
+    `action.cost` is used as-is, same as before this fix."""
+    action = make_build_action(cost=Resources(metal=60, crystal=15))
+    report = evaluate(action, make_snapshot(), make_policy(tier=Tier.ECONOMY))
+    assert verdict(report, "affordability").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# prerequisites — FLEET_MISSION ship-availability check (also-worth-fixing #2, judge
+# review 2026-08-17). Before this fix, FLEET_MISSION had no entry in
+# `_FAMILY_FOR_ACTION_KIND`, so `prerequisites` PASSed trivially regardless of whether the
+# origin planet actually owned the ships committed.
+# --------------------------------------------------------------------------------------
+
+
+def test_prerequisites_blocks_a_fleet_mission_without_enough_ships_at_origin():
+    from veydrift_agent.models import Entity as _Entity
+
+    planet = make_planet(ships=[_Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=2, cost=Resources())])
+    snapshot = make_snapshot(planets=[planet])
+    action = make_fleet_action(ships={ids.Ship.SMALL_CARGO: 5})
+    v = verdict(evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR)), "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "Small Cargo" in v.detail
+
+
+def test_prerequisites_blocks_a_fleet_mission_ship_the_snapshot_never_reported():
+    planet = make_planet(ships=[])
+    snapshot = make_snapshot(planets=[planet])
+    action = make_fleet_action(ships={ids.Ship.SMALL_CARGO: 1})
+    v = verdict(evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR)), "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "not reported" in v.detail
+
+
+def test_prerequisites_passes_a_fleet_mission_with_enough_ships_at_origin():
+    from veydrift_agent.models import Entity as _Entity
+
+    planet = make_planet(ships=[_Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=2, cost=Resources())])
+    snapshot = make_snapshot(planets=[planet])
+    action = make_fleet_action(ships={ids.Ship.SMALL_CARGO: 2})
+    v = verdict(evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR)), "prerequisites")
+    assert v.status is GuardStatus.PASS
 
 
 # --------------------------------------------------------------------------------------

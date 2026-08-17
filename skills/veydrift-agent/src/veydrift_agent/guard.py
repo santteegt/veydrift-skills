@@ -43,6 +43,7 @@ from veydrift_agent.models import (
     PlanetSnapshot,
     Policy,
     QueueKind,
+    Resources,
     Snapshot,
     Tier,
     UnsignedTx,
@@ -246,6 +247,49 @@ def _gate_tier(action: Action, policy: Policy) -> GuardVerdict:
     return _verdict("tier", GuardStatus.PASS, f"{action.function} allowed at tier {policy.tier.value}")
 
 
+#: Field widths `_decodeColonyTarget` masks against
+#: (`VeydriftColonizationModule.sol:42-46,482-492`, pinned commit 701bed35):
+#: ``COLONIZATION_COORDINATE_MASK = 0xffff`` for both galaxy and system (each packed as
+#: a `uint16`), ``COLONIZATION_POSITION_MASK = 0xff`` for position (packed as a `uint8`
+#: occupying the low byte directly, not shifted). Verified directly against the pinned
+#: source, not merely trusted from a brief. Duplicated from `tick.py`'s
+#: `_encode_colony_target` bounds, not imported -- this module never imports from
+#: `tick.py` (the same "duplicated here" posture every other contract-derived constant
+#: in this module already takes).
+_COLONIZATION_GALAXY_MAX = 0xFFFF
+_COLONIZATION_SYSTEM_MAX = 0xFFFF
+_COLONIZATION_POSITION_MAX = 0xFF
+
+
+def _colony_target_range_violation(coordinates: str | None) -> str | None:
+    """`None` when `coordinates` packs cleanly into `_encode_colony_target`'s on-chain
+    representation; otherwise a detail string. Judge finding 2 (2026-08-17): a
+    galaxy/system/position value outside these masks does not raise on-chain at encode
+    time -- there is no Solidity-side call in this codebase's write path, `tick.py`'s
+    Python function IS the encoder -- it silently collides with an adjacent field's bits
+    during the `|` pack, producing a *different, still-valid-looking* target
+    (`"1:2:300"` decodes as galaxy 1, system 3, position 44: position's low-byte overflow
+    adds 1 to system). This is `guard.py`'s independent re-check of `tick.py`'s own bounds
+    check, the same defense-in-depth posture every other duplicated check in this module
+    takes."""
+    if coordinates is None:
+        return "no target_coordinates set for a Colonize mission"
+    parts = coordinates.split(":")
+    if len(parts) != 3:
+        return f"{coordinates!r} is not a 'G:S:P' coordinate string"
+    try:
+        galaxy, system, position = (int(p) for p in parts)
+    except ValueError:
+        return f"{coordinates!r} is not a 'G:S:P' coordinate string"
+    if not (0 <= galaxy <= _COLONIZATION_GALAXY_MAX):
+        return f"galaxy {galaxy} out of range [0, {_COLONIZATION_GALAXY_MAX}]"
+    if not (0 <= system <= _COLONIZATION_SYSTEM_MAX):
+        return f"system {system} out of range [0, {_COLONIZATION_SYSTEM_MAX}]"
+    if not (0 <= position <= _COLONIZATION_POSITION_MAX):
+        return f"position {position} out of range [0, {_COLONIZATION_POSITION_MAX}]"
+    return None
+
+
 def _gate_mission_type(action: Action) -> GuardVerdict:
     """Phase 5c (docs/SPEC.md §5.5): default-deny gate for `launchFleetMission`'s
     `mission_type` argument, independent of and in addition to the `tier` gate above.
@@ -280,6 +324,19 @@ def _gate_mission_type(action: Action) -> GuardVerdict:
             f"mission_type {action.mission_type} ({name}) is not in the allowed set {allowed} "
             "(Transport/Deploy/Colonize/Harvest only -- combat is refused unconditionally)",
         )
+    if action.mission_type == ids.FleetMissionType.COLONIZE:
+        # Judge finding 2: independently re-check tick.py's own colony-target bounds --
+        # an out-of-range coordinate doesn't fail on-chain, it silently corrupts the
+        # packed target (see _colony_target_range_violation's docstring).
+        violation = _colony_target_range_violation(action.target_coordinates)
+        if violation is not None:
+            return _verdict(
+                "mission_type",
+                GuardStatus.BLOCK,
+                f"Colonize target_coordinates invalid: {violation} -- an out-of-range "
+                "value would silently corrupt the packed on-chain colony target rather "
+                "than raise",
+            )
     return _verdict(
         "mission_type",
         GuardStatus.PASS,
@@ -365,6 +422,44 @@ def _defense_cap_violation(action: Action, planet: PlanetSnapshot) -> str | None
     return None
 
 
+def _gate_fleet_ship_availability(action: Action, snapshot: Snapshot) -> GuardVerdict:
+    """`prerequisites`' `FLEET_MISSION`-specific branch (also-worth-fixing #2, judge
+    review 2026-08-17): does the origin planet actually own enough of every ship
+    `action.ships` commits? Before this, `FLEET_MISSION` had no entry in
+    `_FAMILY_FOR_ACTION_KIND`, so `_gate_prerequisites` PASSed it trivially -- correct for
+    "does this entity have its on-chain unlock prerequisites" (a fleet mission proposes no
+    new building/tech/ship/defense entity), but it left "does the origin planet actually
+    own these ships" unchecked anywhere in this module. `candidates.py`'s generators only
+    ever commit already-built ships, but this is `guard.py`'s own independent re-check of
+    that invariant -- the same defense-in-depth posture every other gate here takes toward
+    the planner, and the one Finding 1 showed is not optional for this action family.
+    Fails closed: a ship count the snapshot didn't report is unverifiable, not "0 built"."""
+    if not action.ships:
+        return _verdict("prerequisites", GuardStatus.PASS, "fleet mission commits no ships to check")
+    if action.origin_planet_id is None:
+        return _verdict(
+            "prerequisites", GuardStatus.BLOCK, "fleet mission has no origin_planet_id to check ship availability against"
+        )
+    planet = snapshot.planet(action.origin_planet_id)
+    if planet is None:
+        return _verdict("prerequisites", GuardStatus.BLOCK, f"planet {action.origin_planet_id} not found in snapshot")
+    owned = {e.id: e.count for e in planet.ships}
+    shortfalls: list[str] = []
+    for ship_id, requested in action.ships.items():
+        if requested <= 0:
+            continue
+        built = owned.get(ship_id)
+        if built is None:
+            shortfalls.append(f"{ids.ship_name(ship_id)} count not reported for planet {planet.planet_id}")
+        elif built < requested:
+            shortfalls.append(f"{ids.ship_name(ship_id)} requests {requested}, only {built} built")
+    if shortfalls:
+        return _verdict(
+            "prerequisites", GuardStatus.BLOCK, "fleet mission ship availability unverified/insufficient: " + "; ".join(shortfalls)
+        )
+    return _verdict("prerequisites", GuardStatus.PASS, f"origin planet {planet.planet_id} has every ship this mission commits")
+
+
 def _gate_prerequisites(action: Action, snapshot: Snapshot) -> GuardVerdict:
     """New gate (docs/SPEC.md §5.5), slotted immediately after `tier` and before
     `address`. Independently re-derives the planet's building/technology level vectors
@@ -374,11 +469,17 @@ def _gate_prerequisites(action: Action, snapshot: Snapshot) -> GuardVerdict:
     -- fail closed, never PASS on absent data), and on a shield-dome/missile-slot cap
     violation.
 
+    `FLEET_MISSION` gets its own branch (`_gate_fleet_ship_availability`) -- see that
+    function's docstring.
+
     Actions with no entity to check (`resolve_mission`/`noop`/`escalate`/`halt`, or any
     action missing `entity_id`) PASS trivially -- there is nothing here for this gate to
     say anything about, the same posture `_gate_energy`/`_gate_affordability` take toward
     an action with no target planet.
     """
+    if action.kind is ActionKind.FLEET_MISSION:
+        return _gate_fleet_ship_availability(action, snapshot)
+
     family = _FAMILY_FOR_ACTION_KIND.get(action.kind)
     if family is None or action.entity_id is None:
         return _verdict("prerequisites", GuardStatus.PASS, "action has no entity to check prerequisites for")
@@ -471,13 +572,116 @@ def _gate_index_lag(policy: Policy, agent_state: AgentState, *, now) -> GuardVer
     return _verdict("index_lag", GuardStatus.WARN, f"{pending.key} awaiting index, {elapsed:.0f}s elapsed")
 
 
+#: `VeydriftGameStorage.sol:52` (`LOCAL_HARVEST_DISTANCE`) -- duplicated from
+#: `candidates.py`'s own constant of the same name and value, not imported: this module
+#: never imports from `candidates.py` (the module docstring's "duplicated here, sourced
+#: from the exact same pin" convention, already applied to `PINNED_ABI_HASH` and
+#: `_MIN_TIER_FOR_FUNCTION`/`_ALLOWED_MISSION_TYPES` above -- two independent
+#: implementations of the same contract rule, so a bug in one is unlikely to also be in
+#: the other). A same-planet Harvest (`origin_planet_id == planet_id`,
+#: `target_coordinates` unset) uses this fixed distance instead of `calc.distance`, which
+#: is undefined for two identical coordinates in the sense the contract means here.
+_LOCAL_HARVEST_DISTANCE = 5
+
+
+def _drive_tech_levels(snapshot: Snapshot) -> tuple[int, int, int]:
+    """`(combustion_drive_level, impulse_drive_level, hyperspace_drive_level)` -- `0` for
+    any technology the snapshot doesn't report. Duplicated from `candidates.py`'s
+    function of the same name and behaviour, not imported, for the same reason every
+    other contract-derived value in this module is duplicated rather than shared."""
+
+    def _level(tech_id: int) -> int:
+        entity = next((t for t in snapshot.technologies if t.id == tech_id), None)
+        return entity.level if entity is not None and entity.level is not None else 0
+
+    return (
+        _level(ids.Technology.COMBUSTION_DRIVE),
+        _level(ids.Technology.IMPULSE_DRIVE),
+        _level(ids.Technology.HYPERSPACE_DRIVE),
+    )
+
+
+def _derive_fleet_mission_spend(action: Action, snapshot: Snapshot) -> Resources | None:
+    """Independently re-derive a `FLEET_MISSION` action's true launch spend -- cargo plus
+    fuel, fuel counted as deuterium (`VeydriftGameplayModule.sol:246-260`, pinned commit
+    701bed35: ``_spend(origin, {..., deuterium: cargo.deuterium + fuelCost})``) -- from
+    `action.ships` / `action.origin_planet_id` / `action.target_coordinates` alone,
+    **never** from `action.cost`.
+
+    This is `guard.py`'s own defense-in-depth check for the one action family whose true
+    cost previously lived off `Action.cost` entirely (judge finding 1, 2026-08-17):
+    `candidates.py`'s logistics generators built a `FLEET_MISSION` `Action` without ever
+    setting `cost`, so `affordability`/`reserve`/`value_ceiling` all evaluated a real
+    resource spend as zero and passed vacuously -- defeating this module's own defense-in-
+    depth claim for exactly the one action family that moves resources off-planet. A
+    planner that forgets to populate `cost` again must still be caught here, the same
+    posture `_gate_energy` already takes toward `plan.py`'s energy invariant: an
+    independent re-derivation, never a call into the planner's own code.
+
+    For every other `ActionKind` this is just `action.cost`, unchanged.
+
+    Returns `None` when the spend cannot be verified (unknown route, absent ship/route/
+    technology data) -- **unverifiable, never zero** (AGENTS.md §5's "a guardrail must
+    never pass vacuously on absent data," applied to this derivation's own inputs, not
+    just to snapshot data)."""
+    if action.kind is not ActionKind.FLEET_MISSION:
+        return action.cost
+    if not action.ships or action.origin_planet_id is None:
+        return None
+    origin = snapshot.planet(action.origin_planet_id)
+    if origin is None or origin.coordinates is None:
+        return None
+
+    if action.target_coordinates is None:
+        # Local Harvest special case: target IS origin (candidates.py's own convention;
+        # tick.py's encoder resolves it the same way). Any other target_coordinates-unset
+        # mission is malformed, not "nothing to check" -- fail closed.
+        if action.mission_type != ids.FleetMissionType.HARVEST:
+            return None
+        distance = _LOCAL_HARVEST_DISTANCE
+    else:
+        try:
+            distance = calc.distance(origin.coordinates, action.target_coordinates)
+        except (ValueError, TypeError):
+            return None
+
+    combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
+    ship_stats: list[tuple[int, int, int]] = []  # (fuel_consumption, count, speed)
+    for ship_id, count in action.ships.items():
+        if count <= 0:
+            continue
+        try:
+            _, fuel_consumption, speed = calc.ship_movement_stats(ship_id, combustion, impulse, hyperspace)
+        except (KeyError, ValueError):
+            return None
+        ship_stats.append((fuel_consumption, count, speed))
+    if not ship_stats:
+        return None
+
+    slowest_speed = min(speed for _, _, speed in ship_stats)
+    fuel = calc.mission_fuel(ship_stats, distance, slowest_speed)
+    return Resources(
+        metal=action.cargo.metal,
+        crystal=action.cargo.crystal,
+        deuterium=action.cargo.deuterium + fuel,
+    )
+
+
 def _gate_affordability(action: Action, snapshot: Snapshot) -> GuardVerdict:
     if action.planet_id is None:
         return _verdict("affordability", GuardStatus.PASS, "action has no target planet to check cost against")
     planet = snapshot.planet(action.planet_id)
     if planet is None:
         return _verdict("affordability", GuardStatus.BLOCK, f"planet {action.planet_id} not found in snapshot")
-    if planet.resources_as_of_now.covers(action.cost):
+    spend = _derive_fleet_mission_spend(action, snapshot)
+    if spend is None:
+        return _verdict(
+            "affordability",
+            GuardStatus.BLOCK,
+            "fleet-mission spend could not be independently verified (missing ships/route/"
+            "technology data) -- refusing to treat an unverifiable cost as zero",
+        )
+    if planet.resources_as_of_now.covers(spend):
         return _verdict("affordability", GuardStatus.PASS, "resourcesAsOfNow covers the proposed cost")
 
     # Best-effort, informational only -- never changes this gate's BLOCK decision, which
@@ -487,11 +691,11 @@ def _gate_affordability(action: Action, snapshot: Snapshot) -> GuardVerdict:
     # resource is actually the bottleneck.
     eta_bits: list[str] = []
     for label, cost, current, per_hour, cap in (
-        ("Metal", action.cost.metal, planet.resources_as_of_now.metal, planet.production_per_hour.metal, planet.storage_caps.metal),
-        ("Crystal", action.cost.crystal, planet.resources_as_of_now.crystal, planet.production_per_hour.crystal, planet.storage_caps.crystal),
+        ("Metal", spend.metal, planet.resources_as_of_now.metal, planet.production_per_hour.metal, planet.storage_caps.metal),
+        ("Crystal", spend.crystal, planet.resources_as_of_now.crystal, planet.production_per_hour.crystal, planet.storage_caps.crystal),
         (
             "Deuterium",
-            action.cost.deuterium,
+            spend.deuterium,
             planet.resources_as_of_now.deuterium,
             planet.production_per_hour.deuterium,
             planet.storage_caps.deuterium,
@@ -511,8 +715,8 @@ def _gate_affordability(action: Action, snapshot: Snapshot) -> GuardVerdict:
     return _verdict(
         "affordability",
         GuardStatus.BLOCK,
-        f"resourcesAsOfNow does not cover cost (need M{action.cost.metal} C{action.cost.crystal} "
-        f"D{action.cost.deuterium}; have M{planet.resources_as_of_now.metal} "
+        f"resourcesAsOfNow does not cover cost (need M{spend.metal} C{spend.crystal} "
+        f"D{spend.deuterium}; have M{planet.resources_as_of_now.metal} "
         f"C{planet.resources_as_of_now.crystal} D{planet.resources_as_of_now.deuterium}) -- {eta_text}",
     )
 
@@ -666,11 +870,19 @@ def _gate_reserve(action: Action, snapshot: Snapshot, policy: Policy) -> GuardVe
     planet = snapshot.planet(action.planet_id)
     if planet is None:
         return _verdict("reserve", GuardStatus.BLOCK, f"planet {action.planet_id} not found in snapshot")
+    spend = _derive_fleet_mission_spend(action, snapshot)
+    if spend is None:
+        return _verdict(
+            "reserve",
+            GuardStatus.BLOCK,
+            "fleet-mission spend could not be independently verified (missing ships/route/"
+            "technology data) -- refusing to treat an unverifiable cost as zero",
+        )
     holdings = planet.resources_as_of_now
     projected = (
-        holdings.metal - action.cost.metal,
-        holdings.crystal - action.cost.crystal,
-        holdings.deuterium - action.cost.deuterium,
+        holdings.metal - spend.metal,
+        holdings.crystal - spend.crystal,
+        holdings.deuterium - spend.deuterium,
     )
     floors = (policy.reserves.metal, policy.reserves.crystal, policy.reserves.deuterium)
     breaches = [
@@ -735,7 +947,15 @@ def _gate_eth_floor(action: Action, policy: Policy, *, eth_balance_wei: int | No
 
 
 def _gate_value_ceiling(action: Action, snapshot: Snapshot, policy: Policy) -> GuardVerdict:
-    total_cost = action.cost.metal + action.cost.crystal + action.cost.deuterium
+    spend = _derive_fleet_mission_spend(action, snapshot)
+    if spend is None:
+        return _verdict(
+            "value_ceiling",
+            GuardStatus.BLOCK,
+            "fleet-mission spend could not be independently verified (missing ships/route/"
+            "technology data) -- refusing to treat an unverifiable cost as zero",
+        )
+    total_cost = spend.metal + spend.crystal + spend.deuterium
     if total_cost == 0:
         return _verdict("value_ceiling", GuardStatus.PASS, "action has no resource cost")
     if action.planet_id is None:

@@ -581,7 +581,7 @@ def test_crawler_candidate_is_scored_when_boost_has_room_to_grow():
     snapshot = _ready_snapshot(ship_counts={ids.Ship.CRAWLER: 1})
     planet = snapshot.planet(700)
     assert planet is not None
-    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True))
+    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True), strategy=StrategyCfg(enable_crawler=True))
 
     result = candidates.generate_crawler_candidates(snapshot, policy, planet)
 
@@ -597,7 +597,7 @@ def test_crawler_candidate_respects_the_eight_per_mine_level_cap():
     snapshot = _ready_snapshot(ship_counts={ids.Ship.CRAWLER: 480})
     planet = snapshot.planet(700)
     assert planet is not None
-    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True))
+    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True), strategy=StrategyCfg(enable_crawler=True))
 
     result = candidates.generate_crawler_candidates(snapshot, policy, planet)
 
@@ -610,7 +610,7 @@ def test_crawler_candidate_prefers_the_live_capped_flag_over_recomputing():
     snapshot = _ready_snapshot(ship_counts={ids.Ship.CRAWLER: 10}, crawler_production=live)
     planet = snapshot.planet(700)
     assert planet is not None
-    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True))
+    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True), strategy=StrategyCfg(enable_crawler=True))
 
     result = candidates.generate_crawler_candidates(snapshot, policy, planet)
 
@@ -626,12 +626,28 @@ def test_crawler_locked_without_shipyard_five():
     downgraded = planet.model_copy(
         update={"buildings": [b if b.id != ids.Building.SHIPYARD else b.model_copy(update={"level": 1}) for b in planet.buildings]}
     )
-    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True))
+    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True), strategy=StrategyCfg(enable_crawler=True))
 
     result = candidates.generate_crawler_candidates(snapshot, policy, downgraded)
 
     assert len(result) == 1
     assert result[0].score_basis.startswith("locked:")
+
+
+def test_crawler_candidates_empty_when_not_opted_in():
+    """Judge finding 4 (2026-08-17): `generate_crawler_candidates` used to be gated only
+    on `allow_ships`, so an entirely empty `policy.strategy` could still let a scored,
+    unlocked Crawler win `select_shipyard_candidate`'s ranking over Solar Satellite --
+    contradicting the "Solar Satellite's priority is unchanged when nothing new is
+    configured" AC (docs/SPEC.md §9). `policy.strategy.enable_crawler` defaults `False`;
+    this pins that default reproducing pre-Phase-3 behaviour exactly, even when the
+    Crawler is fully unlocked and scoreable."""
+    snapshot = _ready_snapshot(ship_counts={ids.Ship.CRAWLER: 1})
+    planet = snapshot.planet(700)
+    assert planet is not None
+    policy = make_policy(planets=[700], actions=ActionsCfg(allow_ships=True))
+
+    assert candidates.generate_crawler_candidates(snapshot, policy, planet) == []
 
 
 def test_proactive_storage_candidate_scored_none_and_present_regardless_of_urgency():
@@ -1022,13 +1038,19 @@ def test_generate_transport_candidates_moves_surplus_to_the_planet_that_needs_it
     assert action.mission_type == ids.FleetMissionType.TRANSPORT
     assert action.origin_planet_id == 664
     assert action.target_coordinates == "7:181:15"  # planet 665 -- the only other own planet
-    assert action.ships == {ids.Ship.SMALL_CARGO: 2}
-    # holdings (5000) - reserve floor (100) = 4900 surplus; 2 Small Cargo give 9997
-    # available cargo at this distance/speed (verified against calc.py directly) -- surplus
-    # is the binding constraint, not cargo capacity.
+    # judge finding 3: send only what the cargo requires. 1 Small Cargo (5000 capacity,
+    # fuel 2 at this distance/speed -- verified against calc.py directly) already covers
+    # the 4900 surplus with room to spare (4998 available), so only 1 of the 2 owned
+    # Small Cargo is committed, not both.
+    assert action.ships == {ids.Ship.SMALL_CARGO: 1}
     assert action.cargo.metal == 4900
     assert action.cargo.crystal == 0
     assert action.cargo.deuterium == 0
+    # judge finding 1: Action.cost must be the true launch spend (cargo + fuel, fuel as
+    # deuterium), not the frozen-model default of zero.
+    assert action.cost.metal == 4900
+    assert action.cost.crystal == 0
+    assert action.cost.deuterium == 2
 
 
 def test_generate_transport_candidates_empty_without_cargo_ships():
@@ -1036,6 +1058,45 @@ def test_generate_transport_candidates_empty_without_cargo_ships():
     policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True))
     origin = snapshot.planet(664)
     assert candidates.generate_transport_candidates(snapshot, policy, origin, snapshot.planets) == []
+
+
+def test_generate_transport_candidates_never_commits_combat_ships_or_the_recycler():
+    """Judge finding 3 (2026-08-17): the pre-fix filter was "nonzero cargo capacity",
+    true for every flyable ship including the Deathstar -- so Transport committed the
+    planet's ENTIRE fleet (defenceless for the round trip) at combat-ship fuel rates.
+    A planet with only a Battleship (has cargo capacity 1,500 in calc.py's table, but is
+    a combat ship) and a Recycler (reserved for Harvest) and no genuine hauler must
+    produce nothing, even though both those ships technically have nonzero capacity."""
+    origin = _origin_planet(
+        ships=[
+            Entity(id=ids.Ship.BATTLESHIP, name="Battleship", count=5, cost=Resources()),
+            Entity(id=ids.Ship.RECYCLER, name="Recycler", count=3, cost=Resources()),
+        ]
+    )
+    snapshot = _two_planet_snapshot(origin=origin)
+    policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), reserves=Resources(metal=100))
+    result = candidates.generate_transport_candidates(snapshot, policy, origin, snapshot.planets)
+    assert result == []
+
+
+def test_generate_transport_candidates_uses_only_haulers_when_combat_ships_are_present():
+    """Same shape as above, but with a genuine hauler (Small Cargo) also present: the
+    Transport must use only the Small Cargo, never the Battleship or the Recycler."""
+    origin = _origin_planet(
+        ships=[
+            Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=2, cost=Resources()),
+            Entity(id=ids.Ship.BATTLESHIP, name="Battleship", count=5, cost=Resources()),
+            Entity(id=ids.Ship.RECYCLER, name="Recycler", count=3, cost=Resources()),
+        ]
+    )
+    snapshot = _two_planet_snapshot(origin=origin)
+    policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), reserves=Resources(metal=100))
+    result = candidates.generate_transport_candidates(snapshot, policy, origin, snapshot.planets)
+    assert len(result) == 1
+    ships = result[0].action.ships
+    assert set(ships) == {ids.Ship.SMALL_CARGO}
+    assert ids.Ship.BATTLESHIP not in ships
+    assert ids.Ship.RECYCLER not in ships
 
 
 def test_generate_transport_candidates_empty_without_surplus():
@@ -1124,6 +1185,10 @@ def test_generate_harvest_candidates_produces_a_local_harvest_action():
     # metal) exceeds it, so the harvest is capacity-bound, not debris-bound.
     assert action.cargo.metal == 19_999
     assert action.cargo.crystal == 0
+    # judge finding 1: Action.cost must be the true launch spend (cargo + fuel).
+    assert action.cost.metal == 19_999
+    assert action.cost.crystal == 0
+    assert action.cost.deuterium == 1
 
 
 def test_select_logistics_candidate_returns_none_with_default_policy():

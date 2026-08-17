@@ -210,9 +210,16 @@ cd skills/veydrift-wallet && npx tsx src/cli.ts verify-abi
 ```
 
 A dry-run tick should write a pretty report plus one entry each to
-`$VEYDRIFT_HOME/logs/proposals.jsonl` and `logs/strategy.md`, and write **nothing** to
-`logs/actions.jsonl` — tier 1 never executes. `touch $VEYDRIFT_HOME/KILLSWITCH` before a
-tick to confirm it halts before any network call beyond `/health`.
+`$VEYDRIFT_HOME/logs/proposals.jsonl` and `ticks/<timestamp>.md`, and write **nothing** to
+`logs/actions.jsonl` — tier 1 never executes. `logs/strategy.md` gets an entry only when
+there's something worth narrating (`tick.py`'s own comment: an ESCALATE, or `guard_report.
+decision` not `ALLOW`, and not the purely-structural tier-1 block every tick produces
+until promotion) — a routine live NOOP/ALLOW dry-run against an account with nothing to
+propose writes `proposals.jsonl` and a `ticks/` entry but no `strategy.md` line; that's
+pre-existing suppression, not a bug (corrected here 2026-08-17, judge review — this
+section previously implied every dry-run writes `strategy.md`, which is only true for a
+tick with something to narrate). `touch $VEYDRIFT_HOME/KILLSWITCH` before a tick to
+confirm it halts before any network call beyond `/health`.
 
 ## 9. Multi-agent build/judge workflow used on this repo
 

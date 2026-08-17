@@ -1445,7 +1445,20 @@ def generate_crawler_candidates(snapshot: Snapshot, policy: Policy, planet: Plan
     `PlanetSnapshot.crawler_production.capped` is already `True`, in which case this
     short-circuits before doing the delta computation at all and says so plainly (Phase
     3's own "prefer the API's own numbers over recomputing" instruction, same posture
-    `energy.solar_satellite_energy` already takes)."""
+    `energy.solar_satellite_energy` already takes).
+
+    Gated on `policy.strategy.enable_crawler` (judge fix, 2026-08-17; default `False` --
+    returns `[]` immediately when unset, reproducing pre-Phase-3 behaviour exactly, the
+    same convention `ship_targets`/`defense_targets`/`building_priority` already use).
+    Before this gate, Crawler generation was unconditional (subject only to
+    `allow_ships`), and -- unlike the Fusion Reactor / proactive-storage additions this
+    same fix audited -- a scored Crawler competes directly with Solar Satellite in
+    `select_shipyard_candidate`'s `rank_candidates(selectable_ships)[0]` winner pick, so
+    it could silently displace Solar Satellite with an entirely empty `policy.strategy`
+    wherever the Crawler happened to be unlocked. See `StrategyCfg.enable_crawler`'s
+    docstring."""
+    if not policy.strategy.enable_crawler:
+        return []
     crawler = _entity(planet.ships, ids.Ship.CRAWLER)
     if crawler is None or crawler.count is None:
         return []
@@ -1787,17 +1800,115 @@ def _drive_tech_levels(snapshot: Snapshot) -> tuple[int, int, int]:
     )
 
 
+#: Ships this codebase will actually commit to a Transport mission (judge finding 3,
+#: 2026-08-17). The pre-fix filter was "nonzero `calc.SHIP_CARGO_CAPACITY`", which is
+#: true for all 14 flyable ships -- Light Fighter (50) through Deathstar (1,000,000) --
+#: so a Transport committed the planet's ENTIRE fleet, including every combat ship, at
+#: combat-ship fuel rates (Bomber/Destroyer/Reaper: 1,000/unit vs Small Cargo's 10-20),
+#: leaving the origin defenceless for the round trip. Restricted to the two ships whose
+#: sole catalog role is hauling cargo, unarmed, with no other primary use:
+#:   * Small Cargo (5,000 capacity) and Large Cargo (25,000 capacity) -- both pure
+#:     transports, no combat stats, no other mission this codebase ever assigns them.
+#: Deliberately excluded, each for a specific reason, not just "not in the pair above":
+#:   * Recycler (20,000 capacity, competitive with Large Cargo) -- its entire in-game
+#:     role is debris-field harvesting, and `generate_harvest_candidates` below already
+#:     depends on it being available at the origin; committing it to Transport too would
+#:     starve Harvest of the ship it needs.
+#:   * Pathfinder (12,000 capacity) and Colony Ship (7,500 capacity) -- each has a
+#:     distinct primary role (an exploration-class multi-mission ship; one-shot
+#:     colonisation) and is not a dedicated hauler.
+#:   * Every combat ship (Light/Heavy Fighter, Cruiser, Battleship, Bomber, Destroyer,
+#:     Deathstar, Battlecruiser, Reaper) -- Transport must never strip a planet's defence
+#:     fleet or pay combat-ship fuel rates, the core defect this fix addresses.
+_HAULER_SHIP_IDS: tuple[int, ...] = (ids.Ship.LARGE_CARGO, ids.Ship.SMALL_CARGO)
+
+
 def _cargo_ships(planet: PlanetSnapshot) -> list[tuple[int, int]]:
-    """`(ship_id, count)` for every ship type already built on `planet` with a nonzero
-    count AND a nonzero cargo capacity (`calc.SHIP_CARGO_CAPACITY`) -- SolarSatellite and
-    Crawler have capacity `0` in that table and are excluded by this filter alone (on top
-    of being non-flyable at all, `ids.NON_FLYABLE_SHIPS`), so this function can never hand
-    a non-flyable ship id to `calc.ship_movement_stats`, which would raise."""
-    return [
-        (entity.id, entity.count)
-        for entity in planet.ships
-        if entity.count and calc.SHIP_CARGO_CAPACITY.get(entity.id, 0) > 0
-    ]
+    """`(ship_id, count)` for every `_HAULER_SHIP_IDS` type already built on `planet`
+    with a nonzero count -- restricted to genuine haulers (see `_HAULER_SHIP_IDS`), not
+    "every ship with nonzero cargo capacity" (judge finding 3: that included every
+    combat ship up to the Deathstar)."""
+    counts = {entity.id: entity.count for entity in planet.ships if entity.count}
+    return [(ship_id, counts[ship_id]) for ship_id in _HAULER_SHIP_IDS if counts.get(ship_id)]
+
+
+def _fleet_mission_cost(cargo: Resources, fuel: int) -> Resources:
+    """The true on-chain launch spend for a `launchFleetMission` action: cargo plus fuel,
+    fuel counted as deuterium -- `VeydriftGameplayModule.sol:246-260` (pinned commit
+    701bed35): `_spend(origin, {..., deuterium: cargo.deuterium + fuelCost})`. Judge
+    finding 1: `generate_transport_candidates`/`generate_harvest_candidates` built an
+    `Action` without ever setting `Action.cost`, so `guard.py`'s `affordability`/
+    `reserve`/`value_ceiling` gates all evaluated a fleet mission's true resource spend
+    as zero and passed vacuously. Every fleet-mission generator must route its cost
+    through this helper."""
+    return Resources(metal=cargo.metal, crystal=cargo.crystal, deuterium=cargo.deuterium + fuel)
+
+
+def _select_haulers_for_cargo(
+    cargo_ships: list[tuple[int, int]],
+    amount: int,
+    distance: int,
+    combustion: int,
+    impulse: int,
+    hyperspace: int,
+) -> tuple[dict[int, int], int, int]:
+    """Pick the smallest hauler fleet (from `cargo_ships`, already restricted to
+    `_HAULER_SHIP_IDS`) whose available cargo (capacity minus this fleet's own mission
+    fuel) covers `amount` -- judge finding 3's "do not send more ships than the cargo
+    requires". Tries the most fuel-efficient type first (highest cargo-per-fuel-unit,
+    which for this catalog is Large Cargo, then Small Cargo), adds only as many of that
+    type as a ceiling-division estimate calls for (capped at what's actually owned), then
+    shaves back one unit at a time while the fleet built so far still covers `amount` --
+    the ceiling estimate ignores this fleet's own fuel draw, which is small enough
+    relative to capacity (Large Cargo: 50 fuel / 25,000 capacity) that it only ever
+    overshoots by a unit or two, corrected here rather than accepted as slop.
+
+    Returns `(ship_counts, fuel, available_cargo)`. `ship_counts` may under-cover
+    `amount` if every owned hauler combined still isn't enough -- the caller (mirroring
+    the pre-fix behaviour) clamps `send_amount = min(amount, available)`."""
+    stats = {
+        ship_id: calc.ship_movement_stats(ship_id, combustion, impulse, hyperspace) for ship_id, _ in cargo_ships
+    }
+    owned = dict(cargo_ships)
+    order = sorted(
+        (sid for sid in owned if stats[sid][0] > 0),
+        key=lambda sid: stats[sid][0] / stats[sid][1] if stats[sid][1] else float("inf"),
+        reverse=True,
+    )
+    selected: dict[int, int] = {}
+
+    def fuel_and_available(sel: dict[int, int]) -> tuple[int, int]:
+        if not sel:
+            return 0, 0
+        speed = min(stats[sid][2] for sid in sel)
+        fuel = calc.mission_fuel(
+            [(stats[sid][1], count, stats[sid][2]) for sid, count in sel.items()], distance, speed
+        )
+        capacity = sum(stats[sid][0] * count for sid, count in sel.items())
+        return fuel, calc.available_cargo(capacity, fuel)
+
+    for ship_id in order:
+        _, available_so_far = fuel_and_available(selected)
+        if available_so_far >= amount:
+            break
+        capacity_per = stats[ship_id][0]
+        needed = min(-(-(amount - available_so_far) // capacity_per), owned[ship_id])  # ceil div
+        if needed <= 0:
+            continue
+        selected[ship_id] = needed
+        while selected[ship_id] > 0:
+            trial = dict(selected)
+            trial[ship_id] -= 1
+            if trial[ship_id] == 0:
+                del trial[ship_id]
+            _, trial_available = fuel_and_available(trial)
+            if trial_available >= amount:
+                selected = trial
+            else:
+                break
+
+    fuel, available = fuel_and_available(selected)
+    return selected, fuel, available
 
 
 def generate_transport_candidates(
@@ -1835,22 +1946,16 @@ def generate_transport_candidates(
 
     combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
     distance = calc.distance(planet.coordinates, destination.coordinates)
-    ship_stats = [
-        (ship_id, count, *calc.ship_movement_stats(ship_id, combustion, impulse, hyperspace)[1:])
-        for ship_id, count in cargo_ships
-    ]  # (ship_id, count, fuel_consumption, speed)
-    slowest_speed = min(speed for _, _, _, speed in ship_stats)
-    fuel = calc.mission_fuel(
-        [(fuel_consumption, count, speed) for _, count, fuel_consumption, speed in ship_stats],
-        distance,
-        slowest_speed,
+    selected_ships, fuel, available = _select_haulers_for_cargo(
+        cargo_ships, amount, distance, combustion, impulse, hyperspace
     )
-    total_capacity = sum(count * calc.SHIP_CARGO_CAPACITY[ship_id] for ship_id, count in cargo_ships)
-    available = calc.available_cargo(total_capacity, fuel)
-    if available <= 0:
+    if not selected_ships or available <= 0:
         return []
     send_amount = min(amount, available)
     cargo = Resources(**{label: send_amount})
+    slowest_speed = min(
+        calc.ship_movement_stats(ship_id, combustion, impulse, hyperspace)[2] for ship_id in selected_ships
+    )
     travel_secs = calc.travel_seconds(distance, slowest_speed)
 
     action = Action(
@@ -1860,13 +1965,15 @@ def generate_transport_candidates(
         mission_type=ids.FleetMissionType.TRANSPORT,
         origin_planet_id=planet.planet_id,
         target_coordinates=destination.coordinates,
-        ships=dict(cargo_ships),
+        ships=selected_ships,
         cargo=cargo,
+        cost=_fleet_mission_cost(cargo, fuel),
         rationale=(
             f"policy.actions.allow_fleet_noncombat=true; planet {planet.planet_id} holds "
             f"{getattr(holdings, label)} {label} above the reserve floor of {getattr(reserves, label)} "
             f"({amount} surplus). Sending {send_amount} {label} to planet {destination.planet_id} "
-            f"({destination.coordinates}, {distance} distance, ~{travel_secs}s travel, {fuel} fuel)."
+            f"({destination.coordinates}, {distance} distance, ~{travel_secs}s travel, {fuel} fuel) "
+            f"using {selected_ships} (ship id -> count, restricted to genuine haulers)."
         ),
         expected_effect=f"planet {destination.planet_id} gains {send_amount} {label}; planet {planet.planet_id} loses it plus {fuel} deuterium fuel.",
     )
@@ -1948,6 +2055,7 @@ def generate_harvest_candidates(
         target_coordinates=None,  # local harvest: target IS origin (contract special case)
         ships={ids.Ship.RECYCLER: recycler.count},
         cargo=cargo,
+        cost=_fleet_mission_cost(cargo, fuel),
         rationale=(
             f"policy.actions.allow_fleet_noncombat=true; planet {planet.planet_id} has its own "
             f"debris field (M{debris.metal} C{debris.crystal}); harvesting with "
@@ -1989,8 +2097,12 @@ def select_logistics_candidate(
         harvests = generate_harvest_candidates(snapshot, policy, planet, own_planet_debris=own_planet_debris)
         if harvests:
             return harvests[0], rank_candidates(alternatives + harvests[1:])
-        alternatives.extend(transports)
-        alternatives.extend(harvests)
+        # No `alternatives.extend(transports/harvests)` here (judge finding, also-worth-
+        # fixing #3): both generators return at most one `Candidate`, and both `if
+        # transports:` / `if harvests:` branches above already return whenever either is
+        # non-empty -- so by this point both are always `[]`. Extending with them was
+        # dead code (an empty-list no-op every time this line ran), removed rather than
+        # kept as decoration.
     return None, []
 
 

@@ -319,6 +319,16 @@ class StrategyCfg(Base):
     #: remain reachable only if some other rung happens to touch them, which none does
     #: pre-Phase-3) — setting this is what makes them reachable at all.
     building_priority: list[str] = Field(default_factory=list)
+    #: Explicit opt-in for Crawler production (`candidates.generate_crawler_candidates`).
+    #: Default `False` reproduces pre-Phase-3 behaviour exactly: Crawler generation
+    #: returns `[]` unconditionally, so `select_shipyard_candidate`'s scored ranking can
+    #: never pick it over Solar Satellite, matching `ship_targets`/`building_priority`'s
+    #: own "empty/off == old behaviour" convention. Judge finding (2026-08-17): with an
+    #: entirely empty `policy.strategy`, an unlocked, scoreable Crawler could silently
+    #: outrank Solar Satellite on `select_shipyard_candidate`'s ranked winner, which is
+    #: exactly the AC docs/SPEC.md §9 / this field's own docstring say must not happen.
+    #: This flag is what makes that outcome opt-in rather than automatic.
+    enable_crawler: bool = False
 
 
 class Policy(Base):

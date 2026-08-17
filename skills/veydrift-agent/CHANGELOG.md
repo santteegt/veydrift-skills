@@ -11,6 +11,76 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-17
+
+Judge review of the just-completed general-strategy-engine program (`b00d8ca..f6a7c56`). Minor
+rather than patch: `StrategyCfg` gains a new additive field (`enable_crawler`), and `guard.py`
+gains an independent defense-in-depth check for fleet-mission spend — both backward-compatible
+(an old `policy.json` with no `strategy.enable_crawler` key still loads, defaulting to the
+pre-existing behaviour), not a breaking CLI/schema/ABI change.
+
+### Fixed
+
+- **Finding 1 (most severe) — fleet-mission actions bypassed every resource gate.**
+  `generate_transport_candidates`/`generate_harvest_candidates` (`candidates.py`) built a
+  `FLEET_MISSION` `Action` without ever setting `Action.cost` — exactly what `guard.py`'s
+  `affordability`/`reserve`/`value_ceiling` gates read. A planet holding 50,000 deuterium with a
+  40,000 reserve floor could propose a Transport of the 10,000 surplus plus fuel with the
+  `reserve` gate PASSing (final holdings 39,929 — floor breached, no gate fired). Fixed on two
+  independent layers: both generators now populate `Action.cost = cargo + fuel` (fuel counted as
+  deuterium, `VeydriftGameplayModule.sol:246-260`); `guard.py` gained
+  `_derive_fleet_mission_spend`, which independently re-derives the true spend from
+  `Action.ships`/`Action.cargo`/route rather than trusting `Action.cost` at all, the same
+  defense-in-depth posture `_gate_energy` already takes toward `plan.py`'s energy invariant — a
+  planner that forgets `cost` again is still caught. Unverifiable spend (missing ships/route/
+  technology data) resolves to `BLOCK`, never a silent zero.
+- **Finding 2 — `_encode_colony_target` silently corrupted out-of-range coordinates.**
+  `tick.py:_encode_colony_target` had no bounds check; `"1:2:300"` decoded on-chain as galaxy 1,
+  system 3, position 44 (position's low-byte overflow spilling into the system field) — a
+  corrupted but still in-range-looking target that would launch a real Colony Ship at the wrong
+  slot with no error anywhere in the pipeline. Now raises on any galaxy/system value outside
+  `[0, 0xffff]` or position outside `[0, 0xff]` (verified against `_decodeColonyTarget`'s own
+  masks, `VeydriftColonizationModule.sol:42-46,482-492`), or a malformed `"G:S:P"` string.
+  `guard.py`'s `mission_type` gate gained an independent re-check of the same bounds for Colonize
+  actions.
+- **Finding 3 — Transport committed the entire fleet, not cargo ships.** `_cargo_ships` filtered
+  on nonzero `SHIP_CARGO_CAPACITY`, true for all 14 flyable ships including combat ships and the
+  Deathstar — a Transport could strip a planet's defence fleet for the round trip and pay
+  combat-ship fuel rates. Restricted to genuine haulers only (Small Cargo, Large Cargo — see
+  `_HAULER_SHIP_IDS`'s docstring for why Recycler/Pathfinder/Colony Ship and every combat ship are
+  excluded), and a new `_select_haulers_for_cargo` picks the smallest hauler fleet that covers the
+  proposed cargo rather than committing every owned hauler regardless of need.
+- **Finding 4 — Phase 3's "reproduces Phase 2 output when nothing new is configured" claim was
+  false for the Crawler.** `generate_crawler_candidates` was gated only on `allow_ships`, so an
+  unlocked, scoreable Crawler could outrank Solar Satellite in `select_shipyard_candidate`'s
+  ranked winner pick with an entirely empty `policy.strategy` — latent only because the Crawler
+  happened to be locked on the account this codebase was tested against. Gated behind a new
+  `policy.strategy.enable_crawler` field (default `false`), following `ship_targets`/
+  `building_priority`'s own "empty/off == old behaviour" convention. Audited the same shape in
+  `generate_proactive_storage_candidates`, `generate_infrastructure_candidates`, and the Fusion
+  Reactor branch of `generate_energy_candidates`: all three are structurally confined to
+  `alternatives` in their current call graphs (never reachable as a rung's winner), so none needed
+  the same fix — see the WP report for the full trace.
+- **`_gate_prerequisites` now checks ship availability at the origin for `FLEET_MISSION`
+  actions** (previously PASSed trivially — `FLEET_MISSION` had no entry in
+  `_FAMILY_FOR_ACTION_KIND`). Fails closed on a ship count the snapshot didn't report.
+- **`_ship_counts_to_fleet_tuple` now rejects a negative ship count**, matching
+  `veydrift-wallet`'s `fleet.ts` (the two encoders could previously disagree on the same
+  malformed input).
+- Dead code removed: `select_logistics_candidate`'s trailing `alternatives.extend(transports/
+  harvests)` was unreachable (both generators return at most one `Candidate`, and both branches
+  above already return whenever either is non-empty).
+- Doc corrections (stale `settlePlanet`-is-allowlisted / mission-type-list / gate-count
+  references): `docs/SPEC.md` (tier table, Phase 5 status note), `docs/COVERAGE.md`,
+  `skills/veydrift-agent/SKILL.md`, `docs/PLAYER-GUIDE.md`, `docs/TECHNICAL-WALKTHROUGH.md`,
+  `AGENTS.md` §8 (a dry-run tick's `strategy.md` entry is conditional, not guaranteed), and
+  `tests/test_guard.py`/`tests/test_tick.py`'s own "17-gate"/"17 gates" docstrings (stale since
+  the `mission_type` gate landed at 18).
+
+### Added
+
+- `Policy.strategy.enable_crawler: bool = False` — see Finding 4 above.
+
 ## [1.0.0] - 2026-08-17
 
 Phase 5 of the general-strategy-engine program (docs/SPEC.md §5.4/§9), and the release

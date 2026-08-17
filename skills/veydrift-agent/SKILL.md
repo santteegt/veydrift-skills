@@ -35,7 +35,7 @@ different things at each tier.
 | --- | --- | --- | --- |
 | 1 `advisor` (default) | everything in scope | **nothing, ever** | — |
 | 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
-| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Harvest(4) only | ≥7 days clean T2, human edit |
+| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) only | ≥7 days clean T2, human edit |
 
 **Combat is unreachable at every tier by code, not by config.** `policy.json` has an
 `allow_combat` key that every code path deliberately ignores — enabling `Attack`,

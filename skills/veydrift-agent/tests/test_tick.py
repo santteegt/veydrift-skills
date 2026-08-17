@@ -634,6 +634,70 @@ def test_fleet_mission_colonize_encodes_the_packed_coordinate_target():
     assert built["args"][-1] == 0
 
 
+def test_encode_colony_target_raises_on_out_of_range_position_rather_than_corrupt_it():
+    """Judge finding 2 (2026-08-17): before this fix, `_encode_colony_target` had no
+    bounds check, so a position > 255 (COLONIZATION_POSITION_MASK = 0xff,
+    VeydriftColonizationModule.sol:46) silently overflowed into the system field's bits
+    during the `|` pack instead of raising. `"1:2:300"` used to decode back
+    (`_decodeColonyTarget`'s own masks) as galaxy 1, system 3, position 44 -- a corrupted
+    but still in-range-looking target that would launch a real Colony Ship at the wrong
+    slot with no error anywhere in the pipeline."""
+    with pytest.raises(ValueError, match="position"):
+        tick._encode_colony_target("1:2:300")
+
+
+def test_encode_colony_target_raises_on_out_of_range_system():
+    """system is packed as a uint16 (COLONIZATION_COORDINATE_MASK = 0xffff,
+    VeydriftColonizationModule.sol:45); 70000 overflows it."""
+    with pytest.raises(ValueError, match="system"):
+        tick._encode_colony_target("1:70000:5")
+
+
+def test_encode_colony_target_raises_on_out_of_range_galaxy():
+    with pytest.raises(ValueError, match="galaxy"):
+        tick._encode_colony_target("70000:2:5")
+
+
+def test_encode_colony_target_raises_on_malformed_coordinate_string():
+    with pytest.raises(ValueError, match="not a 'G:S:P'"):
+        tick._encode_colony_target("not-a-coordinate")
+    with pytest.raises(ValueError, match="not a 'G:S:P'"):
+        tick._encode_colony_target("1:2")
+
+
+def test_encode_colony_target_accepts_the_maximum_valid_field_widths():
+    """Sanity check that the bounds check is inclusive of the real field widths
+    (galaxy/system uint16 max 65535, position uint8 max 255), not off-by-one strict."""
+    target = tick._encode_colony_target("65535:65535:255")
+    assert target == (1 << 255) | (65535 << 24) | (65535 << 8) | 255
+
+
+def test_fleet_mission_colonize_rejects_an_out_of_range_target_end_to_end():
+    """The bounds check fires through the normal `_action_to_walletctl_json` path a real
+    Colonize proposal would take, not just when calling `_encode_colony_target` directly."""
+    from veydrift_agent import ids
+
+    action = _fleet_action(
+        mission_type=ids.FleetMissionType.COLONIZE,
+        target_coordinates="1:2:300",
+        ships={ids.Ship.COLONY_SHIP: 1},
+        cargo=Resources(),
+        speed_pct=None,
+    )
+    with pytest.raises(ValueError, match="position"):
+        tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
+def test_ship_counts_to_fleet_tuple_rejects_a_negative_count():
+    """Mirrors fleet.ts's own negative-count rejection (also-worth-fixing #1, judge review
+    2026-08-17) -- before this fix, the two encoders could disagree on the same malformed
+    input."""
+    from veydrift_agent import ids
+
+    with pytest.raises(ValueError, match="negative count"):
+        tick._ship_counts_to_fleet_tuple({ids.Ship.SMALL_CARGO: -1})
+
+
 def test_fleet_mission_local_harvest_targets_the_origin_planet_with_no_coordinate_lookup():
     """The contract's own special case (`originPlanetId == targetPlanetId && missionType
     == Harvest`) -- `target_coordinates` left unset resolves straight to `origin_planet_id`
@@ -1136,7 +1200,7 @@ def _allow_guard(monkeypatch):
     """Force guard.evaluate_guardrails to ALLOW, the same trick
     test_dry_run_at_tier1_never_sends_even_when_guard_would_allow already uses -- lets
     these tests isolate the require_confirmation branch without needing every one of the
-    17 gates to genuinely pass."""
+    18 gates to genuinely pass."""
     import veydrift_agent.guard as guard_module
 
     monkeypatch.setattr(

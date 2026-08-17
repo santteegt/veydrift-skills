@@ -102,7 +102,7 @@ validated the transaction upstream. Five checks, all evaluated and reported:
 3. `tx.value == 0` — no payable action is whitelisted at any tier reachable here
 4. `tx.chainId == 8453` (Base)
 5. `operator`-only: `launchFleetMission`'s mission-type argument (decoded from calldata,
-   since it isn't part of the selector) must be Transport(0)/Deploy(1)/Harvest(4) —
+   since it isn't part of the selector) must be Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) —
    combat mission types are unreachable through this engine no matter what tier is set
 
 Any failure: non-zero exit, the rejection reason printed, nothing signed. Full mechanics
