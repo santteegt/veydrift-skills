@@ -90,6 +90,21 @@ class Resources(Base):
         )
 
 
+class CrawlerProduction(Base):
+    """`/infrastructure`'s `crawlerProduction` block (Phase 3 of the general-strategy-
+    engine program, docs/SPEC.md §5.4). Prefer these live numbers over recomputing via
+    `calc.crawler_boost_bps` wherever they're present -- same posture
+    `EnergyBalance.solar_satellite_energy` already takes. Every field defaults to `None`;
+    a `None` here means the API did not report this sub-block, never that the value is
+    zero -- treat it as unverifiable, not as "no boost/not capped" (AGENTS.md §5)."""
+
+    total: int | None = None
+    effective: int | None = None
+    max_effective: int | None = None
+    boost_bps: int | None = None
+    capped: bool | None = None
+
+
 class EnergyBalance(Base):
     produced: int
     required: int
@@ -163,6 +178,18 @@ class PlanetSnapshot(Base):
     defenses: list[Entity] = Field(default_factory=list)
     #: Queues are per-planet except research, which is per-player. None == idle.
     queues: dict[QueueKind, QueueEntry | None] = Field(default_factory=dict)
+
+    #: Phase 3 of the general-strategy-engine program (docs/SPEC.md §5.4). Sourced from
+    #: `/wallet/{addr}/defenses`'s `missileSiloLevel`, alongside `shipyardLevel`/
+    #: `naniteLevel` on that same route -- `read.py` already fetches this response for
+    #: `defenses[]` and previously discarded the field. `None` means the route did not
+    #: report it (or the route wasn't reachable), never level 0 -- a missile-silo
+    #: capacity check must fail closed on `None`, not divide-by-zero-as-if-empty.
+    missile_silo_level: int | None = None
+    #: Sourced from `/infrastructure`'s `crawlerProduction` block (also previously
+    #: fetched-and-discarded by `read.py`). `None` means the API did not report this
+    #: sub-block at all.
+    crawler_production: CrawlerProduction | None = None
 
 
 class Snapshot(Base):
@@ -239,11 +266,26 @@ class WalletEngineCfg(Base):
     require_confirmation: bool = True
 
 
+class EntityTarget(Base):
+    """One declared standing-count target (Phase 3 of the general-strategy-engine
+    program, docs/SPEC.md §5.4/§5.6): "I want N of this ship/defense." Resolved against
+    `ids.py`'s `*_NAMES` maps case-insensitively via `name`, or directly via `id` —
+    exactly one of the two should be set. `candidates.py` resolves `name` at generation
+    time and raises loudly (`ValueError`) on an unknown name rather than treating it as
+    "no target" — `Policy` is `extra="forbid"`, so a typo in a key is already a hard
+    stop; a typo in a *value* here must be too, for the same reason."""
+
+    name: str | None = None
+    id: int | None = None
+    count: int = 0
+
+
 class StrategyCfg(Base):
-    """Phase 2 of the general-strategy-engine program (docs/SPEC.md §5.4/§5.6):
-    generate/filter/score/select candidate pipeline config. Both fields are additive —
-    an older `policy.json` with no `strategy` key still loads (defaults below), but a
-    policy file that sets one is rejected by any agent build predating this field
+    """Phase 2 (docs/SPEC.md §5.4/§5.6) added `resource_weights`/`max_alternatives`;
+    Phase 3 adds the four fields below. All are additive — an older `policy.json` with
+    no `strategy` key, or one that sets `strategy` but omits these newer keys, still
+    loads (defaults below reproduce pre-Phase-3 behaviour exactly), but a policy file
+    that sets one of these new keys is rejected by any agent build predating this field
     (`Policy.model_config` is `extra="forbid"`)."""
 
     #: Relative worth of one unit of each resource when collapsing a cost triple to a
@@ -253,6 +295,25 @@ class StrategyCfg(Base):
     resource_weights: Resources = Field(default_factory=lambda: Resources(metal=1, crystal=1, deuterium=1))
     #: Caps `Action.alternatives` so `proposals.jsonl` stays bounded.
     max_alternatives: int = 5
+
+    #: Desired standing ship/defense counts (Phase 3). Production is proposed toward the
+    #: first target below its count when the relevant queue is idle, filtered through
+    #: `techtree.unmet()` and the entity's own caps. Empty (default) == today's
+    #: behaviour: Solar Satellite's separate energy-driven path is untouched by this
+    #: field, and defenses fall back to the pre-Phase-3 hardcoded Rocket Launcher pick.
+    ship_targets: list[EntityTarget] = Field(default_factory=list)
+    defense_targets: list[EntityTarget] = Field(default_factory=list)
+    #: Ordered technology preference, by name (resolved via `ids.technology_id`,
+    #: case-insensitive). Empty == lowest-level-first, as today. Names not present here
+    #: are still considered, ordered after the declared ones by the same lowest-level-
+    #: first fallback rule.
+    research_priority: list[str] = Field(default_factory=list)
+    #: Ordered building preference for the new "infrastructure" family (Robotics
+    #: Factory, Nanite Factory, Shipyard, Research Lab, Terraformer, Missile Silo).
+    #: Empty == infrastructure buildings are never proposed as a distinct family (they
+    #: remain reachable only if some other rung happens to touch them, which none does
+    #: pre-Phase-3) — setting this is what makes them reachable at all.
+    building_priority: list[str] = Field(default_factory=list)
 
 
 class Policy(Base):

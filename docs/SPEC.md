@@ -276,6 +276,14 @@ battle-reports · highscores · snapshot`.
 `lastReconciledBlock` ↔ `latestIndexedBlock` gap — it is ~1.5M blocks by design. Freshness comes from
 `indexedState: "healthy"` + `safeToServeIndexedState: true` on the wallet routes.
 
+> **Phase 3 of the general-strategy-engine program, 2026-08-16.** `PlanetSnapshot` gains two fields,
+> both sourced from routes `snapshot` already fetches (no new HTTP call): `missile_silo_level` ←
+> `/defenses`'s `missileSiloLevel` (needed for the defense-target missile-slot cap, §5.4), and
+> `crawler_production` ← `/infrastructure`'s `crawlerProduction` block (`total`/`effective`/
+> `maxEffective`/`boostBps`/`capped`, preferred over recomputing wherever present, same posture
+> `energy.solar_satellite_energy` already takes). Both default `None`, and `None` means unverifiable
+> — never `0` — for every consumer (`AGENTS.md` §5).
+
 ### 5.3 `vd calc` — deterministic calculators
 
 Pure functions, no network, fully unit-tested, each docstring citing its source (`docs.md`,
@@ -351,9 +359,58 @@ use a fixed solar-level offset — the gap widens from 2 levels at mine 3 to 4 a
 `solarSatelliteEnergy`, fields, levels). Planet 664's deuterium-lean, no-satellite opener must *fall
 out of* its traits.
 
-**`alternatives` is informational only.** It is never an ROI verdict, never a new entity family or new
-proposable behaviour (that's Phase 3), and never consulted by `guard.py` or any `Decision` logic — the
-winning `Action` is decided exactly the way it always was.
+**`alternatives` is informational only.** It is never an ROI verdict, never consulted by `guard.py` or
+any `Decision` logic — the winning `Action` is decided exactly the way it always was.
+
+> **Phase 3 of the general-strategy-engine program, 2026-08-16 — every planet-local entity
+> reachable.** Before this change the planner could only ever propose 13 of the 51 entities in
+> `ids.py`. `candidates.py` gains three new/extended families, all driven by declared
+> `policy.strategy` targets rather than an invented doctrine (the governing principle: *the engine
+> computes what is legal, affordable and economically comparable; the policy declares intent for
+> everything else*):
+>
+> - **ships** — `generate_ship_target_candidates` stock-keeps toward `policy.strategy.ship_targets`:
+>   the first declared target below its live `Entity.count`, filtered through `techtree.unmet()`.
+>   **Solar Satellite keeps its separate energy-driven scored path** (`_generate_satellite_ship_
+>   candidates`) untouched — the two mechanisms never merge. **Crawler** (`generate_crawler_
+>   candidates`) is new and *scored*: `calc.crawler_boost_bps`'s own internal caps (8 per combined
+>   mine level, 5,000 bps) make an already-saturated crawler count score `None` automatically
+>   (`score_payback` sees a zero marginal delta), and the live `PlanetSnapshot.crawler_production.
+>   capped` flag short-circuits the same conclusion without recomputing when present.
+> - **defenses** — `generate_defense_target_candidates` is the same shape against
+>   `policy.strategy.defense_targets`, plus `techtree`'s caps: shield domes at 1 per planet, and
+>   missiles against `missile_silo_level * 10` slots (ABM 1 slot, Interplanetary 2). Declaring
+>   `defense_targets` supersedes the pre-Phase-3 hardcoded Rocket-Launcher-only default entirely — an
+>   empty list reproduces that default exactly. **The contract counts queued quantity toward both
+>   caps**; `PlanetSnapshot` carries only one `QueueEntry` per queue kind (no backlog), so a queued
+>   amount beyond that single entry is under-counted, never over-counted — the safe direction. A
+>   `missile_silo_level` (or a built/queued count) the snapshot didn't report fails closed (a
+>   `"locked: ..."` candidate, never silently treated as `0`).
+> - **research** — `generate_research_candidates` orders by `policy.strategy.research_priority`
+>   first (technology names, resolved case-insensitively), then falls back to the pre-Phase-3
+>   lowest-level-then-id order for everything not named — and that fallback pick's `score_basis` is
+>   explicitly prefixed `"default: ..."` so a reader can tell a derived-looking pick apart from an
+>   actual declared preference.
+> - **infrastructure** (the family reserved, unused, in Phase 2) — Robotics Factory, Nanite Factory,
+>   Shipyard, Research Lab, Terraformer, Missile Silo, `score=None`, ordered by
+>   `policy.strategy.building_priority`. Empty `building_priority` means this family never generates
+>   anything — it is the family's sole reachability switch. When set, it takes precedence ahead of
+>   the ordinary mine walk in `select_building_candidate` (an explicit `building_priority` is a
+>   declared human intent, which wins outright under the governing principle above). **Fusion
+>   Reactor does NOT belong here** — it moves `production_per_hour`, so `generate_energy_candidates`
+>   scores it in the economic band instead, deliberately without touching the pre-Phase-3
+>   `_cheapest_energy_choice` substitution comparison (pinned by AC4/the hot-planet counterfactual to
+>   Solar Plant vs. Solar Satellite only).
+> - **storage, proactively** — `generate_proactive_storage_candidates` activates `calc.storage_cap`
+>   (previously dead) as a Band-2 candidate, always `score=None`, visible in `alternatives` well
+>   before `generate_storage_candidates`' reactive overflow trigger fires. Never changes which
+>   candidate *wins* Band 2 — additive to the alternatives pool only.
+>
+> **This phase's own acceptance criterion, again zero behaviour change**: every one of the four new
+> `StrategyCfg` fields (`ship_targets`, `defense_targets`, `research_priority`, `building_priority`)
+> defaults to empty, and empty reproduces Phase 2's planner output exactly — pinned directly in
+> `tests/test_candidates.py`/`tests/test_plan.py` and implicitly by every pre-Phase-3 test passing
+> unmodified (§9 AC25-31).
 
 ### 5.5 `vd guard` — guardrail evaluation
 
@@ -406,6 +463,22 @@ reported**, never short-circuited — the full verdict list is the audit artifac
 > a new class of check). The tech-tree table itself is **transcribed from contract source
 > and has never been validated against a live revert** — see §11.
 
+> **Re-verified, 2026-08-16 (Phase 3 of the general-strategy-engine program).** Phase 3 makes
+> `Action.quantity` routinely > 1 for the first time (ship/defense stock-keeping toward a declared
+> count) and makes the shield-dome/missile-silo cap check reachable through paths other than the old
+> hardcoded single Rocket Launcher. `_gate_prerequisites`/`_defense_cap_violation` already read
+> `action.quantity` generically (defaulting to `1` only when absent) and already sum
+> `techtree.MISSILE_SLOTS` across every missile id, so **no code change was needed** — verified by
+> two new tests requesting a multi-unit Small Shield Dome and a multi-unit Interplanetary Missile
+> purchase that a `quantity=1` request from the same starting count would have passed
+> (`tests/test_guard.py::test_prerequisites_blocks_a_multi_unit_shield_dome_request_even_at_zero_built`,
+> `::test_prerequisites_blocks_a_multi_unit_missile_request_over_remaining_silo_capacity`). `candidates.py`
+> gains its own, independently-written cap check (`_defense_capacity_reason`) for the same contract
+> rule — deliberate duplication, not shared code, matching the defense-in-depth posture `_gate_energy`
+> already takes toward `plan.py`'s energy invariant — using the new `PlanetSnapshot.missile_silo_level`
+> field (§5.2); `guard.py`'s own check is untouched and keeps reading the Missile Silo *building*
+> level from `Snapshot.planets[].buildings`, an independent source for the same number.
+
 ### 5.6 `policy.json`
 
 A pydantic `Policy` model. `schemas/policy.schema.json` is **generated** from it and committed;
@@ -440,7 +513,14 @@ a hard stop — never a silent fallback to defaults.
     "on_health_unhealthy_minutes": 30, "on_revert_count": 2
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },
-  "strategy": { "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 }, "max_alternatives": 5 }
+  "strategy": {
+    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },
+    "max_alternatives": 5,
+    "ship_targets": [],
+    "defense_targets": [],
+    "research_priority": [],
+    "building_priority": []
+  }
 }
 ```
 
@@ -454,6 +534,17 @@ implicitly (it summed the three unweighted). `max_alternatives` caps `Action.alt
 `proposals.jsonl` stays bounded. Both fields are additive for an existing `policy.json` (absent
 `strategy` key -> default), but because `Policy` is `extra="forbid"`, a new policy file that sets
 `strategy` will not load on an agent build predating this field.
+
+**`ship_targets` / `defense_targets` / `research_priority` / `building_priority`** (Phase 3 of the
+general-strategy-engine program, 2026-08-16 — see §5.4's Phase 3 note for the full behaviour). Each
+entry of `ship_targets`/`defense_targets` is an `EntityTarget`: `{"name": "Crawler", "count": 20}` or
+`{"id": 15, "count": 20}` (exactly one of `name`/`id`) — `name` is resolved case-insensitively against
+`ids.py`'s `ship_name`/`defense_name` tables, and **an unresolvable name raises loudly** (`ValueError`,
+surfacing as a failed `vd plan`/`vd tick`) rather than silently proposing nothing — the same "typo must
+never mean silence" posture `Policy`'s `extra="forbid"` already takes at the key level, extended to
+target *values*. `research_priority`/`building_priority` are plain ordered name lists, resolved the
+same way. All four default to `[]`, and `[]` reproduces Phase 2's behaviour byte-for-byte — this is
+Phase 3's own acceptance criterion (§9 AC25).
 
 ### 5.7 `vd tick` — the loop entrypoint
 
@@ -798,6 +889,48 @@ silent-failure risks, guardrail bypasses and spec defects. Triage, fix, repeat u
     `test_ticks_whose_only_difference_is_alternatives_are_not_deduped` pin both halves. Added
     2026-08-16 (Phase 2 of the general-strategy-engine program).
 
+**Phase 3 of the general-strategy-engine program, added 2026-08-16 — every planet-local entity
+reachable (§5.4/§5.6):**
+
+25. With every `policy.strategy` target field empty (the default), `plan_next_action`'s output is
+    byte-identical to Phase 2's on the same fixtures —
+    `tests/test_plan.py::test_empty_strategy_targets_reproduce_phase_2_planner_output_exactly` /
+    `::test_empty_strategy_targets_reproduce_phase_2_hot_planet_output_exactly`, plus every
+    Phase-1/Phase-2 test in `test_plan.py`/`test_candidates.py`/`test_guard.py` passing unmodified.
+26. A declared `ship_targets`/`defense_targets` entry below its live count is proposed; at or above
+    count is not; a locked entry is skipped with `techtree.describe()`'s text in the reason —
+    `tests/test_candidates.py::test_ship_target_below_count_is_proposed`,
+    `::test_ship_target_at_count_is_not_proposed`,
+    `::test_locked_ship_target_is_skipped_with_techtree_describe_in_the_reason`.
+27. A second Small Shield Dome is refused (1-per-planet cap), and a missile request exceeding
+    `missile_silo_level * 10` remaining slots is refused — both independently, in `candidates.py`
+    (planner side) and `guard.py` (unchanged, re-verified generalizes to `quantity > 1`) —
+    `tests/test_candidates.py::test_second_small_shield_dome_is_refused`,
+    `::test_missiles_over_silo_capacity_are_refused`;
+    `tests/test_guard.py::test_prerequisites_blocks_a_multi_unit_shield_dome_request_even_at_zero_built`,
+    `::test_prerequisites_blocks_a_multi_unit_missile_request_over_remaining_silo_capacity`.
+28. An unknown entity name in `ship_targets`/`defense_targets`/`research_priority`/`building_priority`
+    raises rather than silently proposing nothing —
+    `tests/test_candidates.py::test_unknown_ship_target_name_fails_loudly` (+ the defense/research
+    siblings).
+29. A crawler candidate is scored via `calc.crawler_boost_bps` and respects the 8-per-mine-level cap
+    (a saturated boost scores `None`, never a spurious positive payback) —
+    `tests/test_candidates.py::test_crawler_candidate_is_scored_when_boost_has_room_to_grow`,
+    `::test_crawler_candidate_respects_the_eight_per_mine_level_cap`.
+30. Proactive storage is a scored-band (Band 2) candidate, always `score=None`, present regardless of
+    overflow urgency — `tests/test_candidates.py::test_proactive_storage_candidate_scored_none_and_
+    present_regardless_of_urgency`.
+31. `building_priority` orders the new `infrastructure` family, taking precedence over the ordinary
+    mine walk when set; `research_priority` overrides the lowest-level-first order, and the fallback
+    pick's reason is explicitly labelled `"default: ..."` —
+    `tests/test_candidates.py::test_building_priority_orders_infrastructure_candidates`,
+    `::test_building_priority_selects_first_unlocked_declared_building`,
+    `::test_research_priority_overrides_lowest_level_first`,
+    `::test_research_fallback_is_explicitly_labelled_default`.
+32. `missile_silo_level is None` is never read as `0` by the new `candidates.py` cap-check code (a
+    separate failure mode from `guard.py`'s own, already-covered, building-level-sourced check) —
+    `tests/test_candidates.py::test_defense_target_missile_silo_level_none_fails_closed_not_as_zero`.
+
 ---
 
 ## 10. Risks
@@ -838,3 +971,11 @@ silent-failure risks, guardrail bypasses and spec defects. Triage, fix, repeat u
   arithmetic carries the same caveat, plus a narrower one of its own: it is derived from a
   single `QueueEntry` per `PlanetSnapshot` (no backlog list — `models.py` is frozen), so a
   real queue backlog deeper than one entry would be undercounted, not overcounted.
+- **Phase 3's newly-reachable families are legality-verified, never economically or
+  live-verified.** `generate_ship_target_candidates`/`generate_defense_target_candidates`/
+  `generate_infrastructure_candidates` are exercised only against synthetic fixtures
+  (`tests/test_candidates.py`'s `_ready_snapshot`), never a live account with a Shipyard ≥ 5 or a
+  Missile Silo ≥ 2 — the zero-state account this project was built against (§10) has neither. The
+  crawler boost formula (`calc.crawler_boost_bps`) and the 8-per-mine-level/5,000-bps caps are
+  contract-derived and unit-tested, but no crawler has ever actually been produced and observed to
+  move real `productionPerHour`.

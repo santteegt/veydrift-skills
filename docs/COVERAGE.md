@@ -46,7 +46,12 @@ independently. **Phase 2 landed 2026-08-16** (the general-strategy-engine progra
 entity-selection logic for rungs 5-9, including this research rung, moved out of `plan.py`
 into a new `candidates.py` generate/filter/score/select pipeline — see `docs/SPEC.md`
 §5.4. Function names below are updated accordingly; behaviour is unchanged (Phase 2's own
-acceptance criterion).
+acceptance criterion). **Phase 3 landed 2026-08-16**: every planet-local entity is now
+reachable, driven by declared `policy.strategy` targets — `ship_targets`/`defense_targets`
+(stock-keeping), `research_priority` (ordering override), `building_priority` (the new
+"infrastructure" family), plus scored Crawler and proactive-storage candidates. Empty
+targets reproduce Phase 2's behaviour exactly (Phase 3's own acceptance criterion). See
+`docs/SPEC.md` §5.4/§5.6 and this ledger's Part 1.1/Part 3 rows for what moved.
 
 ---
 
@@ -56,10 +61,10 @@ acceptance criterion).
 
 | Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
 | --- | --- | --- | --- | --- | --- |
-| `startBuildingUpgrade` | Yes — `candidates.select_building_candidate` / `select_storage_candidate` (moved from `plan.py`'s `_next_building_action` / `_storage_overflow_action` in Phase 2) | ECONOMY (`guard.py:73`) | ECONOMY (`allowlist.ts:39`) | implemented | — |
-| `startResearch` | Yes — `candidates.select_research_candidate` (moved from `plan.py`'s `_next_research_action` in Phase 2), lowest-level-account-wide tie-break, filtered through `techtree.unmet()` (Phase 1) | ECONOMY (`guard.py:74`) | ECONOMY (`allowlist.ts:40`) | implemented | — |
-| `startShipProduction` | Yes — `candidates.select_building_candidate`'s energy-fallback branch and `candidates.select_shipyard_candidate` (moved from `plan.py`'s `_next_building_action`/`_shipyard_action` in Phase 2) | ECONOMY (`guard.py:83`, added 2026-08-12 — see comment there for the dead-config history) | ECONOMY (`allowlist.ts:49`) | implemented | — |
-| `startDefenseProduction` | Yes — `candidates.select_shipyard_candidate` (moved from `plan.py`'s `_shipyard_action`, `allow_defense`, in Phase 2) | ECONOMY (`guard.py:77`) | ECONOMY (`allowlist.ts:43`) | implemented | — |
+| `startBuildingUpgrade` | Yes — `candidates.select_building_candidate` / `select_storage_candidate` (moved from `plan.py`'s `_next_building_action` / `_storage_overflow_action` in Phase 2). **Phase 3 (2026-08-16)** widens the entities this can target: `generate_infrastructure_candidates` (Robotics Factory/Nanite Factory/Shipyard/Research Lab/Terraformer/Missile Silo, ordered by `building_priority`), Fusion Reactor (scored, in `generate_energy_candidates`), and proactive storage (`generate_proactive_storage_candidates`, Band 2) | ECONOMY (`guard.py:73`) | ECONOMY (`allowlist.ts:39`) | implemented | — |
+| `startResearch` | Yes — `candidates.select_research_candidate` (moved from `plan.py`'s `_next_research_action` in Phase 2), lowest-level-account-wide tie-break, filtered through `techtree.unmet()` (Phase 1). **Phase 3** adds `Policy.strategy.research_priority`: named technologies first, then the same lowest-level-first fallback (now labelled `"default: ..."` in the losing/fallback rationale) | ECONOMY (`guard.py:74`) | ECONOMY (`allowlist.ts:40`) | implemented | — |
+| `startShipProduction` | Yes — `candidates.select_building_candidate`'s energy-fallback branch and `candidates.select_shipyard_candidate` (moved from `plan.py`'s `_next_building_action`/`_shipyard_action` in Phase 2). **Phase 3** adds `generate_crawler_candidates` (scored) and `generate_ship_target_candidates` (stock-keeping toward `Policy.strategy.ship_targets`, any of the 16 ships) — Solar Satellite's separate energy-driven path is unchanged and untouched by either addition | ECONOMY (`guard.py:83`, added 2026-08-12 — see comment there for the dead-config history) | ECONOMY (`allowlist.ts:49`) | implemented | — |
+| `startDefenseProduction` | Yes — `candidates.select_shipyard_candidate` (moved from `plan.py`'s `_shipyard_action`, `allow_defense`, in Phase 2). **Phase 3** adds `generate_defense_target_candidates` (stock-keeping toward `Policy.strategy.defense_targets`, any of the 10 defenses, respecting the shield-dome/missile-silo caps via a new independent `candidates._defense_capacity_reason`) — declaring `defense_targets` supersedes the pre-Phase-3 hardcoded Rocket-Launcher-only default; an empty list reproduces it exactly | ECONOMY (`guard.py:77`) | ECONOMY (`allowlist.ts:43`) | implemented | — |
 | `resolveFleetMission` | Yes in code (`plan_next_action` rung 3, unchanged by Phase 2 — a veto rung, not part of the candidate pipeline), **but dormant** — `tick.py`'s wired caller (`_run_tick`, ~line 773) never passes `resolvable_mission_ids` to `plan_next_action`, so the parameter defaults to `[]` and rung 3 never fires from the real entrypoint. Root cause: `Snapshot` (frozen, `models.py`) carries no list of the player's own fleet missions, so there is nothing to check "Resolving > 60s" against — see `plan.py`'s module docstring. | ECONOMY (`guard.py:75`) | ECONOMY (`allowlist.ts:41`) | **implemented (dormant)** | Populate `Snapshot`/a caller-supplied list from `/wallet/{addr}/missions` and wire it into `tick.py`'s `plan_next_action` call — tracked informally as the natural "Phase 5a" alongside 5b/5c below. |
 
 ### 1.2 Planned (2 rows — one function, two overloads)
@@ -208,6 +213,7 @@ Surfaces not reducible to a single ABI entrypoint. Same status/what-it-would-tak
 
 | Surface | Status | What it would take / notes |
 | --- | --- | --- |
+| Fusion Reactor as an energy-first *substitute* | **partial (Phase 3)** | Fusion Reactor is a scored candidate in `generate_energy_candidates`, so it can win the economic band on its own merits. It is deliberately **not** wired into `candidates._cheapest_energy_choice`, the comparison that picks the substitute when a mine upgrade is energy-blocked — that comparison is still Solar Plant vs. Solar Satellite only, as it was pre-Phase-3, because it is pinned by the hot-planet counterfactual fixture where Fusion Reactor happens to be unlocked. Consequence: on an energy-blocked planet the substitute proposed can be a Solar Plant even where a Fusion Reactor would be the better buy. Closing it means extending `_cheapest_energy_choice` to a three-way comparison (it must account for Fusion's deuterium upkeep via `calc.fusion_deuterium_upkeep`, which the two-way comparison never had to) and re-pinning that fixture deliberately. |
 | Combat & battle resolution | out of scope — policy, not technical (§1.6 above) | The formulas (`shipBattleAttack`/`Shield`/`Hull`, rapidfire tables) are already extractable from `VeydriftCatalog.sol` the same way the tech tree is. What's missing is the deliberate friction removal across `plan.py`/`guard.py`/`allowlist.ts` described in `AGENTS.md` §5, not a research problem. |
 | Espionage | not found | No espionage/spy-probe entrypoint, building, or technology found anywhere in the pinned ABI or contract source (`VeydriftTypes.sol`, `VeydriftCatalog.sol` — searched for `probe`/`scan`/`espionage`/`recon`, no matches). Recorded as "not found" rather than "deferred" — it may simply not exist as a mechanic in this version of Veydrift, unlike classic OGame-likes. |
 | Raid/loot model | blocked | `protectedResources` semantics are unconfirmed — `docs/NOTES.md` §6 (`docs/NOTES.md:121-133`): raidable resources observed as exactly 50% of held while `protectedResources` independently read 0, meaning it tracks something other than a simple floor. `docs/SPEC.md` §1 lists "a raid-profitability model" as an explicit non-goal for this reason. `models.py`'s `PlanetSnapshot.protected_resources` field comment says the same: "Semantics UNCONFIRMED... Do not build a loot model on this." |
@@ -234,9 +240,16 @@ reads) never carries this data even though it is one CLI call away:
 | The player's own outgoing/returning missions | `read.py`'s `missions` command, `read.py:536-548` | This is *exactly* why `plan.py`'s rung 3 (`resolveFleetMission`) is dead in practice — see §1.1 above and `plan.py:19-25` |
 | Universe/neighbourhood data (other players, debris, moons, migration reservations near a planet) | `read.py`'s `universe` command, `read.py:584-610` | `PlanetSnapshot.archetype` is set to `None` unconditionally in `_planet_snapshot()` (`read.py:689,709`) with the comment "not present on any route `snapshot` composes" — this is the reason why |
 | Tactical/combat data from `/planets` | `read.py`'s `planets`-adjacent commands; `highscores`' "full planet+tactical payload" note at `read.py:638` | Would be needed for any combat-adjacent planning, itself out of scope (Part 1 §1.6) |
-| `crawlerProduction` | Present in raw `/infrastructure` response (`docs/NOTES.md:28`), never read into `PlanetSnapshot` by `_planet_snapshot()` (`read.py:656-727`) | `calc.crawler_boost_bps` (Part 3) exists and is tested but has no live input path into the planner |
-| `missileSiloLevel` | Documented as part of `/wallet/{addr}/defenses` (`skills/veydrift-agent/references/api-routes.md:275`), never read into `PlanetSnapshot` | Only matters once missile-attack/defense planning exists (out of scope, §1.6) |
 | `launchableShips` | Present in raw `/shipyard` response (`docs/NOTES.md:30`), never read into `PlanetSnapshot` | Only matters once a fleet-mission planner (P5c, §1.2) exists |
+
+**`crawlerProduction` and `missileSiloLevel` moved out of this table, 2026-08-16 (Phase 3 of
+the general-strategy-engine program).** Both are now read into `PlanetSnapshot`
+(`crawler_production`, `missile_silo_level`) from the exact same routes `snapshot` already
+calls — no new HTTP call — and both are live consumers, not dead data: `crawler_production`
+feeds `candidates.generate_crawler_candidates` (preferring the live `capped` flag over
+recomputing), and `missile_silo_level` feeds `candidates._defense_capacity_reason`'s
+independent missile-silo-slot cap check. Both default `None` and are treated as
+unverifiable, never `0`, everywhere they're consumed.
 
 ---
 
@@ -252,9 +265,7 @@ ladder rung today.
 
 | Function | What it computes | Plausible future consumer |
 | --- | --- | --- |
-| `production_per_hour` | Full per-hour Metal/Crystal/Deuterium output, applying multiplier → crawler boost → fusion upkeep → energy throttle in the contract's own order | A full economic simulator / lookahead planner |
-| `crawler_boost_bps` | Crawler production boost in bps, capped per mine level and at 5,000 bps total | Same — needs live `crawlerProduction` data, which `Snapshot` doesn't carry (Part 2 above) |
-| `storage_cap` | Per-level storage ceiling from the contract's literal lookup table (levels 0-50) | Independent verification of the API's own `storageCaps` field, or a fallback when it's missing |
+| `production_per_hour` | Full per-hour Metal/Crystal/Deuterium output, applying multiplier → crawler boost → fusion upkeep → energy throttle in the contract's own order | A full economic simulator / lookahead planner (note: this row predates Phase 2/3 and is stale — `candidates.py` already calls this directly, both for `score_payback`'s before/after delta since Phase 2 and for `generate_crawler_candidates` since Phase 3; not corrected here, out of this pass's scope) |
 | `ship_seconds` | Ship-production queue duration | A fleet-mission / shipyard planning phase (P5c and beyond) |
 | `research_seconds` | Research queue duration | Already covered live by `vd calc verify`'s duration cross-check; not used for planning decisions |
 | `distance` | Coordinate-pair distance (`"G:S:P"` or tuple) | Any planner path that ranks candidate mission targets — colonization, P5c fleet missions |

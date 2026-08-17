@@ -591,5 +591,42 @@ def test_cli_run_prints_json_action(tmp_path):
     assert payload["entity_id"] == ids.Building.SOLAR_PLANT
 
 
+# --------------------------------------------------------------------------------------
+# Phase 3 of the general-strategy-engine program (docs/SPEC.md §5.4): the acceptance
+# criterion pinned explicitly, at the `plan_next_action` ladder level rather than just
+# at the `candidates.py` seam (`tests/test_candidates.py` has the direct, per-generator
+# version of this same guarantee). Every test above this point is untouched by Phase 3
+# and still passes unmodified -- that is the primary proof; this is the explicit pin the
+# brief additionally asks for.
+# --------------------------------------------------------------------------------------
+
+
+def test_empty_strategy_targets_reproduce_phase_2_planner_output_exactly():
+    snapshot = load_snapshot("planet_664.json")
+    policy = make_policy(planets=[664])  # StrategyCfg() defaults: all four Phase 3 fields empty
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "6:building-queue-empty"
+    assert action.kind == ActionKind.BUILD
+    assert action.function == "startBuildingUpgrade"
+    assert action.entity_id == ids.Building.SOLAR_PLANT
+    assert action.target_level == 1
+    assert action.entity_id != ids.Ship.SOLAR_SATELLITE
+
+
+def test_empty_strategy_targets_reproduce_phase_2_hot_planet_output_exactly():
+    snapshot = load_snapshot("planet_hot.json")
+    policy = make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=True))
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "6:building-queue-empty"
+    assert action.kind == ActionKind.SHIP
+    assert action.function == "startShipProduction"
+    assert action.entity_id == ids.Ship.SOLAR_SATELLITE
+    assert action.quantity == 1
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

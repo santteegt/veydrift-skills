@@ -17,6 +17,15 @@ still exactly what the code computes; only the function names changed (noted inl
 it matters). See `docs/SPEC.md` §5.4 for the architecture and `plan.py`'s own module
 docstring for the three-band precedence.
 
+**2026-08-16 (Phase 3, the same program): every planet-local entity becomes reachable.**
+`candidates.py` gains `crawler` (scored) and a broadened `infrastructure` family (was
+reserved/unused since Phase 2), and `ship`/`defense`/`research` gain declared-target
+stock-keeping/ordering (`policy.strategy.ship_targets`/`defense_targets`/
+`research_priority`/`building_priority`). §8 below is updated inline; the governing
+principle — the engine computes legality/affordability/economics, the policy declares
+intent for everything else — is stated once at the end of §8 rather than repeated per
+family.
+
 If you are reviewing a proposal `vd plan` made and want to know "is this right," this
 document plus `references/formulas.md` §9 (the worked energy-source example) should be
 enough to check it by hand.
@@ -268,7 +277,21 @@ where it moved.
    (`candidates.generate_energy_candidates`) is what fills that gap — and each generated
    mine/energy candidate is scored (`candidates.score_payback`, payback hours) whenever
    the level change actually moves `calc.production_per_hour`'s output. Runner-ups
-   populate the proposal's `alternatives` (informational; see docs/SPEC.md §5.4).
+   populate the proposal's `alternatives` (informational; see docs/SPEC.md §5.4). **Phase
+   3** adds three things to this rung, none changing the winner when unconfigured:
+   - `generate_energy_candidates` also scores **Fusion Reactor** (locked/scored the same
+     way as Solar Plant), but the energy-first *substitution* comparison
+     (`_cheapest_energy_choice`) still only compares Solar Plant vs. Solar Satellite —
+     Fusion Reactor never substitutes for a blocked mine automatically, only appears as
+     an ordinary scored candidate.
+   - `generate_proactive_storage_candidates` adds storage as an always-`score=None`
+     alternative, visible before the reactive overflow trigger (rung 5) would ever fire.
+   - If `policy.strategy.building_priority` is set, `select_building_candidate` checks
+     `generate_infrastructure_candidates` (Robotics Factory, Nanite Factory, Shipyard,
+     Research Lab, Terraformer, Missile Silo, `score=None`, in declared order) **first**,
+     ahead of the mine walk — an explicit `building_priority` is a declared human intent
+     and wins outright, per this phase's governing principle (below). Left unset, this
+     never fires.
 7. **Research queue empty -> next research.** Deliberately the least-derived rung in this
    module: picks the technology with the lowest current level account-wide, ties broken
    by ascending contract id, filtered through `techtree.unmet()` (a locked candidate is
@@ -276,7 +299,11 @@ where it moved.
    invariant on purpose — the SPEC's rung 7 only asks for "next research," not a
    tech-tree strategy. `candidates.select_research_candidate` (Phase 2) always scores a
    research candidate `None` — nothing in `calc.py` models a technology moving
-   `production_per_hour`.
+   `production_per_hour`. **Phase 3**: if `policy.strategy.research_priority` names
+   technologies (case-insensitive), those are tried first, in declared order; the
+   lowest-level-first walk becomes the *fallback* for everything not named, and its
+   `score_basis` is explicitly prefixed `"default: ..."` so a reader can tell "this is
+   the fallback" from "this is what the operator asked for" at a glance.
 8. **Shipyard idle AND economy on track -> ships/defense per policy.** Fires only if
    `policy.actions.allow_ships` or `allow_defense` is true (both default `false` in
    `assets/policy.example.json`, so this rung rarely fires in practice) and something
@@ -285,9 +312,40 @@ where it moved.
    cheaper energy source on this planet (§5, `candidates.generate_ship_candidates`),
    proposes one; if defense is allowed, proposes the cheapest defense entry (Rocket
    Launcher, `candidates.generate_defense_candidates`, always `score=None`) as a
-   policy-driven default in the absence of any threat model.
+   policy-driven default in the absence of any threat model. **Phase 3** adds two ship
+   candidates and a defense-target mechanism, all reachable only via explicit policy:
+   - **Crawler** (`candidates.generate_crawler_candidates`) — the one *scored* addition
+     here, via `calc.crawler_boost_bps`'s marginal effect on `calc.production_per_hour`.
+     The formula's own caps (8 per combined mine level, 5,000 bps total) mean a
+     saturated crawler count scores `None` automatically; the live
+     `PlanetSnapshot.crawler_production.capped` flag short-circuits the same conclusion
+     without recomputing, when the API reports it.
+   - **`policy.strategy.ship_targets`** (`candidates.generate_ship_target_candidates`) —
+     stock-keeping toward a declared standing count for *any* of the 16 ships, filtered
+     through `techtree.unmet()`. This never touches Solar Satellite's separate
+     energy-driven path above; naming Solar Satellite in `ship_targets` stock-keeps it
+     as an ordinary policy-declared ship, independent of the energy mechanism. Among
+     everything `generate_ship_candidates` yields for a planet, the best-*scored*
+     selectable candidate wins (falls back to generation order — satellite first — when
+     nothing is scored, preserving pre-Phase-3 priority when nothing new is configured).
+   - **`policy.strategy.defense_targets`** (`candidates.generate_defense_target_candidates`)
+     — the same shape for *any* of the 10 defenses, plus `techtree`'s hard caps: shield
+     domes at 1 built+queued per planet, missiles against `missile_silo_level * 10`
+     slots (ABM 1 slot, Interplanetary Missile 2). **Declaring `defense_targets`
+     entirely replaces the old hardcoded Rocket Launcher default** — a human who states
+     explicit defense intent has superseded the "reasonable policy-driven default in the
+     absence of a threat model" the pre-Phase-3 comment describes. Left unset, the old
+     default fires exactly as before.
 9. **Otherwise -> NO-OP with an explicit reason.** Always reachable; `Action.rationale`
    is never empty.
+
+**Phase 3's governing principle, stated once here** (docs/SPEC.md §5.4): *the engine
+computes what is legal (`techtree.unmet()`), affordable (`guard.py`, unchanged) and
+economically comparable (`score_payback`, where a level change genuinely moves
+`calc.production_per_hour`'s output); the policy declares intent for everything else.*
+This module is deliberately not a fleet doctrine or a threat model — `ship_targets`/
+`defense_targets` never choose *how many* of something to want, only whether the
+declared count is legal and, for ships, how it ranks against other scored options.
 
 ## 9. There is no exit — why compounding is the only strategy here
 

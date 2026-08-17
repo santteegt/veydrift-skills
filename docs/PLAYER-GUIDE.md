@@ -253,12 +253,43 @@ change called out:
     "on_health_unhealthy_minutes": 30, "on_revert_count": 2
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },
-  "strategy": {                      // added 2026-08-16; safe to leave at defaults
-    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },
-    "max_alternatives": 5             // caps how many runner-up options each proposal lists
+  "strategy": {
+    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },   // added 2026-08-16
+    "max_alternatives": 5,            // caps how many runner-up options each proposal lists
+    "ship_targets": [],               // added 2026-08-16, e.g. [{"name": "Crawler", "count": 20}]
+    "defense_targets": [],            // same shape, e.g. [{"name": "Small Shield Dome", "count": 1}]
+    "research_priority": [],          // ordered technology names, e.g. ["Energy Technology"]
+    "building_priority": []           // ordered infrastructure names (Robotics Factory etc.)
   }
 }
 ```
+
+**`ship_targets`/`defense_targets`/`research_priority`/`building_priority`, added
+2026-08-16.** All four default to `[]`, and `[]` on all four reproduces exactly the
+pre-2026-08-16 behaviour: energy still comes only from Solar Plant/Solar Satellite,
+defense still means only the Rocket Launcher, research still walks lowest-level-first,
+and nothing proposes Robotics Factory/Nanite Factory/Shipyard/Research Lab/Terraformer/
+Missile Silo at all. Declare a target to unlock the rest of the entity list:
+
+- `ship_targets`/`defense_targets` are standing-count declarations: `{"name": "Crawler",
+  "count": 20}` means "keep producing Crawlers, one at a time, until 20 are built or
+  queued." Accepts either `"name"` (case-insensitive, e.g. `"crawler"`,
+  `"Small Shield Dome"`) or a numeric `"id"` from `references/entity-ids.md`. Declaring
+  `defense_targets` **replaces** the old hardcoded Rocket-Launcher-only default
+  entirely — leave it empty if you're happy with that default.
+- `research_priority`/`building_priority` are ordered name lists — the planner tries
+  each in turn, falling back to its own default ordering (lowest-level-first for
+  research; nothing at all for infrastructure, since that family only exists once you
+  declare a priority) for anything not named.
+- **A name that doesn't match anything is a hard error on the next tick** — the same
+  "typo must never mean silence" posture the rest of `policy.json` already takes for an
+  unrecognized key. If `vd tick` starts failing right after you edit this list, check
+  the spelling first.
+
+None of this is a fleet doctrine or a threat model. The planner still only enforces what
+is legal (on-chain prerequisites, shield-dome/missile-silo caps) and, where a number is
+genuinely comparable, what is economical (Crawler's production-boost payback) — *how
+many* Crawlers or Small Shield Domes you actually want is your call, expressed here.
 
 **Two fields you must edit before anything downstream makes sense:**
 

@@ -149,7 +149,7 @@ verification.
 | `read.py` | 830 | One `vd read` subcommand per API route (18 targets). `--summary` mode is the default and is capped near 2KB; `battle-reports`/`highscores` refuse to print to stdout at all — `--out` is mandatory, since they run 60KB–2.2MB uncompressed. |
 | `calc.py` | 737 | Pure formulas, no network calls, one docstring citation per function. Contains **no cost-scaling function** by design — live cost always comes from the API's own `cost` field, since the per-building factors are unpublished rationals and recomputing them is exactly how affordability checks go wrong silently. |
 | `plan.py` | ~250 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's three-band precedence calling into `candidates.py`. As of 2026-08-16 (Phase 2 of the general-strategy-engine program) it no longer decides *which entity*; that moved out. |
-| `candidates.py` | ~700 | New in Phase 2. The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order. The energy-first invariant lives here now: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. |
+| `candidates.py` | ~1400 | New in Phase 2, roughly doubled in Phase 3 (2026-08-16, general-strategy-engine program). The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`, plus Phase 3's `infrastructure` and `crawler`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order when nothing new is configured. The energy-first invariant lives here: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. Phase 3 adds declared-target stock-keeping for ships/defenses (`ship_targets`/`defense_targets`), priority ordering for research/infrastructure (`research_priority`/`building_priority`), and two new scored/unscored families (Crawler, proactive storage) — every one of the four new `StrategyCfg` fields defaults empty and reproduces Phase 2's output exactly when left unset. |
 | `guard.py` | 640 | 16 guardrail gates, every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. |
 | `state.py` | 287 | `$VEYDRIFT_HOME` resolution, `AgentState` (pending txs, cumulative gas, revert counts), the tick lockfile, `KILLSWITCH` detection. |
 | `tick.py` | 978 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`. The single largest module, and where both criticals a first-pass judge review found actually lived (§10, §11). |
@@ -203,9 +203,16 @@ general-strategy-engine program — see §5's module table):
 4. incoming hostile fleet           -> ESCALATE, no proposal at all
 5-9. generate -> filter -> score -> select, three bands in order:
      1. deadline-driven      -- storage overflow: spend it, or build the matching storage
+                                 (plus, Phase 3: proactive storage as an always-visible
+                                 Band-2 alternative, not a Band-1 winner)
      2. economically scored  -- building upgrade, ascending payback hours (energy-first
-                                 is a hard filter here, not a score)
-     3. policy-declared      -- research, then ships/defense, gated on economy-on-track
+                                 is a hard filter here, not a score); Phase 3: an explicit
+                                 `building_priority` takes precedence over the mine walk
+     3. policy-declared      -- research (Phase 3: `research_priority` first, else
+                                 lowest-level-first, labelled "default:" when it's the
+                                 fallback), then ships/defense (Phase 3: `ship_targets`/
+                                 `defense_targets` stock-keeping, plus scored Crawler),
+                                 gated on economy-on-track
      else                    -> NO-OP, explicit reason
 ```
 
@@ -213,6 +220,19 @@ The winning `Action` also carries `alternatives` — the runner-up candidates fr
 pass, ranked, each with a `why_not` (a payback-hours comparison, or a lock reason from
 `techtree.describe()`). Purely informational: never an ROI verdict, never read by
 `guard.py` or any `Decision` logic.
+
+**Phase 3 (2026-08-16) — every planet-local entity reachable.** Before this change the
+planner could only ever propose 13 of the 51 entities `ids.py` knows about (three mines,
+Solar Plant, three storages, one ship, one hardcoded defense, "whichever technology has
+the lowest level"). `policy.strategy` grows four target-declaration fields
+(`ship_targets`, `defense_targets`, `research_priority`, `building_priority`, all
+`list[str]`/`list[EntityTarget]`, all defaulting to `[]`) that drive the rest of the
+entity list without inventing a doctrine — the governing principle is that the engine
+computes what's legal (`techtree.unmet()`), affordable (`guard.py`, unchanged) and
+economically comparable (`score_payback`), and the policy declares intent for everything
+else. `[]` on all four is this phase's own acceptance criterion: byte-identical output to
+Phase 2 on the same fixtures, pinned in `tests/test_candidates.py`/`tests/test_plan.py`
+and by every pre-Phase-3 test passing unmodified.
 
 `--dry-run` is the default at tier 1 and cannot be disabled there — `tick._effective_dry_run()`
 forces it regardless of the flag whenever `policy.tier is Tier.ADVISOR`. It's doubly

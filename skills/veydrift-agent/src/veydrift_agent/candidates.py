@@ -49,13 +49,21 @@ from veydrift_agent.models import (
     Action,
     ActionKind,
     Entity,
+    EntityTarget,
     PlanetSnapshot,
     Policy,
     QueueKind,
     Resources,
     Snapshot,
 )
-from veydrift_agent.techtree import EntityFamily, describe, unmet
+from veydrift_agent.techtree import (
+    MAX_DEFENSE_PER_PLANET,
+    MISSILE_SLOTS,
+    EntityFamily,
+    describe,
+    missile_silo_capacity,
+    unmet,
+)
 
 # --------------------------------------------------------------------------------------
 # The candidate type.
@@ -65,10 +73,10 @@ from veydrift_agent.techtree import EntityFamily, describe, unmet
 @dataclass(frozen=True)
 class Candidate:
     action: Action
-    #: mine | energy | storage | infrastructure | research | ship | defense. Only the
-    #: families this phase's generators actually produce are populated today (mine,
-    #: energy, storage, research, ship, defense) — "infrastructure" is reserved for a
-    #: future family (Phase 3), not used by anything in this module.
+    #: mine | energy | storage | infrastructure | research | ship | defense | crawler.
+    #: "infrastructure" and "crawler" were reserved/unused before Phase 3 of the
+    #: general-strategy-engine program (docs/SPEC.md §5.4) and are populated by
+    #: `generate_infrastructure_candidates` / `generate_crawler_candidates` below.
     family: str
     #: Payback hours, or `None` if this candidate's level change doesn't move
     #: `calc.production_per_hour`'s output (see module docstring).
@@ -119,6 +127,37 @@ def _unlocked(
 def _describe_unmet(family: EntityFamily, entity_id: int, *, building_levels, technology_levels) -> str:
     reqs = unmet(family, entity_id, building_levels=building_levels, technology_levels=technology_levels)
     return "locked: " + "; ".join(describe(r) for r in reqs)
+
+
+def _resolve_target_id(target: EntityTarget, id_fn) -> int:
+    """`EntityTarget.id` if set, else `id_fn(target.name)` -- `id_fn` is one of
+    `ids.ship_id` / `ids.defense_id`, both of which already normalize case/space/hyphen
+    and raise `KeyError` on an unknown name (`ids.py`'s own convention: "no silent
+    fallback anywhere in this module"). Phase 3's own brief: "fail loudly on an unknown
+    name -- a typo must never silently mean 'no target'" -- so this re-raises as a
+    `ValueError` with the offending name in the message rather than swallowing it,
+    letting the whole `vd plan`/`vd tick` call fail rather than silently skip the typo'd
+    target forever."""
+    if target.id is not None:
+        return target.id
+    if target.name is not None:
+        try:
+            return id_fn(target.name)
+        except KeyError as exc:
+            raise ValueError(
+                f"policy.strategy target name {target.name!r} does not match any known entity name"
+            ) from exc
+    raise ValueError("EntityTarget requires either `name` or `id` to be set")
+
+
+def _resolve_name_id(name: str, id_fn) -> int:
+    """Same fail-loudly contract as `_resolve_target_id`, for the plain-string entries in
+    `research_priority`/`building_priority` (no `EntityTarget` wrapper -- those fields are
+    `list[str]`, not `list[EntityTarget]`, per docs/SPEC.md §5.6)."""
+    try:
+        return id_fn(name)
+    except KeyError as exc:
+        raise ValueError(f"policy.strategy priority name {name!r} does not match any known entity name") from exc
 
 
 def _energy_technology_level(snapshot: Snapshot) -> int:
@@ -416,21 +455,80 @@ def generate_mine_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetS
 
 
 def generate_energy_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
-    """Solar Plant and (if unlocked) Solar Satellite as energy candidates, cheapest cost-
-    per-energy-point first. Ported from `plan.py`'s pre-Phase-2 `_energy_candidate`.
-    Scored via `score_payback` against the planet's *current* levels -- typically `None`
-    (raising future energy supply doesn't move `calc.production_per_hour`'s output until
-    a mine level actually consumes it), except when the planet is already
-    energy-throttled today (`scale_bps < 10000` at current levels), in which case more
-    energy supply genuinely raises current output and is scored."""
+    """Solar Plant, Fusion Reactor (Phase 3) and (if unlocked) Solar Satellite as energy
+    candidates, cheapest cost-per-energy-point first. Ported from `plan.py`'s pre-Phase-2
+    `_energy_candidate`. Scored via `score_payback` against the planet's *current* levels
+    -- typically `None` (raising future energy supply doesn't move
+    `calc.production_per_hour`'s output until a mine level actually consumes it), except
+    when the planet is already energy-throttled today (`scale_bps < 10000` at current
+    levels), in which case more energy supply genuinely raises current output and is
+    scored.
+
+    **Fusion Reactor is deliberately NOT wired into `_cheapest_energy_choice`** (the
+    function `select_building_candidate` uses to pick the energy-first *substitute* when
+    a mine upgrade would be energy-unsafe) -- that comparison is pinned by
+    `tests/test_plan.py::test_planet_hot_inverts_and_proposes_satellite` to exactly
+    Solar Plant vs. Solar Satellite, and Fusion Reactor happens to be unlocked on that
+    exact fixture, so adding it there would risk silently changing which source wins.
+    Fusion Reactor is instead generated here as an ordinary scored/locked "energy" family
+    candidate -- visible in `alternatives`, and reachable as a *winner* wherever a caller
+    scores the full energy-candidate pool directly, without touching the pinned
+    substitution branch. See docs/SPEC.md §5.4 Phase 3 and the WP report for the full
+    reasoning."""
     if not policy.actions.allow_building:
         return []
     building_levels = _level_vector(planet.buildings)
     technology_levels = _level_vector(snapshot.technologies)
     satellite_energy = _satellite_energy_per_unit(planet)
     weights = policy.strategy.resource_weights
+    energy_technology_level = _energy_technology_level(snapshot)
 
     out: list[Candidate] = []
+
+    fusion = _entity(planet.buildings, ids.Building.FUSION_REACTOR)
+    if fusion is not None and fusion.level is not None:
+        if not _unlocked(EntityFamily.BUILDING, ids.Building.FUSION_REACTOR, building_levels=building_levels, technology_levels=technology_levels):
+            out.append(
+                Candidate(
+                    action=Action(
+                        kind=ActionKind.BUILD,
+                        function="startBuildingUpgrade",
+                        planet_id=planet.planet_id,
+                        entity_id=ids.Building.FUSION_REACTOR,
+                        entity_name=fusion.name or ids.building_name(ids.Building.FUSION_REACTOR),
+                        target_level=fusion.level + 1,
+                        cost=fusion.cost,
+                    ),
+                    family="energy",
+                    score=None,
+                    score_basis=_describe_unmet(
+                        EntityFamily.BUILDING, ids.Building.FUSION_REACTOR, building_levels=building_levels, technology_levels=technology_levels
+                    ),
+                )
+            )
+        else:
+            gained = calc.fusion_energy(fusion.level + 1, energy_technology_level) - calc.fusion_energy(
+                fusion.level, energy_technology_level
+            )
+            if gained > 0:
+                score, basis = _score_level_delta(planet, snapshot, weights, fusion.cost, fusion_level=1)
+                out.append(
+                    Candidate(
+                        action=Action(
+                            kind=ActionKind.BUILD,
+                            function="startBuildingUpgrade",
+                            planet_id=planet.planet_id,
+                            entity_id=ids.Building.FUSION_REACTOR,
+                            entity_name=fusion.name or ids.building_name(ids.Building.FUSION_REACTOR),
+                            target_level=fusion.level + 1,
+                            cost=fusion.cost,
+                            expected_effect=f"produced energy -> +{gained} (also raises deuterium upkeep -- calc.fusion_deuterium_upkeep)",
+                        ),
+                        family="energy",
+                        score=score,
+                        score_basis=basis,
+                    )
+                )
 
     solar = _entity(planet.buildings, ids.Building.SOLAR_PLANT)
     if solar is not None and solar.level is not None:
@@ -551,9 +649,163 @@ def _cheapest_energy_choice(
 
 
 # --------------------------------------------------------------------------------------
+# Infrastructure family (new in Phase 3, docs/SPEC.md §5.4 "Phase 3 of the general-
+# strategy-engine program") -- Robotics Factory, Nanite Factory, Shipyard, Research Lab,
+# Terraformer, Missile Silo as first-class candidates. Always `score=None` (none of these
+# move `calc.production_per_hour` directly -- Fusion Reactor does, which is exactly why
+# it lives in `generate_energy_candidates` instead, not here). Ordered by
+# `policy.strategy.building_priority`; empty means this family never fires at all --
+# these six buildings stay reachable only through whatever path already touched them
+# pre-Phase-3 (none), which is what makes `building_priority` load-bearing rather than
+# cosmetic.
+# --------------------------------------------------------------------------------------
+
+_INFRASTRUCTURE_BUILDING_IDS: tuple[int, ...] = (
+    ids.Building.ROBOTICS_FACTORY,
+    ids.Building.NANITE_FACTORY,
+    ids.Building.SHIPYARD,
+    ids.Building.RESEARCH_LAB,
+    ids.Building.TERRAFORMER,
+    ids.Building.MISSILE_SILO,
+)
+
+
+def _infrastructure_priority_order(policy: Policy) -> list[int]:
+    """`policy.strategy.building_priority`'s named buildings first (in declared order,
+    resolved via `ids.building_id` -- case-insensitive, raises `ValueError` on an unknown
+    name per `_resolve_name_id`), then any of the six infrastructure ids not mentioned, in
+    their `_INFRASTRUCTURE_BUILDING_IDS` default order. A `building_priority` name outside
+    this family's six ids (e.g. a mine) is simply not relevant here and is dropped --
+    `generate_infrastructure_candidates` only ever proposes the six infrastructure
+    buildings, never a mine/storage/energy building through this path."""
+    if not policy.strategy.building_priority:
+        return list(_INFRASTRUCTURE_BUILDING_IDS)
+    named = [_resolve_name_id(name, ids.building_id) for name in policy.strategy.building_priority]
+    named = [building_id for building_id in named if building_id in _INFRASTRUCTURE_BUILDING_IDS]
+    seen = set(named)
+    remaining = [building_id for building_id in _INFRASTRUCTURE_BUILDING_IDS if building_id not in seen]
+    return named + remaining
+
+
+def generate_infrastructure_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """One `Candidate` per infrastructure building with live data on `planet`, in
+    `_infrastructure_priority_order`. A locked building is still yielded (`score=None`,
+    `"locked: ..."` basis) so it appears as an alternative with `techtree.describe()` in
+    the reason, same convention `generate_research_candidates` already uses.
+
+    Gated on `policy.strategy.building_priority` being non-empty, same as
+    `generate_ship_target_candidates`/`generate_defense_target_candidates` gate on their
+    own target lists -- this is the family's sole reachability switch (see
+    `StrategyCfg.building_priority`'s docstring), so an empty list must return `[]`
+    here directly, not merely be skipped by a caller that happens to check first."""
+    if not policy.actions.allow_building or not policy.strategy.building_priority:
+        return []
+    building_levels = _level_vector(planet.buildings)
+    technology_levels = _level_vector(snapshot.technologies)
+
+    out: list[Candidate] = []
+    for building_id in _infrastructure_priority_order(policy):
+        entity = _entity(planet.buildings, building_id)
+        if entity is None or entity.level is None:
+            continue
+        action = Action(
+            kind=ActionKind.BUILD,
+            function="startBuildingUpgrade",
+            planet_id=planet.planet_id,
+            entity_id=building_id,
+            entity_name=entity.name or ids.building_name(building_id),
+            target_level=entity.level + 1,
+            cost=entity.cost,
+            rationale=(
+                f"{ids.building_name(building_id)} is next in policy.strategy.building_priority "
+                "order (or the default infrastructure order, if unset)."
+            ),
+        )
+        unmet_reqs = unmet(EntityFamily.BUILDING, building_id, building_levels=building_levels, technology_levels=technology_levels)
+        if unmet_reqs:
+            out.append(
+                Candidate(action=action, family="infrastructure", score=None, score_basis="locked: " + "; ".join(describe(r) for r in unmet_reqs))
+            )
+            continue
+        out.append(
+            Candidate(
+                action=action,
+                family="infrastructure",
+                score=None,
+                score_basis="policy-declared infrastructure order (score=None: not a calc.production_per_hour input)",
+            )
+        )
+    return out
+
+
+# --------------------------------------------------------------------------------------
+# Proactive storage (Phase 3): storage as a Band-2 (this economically-scored-building
+# band's) candidate, not only the Band-1 deadline-driven one (`generate_storage_candidates`
+# below). Activates `calc.storage_cap` (previously dead per docs/COVERAGE.md Part 3) so
+# storage headroom is visible in `alternatives` well before the reactive overflow trigger
+# fires. Always `score=None` -- same rule `generate_storage_candidates` documents, a
+# storage-cap raise never moves `calc.production_per_hour`'s output -- this only changes
+# *when* storage becomes visible as a candidate, never whether it can outrank a scored
+# mine/energy pick.
+# --------------------------------------------------------------------------------------
+
+
+def generate_proactive_storage_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    if not policy.actions.allow_building:
+        return []
+    out: list[Candidate] = []
+    for index, (building_id, current, per_hour, cap) in enumerate(
+        (
+            (ids.Building.METAL_STORAGE, planet.resources_as_of_now.metal, planet.production_per_hour.metal, planet.storage_caps.metal),
+            (ids.Building.CRYSTAL_STORAGE, planet.resources_as_of_now.crystal, planet.production_per_hour.crystal, planet.storage_caps.crystal),
+            (ids.Building.DEUTERIUM_TANK, planet.resources_as_of_now.deuterium, planet.production_per_hour.deuterium, planet.storage_caps.deuterium),
+        )
+    ):
+        entity = _entity(planet.buildings, building_id)
+        if entity is None or entity.level is None:
+            continue
+        try:
+            next_cap = calc.storage_cap(entity.level + 1)
+        except ValueError:
+            continue  # already at MAX_LEVEL (50) -- nothing more to propose
+        hours = calc.hours_to_cap(current, per_hour, cap)
+        if per_hour <= 0:
+            headroom = "not currently producing this resource"
+        elif hours is None:
+            headroom = "never at current production"
+        else:
+            headroom = f"{hours:.1f}h to cap at current production"
+        out.append(
+            Candidate(
+                action=Action(
+                    kind=ActionKind.BUILD,
+                    function="startBuildingUpgrade",
+                    planet_id=planet.planet_id,
+                    entity_id=building_id,
+                    entity_name=entity.name or ids.building_name(building_id),
+                    target_level=entity.level + 1,
+                    cost=entity.cost,
+                    expected_effect=f"storage cap {cap} -> {next_cap}",
+                ),
+                family="storage",
+                score=None,
+                score_basis=f"proactive: {_RESOURCE_LABELS[index]} {headroom} (cap {cap} -> {next_cap} at next level)",
+            )
+        )
+    return out
+
+
+# --------------------------------------------------------------------------------------
 # select_building_candidate — rung 6's select step. Replays the exact pre-Phase-2 walk:
 # priority-ordered mine, energy-first hard filter, fall through to the next mine only
 # when no energy substitute is resolvable at all. See module docstring's AC23 note.
+#
+# Phase 3 adds one new precedence step ahead of the mine walk, gated entirely behind
+# `policy.strategy.building_priority` being non-empty: an explicit `building_priority`
+# is a declared human intent (the governing principle stated in the Phase 3 brief -- "the
+# policy declares intent for everything else"), so it wins outright. Left unset (the
+# default), this new step never fires and the function is behaviourally identical to
+# Phase 2 (AC pinned in tests/test_candidates.py).
 # --------------------------------------------------------------------------------------
 
 
@@ -563,8 +815,20 @@ def select_building_candidate(
     if not policy.actions.allow_building:
         return None, []
 
+    if policy.strategy.building_priority:
+        infra_candidates = generate_infrastructure_candidates(snapshot, policy, planet)
+        selectable_infra = [c for c in infra_candidates if not c.score_basis.startswith("locked:")]
+        if selectable_infra:
+            winner = selectable_infra[0]
+            remaining_infra = [c for c in infra_candidates if c is not winner]
+            mine_pool = generate_mine_candidates(snapshot, policy, planet)
+            energy_pool = generate_energy_candidates(snapshot, policy, planet)
+            storage_pool = generate_proactive_storage_candidates(snapshot, policy, planet)
+            return winner, rank_candidates(remaining_infra + mine_pool + energy_pool + storage_pool)
+
     mine_candidates = {c.action.entity_id: c for c in generate_mine_candidates(snapshot, policy, planet)}
     energy_candidates = generate_energy_candidates(snapshot, policy, planet)
+    proactive_storage_candidates = generate_proactive_storage_candidates(snapshot, policy, planet)
     building_levels = _level_vector(planet.buildings)
     technology_levels = _level_vector(snapshot.technologies)
     satellite_energy = _satellite_energy_per_unit(planet)
@@ -635,7 +899,7 @@ def select_building_candidate(
     # option there directly) so this pass never re-adds the same candidate twice.
     seen = {(winner.family, winner.action.entity_id)}
     seen.update((c.family, c.action.entity_id) for c in alternatives)
-    for pool in (mine_candidates.values(), energy_candidates):
+    for pool in (mine_candidates.values(), energy_candidates, proactive_storage_candidates):
         for candidate in pool:
             key = (candidate.family, candidate.action.entity_id)
             if key in seen:
@@ -772,21 +1036,61 @@ def select_storage_candidate(
 # --------------------------------------------------------------------------------------
 
 
+def _research_priority_order(snapshot: Snapshot, policy: Policy) -> tuple[list[int], set[int]]:
+    """`(order, declared_ids)` -- `order` is every technology id known to the snapshot,
+    `policy.strategy.research_priority`'s named technologies first (resolved via
+    `ids.technology_id`, case-insensitive, raises loudly on an unknown name per
+    `_resolve_name_id`), then the remaining ids in the pre-Phase-3 lowest-level-then-id
+    fallback order. `declared_ids` is which of those ids came from `research_priority`,
+    so the caller can label a pick as policy-declared-by-name vs. the default fallback.
+    Empty `research_priority` returns the fallback order unchanged and an empty
+    `declared_ids` set -- exactly Phase 2's ordering."""
+    fallback_order = [t.id for t in sorted(snapshot.technologies, key=lambda t: ((t.level or 0), t.id))]
+    if not policy.strategy.research_priority:
+        return fallback_order, set()
+    known_ids = {t.id for t in snapshot.technologies}
+    declared = [_resolve_name_id(name, ids.technology_id) for name in policy.strategy.research_priority]
+    declared = [tid for tid in declared if tid in known_ids]
+    seen = set(declared)
+    remainder = [tid for tid in fallback_order if tid not in seen]
+    return declared + remainder, seen
+
+
 def generate_research_candidates(snapshot: Snapshot, policy: Policy, target_planets: list[PlanetSnapshot]) -> list[Candidate]:
-    """Every technology, ordered by lowest current level account-wide (ties by ascending
-    id) -- ported verbatim from `plan.py`'s pre-Phase-2 `_next_research_action`. The
-    Research Lab prerequisite is planet-scoped even though the queue itself is
-    per-player, so it's read from `target_planets[0]` -- the planet `startResearch` would
-    actually be submitted through (see that function's original docstring for why)."""
+    """Every technology, ordered by `policy.strategy.research_priority` first (Phase 3),
+    then the pre-Phase-2 lowest-current-level-account-wide fallback (ties by ascending
+    id) -- `_research_priority_order` computes the combined order; empty
+    `research_priority` reproduces the pre-Phase-3 order exactly. The Research Lab
+    prerequisite is planet-scoped even though the queue itself is per-player, so it's
+    read from `target_planets[0]` -- the planet `startResearch` would actually be
+    submitted through (see the original `_next_research_action`'s docstring for why)."""
     if not policy.actions.allow_research or not snapshot.technologies or not target_planets:
         return []
     planet = target_planets[0]
     building_levels = _level_vector(planet.buildings)
     technology_levels = _level_vector(snapshot.technologies)
+    order, declared_ids = _research_priority_order(snapshot, policy)
+    by_id = {t.id: t for t in snapshot.technologies}
+    declared_positions = {tid: position + 1 for position, tid in enumerate(tid for tid in order if tid in declared_ids)}
 
     out: list[Candidate] = []
-    for candidate in sorted(snapshot.technologies, key=lambda t: ((t.level or 0), t.id)):
+    for tech_id in order:
+        candidate = by_id.get(tech_id)
+        if candidate is None:
+            continue
         unmet_reqs = unmet(EntityFamily.RESEARCH, candidate.id, building_levels=building_levels, technology_levels=technology_levels)
+        if candidate.id in declared_ids:
+            rationale = (
+                f"{candidate.name or ids.technology_name(candidate.id)} is next in "
+                "policy.strategy.research_priority order."
+            )
+            basis = f"policy-declared via research_priority (position {declared_positions[candidate.id]})"
+        else:
+            rationale = (
+                f"{candidate.name or ids.technology_name(candidate.id)} is the lowest-level "
+                f"unlocked technology account-wide (level {candidate.level or 0}); research queue is idle."
+            )
+            basis = "default: lowest unlocked level/id (no policy.strategy.research_priority match)"
         action = Action(
             kind=ActionKind.RESEARCH,
             function="startResearch",
@@ -795,10 +1099,7 @@ def generate_research_candidates(snapshot: Snapshot, policy: Policy, target_plan
             entity_name=candidate.name or ids.technology_name(candidate.id),
             target_level=(candidate.level or 0) + 1,
             cost=candidate.cost,
-            rationale=(
-                f"{candidate.name or ids.technology_name(candidate.id)} is the lowest-level "
-                f"unlocked technology account-wide (level {candidate.level or 0}); research queue is idle."
-            ),
+            rationale=rationale,
         )
         if unmet_reqs:
             out.append(
@@ -810,7 +1111,7 @@ def generate_research_candidates(snapshot: Snapshot, policy: Policy, target_plan
                 )
             )
             continue
-        out.append(Candidate(action=action, family="research", score=None, score_basis="policy-declared; lowest unlocked level/id"))
+        out.append(Candidate(action=action, family="research", score=None, score_basis=basis))
     return out
 
 
@@ -838,13 +1139,14 @@ def economy_on_track(snapshot: Snapshot, target_planets: list[PlanetSnapshot]) -
     return any(planet.queues.get(QueueKind.BUILDING) is not None for planet in target_planets)
 
 
-def generate_ship_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+def _generate_satellite_ship_candidate(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
     """A Solar Satellite when it's currently the cheaper energy source per point on this
-    planet and the ship queue is idle -- ported from `plan.py`'s pre-Phase-2
-    `_shipyard_action` ship branch. Scored the same way `generate_energy_candidates`
-    scores a satellite (usually `None` -- see that function's docstring)."""
-    if not policy.actions.allow_ships or planet.queues.get(QueueKind.SHIP) is not None:
-        return []
+    planet -- ported from `plan.py`'s pre-Phase-2 `_shipyard_action` ship branch. Scored
+    the same way `generate_energy_candidates` scores a satellite (usually `None` -- see
+    that function's docstring). **This is Solar Satellite's separate energy-driven path
+    -- Phase 3's `ship_targets` stock-keeping (`generate_ship_target_candidates` below)
+    never touches it and never substitutes for it.** Caller (`generate_ship_candidates`)
+    already applied the `allow_ships`/ship-queue-idle guard."""
     satellite_energy = _satellite_energy_per_unit(planet)
     building_levels = _level_vector(planet.buildings)
     technology_levels = _level_vector(snapshot.technologies)
@@ -878,12 +1180,256 @@ def generate_ship_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetS
     ]
 
 
-def generate_defense_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
-    """A single Rocket Launcher when the defense queue is idle -- ported from `plan.py`'s
-    pre-Phase-2 `_shipyard_action` defense branch. Always unscored: defense count doesn't
-    move `calc.production_per_hour`."""
-    if not policy.actions.allow_defense or planet.queues.get(QueueKind.DEFENSE) is not None:
+def generate_crawler_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """Crawler (Ship id 15, non-flyable -- produced via `startShipProduction`, never
+    flown; Phase 3) scored via the marginal `calc.crawler_boost_bps` effect on
+    `calc.production_per_hour`, the same `score_payback` mechanism every other scored
+    family uses. `calc.production_per_hour` already enforces both contract caps
+    internally (`crawler_boost_bps`'s own `effective_cap = combined_mine_level * 8` and
+    the flat 5,000 bps ceiling), so a crawler count already at either cap simply produces
+    a zero-delta score (`score_payback` returns `None`, "no production_per_hour change")
+    without any extra cap logic here -- **except** when the live
+    `PlanetSnapshot.crawler_production.capped` is already `True`, in which case this
+    short-circuits before doing the delta computation at all and says so plainly (Phase
+    3's own "prefer the API's own numbers over recomputing" instruction, same posture
+    `energy.solar_satellite_energy` already takes)."""
+    crawler = _entity(planet.ships, ids.Ship.CRAWLER)
+    if crawler is None or crawler.count is None:
         return []
+    building_levels = _level_vector(planet.buildings)
+    technology_levels = _level_vector(snapshot.technologies)
+    entity_name = crawler.name or ids.ship_name(ids.Ship.CRAWLER)
+
+    action = Action(
+        kind=ActionKind.SHIP,
+        function="startShipProduction",
+        planet_id=planet.planet_id,
+        entity_id=ids.Ship.CRAWLER,
+        entity_name=entity_name,
+        quantity=1,
+        cost=crawler.cost,
+        rationale=(
+            "Crawler adds a mine-production boost (calc.crawler_boost_bps), capped at 8 "
+            "per combined mine level and 5,000 bps total."
+        ),
+    )
+
+    unmet_reqs = unmet(EntityFamily.SHIP, ids.Ship.CRAWLER, building_levels=building_levels, technology_levels=technology_levels)
+    if unmet_reqs:
+        return [Candidate(action=action, family="crawler", score=None, score_basis="locked: " + "; ".join(describe(r) for r in unmet_reqs))]
+
+    if planet.crawler_production is not None and planet.crawler_production.capped:
+        live = planet.crawler_production
+        return [
+            Candidate(
+                action=action,
+                family="crawler",
+                score=None,
+                score_basis=(
+                    f"at boost cap -- live crawlerProduction.capped=true (effective {live.effective}"
+                    f"/{live.max_effective}, boostBps={live.boost_bps})"
+                ),
+            )
+        ]
+
+    weights = policy.strategy.resource_weights
+    score, basis = _score_level_delta(planet, snapshot, weights, crawler.cost, crawler_count=1)
+    if planet.crawler_production is not None:
+        live = planet.crawler_production
+        basis = f"{basis} (live crawlerProduction: effective {live.effective}/{live.max_effective}, boostBps={live.boost_bps})"
+    return [Candidate(action=action, family="crawler", score=score, score_basis=basis)]
+
+
+def generate_ship_target_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """Stock-keeping toward `policy.strategy.ship_targets` (Phase 3): for every declared
+    target below its live `Entity.count`, propose one more unit, filtered through
+    `techtree.unmet()`. **Never touches Solar Satellite's separate energy-driven path**
+    (`_generate_satellite_ship_candidate`) -- a `ship_targets` entry naming Solar
+    Satellite would stock-keep it as an ordinary policy-declared target alongside every
+    other ship, entirely independent of the energy-driven mechanism. Empty
+    `ship_targets` (the default) returns `[]`, reproducing pre-Phase-3 behaviour exactly.
+    A target already at or above its declared count yields nothing for that target
+    (not even a locked/informational entry) -- there is nothing left to propose. A
+    target whose live `Entity` is missing/uncounted (`count is None`) is skipped, not
+    treated as "0 built" -- fails closed on absent data, same rule as everywhere else in
+    this module."""
+    if not policy.strategy.ship_targets:
+        return []
+    building_levels = _level_vector(planet.buildings)
+    technology_levels = _level_vector(snapshot.technologies)
+
+    out: list[Candidate] = []
+    for target in policy.strategy.ship_targets:
+        entity_id = _resolve_target_id(target, ids.ship_id)
+        entity = _entity(planet.ships, entity_id)
+        if entity is None or entity.count is None:
+            continue
+        if entity.count >= target.count:
+            continue
+        entity_name = entity.name or ids.ship_name(entity_id)
+        action = Action(
+            kind=ActionKind.SHIP,
+            function="startShipProduction",
+            planet_id=planet.planet_id,
+            entity_id=entity_id,
+            entity_name=entity_name,
+            quantity=1,
+            cost=entity.cost,
+            rationale=(
+                f"policy.strategy.ship_targets declares {target.count}x {entity_name}; "
+                f"currently {entity.count} built/queued."
+            ),
+        )
+        unmet_reqs = unmet(EntityFamily.SHIP, entity_id, building_levels=building_levels, technology_levels=technology_levels)
+        if unmet_reqs:
+            out.append(Candidate(action=action, family="ship", score=None, score_basis="locked: " + "; ".join(describe(r) for r in unmet_reqs)))
+            continue
+        out.append(
+            Candidate(
+                action=action,
+                family="ship",
+                score=None,
+                score_basis=f"policy-declared stock target ({entity.count}/{target.count})",
+            )
+        )
+    return out
+
+
+def generate_ship_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """The "ships" family: Solar Satellite's separate energy-driven path first (unchanged
+    priority from pre-Phase-3), then Crawler (scored), then `ship_targets` stock-keeping
+    (policy-declared) -- all gated once, here, on `allow_ships`/ship-queue-idle. With
+    `ship_targets` empty and Crawler locked/absent, this returns exactly what pre-Phase-3
+    `generate_ship_candidates` returned (AC: docs/SPEC.md §9, "empty strategy targets
+    reproduce Phase 2 behaviour exactly")."""
+    if not policy.actions.allow_ships or planet.queues.get(QueueKind.SHIP) is not None:
+        return []
+    return (
+        _generate_satellite_ship_candidate(snapshot, policy, planet)
+        + generate_crawler_candidates(snapshot, policy, planet)
+        + generate_ship_target_candidates(snapshot, policy, planet)
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Defense targets + caps (Phase 3). `_queued_defense_quantity`/`_defense_capacity_reason`
+# independently re-derive `_requireDefenseCapacity`
+# (`VeydriftDefenseProductionModule.sol:352-380`) from `candidates.py`'s own side --
+# deliberately NOT shared code with `guard.py`'s `_defense_cap_violation`, the same
+# defense-in-depth posture `guard.py`'s `_gate_energy` already takes toward `plan.py`'s
+# energy invariant (two independent implementations of the same contract rule, so a bug
+# in one is unlikely to also be in the other). `PlanetSnapshot` carries only a single
+# `QueueEntry | None` per `QueueKind.DEFENSE` (no backlog list -- `models.py`'s frozen
+# shape), so -- like `guard.py` -- this can account for at most one queued item, not an
+# arbitrarily deep backlog; that under-counts a deeper real backlog, which is the
+# safe-to-under-restrict-yourself direction for a cap check, never the safe-to-
+# vacuously-pass one.
+# --------------------------------------------------------------------------------------
+
+
+def _queued_defense_quantity(planet: PlanetSnapshot, defense_id: int) -> int:
+    entry = planet.queues.get(QueueKind.DEFENSE)
+    if entry is None or entry.entity_id != defense_id:
+        return 0
+    return entry.quantity or 0
+
+
+def _defense_capacity_reason(planet: PlanetSnapshot, defense_id: int, quantity: int) -> str | None:
+    """`None` when nothing is violated; otherwise a detail string suitable for a
+    `"locked: ..."` `score_basis` (this module's convention for "never selectable as a
+    winner, but still visible as an alternative"). Fails closed: a built/queued count or
+    a missile-silo level the snapshot didn't report BLOCKs (via the "locked:" prefix)
+    rather than being treated as zero -- `missile_silo_level is None` must never read as
+    0, per AGENTS.md §5 and this phase's own brief."""
+    cap = MAX_DEFENSE_PER_PLANET.get(defense_id)
+    if cap is not None:
+        built_entity = _entity(planet.defenses, defense_id)
+        if built_entity is None or built_entity.count is None:
+            return f"{ids.defense_name(defense_id)} count not reported for planet {planet.planet_id}; cannot verify the {cap}-per-planet cap"
+        queued = _queued_defense_quantity(planet, defense_id)
+        projected = built_entity.count + queued + quantity
+        if projected > cap:
+            return (
+                f"{ids.defense_name(defense_id)} is capped at {cap} per planet "
+                f"(built {built_entity.count} + queued {queued} + this action {quantity} = {projected})"
+            )
+
+    slots_per_unit = MISSILE_SLOTS.get(defense_id, 0)
+    if slots_per_unit:
+        if planet.missile_silo_level is None:
+            return f"Missile Silo level not reported for planet {planet.planet_id}; cannot verify missile slot capacity"
+        capacity = missile_silo_capacity(planet.missile_silo_level)
+        used = 0
+        for missile_id, slots in MISSILE_SLOTS.items():
+            count_entity = _entity(planet.defenses, missile_id)
+            if count_entity is None or count_entity.count is None:
+                return f"{ids.defense_name(missile_id)} count not reported for planet {planet.planet_id}; cannot verify missile slot capacity"
+            used += slots * (count_entity.count + _queued_defense_quantity(planet, missile_id))
+        requested = slots_per_unit * quantity
+        if used + requested > capacity:
+            return (
+                f"{ids.defense_name(defense_id)} would use {requested} missile silo slot(s); "
+                f"{used} already used/queued against a capacity of {capacity} "
+                f"(Missile Silo level {planet.missile_silo_level})"
+            )
+    return None
+
+
+def generate_defense_target_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """Stock-keeping toward `policy.strategy.defense_targets`, the defense-family
+    counterpart to `generate_ship_target_candidates` -- same below-count/locked/absent-
+    data rules, plus `_defense_capacity_reason`'s shield-dome and missile-silo caps."""
+    if not policy.strategy.defense_targets:
+        return []
+    building_levels = _level_vector(planet.buildings)
+    technology_levels = _level_vector(snapshot.technologies)
+
+    out: list[Candidate] = []
+    for target in policy.strategy.defense_targets:
+        entity_id = _resolve_target_id(target, ids.defense_id)
+        entity = _entity(planet.defenses, entity_id)
+        if entity is None or entity.count is None:
+            continue
+        if entity.count >= target.count:
+            continue
+        entity_name = entity.name or ids.defense_name(entity_id)
+        action = Action(
+            kind=ActionKind.DEFENSE,
+            function="startDefenseProduction",
+            planet_id=planet.planet_id,
+            entity_id=entity_id,
+            entity_name=entity_name,
+            quantity=1,
+            cost=entity.cost,
+            rationale=(
+                f"policy.strategy.defense_targets declares {target.count}x {entity_name}; "
+                f"currently {entity.count} built/queued."
+            ),
+        )
+        unmet_reqs = unmet(EntityFamily.DEFENSE, entity_id, building_levels=building_levels, technology_levels=technology_levels)
+        if unmet_reqs:
+            out.append(Candidate(action=action, family="defense", score=None, score_basis="locked: " + "; ".join(describe(r) for r in unmet_reqs)))
+            continue
+        cap_reason = _defense_capacity_reason(planet, entity_id, 1)
+        if cap_reason is not None:
+            out.append(Candidate(action=action, family="defense", score=None, score_basis=f"locked: {cap_reason}"))
+            continue
+        out.append(
+            Candidate(
+                action=action,
+                family="defense",
+                score=None,
+                score_basis=f"policy-declared stock target ({entity.count}/{target.count})",
+            )
+        )
+    return out
+
+
+def _generate_default_rocket_launcher_candidate(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """The pre-Phase-3 hardcoded default: a single Rocket Launcher, unconditionally --
+    ported verbatim from `plan.py`'s pre-Phase-2 `_shipyard_action` defense branch. Fires
+    only when `policy.strategy.defense_targets` is empty (`generate_defense_candidates`
+    below), preserving Phase 2 behaviour exactly for the AC in docs/SPEC.md §9."""
     building_levels = _level_vector(planet.buildings)
     technology_levels = _level_vector(snapshot.technologies)
     unmet_reqs = unmet(EntityFamily.DEFENSE, ids.Defense.ROCKET_LAUNCHER, building_levels=building_levels, technology_levels=technology_levels)
@@ -909,19 +1455,42 @@ def generate_defense_candidates(snapshot: Snapshot, policy: Policy, planet: Plan
     return [Candidate(action=action, family="defense", score=None, score_basis="policy-declared; cheapest defense entry")]
 
 
+def generate_defense_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """`defense_targets` (Phase 3), when declared, entirely replaces the pre-Phase-3
+    hardcoded Rocket-Launcher-only default -- a human who declares explicit defense
+    intent has superseded the "reasonable policy-driven default in the absence of a
+    threat model" the old comment describes. Empty `defense_targets` (the default)
+    reproduces the old hardcoded behaviour exactly."""
+    if not policy.actions.allow_defense or planet.queues.get(QueueKind.DEFENSE) is not None:
+        return []
+    if policy.strategy.defense_targets:
+        return generate_defense_target_candidates(snapshot, policy, planet)
+    return _generate_default_rocket_launcher_candidate(snapshot, policy, planet)
+
+
 def select_shipyard_candidate(
     snapshot: Snapshot, policy: Policy, target_planets: list[PlanetSnapshot]
 ) -> tuple[Candidate | None, list[Candidate]]:
     """Ported from `plan.py`'s pre-Phase-2 `_shipyard_action`: per target planet, ship
-    branch before defense branch, first hit wins."""
+    branch before defense branch, first hit wins. Phase 3: both branches now filter out
+    `"locked:"` candidates before picking a winner (pre-Phase-3, `generate_ship_candidates`
+    could never yield a locked entry, so no filter was needed there; Crawler/`ship_targets`
+    now can). Among selectable ships, the best-scored one wins (ties/all-unscored fall
+    back to generation order, i.e. Solar Satellite's priority is unchanged when nothing
+    new is configured) -- `rank_candidates` already implements exactly that ordering."""
     if not target_planets or not economy_on_track(snapshot, target_planets):
         return None, []
     alternatives: list[Candidate] = []
     for planet in target_planets:
         ships = generate_ship_candidates(snapshot, policy, planet)
-        if ships:
+        selectable_ships = [c for c in ships if not c.score_basis.startswith("locked:")]
+        if selectable_ships:
+            winner = rank_candidates(selectable_ships)[0]
             defenses = generate_defense_candidates(snapshot, policy, planet)
-            return ships[0], rank_candidates(alternatives + defenses)
+            remaining_ships = [c for c in ships if c is not winner]
+            return winner, rank_candidates(alternatives + remaining_ships + defenses)
+        if ships:
+            alternatives.extend(ships)
         defenses = generate_defense_candidates(snapshot, policy, planet)
         selectable = [c for c in defenses if not c.score_basis.startswith("locked:")]
         if selectable:

@@ -25,5 +25,12 @@
     "on_health_unhealthy_minutes": 30, "on_revert_count": 2
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },
-  "strategy": { "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 }, "max_alternatives": 5 }
+  "strategy": {
+    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },
+    "max_alternatives": 5,
+    "ship_targets": [],
+    "defense_targets": [],
+    "research_priority": [],
+    "building_priority": []
+  }
 }

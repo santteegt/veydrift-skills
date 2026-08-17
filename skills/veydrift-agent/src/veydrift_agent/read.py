@@ -702,6 +702,19 @@ def _planet_snapshot(
     raidable = infrastructure_raw.get("raidableResources")
     protected = infrastructure_raw.get("protectedResources")
 
+    crawler_raw = infrastructure_raw.get("crawlerProduction")
+    crawler_production = (
+        models.CrawlerProduction(
+            total=crawler_raw.get("total"),
+            effective=crawler_raw.get("effective"),
+            max_effective=crawler_raw.get("maxEffective"),
+            boost_bps=crawler_raw.get("boostBps"),
+            capped=crawler_raw.get("capped"),
+        )
+        if crawler_raw
+        else None
+    )
+
     return models.PlanetSnapshot(
         planet_id=planet_id,
         coordinates=coordinates,
@@ -724,6 +737,8 @@ def _planet_snapshot(
         ships=_entities(shipyard_raw.get("ships"), SHIP_NAMES, level_key=None, count_key="count"),
         defenses=_entities(defenses_raw.get("defenses"), DEFENSE_NAMES, level_key=None, count_key="count"),
         queues=queues,
+        missile_silo_level=defenses_raw.get("missileSiloLevel"),
+        crawler_production=crawler_production,
     )
 
 

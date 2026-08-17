@@ -62,6 +62,42 @@
       "title": "Cadence",
       "type": "object"
     },
+    "EntityTarget": {
+      "description": "One declared standing-count target (Phase 3 of the general-strategy-engine\nprogram, docs/SPEC.md \u00a75.4/\u00a75.6): \"I want N of this ship/defense.\" Resolved against\n`ids.py`'s `*_NAMES` maps case-insensitively via `name`, or directly via `id` \u2014\nexactly one of the two should be set. `candidates.py` resolves `name` at generation\ntime and raises loudly (`ValueError`) on an unknown name rather than treating it as\n\"no target\" \u2014 `Policy` is `extra=\"forbid\"`, so a typo in a key is already a hard\nstop; a typo in a *value* here must be too, for the same reason.",
+      "properties": {
+        "count": {
+          "default": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        }
+      },
+      "title": "EntityTarget",
+      "type": "object"
+    },
     "EscalationCfg": {
       "properties": {
         "on_abi_hash_change": {
@@ -160,15 +196,43 @@
       "type": "object"
     },
     "StrategyCfg": {
-      "description": "Phase 2 of the general-strategy-engine program (docs/SPEC.md \u00a75.4/\u00a75.6):\ngenerate/filter/score/select candidate pipeline config. Both fields are additive \u2014\nan older `policy.json` with no `strategy` key still loads (defaults below), but a\npolicy file that sets one is rejected by any agent build predating this field\n(`Policy.model_config` is `extra=\"forbid\"`).",
+      "description": "Phase 2 (docs/SPEC.md \u00a75.4/\u00a75.6) added `resource_weights`/`max_alternatives`;\nPhase 3 adds the four fields below. All are additive \u2014 an older `policy.json` with\nno `strategy` key, or one that sets `strategy` but omits these newer keys, still\nloads (defaults below reproduce pre-Phase-3 behaviour exactly), but a policy file\nthat sets one of these new keys is rejected by any agent build predating this field\n(`Policy.model_config` is `extra=\"forbid\"`).",
       "properties": {
+        "building_priority": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Building Priority",
+          "type": "array"
+        },
+        "defense_targets": {
+          "items": {
+            "$ref": "#/$defs/EntityTarget"
+          },
+          "title": "Defense Targets",
+          "type": "array"
+        },
         "max_alternatives": {
           "default": 5,
           "title": "Max Alternatives",
           "type": "integer"
         },
+        "research_priority": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Research Priority",
+          "type": "array"
+        },
         "resource_weights": {
           "$ref": "#/$defs/Resources"
+        },
+        "ship_targets": {
+          "items": {
+            "$ref": "#/$defs/EntityTarget"
+          },
+          "title": "Ship Targets",
+          "type": "array"
         }
       },
       "title": "StrategyCfg",

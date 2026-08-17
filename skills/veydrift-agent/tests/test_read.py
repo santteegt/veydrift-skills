@@ -299,6 +299,29 @@ def test_snapshot_json_is_a_valid_snapshot_model(tmp_path):
 
 
 @respx.mock
+def test_snapshot_parses_missile_silo_level_and_crawler_production():
+    """Phase 3 of the general-strategy-engine program (docs/SPEC.md §5.4): both fields
+    are fetched by `snapshot` already (`/defenses`'s `missileSiloLevel`, `/infrastructure`'s
+    `crawlerProduction` block) and were previously discarded. `wallet_defenses.json` /
+    `wallet_infrastructure.json` are real captures that already carry both fields."""
+    _mock_snapshot_routes()
+
+    result = runner.invoke(app, ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET), "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    planet = data["planets"][0]
+    assert planet["missile_silo_level"] == 0
+    assert planet["crawler_production"] == {
+        "total": 0,
+        "effective": 0,
+        "max_effective": 0,
+        "boost_bps": 0,
+        "capped": False,
+    }
+
+
+@respx.mock
 def test_snapshot_exits_2_when_health_unhealthy():
     respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json=load("health_unhealthy.json")))
     respx.get(f"{BASE}/wallet/{WALLET}/research", params={"planetId": str(PLANET)}).mock(

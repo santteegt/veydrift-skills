@@ -382,6 +382,88 @@ def test_prerequisites_allows_missiles_within_silo_capacity():
     assert verdict(report, "prerequisites").status is GuardStatus.PASS
 
 
+def test_prerequisites_blocks_a_multi_unit_shield_dome_request_even_at_zero_built():
+    """Phase 3 (docs/SPEC.md §5.4) makes ships/defenses stock-keepable toward a declared
+    count, so `Action.quantity` can now be > 1 for a defense the pre-Phase-3 ladder never
+    produced with anything but `quantity=1` (the hardcoded Rocket Launcher default). This
+    pins that `_gate_prerequisites`/`_defense_cap_violation` already generalizes
+    correctly to a multi-unit request without any code change: requesting 2 Small Shield
+    Domes in one action, with 0 already built, still exceeds the 1-per-planet cap."""
+    planet = make_planet(
+        defenses=[Entity(id=ids.Defense.SMALL_SHIELD_DOME, name="Small Shield Dome", count=0, cost=Resources(metal=10_000, crystal=10_000))]
+    )
+    snapshot = make_snapshot(
+        planets=[planet],
+        technologies=[Entity(id=ids.Technology.SHIELDING, name="Shielding Technology", level=2, cost=Resources())],
+    )
+    action = make_build_action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        entity_id=ids.Defense.SMALL_SHIELD_DOME,
+        entity_name="Small Shield Dome",
+        quantity=2,
+    )
+    report = evaluate(action, snapshot, make_policy())
+    v = verdict(report, "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "capped at 1" in v.detail
+
+
+def test_prerequisites_blocks_a_multi_unit_missile_request_over_remaining_silo_capacity():
+    """Same generalization check, missile-silo side: Missile Silo level 4 -> 40 slots: 38
+    Anti-Ballistic Missiles already built leaves 2 slots free. Requesting 3 more in one
+    action must BLOCK (38 + 3 = 41 > 40), even though a `quantity=1` request from the same
+    starting count would have passed -- proving the cap check reads `action.quantity`,
+    not an implicit 1."""
+    planet = make_planet(
+        buildings=[
+            Entity(id=ids.Building.SHIPYARD, name="Shipyard", level=1, cost=Resources(metal=400, crystal=200, deuterium=100)),
+            Entity(id=ids.Building.MISSILE_SILO, name="Missile Silo", level=4, cost=Resources(metal=20_000, crystal=20_000, deuterium=1_000)),
+        ],
+        defenses=[
+            Entity(id=ids.Defense.ANTI_BALLISTIC_MISSILE, name="Anti-Ballistic Missile", count=38, cost=Resources(metal=8_000, deuterium=2_000)),
+            Entity(id=ids.Defense.INTERPLANETARY_MISSILE, name="Interplanetary Missile", count=0, cost=Resources(metal=12_500, crystal=2_500, deuterium=10_000)),
+        ],
+    )
+    snapshot = make_snapshot(planets=[planet])
+    action = make_build_action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        entity_id=ids.Defense.ANTI_BALLISTIC_MISSILE,
+        entity_name="Anti-Ballistic Missile",
+        quantity=3,
+    )
+    report = evaluate(action, snapshot, make_policy())
+    v = verdict(report, "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "silo slot" in v.detail
+
+
+def test_prerequisites_allows_a_multi_unit_missile_request_within_remaining_silo_capacity():
+    """The pass-side mirror of the previous test, same starting count (38/40 used):
+    requesting exactly the 2 remaining slots (quantity=2) must PASS."""
+    planet = make_planet(
+        buildings=[
+            Entity(id=ids.Building.SHIPYARD, name="Shipyard", level=1, cost=Resources(metal=400, crystal=200, deuterium=100)),
+            Entity(id=ids.Building.MISSILE_SILO, name="Missile Silo", level=4, cost=Resources(metal=20_000, crystal=20_000, deuterium=1_000)),
+        ],
+        defenses=[
+            Entity(id=ids.Defense.ANTI_BALLISTIC_MISSILE, name="Anti-Ballistic Missile", count=38, cost=Resources(metal=8_000, deuterium=2_000)),
+            Entity(id=ids.Defense.INTERPLANETARY_MISSILE, name="Interplanetary Missile", count=0, cost=Resources(metal=12_500, crystal=2_500, deuterium=10_000)),
+        ],
+    )
+    snapshot = make_snapshot(planets=[planet])
+    action = make_build_action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        entity_id=ids.Defense.ANTI_BALLISTIC_MISSILE,
+        entity_name="Anti-Ballistic Missile",
+        quantity=2,
+    )
+    report = evaluate(action, snapshot, make_policy())
+    assert verdict(report, "prerequisites").status is GuardStatus.PASS
+
+
 def test_defense_cap_violation_blocks_on_a_missile_silo_level_the_snapshot_never_reported():
     """Whitebox test of `guard._defense_cap_violation`'s own fail-closed branch directly:
     through the full `prerequisites` gate this path is currently unreachable (every

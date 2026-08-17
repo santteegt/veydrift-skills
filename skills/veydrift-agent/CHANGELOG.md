@@ -11,6 +11,86 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-16
+
+### Added
+- **Every planet-local entity is now reachable, driven by declared policy targets +
+  `techtree.py` + the contract's caps** (Phase 3 of the general-strategy-engine program).
+  Before this change the planner could only ever propose 13 of the 51 entities in
+  `ids.py`. `candidates.py` gains:
+  - `generate_ship_target_candidates` / `generate_defense_target_candidates` — stock-
+    keeping toward new `Policy.strategy.ship_targets` / `.defense_targets`
+    (`list[EntityTarget]`, each `{name|id, count}`): the first declared target below its
+    live `Entity.count`, filtered through `techtree.unmet()`. **Solar Satellite's
+    separate energy-driven scored path is untouched** — `ship_targets` never merges with
+    it. Declaring `defense_targets` supersedes the pre-Phase-3 hardcoded
+    Rocket-Launcher-only default entirely; an empty list reproduces that default exactly.
+  - `generate_crawler_candidates` — Crawler (Ship id 15, non-flyable), scored via
+    `calc.crawler_boost_bps` (previously dead). The formula's own internal caps (8 per
+    combined mine level, 5,000 bps) make an already-saturated crawler count score `None`
+    automatically; the live `PlanetSnapshot.crawler_production.capped` flag short-
+    circuits the same conclusion without recomputing, when present.
+  - `generate_infrastructure_candidates` — the "infrastructure" family reserved, unused,
+    in 0.4.0: Robotics Factory, Nanite Factory, Shipyard, Research Lab, Terraformer,
+    Missile Silo, always `score=None`, ordered by new `Policy.strategy.building_priority`
+    — the family's sole reachability switch; empty means it never fires. Fusion Reactor
+    does **not** live here — it moves `production_per_hour`, so it is a scored
+    `generate_energy_candidates` candidate instead, deliberately without touching the
+    pinned `_cheapest_energy_choice` substitution comparison (Solar Plant vs. Solar
+    Satellite only, per the hot-planet counterfactual test).
+  - `generate_proactive_storage_candidates` — storage as a Band-2 candidate (always
+    `score=None`), activating `calc.storage_cap` (previously dead) so headroom is visible
+    before the reactive overflow trigger fires. Additive to `alternatives` only; never
+    changes which candidate wins Band 2.
+  - `generate_research_candidates` now orders by new `Policy.strategy.research_priority`
+    (technology names) first, falling back to the pre-existing lowest-level-first order
+    for everything not named — and that fallback's `score_basis` is explicitly prefixed
+    `"default: ..."` so it reads as a fallback, not a derived recommendation.
+- New `Policy.strategy` fields: `ship_targets`, `defense_targets`: `list[EntityTarget]`
+  (new model: `{name: str | None, id: int | None, count: int}`); `research_priority`,
+  `building_priority`: `list[str]`. All default to `[]`; a typo'd name raises `ValueError`
+  at generation time rather than silently proposing nothing (`ids.py`'s existing
+  `KeyError`-on-unknown-name convention, re-raised with the offending name).
+- `PlanetSnapshot` gains `missile_silo_level` (← `/defenses`'s `missileSiloLevel`) and
+  `crawler_production` (← `/infrastructure`'s `crawlerProduction` block, new
+  `CrawlerProduction` model) — both sourced from routes `read.py`'s `snapshot` command
+  already fetches, no new HTTP call. Both default `None`; `None` means unverifiable, never
+  `0`, for every consumer.
+- Two new independent shield-dome/missile-silo cap checks in `candidates.py`
+  (`_defense_capacity_reason`), deliberately not shared code with `guard.py`'s existing
+  `_defense_cap_violation` — the same defense-in-depth posture `_gate_energy` already
+  takes toward `plan.py`'s energy invariant.
+- `schemas/policy.schema.json` regenerated for `EntityTarget`/the four new `StrategyCfg`
+  fields.
+
+### This phase is explicitly NOT
+- **Not a fleet doctrine.** `ship_targets`/`defense_targets` stock-keep toward a declared
+  count; nothing in this change flies a ship, launches a fleet mission, or reasons about
+  combat. Ships/defenses become *producible*, never *flyable* — that stays a future phase.
+- **Not a threat model.** Which defenses to build, and how many, is entirely the
+  operator's declared `defense_targets` — the engine still only enforces legality
+  (`techtree.unmet()`), affordability (`guard.py`, unchanged) and, where a number is
+  genuinely comparable, economics (`score_payback`). It never invents a doctrine.
+
+### Verified unaffected
+- **Zero behaviour change with empty `strategy` targets** — this phase's own acceptance
+  criterion, pinned directly (`tests/test_candidates.py`,
+  `tests/test_plan.py::test_empty_strategy_targets_reproduce_phase_2_planner_output_exactly`
+  / `::test_empty_strategy_targets_reproduce_phase_2_hot_planet_output_exactly`) and by
+  every pre-existing test in `test_plan.py`/`test_candidates.py`/`test_guard.py` passing
+  unmodified.
+- **`guard.py`'s `prerequisites` gate already generalizes to `Action.quantity > 1` and the
+  missile-silo slot arithmetic** — verified with two new tests, no code change needed
+  (`test_prerequisites_blocks_a_multi_unit_shield_dome_request_even_at_zero_built`,
+  `test_prerequisites_blocks_a_multi_unit_missile_request_over_remaining_silo_capacity`).
+- **No cost-scaling function was added anywhere** — every new candidate's cost is a live
+  `Entity.cost`, never recomputed.
+- **Combat stays unreachable.** No `_MIN_TIER_FOR_FUNCTION` entry, no `allowlist.ts`
+  change, nothing proposing `launchFleetMission`.
+- 386 tests passing, up from the pre-Phase-3 baseline of 357 (29 new: 23 in
+  `test_candidates.py`, 3 in `test_guard.py`, 2 in `test_plan.py`, 1 in `test_read.py` —
+  all additions, none replacing an existing assertion).
+
 ## [0.4.0] - 2026-08-16
 
 ### Changed
