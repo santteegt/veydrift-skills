@@ -209,6 +209,22 @@ what a function is:
   ever been submitted to Veydrift from this codebase** — the write path is
   built, allowlisted, and fixture-simulated, never executed against mainnet, by design and by
   standing project rule.
+
+  **"Never against mainnet" means mainnet specifically, not "never send at all."** A local Anvil
+  fork (`http://127.0.0.1:8545` or equivalent, forked off a real Base RPC) is not mainnet — nothing
+  sent there reaches a real chain, and nothing sent there costs real gas or touches a real
+  account's real balance. `src/providers/fork-impersonate.ts` (added `dac1050`) exists precisely to
+  exercise `sendTx`'s `provider.signAndSend()` line for real, for the first time, against a fork —
+  see `references/fork-testing.md` for the runbook. This is the intended first real use of that
+  code path, not an exception carved into the standing rule above; the rule is still "never
+  mainnet," full stop, and `fork-impersonate`'s own loopback guard (`refuseIfNotLoopback`,
+  `references/providers.md`) is what keeps that true even if the provider is misselected outside a
+  fork.
+
+  **`--confirm` remains unconditionally required even against a fork.** `fork-impersonate` changes
+  *who signs* — the node, on an impersonated account's behalf, instead of a locally-held key — it
+  does not change *whether* confirmation is needed. Everything in "The `--confirm` invariant" above
+  applies identically: no env var, no flag, no provider choice makes `send` implicit.
 - It does not attempt to recover a lost password or lost keystore. There is no recovery path — a
   Veydrift planet is permanently bound to the EOA that settled it (`providers.md`'s opening
   section has the full contract-level reasoning).

@@ -54,9 +54,9 @@ source repository ran a full evaluation of every remaining candidate against thi
 including whether EIP-7702 is actually usable — that is a research deliverable, not code, and no
 provider beyond the two below is implemented here.
 
-## The two providers
+## The three providers
 
-Both implement the same interface (`src/providers/types.ts`):
+All three implement the same interface (`src/providers/types.ts`):
 
 ```ts
 interface WalletProvider {
@@ -67,10 +67,11 @@ interface WalletProvider {
 }
 ```
 
-Both are genuinely functional, not one real implementation and one stub — that's what actually
-demonstrates the interface is swappable rather than merely declared to be. `tests/providers.test.ts`
-proves it directly: constructed from the *same* throwaway test key, both providers derive the
-*same* address (acceptance criterion 11).
+`keystore` and `envkey` are genuinely functional, not one real implementation and one stub —
+that's what actually demonstrates the interface is swappable rather than merely declared to be.
+`tests/providers.test.ts` proves it directly: constructed from the *same* throwaway test key, both
+providers derive the *same* address (acceptance criterion 11). `fork-impersonate` (below) is a
+third, different kind of provider entirely — it doesn't hold a key at all.
 
 ### `keystore` — the default
 
@@ -109,9 +110,44 @@ better than committing it, worse than an encrypted keystore. Two things beyond "
   every leak — once the skill is installed elsewhere via `npx skills add`, it may not be running
   inside any git repo at all, in which case the check silently no-ops.
 
+### `fork-impersonate` — a genuinely new category, not a third signing provider
+
+`keystore` and `envkey` are both **local-signing** providers: each holds (encrypted, or in
+plaintext) the actual private key for the actual EOA that owns the planet, and produces a real
+ECDSA signature inside `signAndSend`. `fork-impersonate` (`src/providers/fork-impersonate.ts`) is
+neither — it holds no key material at all. It runs `anvil_impersonateAccount` +
+`anvil_setBalance`, then hands the address to `eth_sendTransaction` as a plain JSON-RPC account;
+viem detects that shape and never attempts a local signature, so the **node** signs on the
+impersonated account's behalf. `capabilities()` reports this honestly:
+`{ canSign: false, canSimulate: false, remotePolicy: false }` — not a copy of the two signing
+providers' `{ canSign: true, ... }` triple.
+
+This is authorization-identical to a real signed transaction only because Veydrift's
+`_requirePlanetOwner` checks plain `msg.sender`, not a signature scheme — there is nothing in the
+contract that a node-trusted impersonated call would fail to satisfy that a real signature would
+have passed. That equivalence is what makes fork testing with this provider a faithful exercise of
+the real write path, not an approximation of it.
+
+**What makes registering a node-trusted, unsigned provider in the normal provider list
+(`providers/index.ts`) safe, rather than a standing hole in the allowlist:** the constructor's
+loopback guard, `refuseIfNotLoopback` (`fork-impersonate.ts:49-67`), runs *before* anything else —
+before even reading `VEYDRIFT_FORK_IMPERSONATE_ADDRESS` — and throws unless the resolved
+`VEYDRIFT_RPC_URL` hostname is `127.0.0.1`/`localhost`/`::1`/`[::1]`. Production's `VEYDRIFT_RPC_URL`
+(Base mainnet, an Alchemy endpoint, anything reachable off-box) never resolves to loopback, so
+`getProvider({ provider: "fork-impersonate" })` is inert outside a local fork by construction —
+selecting it against a real RPC target throws immediately, it does not silently fall through to
+attempting a node-trusted send against mainnet. See `references/fork-testing.md` for how to
+actually use this provider, and `references/tx-safety.md` for why exercising it is the intended
+first real use of `sendTx`'s `provider.signAndSend()` line, not an exception to "never against
+mainnet."
+
+Selected the same way as the other two — `--provider fork-impersonate` on `walletctl status`/
+`build`/`send` (never on `simulate`/`receipt`, which take no `--provider` at all) — and additionally
+requires `VEYDRIFT_FORK_IMPERSONATE_ADDRESS` to be set to the address being impersonated.
+
 ## RPC endpoint
 
-Every read (`getPublicClient()`) and every write (both providers' `signAndSend`) resolve
+Every read (`getPublicClient()`) and every write (all three providers' `signAndSend`) resolve
 their RPC target through one chokepoint, `getRpcUrl()` (`src/tx.ts`):
 
 ```ts

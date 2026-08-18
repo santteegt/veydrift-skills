@@ -11,6 +11,39 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-17
+
+### Added
+- **`fork-impersonate` wallet provider** (`src/providers/fork-impersonate.ts`, landed `dac1050`,
+  documented this release). A third provider, registered normally in `providers/index.ts`: runs the
+  exact production `sendTx` → `provider.signAndSend` path against a local Anvil fork, using
+  `anvil_impersonateAccount` + `anvil_setBalance` + node-trusted `eth_sendTransaction` instead of a
+  locally-held key. Reports `capabilities()` honestly as `{ canSign: false, canSimulate: false,
+  remotePolicy: false }` — a genuinely new provider category, not a third instance of `keystore`/
+  `envkey`'s signing triple. Constructor eagerly calls `refuseIfNotLoopback(getRpcUrl())`, which
+  throws unless the resolved RPC host is `127.0.0.1`/`localhost`/`::1`/`[::1]` — this is what makes
+  ordinary registry membership safe: production's `VEYDRIFT_RPC_URL` never resolves to loopback, so
+  selecting this provider outside a local fork is inert by construction.
+- **This is additive, not a new permission.** `fork-impersonate` does not change what any tier is
+  allowed to send — `checkAllowlist`'s five checks and the mission-type restriction run unchanged
+  regardless of which provider signs. Combat mission types remain unreachable. `--confirm` remains
+  unconditionally required; the provider changes *who* signs, never *whether* confirmation is
+  needed (`references/tx-safety.md`'s new qualification).
+- `references/fork-testing.md` (new) — the execution runbook: starting Anvil, environment setup,
+  the per-selector `build`/`simulate`/`send`/`receipt` sequence, the 7 reachable selectors and which
+  are planner-reachable, two gotchas (the memoized public client; `/runtime-config` being
+  ungoverned by `VEYDRIFT_RPC_URL`), and three verifications beyond a routine sweep (colony-target
+  packing, the two fleet-tuple encoders against real contract state, the fuel formula against a
+  real balance delta).
+- `references/providers.md` — documents `fork-impersonate` as a genuinely new, third provider
+  category (node-trusted, unsigned) distinct from both local-signing providers.
+- `references/tx-safety.md` — clarifies "never against mainnet" refers to mainnet specifically; a
+  local fork is the intended first real exercise of `sendTx`'s send path, not an exception to the
+  standing rule.
+- `tests/providers/fork-impersonate.test.ts` — unconditional loopback-guard and address-validation
+  tests, plus a real-anvil e2e suite skip-gated on `anvil` being installed and
+  `VEYDRIFT_FORK_TEST_RPC_URL` being set (absent either, `npm test` stays green and offline).
+
 ## [0.3.0] - 2026-08-17
 
 The allowlist-widening change below shipped in the working tree without a version bump of

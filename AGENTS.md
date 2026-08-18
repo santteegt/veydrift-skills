@@ -221,6 +221,16 @@ section previously implied every dry-run writes `strategy.md`, which is only tru
 tick with something to narrate). `touch $VEYDRIFT_HOME/KILLSWITCH` before a tick to
 confirm it halts before any network call beyond `/health`.
 
+The next rung up from a dry-run tick against the live API is exercising a real send — against a
+local fork, never mainnet. `skills/veydrift-wallet/src/providers/fork-impersonate.ts` runs the
+exact production `sendTx` → `provider.signAndSend` path against a local Anvil fork with an
+impersonated account instead of a held key, gated by a loopback guard that makes it inert outside a
+fork. `references/fork-testing.md` is the full runbook: starting Anvil, the env vars, the
+per-selector command sequence, the two gotchas that cost time otherwise (the memoized public
+client, and `/runtime-config` being ungoverned by `VEYDRIFT_RPC_URL`), and three verifications
+worth doing beyond a routine sweep — colony-target packing, the two fleet-tuple encoders cross-
+checked against real contract state, and the fuel formula compared against a real balance delta.
+
 ## 9. Multi-agent build/judge workflow used on this repo
 
 `.claude/agents/veydrift-builder.md` and `.claude/agents/veydrift-judge.md` define two
@@ -304,6 +314,9 @@ enough to call out here specifically, not a duplicate of that ledger.
   write-entrypoint list.
 - `docs/wallet-provider-research.md` — every wallet-provider candidate evaluated against
   the address-binding constraint (`README.md` has the short version).
+- `skills/veydrift-wallet/references/fork-testing.md` — the fork-testing runbook: exercising
+  tier≥2 sends against a local Anvil fork with an impersonated account, the intended first real
+  use of `sendTx`'s send path against a real chain state (never mainnet).
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.
