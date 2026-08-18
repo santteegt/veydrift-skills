@@ -52,6 +52,21 @@ export VEYDRIFT_FORK_IMPERSONATE_ADDRESS=0x224aba5d489675a7bd3ce07786fada466b46f
 export VEYDRIFT_HOME=/tmp/empty
 ```
 
+**Prefer a repo-local `.env` over your shell profile.** `.env` and `.env.*` are gitignored at
+the repo root (`.gitignore:2-3`, with `!.env.example` so the template stays committable), so an
+upstream RPC URL with an embedded API key never lands in a tracked file or in your machine-wide
+profile. Copy the template and source it:
+
+```bash
+cp .env.example .env      # then fill in the values
+set -a; . ./.env; set +a  # in the shell that runs the fork commands
+```
+
+Nothing auto-loads it — neither skill declares a dotenv dependency, so the `set -a` form above is
+the load step. Being gitignored is also what keeps it clear of `envkey.ts`'s leak scanner: that
+scan runs `git grep`, so a value in a properly gitignored file is the sanctioned case rather than
+a violation (`src/providers/envkey.ts:52-58`).
+
 `VEYDRIFT_HOME=/tmp/empty` reuses the pattern `references/tx-safety.md` already sanctions for
 standalone `walletctl` use with an explicit `--tier`, rather than inventing a new bypass:
 `resolveTier` (`src/policy.ts:63`) falls back to the caller-supplied `--tier`/`VEYDRIFT_TIER` only
