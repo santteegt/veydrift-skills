@@ -29,8 +29,10 @@ from veydrift_agent.models import (
     Action,
     ActionKind,
     AlternativeNote,
+    Decision,
     EnergyBalance,
     Entity,
+    GuardReport,
     GuardStatus,
     Limits,
     PlanetSnapshot,
@@ -205,6 +207,16 @@ def _patch_common(monkeypatch, *, snapshot=None, action=None, live_addresses=Non
         lambda act, **kw: (unsigned_tx, gas, None, built_tx_path) if act.is_onchain() else (None, None, None, None),
     )
     monkeypatch.setattr(tick, "_walletctl_eth_balance_wei", lambda **kw: None)
+    # `_run_tick` now calls `_walletctl_status` (balance + address in one call) rather
+    # than `_walletctl_eth_balance_wei` directly -- see tick.py's `_walletctl_status`
+    # docstring. None of these tests reach the tier>=2 send path (tier 1 never does; the
+    # require_confirmation=True tests stop before `_send_and_await`), so the value is
+    # never actually consulted -- this only exists so the real subprocess is never hit.
+    monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (None, None))
+    # Simulate-before-send fix: default to "ok" so tests that don't care about the
+    # simulate step specifically (e.g. require_confirmation, which never reaches
+    # `_send_and_await` at all) aren't affected either way.
+    monkeypatch.setattr(tick, "_walletctl_simulate", lambda *a, **kw: (True, None, None))
 
     def _send_should_not_be_called(*a, **kw):
         raise AssertionError("walletctl send must never be called at tier 1")
@@ -1052,6 +1064,14 @@ def test_reconcile_pending_never_treats_a_statusless_receipt_as_success(isolated
 _LIVE_ADDR = "0xf397910F005151b09644228573a4353818D3755d"
 
 
+def _allow_simulate(monkeypatch):
+    """These tests call `_send_and_await` directly to isolate its send/receipt/revert
+    logic from the simulate step added by this fix -- default `_walletctl_simulate` to
+    "ok" so that isolation holds (a real, unmocked `_walletctl_simulate` would try to
+    shell out for real). The simulate step itself gets its own dedicated tests below."""
+    monkeypatch.setattr(tick, "_walletctl_simulate", lambda *a, **kw: (True, None, None))
+
+
 def test_send_and_await_reverted_tx_not_counted_as_success(isolated_home, monkeypatch):
     policy = _economy_policy()
     action = _build_action()
@@ -1059,6 +1079,7 @@ def test_send_and_await_reverted_tx_not_counted_as_success(isolated_home, monkey
     agent_state = AgentState()
     tx_hash_sent = "0x" + "bb" * 32
 
+    _allow_simulate(monkeypatch)
     monkeypatch.setattr(tick, "_walletctl_send", lambda tx_path, *, tier, provider: (tx_hash_sent, None))
     monkeypatch.setattr(
         tick,
@@ -1091,6 +1112,7 @@ def test_send_and_await_success_counts_as_executed(isolated_home, monkeypatch):
     agent_state = AgentState()
     tx_hash_sent = "0x" + "cc" * 32
 
+    _allow_simulate(monkeypatch)
     monkeypatch.setattr(tick, "_walletctl_send", lambda tx_path, *, tier, provider: (tx_hash_sent, None))
     monkeypatch.setattr(
         tick,
@@ -1120,6 +1142,7 @@ def test_send_and_await_unknown_outcome_not_counted_as_success(isolated_home, mo
     unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
     agent_state = AgentState()
 
+    _allow_simulate(monkeypatch)
     monkeypatch.setattr(tick, "_walletctl_send", lambda tx_path, *, tier, provider: ("0x" + "dd" * 32, None))
     monkeypatch.setattr(tick, "_walletctl_receipt", lambda tx_hash: None)  # receipt never available
     monkeypatch.setattr(tick, "_INDEX_POLL_INTERVAL_S", 0)  # don't actually sleep in the test
@@ -1144,6 +1167,7 @@ def test_send_and_await_send_failure_returns_send_failed_and_writes_nothing(isol
     unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
     agent_state = AgentState()
 
+    _allow_simulate(monkeypatch)
     monkeypatch.setattr(tick, "_walletctl_send", lambda tx_path, *, tier, provider: (None, "boom"))
 
     executed, outcome, tx_hash = tick._send_and_await(
@@ -1163,6 +1187,7 @@ def test_revert_streak_gate_blocks_after_on_revert_count_reverts(isolated_home, 
     unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
     agent_state = AgentState()
 
+    _allow_simulate(monkeypatch)
     monkeypatch.setattr(tick, "_walletctl_send", lambda tx_path, *, tier, provider: ("0x" + "ee" * 32, None))
     monkeypatch.setattr(
         tick, "_walletctl_receipt", lambda tx_hash: {"status": "reverted", "blockNumber": "0x64", "actualCostWei": "1"}
@@ -1187,6 +1212,291 @@ def test_revert_streak_gate_blocks_after_on_revert_count_reverts(isolated_home, 
     revert_verdict = next(v for v in report.verdicts if v.gate == "revert_streak")
     assert revert_verdict.status is GuardStatus.ESCALATE
     assert report.decision is guard_mod.Decision.ESCALATE
+
+
+# --------------------------------------------------------------------------------------
+# SIMULATE FIX — `tick.py` never called `walletctl simulate` before sending, so a tx that
+# would revert burned real gas to find out instead of a free eth_call. `_walletctl_simulate`
+# is the new subprocess bridge; `_send_and_await` now calls it between writing the tx file
+# and calling `_walletctl_send`. Fail-closed: an unusable simulate result (`ok is None`) is
+# treated exactly like a genuine `ok is False` revert -- both block the send.
+# --------------------------------------------------------------------------------------
+
+
+def test_walletctl_simulate_passes_tx_and_from_and_no_provider_flag(isolated_home, monkeypatch, tmp_path):
+    """CLI shape verified by hand against a real fork (see this WP's report): `simulate`
+    takes `--tx`/`--from` only -- no `--provider`, unlike `build`/`status`/`send`."""
+    captured = {}
+
+    def _fake_run_walletctl(*args, timeout=None):
+        captured["args"] = args
+        return subprocess.CompletedProcess(args, 0, stdout="function:      startResearch\nok:            true\n", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    ok, revert_reason, error = tick._walletctl_simulate(tmp_path / "tx.json", address=_LIVE_ADDR)
+
+    assert (ok, revert_reason, error) == (True, None, None)
+    assert captured["args"][0] == "simulate"
+    assert "--tx" in captured["args"] and str(tmp_path / "tx.json") in captured["args"]
+    assert "--from" in captured["args"]
+    assert captured["args"][captured["args"].index("--from") + 1] == _LIVE_ADDR
+    assert "--provider" not in captured["args"]
+
+
+def test_walletctl_simulate_parses_ok_false_and_revert_reason(isolated_home, monkeypatch, tmp_path):
+    """The exact scenario reproduced live on the Anvil fork: `startResearch(664, 0)`
+    simulated as `ok: false` with a decoded `InsufficientResources` revert."""
+
+    def _fake_run_walletctl(*args, timeout=None):
+        return subprocess.CompletedProcess(
+            args, 1, stdout="function:      startResearch\nok:            false\nrevert reason: InsufficientResources(6798, 1874, 4444)\n", stderr=""
+        )
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    ok, revert_reason, error = tick._walletctl_simulate(tmp_path / "tx.json", address=_LIVE_ADDR)
+
+    assert ok is False
+    assert revert_reason == "InsufficientResources(6798, 1874, 4444)"
+    assert error is None
+
+
+def test_walletctl_simulate_missing_address_fails_closed_without_shelling_out(tmp_path, monkeypatch):
+    def _boom(*args, timeout=None):
+        raise AssertionError("must not shell out when no wallet address is available")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _boom)
+    ok, revert_reason, error = tick._walletctl_simulate(tmp_path / "tx.json", address=None)
+
+    assert ok is None
+    assert revert_reason is None
+    assert error is not None and "address" in error.lower()
+
+
+def test_walletctl_simulate_unreachable_fails_closed(tmp_path, monkeypatch):
+    """`walletctl` itself could not be run (timeout) -- must NOT be treated as "fine,
+    proceed" (AGENTS.md §5)."""
+
+    def _boom(*args, timeout=None):
+        raise subprocess.TimeoutExpired(cmd="walletctl simulate", timeout=60)
+
+    monkeypatch.setattr(tick, "_run_walletctl", _boom)
+    ok, revert_reason, error = tick._walletctl_simulate(tmp_path / "tx.json", address=_LIVE_ADDR)
+
+    assert ok is None
+    assert revert_reason is None
+    assert error is not None and "could not be run" in error
+
+
+def test_walletctl_simulate_non_zero_exit_with_no_ok_line_fails_closed(tmp_path, monkeypatch):
+    """A crash before `simulate` ever printed an `ok:` line (e.g. a thrown error in the
+    CLI) -- `veydrift-wallet/src/cli.ts`'s own catch block prints `simulate failed: ...`
+    to stderr and exits 1, with no stdout at all."""
+
+    def _fake_run_walletctl(*args, timeout=None):
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="simulate failed: could not fetch live runtime-config\n")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    ok, revert_reason, error = tick._walletctl_simulate(tmp_path / "tx.json", address=_LIVE_ADDR)
+
+    assert ok is None
+    assert revert_reason is None
+    assert error is not None and "no parseable" in error
+
+
+def test_walletctl_simulate_unparseable_output_fails_closed(tmp_path, monkeypatch):
+    """Output that doesn't match the expected plain-text shape at all (e.g. a future CLI
+    change, or stdout truncated) must also fail closed, not be silently read as success."""
+
+    def _fake_run_walletctl(*args, timeout=None):
+        return subprocess.CompletedProcess(args, 0, stdout="some unexpected garbage\nno ok line here\n", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    ok, revert_reason, error = tick._walletctl_simulate(tmp_path / "tx.json", address=_LIVE_ADDR)
+
+    assert ok is None
+    assert revert_reason is None
+    assert error is not None
+
+
+def test_send_and_await_simulate_revert_prevents_send(isolated_home, monkeypatch):
+    """Requirement 1: a failed simulation must prevent the send entirely."""
+    policy = _economy_policy()
+    action = _build_action()
+    unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    agent_state = AgentState()
+    guard_report = GuardReport(decision=Decision.ALLOW, verdicts=[])
+
+    monkeypatch.setattr(
+        tick, "_walletctl_simulate", lambda *a, **kw: (False, "InsufficientResources(6798, 1874, 4444)", None)
+    )
+
+    def _send_should_not_be_called(*a, **kw):
+        raise AssertionError("walletctl send must never be called when simulate reports failure")
+
+    monkeypatch.setattr(tick, "_walletctl_send", _send_should_not_be_called)
+
+    executed, outcome, tx_hash = tick._send_and_await(
+        policy,
+        agent_state,
+        action,
+        unsigned_tx,
+        _healthy_snapshot(),
+        datetime.now(UTC),
+        gas_cost_wei_estimate=1_000_000,
+        wallet_address=_LIVE_ADDR,
+        guard_report=guard_report,
+    )
+
+    assert (executed, outcome, tx_hash) == (False, "simulation_failed", None)
+    assert agent_state.pending is None
+    assert agent_state.executions_count == 0
+    assert agent_state.revert_counts == {}  # NOT a real revert -- nothing was submitted
+    assert not log.actions_path().exists()
+
+    # Requirement 3: the revert reason reaches the logged record -- threaded through
+    # guard_report exactly like build_error already is.
+    assert guard_report.decision is Decision.ESCALATE
+    sim_verdict = next(v for v in guard_report.verdicts if v.gate == "walletctl_simulate")
+    assert sim_verdict.status is GuardStatus.ESCALATE
+    assert "InsufficientResources(6798, 1874, 4444)" in sim_verdict.detail
+
+
+def test_send_and_await_simulate_unusable_result_prevents_send(isolated_home, monkeypatch):
+    """Requirement 2: fail-closed on an unusable simulate result (could not run/parse) --
+    treated the same as a genuine failure, never as "fine, proceed"."""
+    policy = _economy_policy()
+    action = _build_action()
+    unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    agent_state = AgentState()
+    guard_report = GuardReport(decision=Decision.ALLOW, verdicts=[])
+
+    monkeypatch.setattr(tick, "_walletctl_simulate", lambda *a, **kw: (None, None, "walletctl simulate could not be run: boom"))
+
+    def _send_should_not_be_called(*a, **kw):
+        raise AssertionError("walletctl send must never be called when simulate is unusable")
+
+    monkeypatch.setattr(tick, "_walletctl_send", _send_should_not_be_called)
+
+    executed, outcome, tx_hash = tick._send_and_await(
+        policy,
+        agent_state,
+        action,
+        unsigned_tx,
+        _healthy_snapshot(),
+        datetime.now(UTC),
+        gas_cost_wei_estimate=1_000_000,
+        wallet_address=None,  # e.g. walletctl status never resolved an address
+        guard_report=guard_report,
+    )
+
+    assert (executed, outcome, tx_hash) == (False, "simulation_failed", None)
+    assert agent_state.pending is None
+    assert not log.actions_path().exists()
+    assert guard_report.decision is Decision.ESCALATE
+    sim_verdict = next(v for v in guard_report.verdicts if v.gate == "walletctl_simulate")
+    assert "boom" in sim_verdict.detail
+
+
+def test_send_and_await_without_guard_report_still_blocks_send_on_simulate_failure(isolated_home, monkeypatch):
+    """`guard_report` is optional (the direct-call unit tests above it don't pass one) --
+    confirms the None case doesn't crash and still blocks the send."""
+    policy = _economy_policy()
+    action = _build_action()
+    unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    agent_state = AgentState()
+
+    monkeypatch.setattr(tick, "_walletctl_simulate", lambda *a, **kw: (False, "some revert", None))
+    monkeypatch.setattr(tick, "_walletctl_send", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not send")))
+
+    executed, outcome, tx_hash = tick._send_and_await(
+        policy, agent_state, action, unsigned_tx, _healthy_snapshot(), datetime.now(UTC), gas_cost_wei_estimate=1_000_000
+    )
+    assert (executed, outcome, tx_hash) == (False, "simulation_failed", None)
+
+
+def test_full_tick_sequence_is_build_then_simulate_then_send(isolated_home, monkeypatch, tmp_path):
+    """The regression test this whole fix exists to leave behind: assert the RECORDED
+    CALL ORDER is build -> simulate -> send, end-to-end through `vd tick`. Before this
+    fix, `simulate` was never called at all -- 473 pre-existing tests (and two adversarial
+    judge passes) didn't catch that because none of them asserted a call was MISSING."""
+    _write_policy(tier="economy", wallet_engine={"provider": "keystore", "require_confirmation": False})
+
+    calls: list[str] = []
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: {_LIVE_ADDR})
+    monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, _LIVE_ADDR))
+
+    def _fake_build(act, **kw):
+        calls.append("build")
+        return tx, 1_000_000_000, None, built_tx_path
+
+    def _fake_simulate(tx_path, **kw):
+        calls.append("simulate")
+        return True, None, None
+
+    def _fake_send(tx_path, *, tier, provider):
+        calls.append("send")
+        return "0x" + "aa" * 32, None
+
+    monkeypatch.setattr(tick, "_walletctl_build", _fake_build)
+    monkeypatch.setattr(tick, "_walletctl_simulate", _fake_simulate)
+    monkeypatch.setattr(tick, "_walletctl_send", _fake_send)
+    monkeypatch.setattr(tick, "_walletctl_receipt", lambda tx_hash: {"status": "success", "blockNumber": "0x64", "actualCostWei": "1"})
+    monkeypatch.setattr(tick, "_await_indexed", lambda **kw: True)
+    _allow_guard(monkeypatch)
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+    assert calls == ["build", "simulate", "send"]
+
+    proposals = log.read_proposals()
+    assert proposals[0]["executed"] is True
+
+
+def test_full_tick_simulation_failure_surfaces_in_report_and_proposal(isolated_home, monkeypatch, tmp_path):
+    """Requirement 3, end-to-end: the revert reason must reach BOTH the printed tick
+    report and the logged proposals.jsonl record, not just logs/strategy.md."""
+    _write_policy(tier="economy", wallet_engine={"provider": "keystore", "require_confirmation": False})
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: {_LIVE_ADDR})
+    monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, _LIVE_ADDR))
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (tx, 1_000_000_000, None, built_tx_path))
+    monkeypatch.setattr(
+        tick, "_walletctl_simulate", lambda tx_path, **kw: (False, "InsufficientResources(6798, 1874, 4444)", None)
+    )
+
+    def _send_should_not_be_called(*a, **kw):
+        raise AssertionError("must not send when simulate reports failure")
+
+    monkeypatch.setattr(tick, "_walletctl_send", _send_should_not_be_called)
+    _allow_guard(monkeypatch)
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+    assert "SIMULATION FAILED" in result.output
+    assert "InsufficientResources(6798, 1874, 4444)" in result.output
+    assert not log.actions_path().exists()
+
+    proposals = log.read_proposals()
+    assert proposals[0]["executed"] is False
+    assert proposals[0]["send_outcome"] == "simulation_failed"
+    sim_verdicts = [v for v in proposals[0]["guard_verdicts"] if v["gate"] == "walletctl_simulate"]
+    assert len(sim_verdicts) == 1
+    assert "InsufficientResources(6798, 1874, 4444)" in sim_verdicts[0]["detail"]
+    assert proposals[0]["guard_decision"] == "escalate"
+
+    tick_files = list(log.ticks_dir().glob("*.md"))
+    assert "InsufficientResources(6798, 1874, 4444)" in tick_files[0].read_text()
 
 
 # --------------------------------------------------------------------------------------

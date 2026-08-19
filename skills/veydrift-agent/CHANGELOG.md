@@ -11,6 +11,57 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-19
+
+### Fixed
+
+- **`tick.py` never called `walletctl simulate` before sending.** `_run_walletctl(...)`
+  was only ever invoked with `build`, `status`, `receipt` and `send` — the string
+  `simulate` appeared nowhere in `src/`, despite `SKILL.md`, `AGENTS.md` and
+  `docs/SPEC.md` all documenting a `build -> simulate -> send` sequence. A tier>=2 send
+  went straight from `build` to `send` with no free `eth_call`/`estimateGas` pre-flight,
+  so a transaction that would revert burned real gas to find that out instead of costing
+  nothing. Reproduced on a local Anvil fork of Base: `startResearch(664, 0)` simulated as
+  `ok: false` / `InsufficientResources(6798, 1874, 4444)`, then `send` submitted it anyway
+  and the receipt came back `status: "reverted"`.
+
+  **Why the existing 473 unit tests (and two prior adversarial judge passes) didn't catch
+  this:** the tests that exercise `_send_and_await` and the full `_run_tick` send path all
+  monkeypatch the `walletctl` subprocess boundary and assert on the calls that *are*
+  made — a *missing* call is invisible to that style of test unless something explicitly
+  asserts the call sequence. Fixed alongside a regression test
+  (`test_full_tick_sequence_is_build_then_simulate_then_send`) that records and asserts
+  the call order itself, specifically so this class of gap surfaces again if reintroduced.
+
+  Added `_walletctl_simulate` (`tick.py`), wired into `_send_and_await` between writing
+  the tx file and calling `_walletctl_send`. `walletctl simulate --tx <file> --from
+  <address>` has no `--provider` flag (confirmed against the live CLI and the fork) and
+  its `--from` is mandatory — without it, simulate runs against a default address and
+  fails `NotPlanetOwner()` rather than reflecting the real sender. Output is plain text
+  (`ok:`/`revert reason:` lines), parsed defensively like `walletctl status` already is.
+  The wallet address now comes from a new `_walletctl_status` helper that parses both the
+  `balance:` and `address:` lines from the *same* `walletctl status` call `_run_tick`
+  already made for the `eth_floor` gate, rather than a second subprocess call per tick.
+
+  **Fail-closed, matching AGENTS.md §5's rule for absent guardrail data:** a simulate
+  result that could not be obtained or parsed at all (`walletctl` unreachable, timed out,
+  no wallet address, non-zero exit with no `ok:` line, or unparseable output) is treated
+  identically to a genuine simulated revert — both block the send. Neither is logged to
+  `actions.jsonl` or counted via `record_revert`/`executions_count` (nothing was
+  submitted, so there is no on-chain outcome to record) — this matches how a `walletctl
+  build` failure is already handled, not how a real on-chain revert is. The revert reason
+  (or the unusable-result error) is threaded into `guard_report` as a new
+  `walletctl_simulate` `GuardVerdict`, the same mechanism `build_error` already uses, so
+  it reaches both `proposals.jsonl`'s `guard_verdicts` and the printed tick report (a new
+  `!! SIMULATION FAILED` line), not just `logs/strategy.md`.
+
+  **What this is not:** it does not change tier-1 behaviour (tier 1 never reaches
+  `_send_and_await`), the allowlist, `--confirm`'s unconditional requirement, or combat
+  reachability. `AGENTS.md` §10 is updated separately to record that the
+  `build -> simulate -> send` sequence, including this fix, has now run end-to-end
+  against a local Anvil fork of Base (`startBuildingUpgrade`, `status: "success"`) — it
+  has still never run against mainnet.
+
 ## [1.1.0] - 2026-08-17
 
 Judge review of the just-completed general-strategy-engine program (`b00d8ca..f6a7c56`). Minor

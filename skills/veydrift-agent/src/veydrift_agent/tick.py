@@ -533,25 +533,133 @@ def _walletctl_build(
     return tx, gas_cost_wei, None, out_file
 
 
+def _parse_walletctl_status_lines(stdout: str) -> tuple[int | None, str | None]:
+    """Parses `walletctl status`'s plain-text stdout for both the `balance:` (-> wei) and
+    `address:` lines in a single pass -- shared by `_walletctl_eth_balance_wei` (wei only,
+    kept for its existing external contract/tests) and `_walletctl_status` (both, added
+    for the simulate fix below) so the two never drift on the same text, and so a caller
+    that needs the wallet address does not have to shell out to `status` a second time in
+    the same tick when the balance was already fetched from it."""
+    balance_wei: int | None = None
+    address: str | None = None
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("balance:"):
+            try:
+                eth_str = stripped.split(":", 1)[1].strip().split(" ")[0]
+                balance_wei = int(round(float(eth_str) * 10**18))
+            except (ValueError, IndexError):
+                balance_wei = None
+        elif stripped.startswith("address:"):
+            addr = stripped.split(":", 1)[1].strip()
+            address = addr or None
+    return balance_wei, address
+
+
 def _walletctl_eth_balance_wei(*, provider: str) -> int | None:
-    """Best-effort. `walletctl status` prints plain text (`balance: X ETH`), not JSON;
-    parsed defensively. Returns `None` (never raises) on any failure -- the caller
-    (`guard.py`'s `eth_floor` gate) already treats `None` as "cannot verify", never as
-    "the wallet has enough ETH"."""
+    """Balance-only wrapper over the same `walletctl status` parse `_walletctl_status`
+    does. **`_run_tick` no longer calls this** -- it calls `_walletctl_status` instead, to
+    get the balance and the address from one subprocess rather than two (1.1.1, the
+    simulate fix). Kept as the narrow, independently-testable unit for the balance parse
+    itself; the value it returns still feeds `guard.py`'s `eth_floor` gate via
+    `_walletctl_status`, which treats `None` as "cannot verify", never as "the wallet has
+    enough ETH"."""
     try:
         result = _run_walletctl("status", "--provider", provider, timeout=30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
+    balance_wei, _address = _parse_walletctl_status_lines(result.stdout)
+    return balance_wei
+
+
+def _walletctl_status(*, provider: str, timeout: int = 30) -> tuple[int | None, str | None]:
+    """`(eth_balance_wei, address)` from a single `walletctl status` call -- both `None`
+    on any failure (unreachable, non-zero exit), never raises. This is `_run_tick`'s only
+    call site for `walletctl status`: it replaces the bare `_walletctl_eth_balance_wei`
+    call there so the wallet address needed by `_walletctl_simulate`'s mandatory `--from`
+    (see its docstring) comes from the SAME subprocess call already being made for the
+    `eth_floor` guard gate, rather than a second one."""
+    try:
+        result = _run_walletctl("status", "--provider", provider, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None
+    if result.returncode != 0:
+        return None, None
+    return _parse_walletctl_status_lines(result.stdout)
+
+
+def _walletctl_simulate(
+    tx_path: Path, *, address: str | None, timeout: int = 60
+) -> tuple[bool | None, str | None, str | None]:
+    """`walletctl simulate --tx <file> --from <address>` -- the free `eth_call` +
+    `estimateGas` pre-flight that `_send_and_await` now runs before every real send. This
+    closes the defect this fix exists for: previously nothing under `src/` ever called
+    `simulate`, so a transaction that would revert on-chain burned real gas to find that
+    out instead of a free RPC call (reproduced live on an Anvil fork of Base sending
+    `startResearch(664, 0)`: `simulate` reported `ok: false`, revert
+    `InsufficientResources(6798, 1874, 4444)`; `send` submitted it anyway and the receipt
+    came back `status: "reverted"`).
+
+    Returns `(ok, revert_reason, error)`:
+    - `ok is True` -- simulate ran and reports the tx would succeed. Safe to send.
+    - `ok is False` -- simulate ran and reports it would revert; `revert_reason` carries
+      the decoded reason the CLI printed (e.g. `InsufficientResources(6798, 1874, 4444)`).
+    - `ok is None` -- simulate could not be run or its output could not be parsed at all
+      (`walletctl` unreachable, timed out, no wallet address, or a non-zero exit with no
+      parseable `ok:` line). Callers MUST treat this the same as `ok is False` for the
+      purpose of blocking a send -- "could not verify" is never "fine, proceed" (AGENTS.md
+      §5's fail-closed rule for a guardrail on absent data; this is that same rule applied
+      to the pre-send check). `error` carries a human-readable reason for this case only.
+
+    **No `--provider` flag** -- confirmed against the real CLI (`veydrift-wallet/src/
+    cli.ts`'s `simulate` command only declares `--tx`/`--from`) and by running it against
+    a local Anvil fork: omitting `--from` simulates from a default address and fails
+    `NotPlanetOwner()` rather than reflecting the real caller. A missing `address` is
+    therefore treated here as an immediate fail-closed *without* shelling out -- that
+    failure mode is already known well enough that spending a subprocess call to
+    rediscover it adds nothing.
+
+    Output is plain text, not JSON (confirmed against the same source: `console.log`
+    lines, not `JSON.stringify`) -- parsed defensively, the same posture
+    `_walletctl_eth_balance_wei` already takes toward `walletctl status`'s plain text.
+    Success prints `ok:            true` (plus gas/cost lines this function does not
+    need); failure prints `ok:            false` then `revert reason: <reason>` and exits
+    non-zero -- but this function reads `stdout` for the `ok:`/`revert reason:` lines
+    directly rather than trusting the exit code, since a reported revert is an expected,
+    meaningful simulate outcome (`ok is False`), not a tooling failure (`ok is None`)."""
+    if not address:
+        return (
+            None,
+            None,
+            (
+                "no wallet address available to simulate from (walletctl simulate --from is "
+                "mandatory; without it, simulate runs against a default address and fails "
+                "NotPlanetOwner instead of reflecting the real sender)"
+            ),
+        )
+    try:
+        result = _run_walletctl("simulate", "--tx", str(tx_path), "--from", address, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, None, f"walletctl simulate could not be run: {exc}"
+
+    ok: bool | None = None
+    revert_reason: str | None = None
     for line in result.stdout.splitlines():
-        if line.strip().startswith("balance:"):
-            try:
-                eth_str = line.split(":", 1)[1].strip().split(" ")[0]
-                return int(round(float(eth_str) * 10**18))
-            except (ValueError, IndexError):
-                return None
-    return None
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered.startswith("ok:"):
+            value = stripped.split(":", 1)[1].strip().lower()
+            if value in ("true", "false"):
+                ok = value == "true"
+        elif lowered.startswith("revert reason:"):
+            revert_reason = stripped.split(":", 1)[1].strip()
+
+    if ok is None:
+        detail = (result.stderr or result.stdout).strip()[:500]
+        return None, None, f"walletctl simulate produced no parseable 'ok:' line: {detail or '(empty output)'}"
+    return ok, revert_reason, None
 
 
 def _walletctl_receipt(tx_hash: str) -> dict[str, Any] | None:
@@ -994,6 +1102,14 @@ def _proposal_lines(
         lines.append("  ?? outcome UNKNOWN -- could not confirm success/revert in time; NOT counted as executed.")
     elif send_outcome == "send_failed":
         lines.append("  !! walletctl send failed -- nothing was submitted. See logs/strategy.md.")
+    elif send_outcome == "simulation_failed":
+        # The simulate-before-send fix: no gas was spent -- this is the free pre-flight
+        # check catching what `send` alone would have burned real gas to discover. Detail
+        # comes from the `walletctl_simulate` GuardVerdict `_send_and_await` appended,
+        # threaded the same way `build_error` already is.
+        sim_verdict = next((v for v in guard_report.verdicts if v.gate == "walletctl_simulate"), None)
+        detail = sim_verdict.detail if sim_verdict is not None else "walletctl simulate blocked the send"
+        lines.append(f"  !! SIMULATION FAILED -- send blocked, nothing was submitted: {detail}")
     # Fix 3: require_confirmation's printed hand-off command.
     if confirm_hint:
         lines.append(f"  {confirm_hint}")
@@ -1086,6 +1202,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
     build_error: str | None = None
     live_addresses: set[str] | None = None
     eth_balance_wei: int | None = None
+    wallet_address: str | None = None
     built_tx_path: Path | None = None
     gas_cost_wei: int | None = None
     if action.is_onchain():
@@ -1094,7 +1211,11 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
         )
         live_addresses = _live_addresses()
         if policy_model.tier is not Tier.ADVISOR:
-            eth_balance_wei = _walletctl_eth_balance_wei(provider=policy_model.wallet_engine.provider)
+            # Single `walletctl status` call serves both the `eth_floor` guard gate
+            # (balance) and `_walletctl_simulate`'s mandatory `--from` (address) -- see
+            # `_walletctl_status`'s docstring for why this replaced the old
+            # `_walletctl_eth_balance_wei`-only call here.
+            eth_balance_wei, wallet_address = _walletctl_status(provider=policy_model.wallet_engine.provider)
 
     guard_report = guard_mod.evaluate_guardrails(
         action,
@@ -1140,7 +1261,15 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
             )
         else:
             executed, send_outcome, tx_hash = _send_and_await(
-                policy_model, agent_state, action, unsigned_tx, snapshot, now, gas_cost_wei_estimate=gas_cost_wei
+                policy_model,
+                agent_state,
+                action,
+                unsigned_tx,
+                snapshot,
+                now,
+                gas_cost_wei_estimate=gas_cost_wei,
+                wallet_address=wallet_address,
+                guard_report=guard_report,
             )
 
     human_activity_record, human_activity_line = _maybe_check_human_activity(policy_model, previous_unresolved, now=now)
@@ -1193,17 +1322,38 @@ def _send_and_await(
     now: datetime,
     *,
     gas_cost_wei_estimate: int | None,
+    wallet_address: str | None = None,
+    guard_report: GuardReport | None = None,
 ) -> tuple[bool, str, str | None]:
-    """Step 7's send + status-await + indexed-wait. Returns `(executed, outcome,
-    tx_hash)` where `outcome` is one of `"success"`, `"reverted"`, `"unknown"`, or
-    `"send_failed"`. `executed` is True **only** for `"success"` -- Fix 2's core rule: a
-    reverted or unknown-outcome send is never reported, or counted in
-    `AgentState.executions_count`, as a success.
+    """Step 7's build(already done) -> simulate -> send -> status-await -> indexed-wait.
+    Returns `(executed, outcome, tx_hash)` where `outcome` is one of `"success"`,
+    `"reverted"`, `"unknown"`, `"send_failed"`, or `"simulation_failed"`. `executed` is
+    True **only** for `"success"` -- Fix 2's core rule: a reverted, unknown, or blocked
+    send is never reported, or counted in `AgentState.executions_count`, as a success.
 
-    Not exercised in this WP's own verification (no tier>=2 policy or wallet credentials
-    were configured while building/testing this package) -- implemented to spec, guarded
-    by the same ALLOW/tier/dry-run/require_confirmation checks the caller already
-    applied.
+    **The simulate step is the fix this docstring documents.** Before this change,
+    nothing under `src/` ever called `walletctl simulate` -- `send` was the first and
+    only time a proposed transaction was checked against real chain state, so a tx that
+    would revert burned real gas to find out instead of a free `eth_call` +
+    `estimateGas`. Reproduced live on an Anvil fork of Base: `startResearch(664, 0)`
+    simulated as `ok: false` / `InsufficientResources(6798, 1874, 4444)`, then `send`
+    submitted it anyway and the receipt came back `status: "reverted"`. A failed or
+    unusable simulate result (`ok` is not `True` -- see `_walletctl_simulate`'s docstring
+    for why `None` and `False` are both blocking) now prevents `_walletctl_send` from
+    ever being called, and -- mirroring exactly how `build_error` is already threaded
+    through `_run_tick` -- appends a `walletctl_simulate` `GuardVerdict` to `guard_report`
+    (when the caller supplied one; the direct-call unit tests for this function do not)
+    so the detail reaches both `proposals.jsonl`'s `guard_verdicts` and the printed tick
+    report, not just `logs/strategy.md`. A blocked-before-send is deliberately NOT logged
+    to `actions.jsonl` and does NOT call `record_revert` -- nothing was submitted, so
+    there is no on-chain outcome to record; this matches how a `walletctl build` failure
+    is already handled (an `ESCALATE` verdict, no `actions.jsonl` entry), not how a real
+    revert is.
+
+    Not exercised end-to-end against mainnet (no tier>=2 policy or wallet credentials were
+    ever configured against real mainnet funds) -- `startBuildingUpgrade` HAS now run this
+    exact path (including the new simulate step) against a local Anvil fork of Base; see
+    AGENTS.md §10 and `skills/veydrift-wallet/references/fork-testing.md`.
     """
     tmp_dir = Path(tempfile.mkdtemp(prefix="vd-tick-send-"))
     tx_file = tmp_dir / "tx.json"
@@ -1220,6 +1370,22 @@ def _send_and_await(
         )
     )
     key = guard_mod.idempotency_key(action)
+
+    sim_ok, sim_revert_reason, sim_error = _walletctl_simulate(tx_file, address=wallet_address)
+    if sim_ok is not True:
+        if sim_error is not None:
+            detail = sim_error
+        elif sim_revert_reason is not None:
+            detail = f"simulated revert: {sim_revert_reason}"
+        else:
+            detail = "walletctl simulate reported ok: false with no revert reason"
+        if guard_report is not None:
+            guard_report.verdicts.append(GuardVerdict(gate="walletctl_simulate", status=GuardStatus.ESCALATE, detail=detail))
+            if guard_report.decision is Decision.ALLOW:
+                guard_report.decision = Decision.ESCALATE
+        log.append_strategy(f"simulate blocked send for {key}: {detail}", now=now)
+        return False, "simulation_failed", None
+
     tx_hash, error = _walletctl_send(tx_file, tier=policy_model.tier, provider=policy_model.wallet_engine.provider)
     if tx_hash is None:
         log.append_strategy(f"send failed for {key}: {error}", now=now)
