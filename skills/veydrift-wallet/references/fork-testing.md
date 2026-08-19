@@ -359,6 +359,14 @@ source; whether `isCoordinateAvailable`/`occupiedCoordinates` actually flip for 
 target on send remains unverified. This is the honest remaining gap in this section, not a claim
 that Colonize is done.
 
+**Closed in round 3 (2026-08-19), §10.** A Colony Ship was produced (the account's existing
+Shipyard/Impulse Drive levels turned out to already satisfy the production prerequisite, so no
+unlock chain was needed), a real Colonize `launchFleetMission` was sent, and
+`isCoordinateAvailable`/`occupiedCoordinates` were confirmed to flip exactly for the targeted
+`(galaxy, system, position)`. See §10.5 for the before/after read and §10 generally for the full
+sequence, including a genuine `PlanetLimitReached` revert encountered along the way and the
+storage-write workaround used to get past it.
+
 ### 8.2 The two fleet-tuple encoders
 
 `tick.py`'s `_ship_counts_to_fleet_tuple` (`tick.py:347-370`) and `fleet.ts`'s
@@ -511,8 +519,190 @@ All 7 allowlisted selectors (`ECONOMY_SIGNATURES` plus both `LAUNCH_FLEET_MISSIO
 overloads, §3 above) have now been either live-sent on a fork or, for `resolveFleetMission`
 specifically, confirmed correct by source where no real mission existed to exercise it live. What
 remains untouched by this system, mainnet included: **mainnet itself** — nothing here has ever
-submitted a transaction to the real chain (`docs/SPEC.md` §11, `README.md`'s status section) — and
+submitted a transaction to the real chain (`docs/SPEC.md` §11, `README.md`'s status section).
+
+**Both caveats below this line were closed in round 3 (2026-08-19, §10) — kept here, struck
+through in spirit but not in text, for the same "reconstructed once" provenance reason
+`docs/COVERAGE.md` gives for its own struck-through rows.** At the time round 2 finished:
 Colonize's slot-claiming behavior specifically (§8.1's remaining gap: the mission-type encoding is
 covered by this section's general Transport/7-arg confirmation, since Colonize shares the same two
 overloads, but no Colonize mission was actually sent this round, so whether a well-formed target
-actually flips `isCoordinateAvailable`/`occupiedCoordinates` on send is still open).
+actually flips `isCoordinateAvailable`/`occupiedCoordinates` on send is still open) — **now closed,
+§10.5.** `resolveFleetMission` was confirmed correct by source only, not live-sent — **now also
+live-sent, §10.4.**
+
+## 10. Round 3 (2026-08-19) — Colony Ship production and the Colonize slot-claim, live
+
+Same fork session, same account as round 2's second (multi-planet) impersonation —
+`0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1`, impersonated via `fork-impersonate`, no real key
+touched, 10 owned planets going in. This round closes both caveats §9.3 left open: Colonize's
+slot-claiming behavior on send, and `resolveFleetMission`'s live-send status.
+
+### 10.1 The Colony Ship production prerequisite — already satisfied, no unlock chain needed
+
+`VeydriftDependencies.sol:220,223` (pinned commit `701bed3578cff4d134657c714c599dbdb55a4b6a`)
+requires Shipyard ≥ 4 and Impulse Drive (Technology id 9) ≥ 3 to produce a Colony Ship (Ship id 3).
+This account's home planet (planet 23) already had Shipyard 10 and Impulse Drive 6 — confirmed via
+`GET /wallet/{addr}/research` (`technologyLevels["9"]: 6`) and `GET /wallet/{addr}/planets`
+(`keyLevels.shipyard: 10`). So the "Shipyard 1→2→3→4, Impulse Drive 0→1→2→3" grind that AGENTS.md
+§10 described as deferred/out-of-scope was **never actually necessary for this account**. This
+closes the gap by discovering it was already satisfied, not by exercising the grind — **it does
+not generalize**. A single-planet, low-tier account (the project's own
+`0x224aba5d489675a7bd3ce07786fada466b46fa0f`, planet 664, Shipyard 1) would still need the full
+unlock chain, and this round did not touch that account or that chain at all.
+
+### 10.2 `startShipProduction` for the Colony Ship — live-sent
+
+`startShipProduction(uint256,uint8,uint32)`, args `[23, 3, 1]` (planet 23, Ship id 3 = Colony Ship,
+qty 1). Built via `walletctl build --action ... --provider fork-impersonate`, gas estimate 494493.
+`walletctl simulate --tx tx.json --from 0x4e15e...` returned `ok: true`. Sent via `walletctl send
+--tx tx.json --confirm --provider fork-impersonate --tier operator` (the `VEYDRIFT_HOME=/tmp/scratch
+--tier operator` pattern from §2/`references/tx-safety.md`, to avoid the real `policy.json`'s tier
+disagreeing).
+
+tx hash: `0xbc303d4f6dfc33e69e3a8eead12f0392b05bfb1874e2e75417042de258892a82`. Receipt: `status:
+"success"`, gasUsed 473466. Decoded the emitted log's queue timestamps: start 1787178060,
+completion 1787181988 (duration 3928s).
+
+### 10.3 Settlement via the permissionless `finishShipProduction` — not part of this repo's allowlist
+
+Time-traveled past completion (`anvil_increaseTime` + `anvil_mine`, §6), then called
+`finishShipProduction(23)` directly via `cast send ... --unlocked --from 0x4e15e...` — **not**
+through `walletctl`. This selector isn't in `ECONOMY_SIGNATURES`/`LAUNCH_FLEET_MISSION_SIGNATURES`
+(`docs/COVERAGE.md`'s §1.8 lists it as a "queue-completion helper," deferred, player-callable but
+untouched by any layer of this codebase) — it's a permissionless settlement call anyone can trigger,
+correctly out of scope for this repo's allowlist by design, not a gap this round is trying to close.
+
+tx hash `0x1a5d1fd4e4ba47f1e45375d488ac0d932e6876a140f7461061061acec2243a1c`, `status: 1 (success)`.
+Confirmed via `cast call ... "shipCount(uint256,uint8)(uint256)" 23 3` → `1`. The account now
+genuinely owns a Colony Ship on-chain.
+
+### 10.4 `resolveFleetMission` — live-sent for the first time ever in this codebase's history
+
+Before the Colonize send itself (§10.5-10.8), the target coordinate and packed value needed to
+exist — covered next — but the resolve step is described here since it closes the specific gap
+round 2 left open.
+
+Round 2 (§9.1) could only confirm `resolveFleetMission` by reading source, since neither test
+account had an unresolved mission. This round, after the Colonize `launchFleetMission` (§10.8)
+completed its travel time (time-traveled past `arrivalAt: 1787182882`), `resolveFleetMission(uint256)`
+was sent with `args: [26480]` through the **exact same production path as every other selector** —
+`walletctl build → simulate → send --confirm --provider fork-impersonate --tier operator`, no `cast`
+shortcut this time. `simulate` returned `ok: true` (gas 1373613). Sent: tx hash
+`0xb409b6a34413a60fe0ced28a4778ed69d99c6eccde94047d23c3c1b3553002ff`, `status: "success"`, gasUsed
+1312901.
+
+This is the first time `resolveFleetMission` has gone through this codebase's own wallet path
+rather than being confirmed by reading `VeydriftColonizationModule.sol:237-240` alone. Both remain
+true and complementary: the source read explains *why* an invalid mission id is safe (silent no-op,
+not a revert), and this send confirms the selector works end-to-end for a real, valid mission
+through the production path.
+
+### 10.5 Target coordinate discovery and the Colony target encoding
+
+Scanned `isCoordinateAvailable(uint16,uint16,uint8)` (`VeydriftGame.sol:610`, `return
+!occupiedCoordinates[coordinateKey(galaxy,system,position)]`) across positions 1-14 of system
+`2:477` — the same system this account's planets 23 and 184 sit in (§5, §9.2). Positions 4, 5, 9,
+10, 11, 12, 13, 14 were available; `2:477:9` was picked.
+
+Used `veydrift_agent.tick._encode_colony_target("2:477:9")` directly (via `uv run python3`) to get
+the packed `uint256`: `57896044618658097711785492504343953926634992332820282019728792003956598496521`
+(hex `0x800000000000000000000000000000000000000000000000000000000201dd09`). §8.1 already confirmed
+this encoder's shifts/masks match `VeydriftColonizationModule.sol:472-490`'s
+`_encodeColonyTarget`/`_decodeColonyTarget` exactly, by Python-side round-trip against four
+coordinates. This round is the first time that exact packed value round-tripped through a **real
+contract call** rather than only Python-side unit math — it strengthens, rather than supersedes,
+§8.1's existing verification.
+
+### 10.6 First Colonize attempt reverted `PlanetLimitReached(uint256)` — a genuine game rule, not a bug
+
+`walletctl build`'s gas estimation failed with custom error selector `0x791438b6`. Identified by
+brute-forcing every custom error defined across the pinned contracts repo through `cast sig` until
+one matched: `PlanetLimitReached(uint256)`, defined and enforced in
+`VeydriftColonizationModule.sol:289-301`'s `_validateColonyCreation`:
+
+```solidity
+if (planetCountOf[msg.sender] >= limit) revert PlanetLimitReached(limit);
+```
+
+where `limit = 1 + _technologyLevels[msg.sender][Technology.Astrophysics]` — the exact formula
+`calc.max_planets` implements (`docs/COVERAGE.md` Part 3's `max_planets` row). This account had
+Astrophysics (Technology id 12) at level 9, giving `limit = 10`, and already owned exactly 10
+planets — genuinely at cap. Real Astrophysics research to level 10 would cost 615,700 metal /
+1,231,500 crystal / 615,700 deuterium (per `GET /wallet/{addr}/research`'s `technologies[12].cost`)
+against this account's actual ~20K metal balance — unaffordable, and orthogonal to what was being
+tested (the Colonize slot-claim mechanic, not the Astrophysics research economy).
+
+### 10.7 Working around the cap — a single, surgical `anvil_setStorageAt` write
+
+Analogous to this same runbook's existing `anvil_setBalance` gas top-up (§2/§6's spirit, not a new
+technique in kind) — test scaffolding for an orthogonal precondition, not a change to anything
+under test.
+
+Computed the storage slot for `_technologyLevels[0x4e15e...][Technology.Astrophysics]` by reading
+`forge inspect VeydriftGame storage-layout --json` (found `_technologyLevels` at slot 20, a
+`mapping(address => mapping(Technology => uint16))`), then computing `keccak256(abi.encode(owner,
+20))` for the outer mapping and `keccak256(abi.encode(uint8(12), outerSlot))` for the inner
+(`Technology.ASTROPHYSICS = 12`, per `skills/veydrift-agent/src/veydrift_agent/ids.py:72`). Read the
+slot first with `cast storage` and cross-checked the raw value (`9`) against the API-confirmed level
+**before writing anything** — confirming the slot address was correct, not guessed. Then wrote `10`
+via `cast rpc anvil_setStorageAt`, verified via both `cast storage` and `cast call
+"technologyLevel(address,uint8)(uint16)" ... 12` returning `10`. This raises the colony limit to 11,
+one above the account's then-current 10 planets — the minimum change needed to unblock the test,
+nothing more.
+
+**Everything downstream of this write — the actual Colonize send and its resolution (§10.8-10.9) —
+is the real, unmodified contract logic under test.** Only the Astrophysics precondition was
+short-circuited; the slot-claim mechanic itself was not touched or simulated in any way.
+
+### 10.8 Colonize `launchFleetMission` — live-sent after the workaround
+
+6-arg `launchFleetMission(uint256,uint256,uint8,(14-tuple),(uint128,uint128,uint128),uint256)`,
+args `[23, <packed target from §10.5>, 2 (Colonize), [0,0,0,1,0,0,0,0,0,0,0,0,0,0] (colonyShip=1 at
+tuple index 3 — id 3 needs no shift since it's below the first non-flyable id, SolarSatellite=9),
+[0,0,0] (no cargo), 0 (randomnessRequestId, required 0 for Colonize per `models.py`'s existing
+comment)]`.
+
+`walletctl simulate` returned `ok: true` (gas 1222068) — only after the Astrophysics workaround in
+§10.7, confirming the `_isPopulatedPlanetSlot` check for `2:477:9` passes at launch time too
+(`VeydriftColonizationModule.sol:313`), i.e. this is a genuinely populated slot, not just an
+unoccupied one. Sent via the same `walletctl send ... --provider fork-impersonate --tier operator`
+pattern. tx hash `0x8b633266cd30aaaa886dbafd25c2842c33cf5f34ef82a04d97c2bfa8334bc1b1`, `status:
+"success"`, gasUsed 1159457. The CLI's own decoded-args printout confirmed `colonyShip: 1` landed
+at the correct tuple slot: `{"smallCargo":0,"lightFighter":0,"recycler":0,"colonyShip":1,
+"largeCargo":0,...}` — the same tuple-slot correctness §8.2 already confirmed generally, now
+observed for `colonyShip` specifically.
+
+Decoded the `FleetMissionLaunched` event (`VeydriftGameStorage.sol:586-595`) from the receipt logs:
+`originPlanetId: 23`, `targetPlanetId: <matches the packed value from §10.5 exactly>`, `arrivalAt:
+1787182882`, `returnAt: 1787183366`, `randomnessRequestId: 0`. Return data decoded to mission id
+`26480` — the mission `resolveFleetMission` resolved in §10.4.
+
+### 10.9 The actual verification — before/after state, the point of this whole exercise
+
+Before the resolve (§10.4): `isCoordinateAvailable(2,477,9)` → `true`, `planetCountOf(0x4e15e...)`
+→ `10`.
+
+After the resolve: `isCoordinateAvailable(2,477,9)` → `false`, `planetCountOf(0x4e15e...)` → `11`.
+
+This is the confirmation §8.1 and §9.3 both flagged as the remaining gap: a well-formed `"G:S:P"`
+target, packed by this codebase's own `_encode_colony_target`, sent through the real production
+wallet path end to end, genuinely claims the exact slot it named on the real deployed contract
+logic. This was the single most valuable unverified surface named in the original fork-testing
+plan and is now closed.
+
+### 10.10 What this closes, precisely
+
+- **Colonize's slot-claiming behavior**: closed. A well-formed target flips
+  `isCoordinateAvailable`/`occupiedCoordinates` for exactly the targeted coordinate, confirmed by
+  before/after reads around a real send and resolve (§10.9).
+- **`resolveFleetMission`**: now live-sent through the production `walletctl` path (§10.4), not
+  source-confirmed only. Both the source read (round 2, §9.1) and this live send remain valid and
+  complementary — the source read explains why an *invalid* mission id is safe; this send confirms
+  a *valid* one resolves correctly end-to-end.
+- **The Colony Ship unlock chain** (Shipyard ≥4, Impulse Drive ≥3): **not exercised** this round —
+  the test account already satisfied it. Whether the full grind (starting from Shipyard 1, Impulse
+  Drive 0, as the project's own account currently sits) actually works end-to-end remains
+  unverified. Don't read §10.1 as having closed that.
+- **Mainnet**: still untouched by this codebase, same as every round before this one
+  (`docs/SPEC.md` §11, `README.md`'s status section).

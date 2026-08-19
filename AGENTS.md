@@ -302,13 +302,7 @@ enough to call out here specifically, not a duplicate of that ledger.
   do this (see below), so a second, real, multi-planet account
   (`0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1`) was temporarily impersonated instead,
   the same no-real-key technique as every other account in this runbook.
-  `resolveFleetMission` is the one exception: it was **not** live-sent — neither account
-  has an unresolved fleet mission to resolve — and is instead confirmed correct by
-  reading `VeydriftColonizationModule.sol:237-240` directly (an invalid/nonexistent
-  mission id silently no-ops rather than reverting, by design). Be precise about what
-  "exercised" means for that selector: source-verified, not observed executing. **All 7
-  selectors are now accounted for; mainnet remains untouched by this codebase either
-  way.** Round 2 also found a previously undocumented contract rule, source-read from
+  Round 2 also found a previously undocumented contract rule, source-read from
   `VeydriftGameplayModule.sol`'s `_launchFleetMission`: Transport and Deploy additionally
   require `_requirePlanetOwner(targetPlanetId)` — the mission target must itself be a
   planet the sender owns, confirmed by reproduction (`NotPlanetOwner()`, selector
@@ -317,13 +311,38 @@ enough to call out here specifically, not a duplicate of that ledger.
   account above for Transport specifically, and it retroactively confirms
   `candidates.py`'s `generate_transport_candidates` ≥2-owned-planets precondition is the
   literal contract requirement, not an overcautious heuristic — see
-  `docs/RESEARCH-ADDENDUM.md` §4.3. **Colonize is narrower than "exercised" implies**: it
-  shares `launchFleetMission`'s two overloads (so the mission-type encoding is covered by
-  the same confirmation as Transport), but no Colonize mission was actually sent this
-  round — neither account owns a Colony Ship — so whether a well-formed colony target
-  actually flips `isCoordinateAvailable`/`occupiedCoordinates` on send remains
-  unverified, distinct from the packing/unpacking math itself, which round 2 separately
-  confirmed against source (`references/fork-testing.md` §8.1).
+  `docs/RESEARCH-ADDENDUM.md` §4.3.
+  **Round 3 (2026-08-19, `references/fork-testing.md` §10) closed both of round 2's
+  remaining caveats.** `resolveFleetMission` — round 2 could only confirm it by reading
+  `VeydriftColonizationModule.sol:237-240` (an invalid/nonexistent mission id silently
+  no-ops rather than reverting, by design), since neither test account had an unresolved
+  mission — has now been **live-sent** through the exact production `walletctl build →
+  simulate → send` path: the same impersonated multi-planet account
+  (`0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1`) produced a Colony Ship, launched a
+  Colonize mission (id `26480`), and resolved it (`status: "success"`,
+  tx `0xb409b6a34413a60fe0ced28a4778ed69d99c6eccde94047d23c3c1b3553002ff`). The source
+  read and the live send are complementary, not redundant — the source explains why an
+  *invalid* mission id is safe, the send confirms a *valid* one resolves correctly.
+  **Colonize's slot-claiming behavior is also now verified live**, not just its encoding:
+  `isCoordinateAvailable(2,477,9)` read `true`/`planetCountOf` `10` before the send, and
+  `false`/`11` after — the exact targeted coordinate, packed by this codebase's own
+  `_encode_colony_target`, genuinely claimed the slot it named on the real deployed
+  contract. Producing the Colony Ship needed no unlock chain for this account — its home
+  planet already had Shipyard 10 and Impulse Drive 6, both above the
+  `VeydriftDependencies.sol:220,223` thresholds (Shipyard ≥4, Impulse Drive ≥3) — so
+  **this does not demonstrate the unlock grind itself works**; a single-planet, low-tier
+  account (the project's own, planet 664, Shipyard 1) would still need to walk that chain
+  from scratch, and round 3 did not exercise that path. One genuine game rule surfaced
+  along the way and was worked around, not avoided: the account was already at its
+  Astrophysics-derived colony cap (`PlanetLimitReached`, `limit = 1 +
+  astrophysicsLevel = 10`, `VeydriftColonizationModule.sol:289-301`) — raising the real
+  research cost being unaffordable and orthogonal to the thing under test, a single
+  `anvil_setStorageAt` write raised the account's on-chain Astrophysics level by one,
+  analogous to this runbook's existing `anvil_setBalance` gas top-up. That write is test
+  scaffolding for an unrelated precondition; the Colonize send and resolve themselves ran
+  against real, unmodified contract logic. **All 7 selectors are now accounted for, and
+  the two round-2 caveats are closed; mainnet remains untouched by this codebase either
+  way.**
 - **`walletctl`'s tier check defends against a misconfigured caller, not a hostile one.**
   It reads tier from `$VEYDRIFT_HOME/policy.json`, but falls back to a caller-supplied
   `--tier` when no policy file exists — a process that controls its own environment can

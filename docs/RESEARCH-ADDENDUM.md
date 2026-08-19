@@ -265,6 +265,19 @@ throughout this fork-testing effort, harmless to the impersonated account since 
 local fork. Both a 6-arg Transport and a 7-arg Transport (explicit `speedPercent`) sent between two
 of that account's own planets (23 → 184) succeeded, `status: "success"` each.
 
+**Round 3 (2026-08-19) exercised Colonize on the same 6-arg overload, with the same account,
+closing the one mission type §4.3/§4.4 hadn't yet reached live.** A Colony Ship was produced
+(planet 23 already had Shipyard 10 and Impulse Drive 6, both above the production thresholds — no
+unlock chain needed for this account specifically), then a Colonize `launchFleetMission` was sent
+to a scanned-available coordinate (`2:477:9`), and `resolveFleetMission` resolved it — the first
+time that selector has been live-sent by this codebase rather than confirmed by source alone.
+`isCoordinateAvailable(2,477,9)`/`planetCountOf` read `true`/`10` before the send and `false`/`11`
+after, confirming the exact targeted slot was claimed. One real game rule was hit and worked
+around along the way (the account was already at its Astrophysics-derived colony cap,
+`PlanetLimitReached`; a single `anvil_setStorageAt` write bumped the on-chain Astrophysics level by
+one to unblock the test — scaffolding for that unrelated precondition, not a change to the
+Colonize logic itself). Full sequence: `skills/veydrift-wallet/references/fork-testing.md` §10.
+
 ### 4.4 Fuel formula, distance, and ship-movement-stats — confirmed against a real chain-emitted event
 
 New (2026-08-19, fork-testing round 2). `calc.distance`, `calc.ship_movement_stats`, and
@@ -287,6 +300,21 @@ using those same inputs: **10**. Exact match — the first time this codebase's 
 formulas have been confirmed against a real chain observation rather than merely derived from
 contract source. Full command sequence:
 `skills/veydrift-wallet/references/fork-testing.md` §8.3.
+
+### 4.5 Colony-target packing — now round-tripped through a real send, not just Python-side math
+
+`tick.py`'s `_encode_colony_target` was previously verified only by reimplementing
+`VeydriftColonizationModule.sol:472-490`'s `_encodeColonyTarget`/`_decodeColonyTarget` shifts/masks
+in Python and round-tripping four coordinates against that reimplementation
+(`skills/veydrift-wallet/references/fork-testing.md` §8.1) — correct against source, but never
+exercised against the actual contract. Round 3 (2026-08-19,
+`skills/veydrift-wallet/references/fork-testing.md` §10.5) sent the packed value
+`_encode_colony_target("2:477:9")` produces
+(`57896044618658097711785492504343953926634992332820282019728792003956598496521`) as the real
+`targetPlanetId` argument of a live Colonize `launchFleetMission`, and confirmed via before/after
+`isCoordinateAvailable`/`planetCountOf` reads that it claimed exactly the `2:477:9` slot. This
+strengthens the existing verification rather than superseding it — the Python-side round-trip
+against source still stands as the check for coordinates never actually sent on a fork.
 
 ---
 
