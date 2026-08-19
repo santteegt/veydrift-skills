@@ -80,7 +80,7 @@ Then, per command:
 
 ```bash
 walletctl build --action action.json --tier operator --out tx.json
-walletctl simulate --tx tx.json
+walletctl simulate --tx tx.json --from "$VEYDRIFT_FORK_IMPERSONATE_ADDRESS"
 walletctl send --tx tx.json --confirm --provider fork-impersonate --tier operator
 walletctl receipt --hash 0x...
 ```
@@ -89,6 +89,12 @@ walletctl receipt --hash 0x...
 `--from` is omitted) and on `send` (who signs). **`simulate` and `receipt` have no `--provider`
 flag at all** — `simulate` takes `--from` directly (`src/cli.ts:238`), and `receipt` takes only
 `--hash` (`src/cli.ts:316-318`); neither needs a signer.
+
+**`--from` on `simulate` is not optional in practice.** Omit it and the simulation runs against a
+default zero-ish address instead of the impersonated one — every `simulate` reverted with
+`NotPlanetOwner()` in testing until `--from` was added, even though the *built* transaction was
+perfectly fine. `veydrift-agent`'s own tier≥2 path (`tick.py`'s `_walletctl_simulate`, added in
+`1.1.1`) always passes `--from`; do the same by hand here.
 
 Sanity-check the setup before building anything:
 
@@ -162,8 +168,8 @@ address for both scenarios, rather than finding a second empty account, means bo
 reproducible and directly comparable: the only variable between them is the fork's block, not the
 account.
 
-- **Advanced/current state** — fork `latest` (or any recent block). Probed 2026-08-17 **from the
-  contract, not the API** (see the caveat below for why that distinction matters here):
+- **Advanced/current state** — fork `latest` (or any recent block). Probed 2026-08-17 against
+  the contract:
 
   ```bash
   GAME=0xf397910F005151b09644228573a4353818D3755d
@@ -181,21 +187,28 @@ account.
   | Shipyard | 1 | | | |
   | Research Lab | 1 | | | |
 
-  **Read levels from the contract, not from `/wallet/{addr}/planets`, when setting up a fork
-  run.** These were first drafted from the API, which reported Robotics Factory **3** where
-  `buildingLevel(664, 4)` returns **2** — most likely an in-flight construction or an indexer
-  slightly ahead of settled state. A fork serves *contract* state, so an API-derived expectation
-  will disagree with the fork at exactly the moment you are trying to work out whether your
-  transaction did what you meant. The discrepancy is not a bug in either source; they answer
-  subtly different questions.
+  **Prefer the API's effective level over a raw `buildingLevel()` read when predicting what the
+  chain will do next — this is a real finding from the first fork run, not a guess.** The raw
+  contract read above showed Robotics Factory **2**; `GET /wallet/{addr}/planets` reported **3**.
+  Neither was wrong: the contract had a completed-but-unsettled Robotics 2→3 upgrade sitting in
+  its queue (lazy settlement — the level in storage doesn't advance until *something* touches the
+  planet), while the API resolves and reports the *effective* level as if settled. Sending our own
+  `startBuildingUpgrade(664, 0)` on the fork settled the pending Robotics upgrade first as a side
+  effect, and the Metal Mine build duration the contract then computed used Robotics **3**,
+  confirmed by `calc.build_seconds(robotics=3, ...)` matching the observed 1556s exactly (`calc.build_seconds(robotics=2, ...)` does not).
+  So: a raw `buildingLevel()` call can under-report a level that is about to apply the moment you
+  send anything, and an expectation set from that raw read will be wrong by exactly one completed
+  upgrade. Use the API's `/planets`/`/research` routes to know what level a transaction will
+  actually be costed/timed against; use a raw `cast call` only when you specifically want to see
+  whether something is still sitting unsettled in the queue.
 
   This is the account this project is built around, played **by hand through the game UI** — not
   a stranger's wallet, and not one this codebase drives: nothing here has ever submitted a
   transaction (`docs/SPEC.md` §11, `README.md`'s status section). Because a human plays it,
-  levels drift over real time regardless of anything in this repo. Re-probe before relying on a
-  specific level as a test precondition, and treat the table as "known non-zero, known shape"
-  rather than a frozen fixture. Pin `--fork-block-number` for any run whose numbers you intend
-  to write down.
+  levels drift over real time regardless of anything in this repo, and a pending unsettled
+  upgrade can exist at any moment as shown above. Re-probe before relying on a specific level as a
+  test precondition, and treat the table as "known non-zero, known shape" rather than a frozen
+  fixture. Pin `--fork-block-number` for any run whose numbers you intend to write down.
 
 - **Zero (or near-zero) state** — the *same* address, at a fork pinned to
   `--fork-block-number 50108632` or a small number of blocks after. That is the block of this
@@ -235,7 +248,7 @@ Then observe settlement through **`simulate`, never `send`**:
 
 ```bash
 walletctl build --action collect.json --out collect-tx.json   # collectResources(planetId)
-walletctl simulate --tx collect-tx.json
+walletctl simulate --tx collect-tx.json --from "$VEYDRIFT_FORK_IMPERSONATE_ADDRESS"
 ```
 
 `collectResources` is on `NONPAYABLE_READ_FUNCTIONS` (`src/abi.ts:204-211`) — it is `nonpayable` in
