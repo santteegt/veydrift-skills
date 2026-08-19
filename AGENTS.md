@@ -278,7 +278,21 @@ enough to call out here specifically, not a duplicate of that ledger.
   remains true: this has never run against **mainnet**, and only one selector
   (`startBuildingUpgrade`) has been exercised this way — most are still unexercised. If
   you're the one who runs a different selector through this path for the first time,
-  budget extra scrutiny there, the same way this one earned it.
+  budget extra scrutiny there, the same way this one earned it. That same fork-testing
+  effort has since found a second, related defect in `simulate` itself: `simulateTx`
+  (`skills/veydrift-wallet/src/tx.ts`) ran its `eth_call` uncapped, against the node's
+  block gas limit rather than `tx.gas` (the figure `send` actually submits) — so
+  `simulate` could report `ok: true` for a call that would revert `OutOfGas` once sent at
+  its real gas limit. Reproduced live: a `startResearch` call on real accumulated state
+  (planet 664) built at gas limit 465588, simulated `ok: true` pre-fix, was sent at that
+  same limit, and reverted `OutOfGas` after genuinely executing most of its settlement
+  sweep; the identical calldata resent at 931176 (2x) succeeded, proving a pure gas
+  shortfall. Fixed by capping `simulate`'s `eth_call` at `tx.gas` (or a freshly-fetched,
+  validated-against estimate when `tx.gas` isn't yet known) — see
+  `skills/veydrift-wallet/references/tx-safety.md` and `references/fork-testing.md` §8.4.
+  This closes the gap in the *simulate mechanism* specifically; it is not a claim that
+  gas estimation is now always sufficient, only that an insufficient estimate is now
+  caught before send rather than after.
 - **`walletctl`'s tier check defends against a misconfigured caller, not a hostile one.**
   It reads tier from `$VEYDRIFT_HOME/policy.json`, but falls back to a caller-supplied
   `--tier` when no policy file exists — a process that controls its own environment can

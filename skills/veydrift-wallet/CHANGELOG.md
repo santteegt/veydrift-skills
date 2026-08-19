@@ -11,6 +11,43 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-19
+
+### Fixed
+- **`simulateTx` (`src/tx.ts`) capped its `eth_call` at the gas that will actually be sent,
+  instead of running uncapped against the node's block gas limit.** Previously, `simulate`'s `ok`
+  verdict came from an `eth_call` with no `gas` field at all — a separate, fresh `estimateGas()`
+  was fetched immediately after, but only ever surfaced as `SimulateResult.gas`/`estimatedCostWei`
+  reporting metadata, never validated against or used to cap the call that decided `ok`. So
+  `simulate` answered "would this succeed given unlimited gas," not "will the transaction that
+  actually gets sent succeed" — and every provider's `signAndSend` passes `tx.gas` through
+  verbatim (`providers/keystore.ts`, `envkey.ts`, `fork-impersonate.ts`), so those two questions
+  can have different answers.
+
+  Confirmed live on an Anvil fork of Base, real account, planet 664: a `startResearch` call built
+  at an estimated gas limit of 465588 (`walletctl build`) simulated `ok: true` (pre-fix, uncapped),
+  was sent at that same 465588 limit (`send` always submits `tx.gas` verbatim), and reverted
+  `OutOfGas` after genuinely executing most of a `_settleResearchDue` settlement sweep
+  (`VeydriftPlanetManagementModule.sol:330`). The identical calldata resent at 931176 (2x) against
+  the same fork state succeeded, proving the failure was a pure gas shortfall, not a logic bug.
+  `startBuildingUpgrade`, `startShipProduction`, and `startDefenseProduction` all succeeded cleanly
+  earlier in the same fork session — not a defect in every selector, but a real one for any call
+  whose settlement sweep is unexpectedly wide, which only shows up against real, accumulated
+  on-chain state.
+
+  Fixed: `simulateTx` now caps `client.call()` at `tx.gas` when it's known; when it isn't
+  (`build` ran without `--from`, or its own estimate failed), it fetches a fresh estimate and
+  validates the call against that same figure instead of leaving the call uncapped — a failed
+  fallback estimate now propagates as `ok: false` rather than falling through to an unbounded
+  call, per this project's fail-closed-on-absent-data rule (`AGENTS.md` §5). The separately-fetched
+  `estimateGas()` used for `SimulateResult.gas`/`estimatedCostWei` reporting is unchanged.
+  `SimulateResult`'s shape is unchanged — only its accuracy. No Python change was required;
+  `veydrift-agent`'s `_walletctl_simulate` (`tick.py`, added `1.1.1`) just parses `simulateTx`'s
+  `ok`/`revert reason` output and inherits the fix automatically (confirmed: 484 Python tests
+  still pass unmodified).
+  See `references/tx-safety.md` and `references/fork-testing.md` §8.4 for the full detail, and
+  `AGENTS.md` §10 for how this was found.
+
 ## [0.4.0] - 2026-08-17
 
 ### Added

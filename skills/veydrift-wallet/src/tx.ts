@@ -304,12 +304,34 @@ export async function simulateTx(
   const fn = functionsForSelector(selector)[0];
 
   try {
+    // The `ok` verdict must reflect what `send` will actually submit, not an unlimited-gas
+    // hypothetical. Every provider passes `tx.gas` to the chain verbatim (`providers/keystore.ts`,
+    // `envkey.ts`, `fork-impersonate.ts` all set `gas: tx.gas`) -- so a call that only succeeds
+    // with more gas than that is not a call that will succeed when actually sent. This was
+    // confirmed live on an Anvil fork of Base: a `startResearch` call whose settlement sweep
+    // was wider than `eth_estimateGas` accounted for simulated `ok: true` uncapped, was sent at
+    // the estimated gas limit (465588), and reverted `OutOfGas` -- see references/tx-safety.md.
+    //
+    // When `tx.gas` isn't known yet (`build` ran without `--from`, or its own estimate failed),
+    // fall back to a fresh estimate here and validate the call against *that* figure instead --
+    // never leave the call uncapped (AGENTS.md §5: a guardrail must not pass vacuously on absent
+    // data). If that fallback estimate itself fails, the failure propagates as `ok: false` below
+    // rather than falling through to an uncapped call: a call `eth_estimateGas` can't even
+    // estimate for is already evidence it wouldn't succeed, and "cannot verify" must never
+    // become "assume it's fine."
+    const gasLimit =
+      tx.gas ?? (await client.estimateGas({ account: opts.from, to: tx.to, data: tx.data, value: tx.value }));
+
     const callResult = await client.call({
       account: opts.from,
       to: tx.to,
       data: tx.data,
       value: tx.value,
+      gas: gasLimit,
     });
+    // A separate, fresh estimate -- kept as the source for the `gas`/`estimatedCostWei`
+    // reporting fields (consumed downstream by guard.py's `gas`/`eth_floor` gates), independent
+    // of whatever gas figure the call above was capped at.
     const gas = await client
       .estimateGas({ account: opts.from, to: tx.to, data: tx.data, value: tx.value })
       .catch(() => undefined);

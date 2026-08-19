@@ -270,7 +270,7 @@ plain ETH transfer — it proves the impersonate → setBalance → eth_sendTran
 plumbing works without depending on any live Veydrift game state. It is a separate, smaller check
 from everything in §3-6 above, which exercises real game selectors against real game state.
 
-## 8. Three verifications worth doing beyond the per-selector sweep
+## 8. Four verifications worth doing beyond the per-selector sweep
 
 Each of these is a pass/fail finding in its own right — a formula or encoder that has only ever
 been checked against itself, not against the contract's actual behavior.
@@ -313,3 +313,39 @@ used only for same-planet Harvest missions, where `calc.distance` is undefined f
 coordinates. A mismatch there specifically is a finding about an unverified constant, not a test
 bug — if it disagrees with the real fuel spend, that is exactly what this runbook exists to catch,
 and it should be fixed at the source (`guard.py`), not patched around here.
+
+### 8.4 `simulateTx`'s `ok` verdict, capped at the gas that will actually be sent
+
+`simulateTx` (`src/tx.ts`) used to run its `eth_call` uncapped — against the node's block gas
+limit, not against `tx.gas` (the number `walletctl build` already estimated and the exact number
+`send` submits verbatim). A separate, fresh `estimateGas()` was fetched right after, but only ever
+returned as reporting metadata; nothing validated it against `tx.gas`, and nothing replayed the
+call capped at it. `simulate` was answering "would this succeed given unlimited gas," not "will
+the transaction that actually gets sent succeed" — and, like the defects this fork-testing effort
+exists to surface, this is exactly the kind of gap that only shows up against real, accumulated
+on-chain state, not a zero-state test account.
+
+Confirmed on this fork, planet 664, real account `0x224aba5d489675a7bd3ce07786fada466b46fa0f`:
+
+1. `walletctl build --action <startResearch action> --provider fork-impersonate --out tx.json`
+   produced `tx.gas = 465588`.
+2. `walletctl simulate --tx tx.json --from <address>` returned `ok: true` (pre-fix, uncapped call).
+3. `walletctl send --tx tx.json --confirm --provider fork-impersonate --tier operator` submitted it
+   at gas limit 465588 (`cast tx <hash>` confirmed `gasLimit 465588`, matching `tx.json` exactly).
+   **Receipt: `status: "reverted"`.**
+4. `cast run <hash>` traced the failure: the call genuinely executed `PlanetSettled`, a
+   `completeAttackTargetSnapshotQueues` sweep across several nested delegatecalls, and emitted
+   `ResearchQueued` — then hit `[OutOfGas] EvmError: OutOfGas`, reverting the whole transaction.
+5. Resending the identical calldata at gas limit 931176 (2x) against the same fork state
+   succeeded — `status: 1`, and `technologyLevel` confirmed the research level advanced — proving
+   the failure was purely a gas shortfall, not a logic bug.
+
+`startBuildingUpgrade`, `startShipProduction`, and `startDefenseProduction` all succeeded cleanly
+earlier in this same fork session with no gas issue; this is not a general defect in every
+selector, but a real one for any call whose settlement sweep is wider than `eth_estimateGas`'s
+search happened to account for — `startResearch`'s `_settleResearchDue`
+(`VeydriftPlanetManagementModule.sol:330`) pulls in a wide sweep when multiple things are due at
+once. `simulateTx` now caps its `eth_call` at `tx.gas` (falling back to, and validating against, a
+fresh estimate when `tx.gas` isn't yet known) — see `references/tx-safety.md`'s new section for the
+mechanism, `tests/tx.test.ts`'s `simulateTx` block for the regression coverage, and
+`CHANGELOG.md`'s `[Unreleased]` entry for the fix itself.

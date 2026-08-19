@@ -215,6 +215,77 @@ describe("simulateTx", () => {
     expect(result.maxFeePerGas).toBe(5_000_000n);
     expect(result.estimatedCostWei).toBe(80_000n * 5_000_000n);
   });
+
+  it("caps client.call at tx.gas -- FIX: a call that only succeeds uncapped must report ok:false", async () => {
+    // Mirrors the real defect, reproduced live on an Anvil fork of Base: `startResearch`'s
+    // settlement sweep succeeded against the node's block gas limit but reverted OutOfGas when
+    // actually sent at the estimated 465588 gas limit (succeeded again at 931176, 2x). A mock
+    // that ignored the `gas` argument entirely would report ok:true either way and would NOT
+    // have caught this -- this one only succeeds when the call is not capped at-or-below
+    // tx.gas, so it fails against the pre-fix implementation (which never passed `gas` at all)
+    // and passes against the fix.
+    const fn = resolveFunctionAbi("startResearch(uint256,uint8)");
+    const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, 0] });
+    const tx: UnsignedTx = { to: GAME_ADDRESS, data, value: 0n, chainId: 8453, gas: 465_588n };
+
+    const call = vi.fn().mockImplementation(async (args: { gas?: bigint }) => {
+      if (args.gas !== undefined && args.gas <= 465_588n) {
+        throw new Error("execution reverted: out of gas");
+      }
+      return { data: "0x" };
+    });
+    const client = mockClient({ call });
+    const result = await simulateTx(tx, { client });
+
+    expect(result.ok).toBe(false);
+    expect(result.revertReason).toMatch(/out of gas/);
+    expect(result.functionName).toBe("startResearch");
+  });
+
+  it("invokes client.call with gas: tx.gas when tx.gas is set", async () => {
+    const fn = resolveFunctionAbi("settlePlanet(uint256)");
+    const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n] });
+    const tx: UnsignedTx = { to: GAME_ADDRESS, data, value: 0n, chainId: 8453, gas: 200_000n };
+
+    const call = vi.fn().mockResolvedValue({ data: "0x" });
+    const client = mockClient({ call });
+    const result = await simulateTx(tx, { client });
+
+    expect(result.ok).toBe(true);
+    expect(call).toHaveBeenCalledWith(expect.objectContaining({ gas: 200_000n }));
+  });
+
+  it("when tx.gas is undefined, falls back to a fresh estimateGas and validates the call against it", async () => {
+    const fn = resolveFunctionAbi("settlePlanet(uint256)");
+    const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n] });
+    const tx: UnsignedTx = { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 }; // no tx.gas
+
+    const estimateGas = vi.fn().mockResolvedValue(50_000n);
+    const call = vi.fn().mockImplementation(async (args: { gas?: bigint }) => {
+      if (args.gas === undefined) throw new Error("would only succeed if left uncapped");
+      return { data: "0x" };
+    });
+    const client = mockClient({ call, estimateGas });
+    const result = await simulateTx(tx, { client });
+
+    expect(result.ok).toBe(true);
+    expect(call).toHaveBeenCalledWith(expect.objectContaining({ gas: 50_000n }));
+  });
+
+  it("when tx.gas is undefined and the fallback estimateGas itself fails, reports ok:false without ever calling client.call uncapped", async () => {
+    const fn = resolveFunctionAbi("settlePlanet(uint256)");
+    const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n] });
+    const tx: UnsignedTx = { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 }; // no tx.gas
+
+    const call = vi.fn().mockResolvedValue({ data: "0x" }); // would "succeed" if ever invoked
+    const estimateGas = vi.fn().mockRejectedValue(new Error("execution reverted: cannot estimate"));
+    const client = mockClient({ call, estimateGas });
+    const result = await simulateTx(tx, { client });
+
+    expect(result.ok).toBe(false);
+    expect(result.revertReason).toMatch(/cannot estimate/);
+    expect(call).not.toHaveBeenCalled();
+  });
 });
 
 describe("getReceipt", () => {

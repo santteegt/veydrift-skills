@@ -201,6 +201,29 @@ what a function is:
   tries to select it by bare name. By the time a tx reaches `send`, the selector already
   unambiguously identifies one of the two real overloads.
 
+## `simulate`'s `ok` verdict reflects the gas that will actually be sent, not an unlimited-gas hypothetical
+
+`simulateTx` (`src/tx.ts`) caps its `eth_call` at the same gas figure `send` will actually submit —
+`tx.gas` when the tx was built with one, otherwise a fresh `estimateGas()` fetched and validated
+against on the spot. It does **not** run the call uncapped and treat a separately-fetched estimate
+as merely advisory metadata; a call that only succeeds given more gas than what's actually sent is
+not a call that will succeed, and `ok: true` under those conditions was a bug (fixed in `0.4.1`),
+not a permissive design choice.
+
+This matters because `eth_estimateGas`'s own search for a sufficient limit can itself undershoot,
+and the resulting shortfall only shows up once a wide *settlement sweep* runs — not on a typical
+call. Confirmed live on an Anvil fork of Base: a `startResearch` call on a real, accumulated
+account (planet 664, several things due for lazy settlement at once) built at an estimated gas
+limit of 465588, simulated `ok: true` against the pre-fix uncapped `eth_call`, was sent at that
+same 465588 limit (`send` always submits `tx.gas` verbatim — every provider passes it through
+unchanged), and reverted `OutOfGas` after genuinely executing most of the settlement sweep. The
+identical calldata resent at 931176 (2x) against the same fork state succeeded, proving the failure
+was purely a gas shortfall, not a logic bug. `startBuildingUpgrade`, `startShipProduction`, and
+`startDefenseProduction` all succeeded cleanly in the same fork session — this is not a general
+defect in every selector, just in any call whose settlement sweep is unexpectedly wide, which a
+zero-state test account would never surface. See `references/fork-testing.md` §8.4 for the full
+repro with exact numbers, and `AGENTS.md` §10 for how this was found.
+
 ## What this engine deliberately does not do
 
 - It never decides *when* to send — that's a human, or `veydrift-agent`'s tier-gated proposal flow,
