@@ -1921,7 +1921,14 @@ def generate_transport_candidates(
     picks the single largest-surplus resource and moves only that one).
 
     Never scored (`score=None`): this is a logistics opportunity, not a
-    `calc.production_per_hour`-comparable investment (module docstring's scoring rule)."""
+    `calc.production_per_hour`-comparable investment (module docstring's scoring rule).
+
+    The `destinations` filter below (requiring another owned planet) is not just a planner
+    heuristic -- it mirrors an actual contract requirement, confirmed live 2026-08-19:
+    `VeydriftGameplayModule.sol`'s `_launchFleetMission` requires
+    `_requirePlanetOwner(targetPlanetId)` for Transport and Deploy specifically, so sending
+    a Transport to a planet the wallet doesn't own reverts `NotPlanetOwner()` regardless of
+    what this filter does. See `docs/RESEARCH-ADDENDUM.md` §4.3."""
     if not policy.actions.allow_fleet_noncombat or planet.coordinates is None:
         return []
     destinations = [p for p in target_planets if p.planet_id != planet.planet_id and p.coordinates]

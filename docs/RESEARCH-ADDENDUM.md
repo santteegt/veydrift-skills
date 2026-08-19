@@ -228,6 +228,66 @@ launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),
 Both live on the deployed ABI. viem and ethers both require explicit signature disambiguation;
 selecting by name alone is ambiguous and will throw or pick the wrong one.
 
+### 4.3 Trap — Transport and Deploy require the target to also be an owned planet
+
+New (2026-08-19, fork-testing round 2 — `skills/veydrift-wallet/references/fork-testing.md` §9).
+Not previously documented anywhere in this repo. Read directly from source,
+`VeydriftGameplayModule.sol`'s `_launchFleetMission`, immediately after the `_missionMovement`
+call:
+
+```solidity
+if (missionType == FleetMissionType.Transport || missionType == FleetMissionType.Deploy) {
+    _requirePlanetOwner(targetPlanetId);
+}
+```
+
+Confirmed by reproduction, not just by reading: building a Transport `launchFleetMission` from the
+project's own planet 664 to a real, populated third-party-owned planet (id 23) reverted
+`NotPlanetOwner()` (selector `0xab2bcfd3`) — both at `build`'s gas-estimation step and at
+`simulate`. This is **not a bug and not a testing limitation** — it is the actual contract rule:
+Transport and Deploy are intra-empire logistics only, never point-to-point cargo between arbitrary
+players. Harvest and Colonize carry **no** such check — the `if` above is scoped to exactly those
+two mission types, confirmed by the same source read.
+
+**Direct, permanent consequence**: the project's own reference account has exactly one planet
+(`homePlanetId: "664"`, confirmed via `GET /wallet/{addr}/planets`), so it can **never** exercise
+Transport or Deploy, structurally, regardless of ship inventory or resources — not until it
+colonizes a second planet. This also retroactively validates
+`skills/veydrift-agent/src/veydrift_agent/candidates.py`'s `generate_transport_candidates`
+requiring ≥2 owned planets before proposing Transport (`candidates.py:1913-1930`) — that
+precondition is not overcautious, it is the literal contract requirement, now confirmed
+independently rather than just inferred from the planner's own docstring.
+
+To exercise selectors 6/7 (`launchFleetMission`'s two overloads) live at all, round 2 impersonated
+a different real, multi-planet player (`0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1`, 10 owned
+planets, found via `GET /highscores`) instead — the same no-real-key impersonation technique used
+throughout this fork-testing effort, harmless to the impersonated account since nothing leaves the
+local fork. Both a 6-arg Transport and a 7-arg Transport (explicit `speedPercent`) sent between two
+of that account's own planets (23 → 184) succeeded, `status: "success"` each.
+
+### 4.4 Fuel formula, distance, and ship-movement-stats — confirmed against a real chain-emitted event
+
+New (2026-08-19, fork-testing round 2). `calc.distance`, `calc.ship_movement_stats`, and
+`calc.mission_fuel` had previously only been derived from `docs.md`'s published formula set (§5
+below) and cross-checked against each other — never against a real transaction. `docs.md` gives no
+mechanism for observing the true fuel cost of a sent mission directly; the naive approach
+(deuterium balance before/after) turned out to be unreliable — it's contaminated by production
+accruing in the real-time gap between the two reads, so a first attempt at that method produced a
+noisy, non-matching result (~1 deuterium observed vs. ~8 predicted) and should not be used for this
+check. The reliable, authoritative source is the transaction's own event:
+`event FleetMissionCargo(uint256 indexed missionId, uint128 metal, uint128 crystal, uint128
+deuterium, uint128 fuelCost)` (`VeydriftGameStorage.sol:602-608`), decoded directly from the
+receipt's logs.
+
+For the 6-arg Transport in §4.3 above (origin `2:477:7` → target `2:477:3`, `{smallCargo: 2,
+largeCargo: 1}`, distance 1020, using the impersonated player's real drive-tech levels —
+Combustion Drive 6, Impulse Drive 6, Hyperspace Drive 7, read live via
+`technologyLevel(address,uint8)`): **event `fuelCost = 10`**, `calc.mission_fuel`'s prediction
+using those same inputs: **10**. Exact match — the first time this codebase's fuel/distance/speed
+formulas have been confirmed against a real chain observation rather than merely derived from
+contract source. Full command sequence:
+`skills/veydrift-wallet/references/fork-testing.md` §8.3.
+
 ---
 
 ## 5. Formulas confirmed against `docs.md`

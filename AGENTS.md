@@ -227,9 +227,13 @@ exact production `sendTx` → `provider.signAndSend` path against a local Anvil 
 impersonated account instead of a held key, gated by a loopback guard that makes it inert outside a
 fork. `references/fork-testing.md` is the full runbook: starting Anvil, the env vars, the
 per-selector command sequence, the two gotchas that cost time otherwise (the memoized public
-client, and `/runtime-config` being ungoverned by `VEYDRIFT_RPC_URL`), and three verifications
+client, and `/runtime-config` being ungoverned by `VEYDRIFT_RPC_URL`), and four verifications
 worth doing beyond a routine sweep — colony-target packing, the two fleet-tuple encoders cross-
-checked against real contract state, and the fuel formula compared against a real balance delta.
+checked against real contract state, the fuel formula compared against a real chain-emitted event
+(not a balance delta — a first attempt at that method was noisy and is documented as the wrong
+tool for this check, `references/fork-testing.md` §8.3), and `simulate`'s gas cap. §9 of that same
+document is the round-2 sweep that carried all 7 allowlisted selectors through this same fork
+technique — see the bullet above for what that closed and what it didn't.
 
 ## 9. Multi-agent build/judge workflow used on this repo
 
@@ -274,25 +278,52 @@ enough to call out here specifically, not a duplicate of that ledger.
   exactly at 1556s. That same fork run is what surfaced the defect this package's
   `1.1.1` fixed — `_send_and_await` built and sent without ever calling `walletctl
   simulate` first, so a tx that would revert burned real gas to find out instead of a
-  free `eth_call` (see `skills/veydrift-agent/CHANGELOG.md`'s `1.1.1` entry). What
-  remains true: this has never run against **mainnet**, and only one selector
-  (`startBuildingUpgrade`) has been exercised this way — most are still unexercised. If
-  you're the one who runs a different selector through this path for the first time,
-  budget extra scrutiny there, the same way this one earned it. That same fork-testing
-  effort has since found a second, related defect in `simulate` itself: `simulateTx`
-  (`skills/veydrift-wallet/src/tx.ts`) ran its `eth_call` uncapped, against the node's
-  block gas limit rather than `tx.gas` (the figure `send` actually submits) — so
-  `simulate` could report `ok: true` for a call that would revert `OutOfGas` once sent at
-  its real gas limit. Reproduced live: a `startResearch` call on real accumulated state
-  (planet 664) built at gas limit 465588, simulated `ok: true` pre-fix, was sent at that
-  same limit, and reverted `OutOfGas` after genuinely executing most of its settlement
-  sweep; the identical calldata resent at 931176 (2x) succeeded, proving a pure gas
-  shortfall. Fixed by capping `simulate`'s `eth_call` at `tx.gas` (or a freshly-fetched,
-  validated-against estimate when `tx.gas` isn't yet known) — see
+  free `eth_call` (see `skills/veydrift-agent/CHANGELOG.md`'s `1.1.1` entry). That same
+  fork-testing effort has since found a second, related defect in `simulate` itself:
+  `simulateTx` (`skills/veydrift-wallet/src/tx.ts`) ran its `eth_call` uncapped, against
+  the node's block gas limit rather than `tx.gas` (the figure `send` actually submits) —
+  so `simulate` could report `ok: true` for a call that would revert `OutOfGas` once sent
+  at its real gas limit. Reproduced live: a `startResearch` call on real accumulated
+  state (planet 664) built at gas limit 465588, simulated `ok: true` pre-fix, was sent at
+  that same limit, and reverted `OutOfGas` after genuinely executing most of its
+  settlement sweep; the identical calldata resent at 931176 (2x) succeeded, proving a
+  pure gas shortfall. Fixed by capping `simulate`'s `eth_call` at `tx.gas` (or a
+  freshly-fetched, validated-against estimate when `tx.gas` isn't yet known) — see
   `skills/veydrift-wallet/references/tx-safety.md` and `references/fork-testing.md` §8.4.
   This closes the gap in the *simulate mechanism* specifically; it is not a claim that
   gas estimation is now always sufficient, only that an insufficient estimate is now
   caught before send rather than after.
+  **Round 2 (2026-08-19, `references/fork-testing.md` §9) exercised the remaining 5 of
+  the 7 allowlisted selectors on the same kind of fork.** `startShipProduction` (Solar
+  Satellite qty 1) and `startDefenseProduction` (Rocket Launcher qty 1) both live-sent
+  from the project's own account, `status: "success"`. `launchFleetMission`'s 6-arg
+  (Transport) and 7-arg (Transport with explicit `speedPercent`) overloads were both
+  live-sent, `status: "success"` on both — the project's own account structurally cannot
+  do this (see below), so a second, real, multi-planet account
+  (`0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1`) was temporarily impersonated instead,
+  the same no-real-key technique as every other account in this runbook.
+  `resolveFleetMission` is the one exception: it was **not** live-sent — neither account
+  has an unresolved fleet mission to resolve — and is instead confirmed correct by
+  reading `VeydriftColonizationModule.sol:237-240` directly (an invalid/nonexistent
+  mission id silently no-ops rather than reverting, by design). Be precise about what
+  "exercised" means for that selector: source-verified, not observed executing. **All 7
+  selectors are now accounted for; mainnet remains untouched by this codebase either
+  way.** Round 2 also found a previously undocumented contract rule, source-read from
+  `VeydriftGameplayModule.sol`'s `_launchFleetMission`: Transport and Deploy additionally
+  require `_requirePlanetOwner(targetPlanetId)` — the mission target must itself be a
+  planet the sender owns, confirmed by reproduction (`NotPlanetOwner()`, selector
+  `0xab2bcfd3`, sending a Transport from planet 664 to a real third-party-owned planet).
+  This is why the project's own single-planet account needed the second impersonated
+  account above for Transport specifically, and it retroactively confirms
+  `candidates.py`'s `generate_transport_candidates` ≥2-owned-planets precondition is the
+  literal contract requirement, not an overcautious heuristic — see
+  `docs/RESEARCH-ADDENDUM.md` §4.3. **Colonize is narrower than "exercised" implies**: it
+  shares `launchFleetMission`'s two overloads (so the mission-type encoding is covered by
+  the same confirmation as Transport), but no Colonize mission was actually sent this
+  round — neither account owns a Colony Ship — so whether a well-formed colony target
+  actually flips `isCoordinateAvailable`/`occupiedCoordinates` on send remains
+  unverified, distinct from the packing/unpacking math itself, which round 2 separately
+  confirmed against source (`references/fork-testing.md` §8.1).
 - **`walletctl`'s tier check defends against a misconfigured caller, not a hostile one.**
   It reads tier from `$VEYDRIFT_HOME/policy.json`, but falls back to a caller-supplied
   `--tier` when no policy file exists — a process that controls its own environment can
@@ -345,7 +376,10 @@ enough to call out here specifically, not a duplicate of that ledger.
   the address-binding constraint (`README.md` has the short version).
 - `skills/veydrift-wallet/references/fork-testing.md` — the fork-testing runbook: exercising
   tier≥2 sends against a local Anvil fork with an impersonated account, the intended first real
-  use of `sendTx`'s send path against a real chain state (never mainnet).
+  use of `sendTx`'s send path against a real chain state (never mainnet). As of round 2 (§9 of
+  that document, 2026-08-19) all 7 allowlisted selectors have been either live-sent this way or,
+  for `resolveFleetMission`, confirmed correct by source in the absence of a real mission to
+  resolve — see this file's §10 for the precise, non-overclaiming summary.
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.
