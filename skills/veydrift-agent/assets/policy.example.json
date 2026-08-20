@@ -31,6 +31,7 @@
     "ship_targets": [{ "name": "Small Cargo", "count": 1 }],
     "defense_targets": [],
     "research_priority": [],
-    "building_priority": []
+    "building_priority": [],
+    "enable_crawler": false
   }
 }
