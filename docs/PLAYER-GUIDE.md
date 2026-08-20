@@ -265,9 +265,16 @@ change called out:
 }
 ```
 
-**`ship_targets`/`defense_targets`/`research_priority`/`building_priority`, added
-2026-08-16.** All four default to `[]`, and `[]` on all four reproduces exactly the
-pre-2026-08-16 behaviour: energy still comes only from Solar Plant/Solar Satellite,
+`policy.json` is validated strictly on every tick: an unrecognized key is a hard error, not
+a silent ignore, and a missing required field stops the tick rather than guessing a
+default. If you break the JSON, the next `vd tick` will tell you exactly what's wrong
+rather than doing something unexpected.
+
+<details>
+<summary><strong>Useful tips</strong> — declaring targets and priorities, <code>enable_crawler</code>, and letting the agent build up to a locked target (click to expand)</summary>
+
+**`ship_targets`/`defense_targets`/`research_priority`/`building_priority`.** All four
+default to `[]`. Empty on all four means: energy still comes only from Solar Plant/Solar Satellite,
 defense still means only the Rocket Launcher, research still walks lowest-level-first,
 and nothing proposes Robotics Factory/Nanite Factory/Shipyard/Research Lab/Terraformer/
 Missile Silo at all. Declare a target to unlock the rest of the entity list:
@@ -282,17 +289,19 @@ Missile Silo at all. Declare a target to unlock the rest of the entity list:
   each in turn, falling back to its own default ordering (lowest-level-first for
   research; nothing at all for infrastructure, since that family only exists once you
   declare a priority) for anything not named.
-- **A name that doesn't match anything is a hard error on the next tick** — the same
-  "typo must never mean silence" posture the rest of `policy.json` already takes for an
-  unrecognized key. If `vd tick` starts failing right after you edit this list, check
-  the spelling first.
+- **A name that doesn't match anything is a hard error on the next tick** for
+  `ship_targets`, `defense_targets`, and `research_priority` — the same "typo must never
+  mean silence" posture the rest of `policy.json` already takes for an unrecognized key.
+  If `vd tick` starts failing right after you edit one of these three lists, check the
+  spelling first. **`building_priority` is the one exception to this rule** — see the
+  callout in the field reference below before relying on the same guarantee there.
 
 None of this is a fleet doctrine or a threat model. The planner still only enforces what
 is legal (on-chain prerequisites, shield-dome/missile-silo caps) and, where a number is
 genuinely comparable, what is economical (Crawler's production-boost payback) — *how
 many* Crawlers or Small Shield Domes you actually want is your call, expressed here.
 
-**`enable_crawler`, added 2026-08-17.** Defaults `false`. This is a *separate* switch from
+**`enable_crawler`.** Defaults `false`. This is a *separate* switch from
 naming `"Crawler"` in `ship_targets` above: `ship_targets` is always an unscored "keep
 building until N" declaration, no matter which entity you name. `enable_crawler` instead
 turns on a second, scored path — the planner comparing Crawler's production-boost payback
@@ -301,8 +310,8 @@ so it stays off unless you opt in. Leave it `false` and nothing changes; set it 
 you want the planner to consider Crawler on its own economic merits, not just when you've
 named a standing count for it.
 
-**Declaring a target you can't build yet, and the agent working out the build-up
-(2026-08-16).** You can name a target your account isn't ready for. The shipped example
+**Declaring a target you can't build yet, and the agent working out the build-up.**
+You can name a target your account isn't ready for. The shipped example
 policy above does exactly this: `ship_targets: [{"name": "Small Cargo", "count": 1}]`. On
 a fresh planet, Small Cargo needs Shipyard level 2 and Combustion Drive level 2 — neither
 of which exists yet. Before this addition, that entry would have sat there, legal to
@@ -314,7 +323,7 @@ planet that's Robotics Factory (Shipyard's own prerequisite), then Shipyard itse
 Robotics Factory clears, and so on, tick by tick, until Small Cargo itself becomes
 buildable and the ordinary `ship_targets` stock-keeping takes over.
 
-Two things this deliberately is *not*: it is not a queued multi-step plan — every tick
+Two things this deliberately is *NOT*: it is not a queued multi-step plan — every tick
 re-derives the next step from your account's live levels, so if you build something by
 hand in between ticks, the next proposal reflects that. And it is not scored against your
 other options the way a mine or energy upgrade is (you'll see `score: null` and
@@ -322,6 +331,8 @@ other options the way a mine or energy upgrade is (you'll see `score: null` and
 available on the ordinary ladder, so it can't crowd out a genuinely profitable upgrade or
 the storage-overflow safety check ahead of it. Read the proposal's `rationale` for which
 target it's working toward and `expected_effect` for what's still left after this step.
+
+</details>
 
 **Two fields you must edit before anything downstream makes sense:**
 
@@ -339,10 +350,126 @@ Everything else in `limits`/`reserves`/`actions`/`escalation` is a reasonable st
 point. Don't loosen `limits` or flip on `allow_defense`/`allow_ships` until you've watched
 the agent propose things under the defaults for a while — see §12.
 
-`policy.json` is validated strictly on every tick: an unrecognized key is a hard error, not
-a silent ignore, and a missing required field stops the tick rather than guessing a
-default. If you break the JSON, the next `vd tick` will tell you exactly what's wrong
-rather than doing something unexpected.
+<details>
+<summary><strong>Full field reference</strong> — every <code>policy.json</code> field, its legal values, and its default (click to expand)</summary>
+
+Every field `policy.json` accepts, with its real type and its real constraint — including
+where there genuinely is none. This is the table that answers "what am I allowed to type
+here," not the terse inline comments in the JSON example above. Where a field is marked
+**unconstrained**, that's a confirmed fact about the schema (`models.py`), not a softened
+guess — don't read it as "should be positive" or "should be sane." Only `version`,
+`tier`, and `wallet_engine.provider` are genuinely closed enums at the schema level.
+
+**Top level**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `version` | int (literal) | only the integer `1` | `1` |
+| `tier` | string enum | exactly `"advisor"`, `"economy"`, `"operator"` (lowercase) | `"advisor"` |
+| `wallet` | string | any string — **no address format or checksum validation at the schema level.** A malformed address is not caught until something downstream tries to use it. | required, no default |
+| `planets` | list of int | any list of planet ids; `[]` is a special case meaning "auto-discover every planet this wallet owns," **not** "no planets" | `[]` |
+| `chain_id` | int | **completely unconstrained by the schema** — any integer validates in `policy.json` itself. It's the separate `veydrift-wallet` skill's own allowlist that actually requires `8453` and refuses every write otherwise. Leave it at `8453`: there's no upside to changing it, only a wallet skill that then refuses to work. | `8453` |
+
+**`cadence`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `economy_minutes` | int | unconstrained — no minimum; `0` or negative is schema-legal, though would presumably misbehave wherever it's consumed as an interval | `10` |
+| `research_minutes` | int | same as above | `10` |
+| `fleet_minutes` | int | same as above | `10` |
+| `universe_hours` | int | unconstrained | `24` |
+
+**`limits`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `gas_per_tx_wei` | int, as a JSON string | **required, no default** — `policy.json` fails to load without it. Unconstrained otherwise: no minimum, and nothing checks it against `gas_per_day_wei`. | none |
+| `gas_per_day_wei` | int, as a JSON string | required, no default; unconstrained | none |
+| `eth_gas_floor_wei` | int, as a JSON string | required, no default; unconstrained | none |
+| `escalate_above_pct_of_resources` | int | unconstrained — **not clamped to 0–100 despite the name** (see footgun below) | `25` |
+| `max_index_wait_s` | int | unconstrained | `300` |
+| `field_warn_pct` | int | unconstrained — **not clamped to 0–100 despite the name** (see footgun below) | `80` |
+
+> **Footgun — the "percent" fields aren't bounded.** `escalate_above_pct_of_resources` and
+> `field_warn_pct` read like they should be schema-limited to 0–100, the way `tier` or
+> `wallet_engine.provider` genuinely are closed enums. They are not. `150` or `-10` both
+> pass `policy.json` validation without complaint; whatever downstream logic treats the
+> value as a percentage does whatever it does with an out-of-range input. The schema
+> provides no safety net here — get the number right yourself.
+
+**`reserves`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `metal` | int | unconstrained — a negative reserve is schema-legal and meaningless | `0` |
+| `crystal` | int | same | `0` |
+| `deuterium` | int | same | `0` |
+
+**`storage`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `hours_to_cap_trigger` | float | unconstrained | `2.0` |
+
+**`actions`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `allow_building` | bool | `true`/`false` | `true` |
+| `allow_research` | bool | `true`/`false` | `true` |
+| `allow_defense` | bool | `true`/`false` | `false` |
+| `allow_ships` | bool | `true`/`false` | `false` |
+| `allow_fleet_noncombat` | bool | `true`/`false` | `false` |
+| `allow_combat` | bool | `true`/`false` — legal to set, but **read and then unconditionally ignored by every code path.** Enabling `Attack`/`AcsAttack`/`MissileAttack`/`Intercept` requires an actual source change, not a config edit — see §14. | `false` |
+
+**`escalation`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `on_incoming_fleet` | bool | `true`/`false` | `true` |
+| `on_abi_hash_change` | bool | `true`/`false` | `true` |
+| `on_health_unhealthy_minutes` | int | unconstrained | `30` |
+| `on_revert_count` | int | unconstrained | `2` |
+
+**`wallet_engine`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `provider` | string enum | exactly `"keystore"` or `"envkey"` — no other value is legal | `"keystore"` |
+| `require_confirmation` | bool | `true`/`false` | `true` |
+
+**`strategy`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `resource_weights.metal` | **int** | unconstrained, but **must be a whole number.** This reuses the same `Resources` model as `reserves`, so `1.5` is not legal even though you might reasonably want to weight deuterium higher than a plain integer allows. | `1` |
+| `resource_weights.crystal` | int | same | `1` |
+| `resource_weights.deuterium` | int | same | `1` |
+| `max_alternatives` | int | unconstrained — `0` legally means "log no alternatives"; there's no upper cap either | `5` |
+| `ship_targets` | list of `{name, id, count}` | `name` resolved case-insensitively against `references/entity-ids.md`'s Ship table (or use a numeric `id` instead); an unrecognized `name` is a hard error on the next tick. `count` defaults `0` and **is not constrained to be non-negative** (see footgun below). **Empty: this rule is off** — no standing ship target is proposed at all (Solar Satellite's separate energy-driven path is unaffected either way). | `[]` |
+| `defense_targets` | list of `{name, id, count}` | same shape and same rules, against the Defense table. **Empty: falls back to the old hardcoded default** — a single Rocket Launcher, unconditionally — not off, just undeclared. | `[]` |
+| `research_priority` | list of string | ordered Technology names; an unrecognized name is a hard error on the next tick. **Empty: falls back to lowest-level-first** across all technologies — research proposals still happen, just unprioritized by name. | `[]` |
+| `building_priority` | list of string | ordered Building names — **asymmetric with the three fields above; see callout below**. **Empty: the infrastructure family never fires** — rung 6 falls through to its ordinary payback-scored mine/energy comparison, i.e. the decision is delegated entirely to scoring. | `[]` |
+| `enable_crawler` | bool | `true`/`false` | `false` |
+
+> **Footgun — a negative `count` is a silent no-op, not an error.** `ship_targets`/
+> `defense_targets` entries are compared as `entity.count >= target.count`. For any
+> negative `target.count`, that comparison is trivially true, so the whole entry becomes
+> inert: the planner treats the target as already met and never proposes anything toward
+> it. Nothing tells you this happened — it just quietly does nothing, forever.
+
+> **`building_priority`'s hard-error rule is not the same as the other three list
+> fields.** A genuinely misspelled name still hard-errors on `building_priority`, same as
+> `ship_targets`/`defense_targets`/`research_priority` — the name-lookup step itself
+> fails. But building-name resolution isn't restricted to the infrastructure family at
+> that lookup step, so a **correctly spelled** building name that isn't one of the six
+> infrastructure buildings (Robotics Factory, Nanite Factory, Shipyard, Research Lab,
+> Terraformer, Missile Silo) resolves fine and then silently produces no candidate — no
+> error, no warning, nothing in the logs. Add `"Metal Mine"` to `building_priority`
+> expecting it to do something, and it will be quietly ignored forever with zero
+> feedback. Stick to the six infrastructure names in this field.
+
+</details>
 
 ## 7. Set up your wallet
 
@@ -455,7 +582,8 @@ override took effect before relying on it.
 §4 has the full list of environment variables both skills read, including the ones on
 this page.
 
-### Running multiple gameplay sessions on one machine
+<details>
+<summary><strong>Running multiple gameplay sessions on one machine</strong> (click to expand)</summary>
 
 Playing more than one wallet from the same laptop — different accounts, different
 sessions, running concurrently — is safe, but needs two separate settings per session,
@@ -484,6 +612,8 @@ kick off that install at once; harmless once `node_modules` exists, which is alm
 always immediately. And both sessions share whatever RPC/API rate limits the default
 endpoints impose unless you point each at its own via `VEYDRIFT_RPC_URL` above — a
 throughput consideration, not a data-collision one.
+
+</details>
 
 ## 8. Your first tick
 
@@ -629,12 +759,9 @@ Nothing in this codebase ever advances the tier on its own. It is **always** a m
 of `policy.json`'s `tier` field, by you, and it should be treated as a real decision, not a
 config toggle.
 
-**What operator actually does now, not just allows.** Before this release, tier 3 was real
-at the wallet-engine layer (the allowlist had always accepted Transport/Deploy/Harvest) but
-the agent itself never proposed one — promoting to operator bought you nothing beyond
-`resolveFleetMission`. That has changed: with `policy.actions.allow_fleet_noncombat` set to
-`true` (it defaults to `false` — promoting to operator alone does **not** turn this on),
-the agent can now propose two kinds of fleet mission on its own:
+**What operator actually does, not just allows.** With `policy.actions.allow_fleet_noncombat`
+set to `true` (it defaults to `false` — promoting to operator alone does **not** turn this
+on), the agent can propose two kinds of fleet mission on its own:
 
 - **Transport** — moving a surplus resource from a planet that has more of it than your
   configured `reserves` floor to whichever of your other planets currently holds the
@@ -646,7 +773,7 @@ the agent can now propose two kinds of fleet mission on its own:
   path exists and is tested but won't actually fire until that's wired up.
 
 **Colonisation** (`launchFleetMission` mission type `Colonize`) is allowed at both
-enforcement layers as of this release — the wallet-engine allowlist and the agent's own
+enforcement layers — the wallet-engine allowlist and the agent's own
 `mission_type` guard both accept it at operator tier — but the agent does not yet propose
 *where* to colonise on its own. If you want to colonise, you'd build and send that
 transaction through `walletctl` directly rather than waiting for a tick to suggest it;
@@ -664,11 +791,10 @@ $ uv run --directory skills/veydrift-agent vd tick --readiness
 ```
 
 This prints the actual evidence: tick count, uptime, proposals made, how many *you*
-executed by hand, and — the part worth reading most carefully — **divergences between
-what was proposed and what you actually did.** A clean report with zero guardrail fires
-is *weaker* evidence than a report where a guard fired correctly and the agent respected
-it; a green tick count on its own tells you the agent hasn't hit a wall yet, not that it's
-trustworthy.
+executed by hand. Read the divergence line carefully — proposals with no matching
+`actions.jsonl` entry. A clean report with zero guardrail fires is *weaker* evidence than a
+report where a guard fired correctly and the agent respected it; a green tick count on its
+own tells you the agent hasn't hit a wall yet, not that it's trustworthy.
 
 The checklist:
 
@@ -712,11 +838,13 @@ room, not less.
 - **`allow_combat` in `policy.json` does nothing, on purpose.** Every code path that reads
   it ignores it. Enabling `Attack`/`AcsAttack`/`MissileAttack`/`Intercept` requires an
   actual source code change, not a config edit — that friction is deliberate.
-- **No transaction has ever been submitted to Veydrift from this codebase.** As of this
-  writing, the entire tier-2+ write path is built, tested against fixtures, and verified
-  piece by piece — but genuinely unexercised against a real chain. You will be the first
-  person to actually exercise it for your account, whenever you promote past tier 1. Budget
-  extra attention there, and re-read §12's checklist before you do.
+- **No transaction has ever been submitted to Veydrift on mainnet from this codebase.**
+  The full write path — build, simulate, send, receipt — has however been exercised for
+  real against a local Anvil fork of Base: all 7 allowlisted selectors have been
+  live-sent and confirmed successful there, proving the contract-facing mechanics
+  genuinely work. Mainnet itself is untouched; the first real mainnet submission will
+  still be yours, at your T1→T2 promotion. Budget extra attention there, and re-read
+  §12's checklist before you do.
 - **`--confirm` can never become automatic.** No environment variable, no policy field,
   and no flag combination makes `walletctl send` skip that explicit flag. If you ever see
   a transaction submit without you having typed `--confirm` on that exact command
