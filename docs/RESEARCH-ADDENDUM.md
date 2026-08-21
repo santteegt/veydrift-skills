@@ -316,6 +316,42 @@ exercised against the actual contract. Round 3 (2026-08-19,
 strengthens the existing verification rather than superseding it — the Python-side round-trip
 against source still stands as the check for coordinates never actually sent on a fork.
 
+### 4.6 `gameMaintenance` / `pausedSince` — first observed live, 2026-08-20
+
+`GET /health` carries a `gameMaintenance` block (`{paused, observedAt, pausedSince,
+pauseAgeSeconds}`) and a `readiness.degradationReasons` array, neither previously
+documented anywhere in this project. An agent session checking live status on 2026-08-20
+found the game genuinely paused for chain-side maintenance
+(`gameMaintenance.paused: true`, a real `pausedSince`, `readiness.degradationReasons:
+["game_paused"]`) — a one-off, hand-read observation, not something any codepath in
+`veydrift-agent` acted on before this. A follow-up live fetch the same day/next (game no
+longer paused) confirmed the field's normal shape:
+
+```json
+"readiness": { "ready": true, "degraded": false, "degradationReasons": [],
+  "gamePaused": false, "gamePauseAgeSeconds": 0 },
+"gameMaintenance": { "paused": false, "observedAt": "2026-08-20T22:59:26.727Z",
+  "pausedSince": null, "pauseAgeSeconds": 0 }
+```
+
+`gameMaintenance` is **always present**, not absent when not paused — the not-paused
+shape above, not an omitted key, is the normal case. `readiness` separately carries its
+own flattened `gamePaused`/`gamePauseAgeSeconds`, redundant with `gameMaintenance`.
+`degradationReasons` is confirmed genuinely free-form: `tests/fixtures/
+health_unhealthy.json` already carries a different real reason ("Upstream RPC unfinished
+requests are growing or stale."), captured independently before this observation.
+
+Also notable: the same 2026-08-20 check found `/health`'s top-level `ok: false` for a
+reason unrelated to any pause (`randomnessReadiness.ready: false`), while
+`readiness.ready`/`degraded` were both fine — the existing `ok`/`readiness.ready` health
+check is a broad, multi-cause signal, and a game-pause fact needs its own dedicated
+signal rather than folding into it. This is a single-capture observation (one real pause,
+one real not-paused response) — `skills/veydrift-agent/tests/fixtures/health_paused.json`
+is a hand-synthesized fixture built from the not-paused capture, not a second independent
+live pause. `skills/veydrift-agent/references/api-routes.md` §3.1 has the full field-level
+writeup; `skills/veydrift-agent/references/guardrails.md`'s `game_paused` gate and
+`plan.py`'s rung `1b` are the two consumers.
+
 ---
 
 ## 5. Formulas confirmed against `docs.md`

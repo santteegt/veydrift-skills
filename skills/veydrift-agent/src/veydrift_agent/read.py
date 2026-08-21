@@ -227,6 +227,33 @@ def _health_ok(data: dict[str, Any]) -> bool:
     return data.get("ok") is True and readiness.get("ready") is True
 
 
+def _game_maintenance(data: dict) -> tuple[bool, models.GameMaintenance | None, list[str]]:
+    """Parses gameMaintenance/pausedSince/readiness.degradationReasons from a raw
+    /health payload. Fail-closed: only ever reports what it can positively confirm.
+    Absent gameMaintenance -> (False, None, reasons), and callers must treat
+    `None` as "cannot confirm not paused," never as confirmation of the opposite.
+
+    Confirmed live (2026-08-20/21): `gameMaintenance` is always present on a real
+    response, `{"paused": false, "observedAt": ..., "pausedSince": null,
+    "pauseAgeSeconds": 0}` when not paused -- the `None` branch below is defensive
+    handling for a malformed/future-changed response, not the shape a healthy backend
+    normally sends. `readiness` also carries its own flattened `gamePaused`/
+    `gamePauseAgeSeconds`, redundant with `gameMaintenance` -- deliberately not read
+    here; `gameMaintenance` is the single source of truth (AGENTS.md §5)."""
+    readiness = data.get("readiness") or {}
+    reasons = list(readiness.get("degradationReasons") or [])
+    maintenance_raw = data.get("gameMaintenance")
+    if maintenance_raw is None:
+        return False, None, reasons
+    paused = maintenance_raw.get("paused") is True
+    maintenance = models.GameMaintenance(
+        paused=paused,
+        paused_since=maintenance_raw.get("pausedSince"),
+        pause_age_seconds=maintenance_raw.get("pauseAgeSeconds") or 0,
+    )
+    return paused, maintenance, reasons
+
+
 def _resources(raw: dict[str, Any] | None) -> models.Resources:
     raw = raw or {}
     return models.Resources(
@@ -865,6 +892,7 @@ def snapshot(
 
     health_raw = _fetch_or_exit("/health", max_age=max_age)
     health_ok = _health_ok(health_raw)
+    game_paused, game_maintenance, degradation_reasons = _game_maintenance(health_raw)
 
     if planet_id is not None:
         planet_ids = [planet_id]
@@ -933,6 +961,9 @@ def snapshot(
         taken_at=datetime.now(UTC),
         wallet=w,
         health_ok=health_ok,
+        game_paused=game_paused,
+        game_maintenance=game_maintenance,
+        degradation_reasons=degradation_reasons,
         indexed_state=indexer_block.get("indexedState"),
         safe_to_serve_indexed_state=indexer_block.get("safeToServeIndexedState"),
         latest_indexed_block=_maybe_int(indexer_block.get("latestIndexedBlock")),

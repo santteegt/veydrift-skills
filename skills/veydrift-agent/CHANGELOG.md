@@ -11,6 +11,39 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-20
+
+### Added
+
+- **Game-pause detection**, a new safety feature following this codebase's existing
+  two-layer defense-in-depth pattern for `health`/`tier`/`mission_type`: `/health`'s
+  `gameMaintenance` block (`paused`, `pausedSince`, `pauseAgeSeconds`) and
+  `readiness.degradationReasons` were observed live for the first time this session (a
+  real chain-side maintenance pause), and neither was previously parsed anywhere in this
+  codebase — nothing distinguished "the game is deliberately halted, any write would
+  revert" from any other reason a tick produced nothing.
+  - `models.py`: new `GameMaintenance` model, `Snapshot.game_paused` /
+    `game_maintenance` / `degradation_reasons` fields, `EscalationCfg.on_game_paused`
+    (default `true`).
+  - `read.py`: new shared `_game_maintenance()` parser (fail-closed — `gameMaintenance`
+    missing from the response means "unconfirmed," never "confirmed not paused"), wired
+    into `snapshot`. `tick.py`'s killswitch-only `_fetch_health_only()` now shares this
+    same parser (previously a second, independent `ok`/`readiness.ready` implementation)
+    and returns a 4-tuple instead of a bare bool.
+  - `plan.py`: new veto rung `1b` (right after rung 1's health check, before rung 2's
+    pending-tx check) — ESCALATE by default, or NO-OP if `escalation.on_game_paused` is
+    `false`; either way a confirmed pause always halts proposing.
+  - `guard.py`: new 19th gate, `game_paused` — the second, independent line of defense.
+    Unlike rung `1b` it BLOCKs unconditionally (not ESCALATE, and not opt-out-able): by
+    the time a proposal reaches `guard.py`, a confirmed pause is a hard safety fact, and
+    a stale/racy proposal built just before a pause began must still be caught. Fail-
+    closed like `energy`: `Snapshot.game_maintenance is None` BLOCKs as "could not run,"
+    never passes vacuously.
+  - Agent-side only, by design — no `veydrift-wallet` changes. The new `guard.py` gate
+    blocks the proposal before it ever reaches the wallet skill; `walletctl simulate`
+    (mandatory before every send since 1.1.1) independently catches any would-revert
+    transaction that somehow got built anyway.
+
 ## [1.1.1] - 2026-08-19
 
 ### Fixed

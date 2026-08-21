@@ -1,10 +1,10 @@
-"""`vd guard` — the 18-gate guardrail evaluator (docs/SPEC.md §5.5).
+"""`vd guard` — the 19-gate guardrail evaluator (docs/SPEC.md §5.5).
 
 `evaluate_guardrails()` is the pure core: given an `Action`, the `Snapshot` it was
 planned from, the `Policy`, the persisted `AgentState`, and a handful of caller-supplied
 facts that don't live on any of those frozen/local models (live contract addresses, the
 live ABI hash, a built `UnsignedTx` + gas estimate, the wallet's ETH balance), it returns
-a `GuardReport` with **all 18 gates evaluated, never short-circuited** — the full
+a `GuardReport` with **all 19 gates evaluated, never short-circuited** — the full
 `GuardReport.verdicts` list is the audit artifact (docs/SPEC.md §5.5), so a passing tick
 is exactly as informative as a blocked one.
 
@@ -193,7 +193,7 @@ def is_structural_tier_block(non_passing_gates: list[tuple[str, str]]) -> bool:
 
     This is not a guess: a routine tier-1 proposal on an unlocked entity (the
     `prerequisites` gate PASSes -- nothing about a plain mine upgrade is locked) shows
-    exactly `guards: 15/18 pass (block)`, and the 3 gates that don't pass there are
+    exactly `guards: 16/19 pass (block)`, and the 3 gates that don't pass there are
     precisely `tier` (BLOCK), `gas` (ESCALATE, no estimate), `eth_floor` (ESCALATE,
     balance never checked at tier 1) -- this predicate is written to recognise exactly
     that cluster as carrying zero promotion-relevant information, matching what
@@ -551,6 +551,31 @@ def _gate_health(snapshot: Snapshot) -> GuardVerdict:
     if not snapshot.health_ok:
         return _verdict("health", GuardStatus.BLOCK, "/health reported not ok / not ready")
     return _verdict("health", GuardStatus.PASS, "/health ok and ready")
+
+
+def _gate_game_paused(snapshot: Snapshot) -> GuardVerdict:
+    """Second, independent line of defense -- plan.py's rung 1b is the first. BLOCKs
+    unconditionally (not ESCALATE): by the time a proposal reaches guard.py, a confirmed
+    pause is a hard safety fact, not the discretionary call plan.py already made.
+    Fail-closed like _gate_energy: game_maintenance is None means unconfirmed, not
+    confirmed-clear.
+
+    Takes only `snapshot` (like `_gate_health`), not `action` -- a pause blocks every
+    write universally, it isn't planet/entity-scoped like `_gate_energy`."""
+    if snapshot.game_maintenance is None:
+        return _verdict(
+            "game_paused", GuardStatus.BLOCK,
+            "gameMaintenance missing from /health; cannot confirm the game is not "
+            "paused -- this is a check that could not run, not one that passed",
+        )
+    if snapshot.game_maintenance.paused:
+        reasons = ", ".join(snapshot.degradation_reasons) or "game_paused"
+        return _verdict(
+            "game_paused", GuardStatus.BLOCK,
+            f"gameMaintenance.paused is true ({reasons}); any write would revert "
+            "on-chain during a chain-side maintenance pause",
+        )
+    return _verdict("game_paused", GuardStatus.PASS, "gameMaintenance.paused is false")
 
 
 def _gate_index_lag(policy: Policy, agent_state: AgentState, *, now) -> GuardVerdict:
@@ -999,7 +1024,7 @@ def _gate_revert_streak(action: Action, agent_state: AgentState, policy: Policy)
 
 
 # --------------------------------------------------------------------------------------
-# The full 18-gate evaluation.
+# The full 19-gate evaluation.
 # --------------------------------------------------------------------------------------
 
 
@@ -1016,7 +1041,7 @@ def evaluate_guardrails(
     eth_balance_wei: int | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 18 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 19 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -1036,6 +1061,7 @@ def evaluate_guardrails(
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),
         _gate_abi_hash(action, snapshot),
         _gate_health(snapshot),
+        _gate_game_paused(snapshot),
         _gate_index_lag(policy, agent_state, now=now),
         _gate_affordability(action, snapshot),
         _gate_energy(action, snapshot),

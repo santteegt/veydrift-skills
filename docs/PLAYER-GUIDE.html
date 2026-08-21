@@ -938,6 +938,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
       <thead><tr><th>Field</th><th>Type</th><th>Legal values / range</th><th>Default</th></tr></thead>
       <tbody>
         <tr><td><code>on_incoming_fleet</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>true</code></td></tr>
+        <tr><td><code>on_game_paused</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>true</code></td></tr>
         <tr><td><code>on_abi_hash_change</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>true</code></td></tr>
         <tr><td><code>on_health_unhealthy_minutes</code></td><td>int</td><td>unconstrained</td><td><code>30</code></td></tr>
         <tr><td><code>on_revert_count</code></td><td>int</td><td>unconstrained</td><td><code>2</code></td></tr>
@@ -1094,7 +1095,7 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
           <div class="propose-why"><strong>Alternatives (informational only):</strong> Solar Satellite — locked: needs Shipyard 1 (have 0)</div>
           <div class="guard-bar">
             <div class="guard-track"><div class="guard-fill" style="width:83%"></div></div>
-            <span class="guard-label">15 / 18 guards pass</span>
+            <span class="guard-label">16 / 19 guards pass</span>
           </div>
           <div class="tx-line">
             <span>to 0xf397…3755d</span><span>·</span><span>data 0x165715e3…</span><span>·</span>
@@ -1128,7 +1129,7 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
 <section class="chapter" id="s9" data-num="09" data-label="Reading the output">
   <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">Reading what the agent tells you</h2></div>
   <ul>
-    <li><strong>15 / 18 guards pass at tier 1 is expected, not a problem.</strong> The tier gate itself blocks every onchain proposal at tier 1 by design — that's what makes tier 1 safe <em>by construction</em>, not by discipline.</li>
+    <li><strong>16 / 19 guards pass at tier 1 is expected, not a problem.</strong> The tier gate itself blocks every onchain proposal at tier 1 by design — that's what makes tier 1 safe <em>by construction</em>, not by discipline.</li>
     <li><strong>The "why" states real numbers</strong>, not a canned explanation — a live comparison against your planet's current state, computed fresh every tick.</li>
     <li><strong>The build order is derived from your planet's actual traits</strong> — temperature, multipliers, current levels — never a generic order copy-pasted for every planet. A cold planet leans toward Deuterium Synthesizer earlier; a hot one gets offered Solar Satellites a cold planet never would.</li>
     <li><strong>The transaction shown is real and complete</strong>, not a mockup. That's what makes a later promotion decision evidence-based rather than a guess (§12).</li>
@@ -1241,7 +1242,7 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
         <tr><td>Health nulls, readiness not ready</td><td>Almost always transient backend replica lag, not an outage — already handled correctly</td></tr>
         <tr><td><code>walletctl status</code> refuses to run</td><td>Expected with no provider configured — not a bug</td></tr>
         <tr><td><code>verify-abi</code> shows a mismatch</td><td>The deployed contract's ABI changed. Every write is blocked until resolved — deliberate</td></tr>
-        <tr><td>Guards read 15/18 at tier 1</td><td>Correct and expected — see §9</td></tr>
+        <tr><td>Guards read 16/19 at tier 1</td><td>Correct and expected — see §9</td></tr>
         <tr><td><code>policy.json</code> edits rejected</td><td>Schema validated strictly — the error names the exact field</td></tr>
       </tbody>
     </table>

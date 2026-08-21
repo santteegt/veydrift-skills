@@ -346,6 +346,59 @@ def test_snapshot_exits_2_when_health_unhealthy():
 
 
 @respx.mock
+def test_snapshot_parses_game_maintenance_paused():
+    """`health_paused.json` is a hand-edited copy of a live 2026-08-20 capture with
+    `gameMaintenance.paused: true` and `readiness.degradationReasons: ["game_paused"]`
+    (see the addendum's dated entry). Confirms all three new Snapshot fields come
+    through -- and that a paused game still parses `health_ok=True` (reads keep working
+    during a pause, confirmed live)."""
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json=load("health_paused.json")))
+    respx.get(f"{BASE}/wallet/{WALLET}/research", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_research.json"))
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/overview", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_overview.json"))
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/infrastructure", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_infrastructure.json"))
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/shipyard", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_shipyard.json"))
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/defenses", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_defenses.json"))
+    )
+
+    result = runner.invoke(app, ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET), "--json"])
+
+    assert result.exit_code == 0  # health.ok/readiness.ready are both true in this fixture
+    data = json.loads(result.stdout)
+    assert data["health_ok"] is True
+    assert data["game_paused"] is True
+    assert data["game_maintenance"]["paused"] is True
+    assert data["game_maintenance"]["paused_since"] == "2026-08-20T22:46:52.727000Z"
+    assert data["game_maintenance"]["pause_age_seconds"] == 754
+    assert data["degradation_reasons"] == ["game_paused"]
+
+
+@respx.mock
+def test_snapshot_parses_game_paused_false_and_none_maintenance_on_older_backend_shape():
+    """`health.json` (the 2026-08-12 capture) predates `gameMaintenance` entirely -- the
+    fail-closed-but-not-crashing case: `_game_maintenance` must not raise on a response
+    that never had this key, and must report `game_maintenance=None` (unconfirmed), not
+    silently invent a `paused=False` GameMaintenance object."""
+    _mock_snapshot_routes()
+
+    result = runner.invoke(app, ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET), "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert data["game_paused"] is False
+    assert data["game_maintenance"] is None
+    assert data["degradation_reasons"] == []
+
+
+@respx.mock
 def test_snapshot_discovers_planets_when_planet_id_omitted():
     respx.get(f"{BASE}/wallet/{WALLET}/planets").mock(
         return_value=httpx.Response(200, json=load("wallet_planets.json"))

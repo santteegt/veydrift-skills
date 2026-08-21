@@ -830,7 +830,7 @@ Rendered with `rich`:
   PROPOSE   startBuildingUpgrade(664, 3 SolarPlant)  ->  level 3 → 4
     cost:   M 225  C 75  D 0        (affordable, 12% of holdings)
     why:    mines at 3 require 157 energy; solar 3 produces 79. Energy-first invariant.
-    guards: 15/18 pass (block)
+    guards: 16/19 pass (block)
     tx:     to 0xf397…755d  data 0x…  (NOT SUBMITTED — tier advisor)
   next:     Metal Mine 3→4, blocked on energy until Solar 5
 ```
@@ -1285,11 +1285,12 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `::test_mission_type_blocks_independently_of_tier_at_every_tier`.
 49. Transport (0), Deploy (1), Colonize (2), Harvest (4) all **PASS** the `mission_type` gate; every
     non-`launchFleetMission` action PASSes it trivially, adding no noise to a routine proposal
-    (18 gates total now, `mission_type` PASSing is the 15th of 15 passing in the routine tier-1
-    case, `15/18` not `14/17`) —
+    (at the time of that change, 18 gates total, `mission_type` PASSing as the 15th of 15 passing
+    in the routine tier-1 case, `15/18` not `14/17`; the `game_paused` gate added later makes the
+    same routine case `16/19` — see criteria 58-60) —
     `tests/test_guard.py::test_mission_type_allows_transport_deploy_colonize_harvest`,
     `::test_mission_type_passes_trivially_for_a_non_fleet_action`,
-    `::test_all_eighteen_gates_always_present_even_when_blocked`.
+    `::test_all_nineteen_gates_always_present_even_when_blocked`.
 50. `guard._ALLOWED_MISSION_TYPES` and `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES` are
     identical sets, parsed from both real files (not hardcoded in the test), and neither contains a
     combat type — `tests/test_guard.py::test_tier_map_agrees_with_the_wallet_engines_allowlist`
@@ -1337,6 +1338,30 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     unmodified except the two documented, justified exceptions (the 17→18 gate-count assertion in
     `test_guard.py`, and the now-stale `allow_fleet_noncombat` "dead config" warning assertion in
     `test_tick.py` — both described in `veydrift-agent`'s `CHANGELOG.md`).
+
+<!-- Game-pause detection (veydrift-agent 1.2.0). /health's `gameMaintenance` block, first
+     observed live 2026-08-20 during a real maintenance pause. -->
+
+58. A confirmed chain-side game pause (`/health`'s `gameMaintenance.paused == true`) never reaches
+    the candidate pipeline: `plan.py`'s rung `1b` returns ESCALATE with `rule="1b:game-paused"`
+    when `policy.escalation.on_game_paused` is true (the default), and NOOP with the same `rule`
+    when it is false — the flag chooses escalate-vs-noop, never escalate-vs-proceed —
+    `tests/test_plan.py::test_game_paused_escalates_when_flag_is_true`,
+    `::test_game_paused_noops_when_flag_is_false`,
+    `::test_game_paused_rung_does_not_fire_when_not_paused`.
+59. `guard.py`'s `game_paused` gate re-checks the same fact independently of `plan.py` and
+    **fails closed on absent data**: `snapshot.game_maintenance is None` is BLOCK ("a check that
+    could not run, not one that passed"), never PASS — the flat `snapshot.game_paused` boolean is
+    a convenience flag and is never read alone as confirmation the game is *not* paused —
+    `tests/test_guard.py::test_game_paused_gate_blocks_when_game_maintenance_is_none`,
+    `::test_game_paused_gate_blocks_when_paused`, `::test_game_paused_gate_passes_when_not_paused`.
+60. `/health` is parsed by exactly one function (`read._game_maintenance`), shared by `read.py`'s
+    full-snapshot path and `tick.py`'s minimal `_fetch_health_only` killswitch path, so the two can
+    never drift apart (AGENTS.md §5). `readiness.degradationReasons` is carried through generically
+    — it is a free-form list, not a pause-only flag, and is never assumed to contain only
+    `"game_paused"` — `tests/test_read.py::test_snapshot_parses_game_maintenance_paused`,
+    `::test_snapshot_parses_game_paused_false_and_none_maintenance_on_older_backend_shape`,
+    `tests/test_tick.py::test_killswitch_health_paused_payload_still_reports_health_ok_and_game_paused`.
 
 ---
 

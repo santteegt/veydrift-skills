@@ -1,4 +1,4 @@
-"""Tests for veydrift_agent.guard — the 18-gate guardrail evaluator.
+"""Tests for veydrift_agent.guard — the 19-gate guardrail evaluator.
 
 The most important tests here are the "missing data must not vacuously pass" ones (one
 per gate where that risk is real: `address`, `abi_hash`, `affordability`, `energy`,
@@ -21,6 +21,7 @@ from veydrift_agent.models import (
     EnergyBalance,
     Entity,
     EscalationCfg,
+    GameMaintenance,
     GuardStatus,
     Limits,
     PlanetSnapshot,
@@ -33,6 +34,15 @@ from veydrift_agent.state import AgentState, PendingTx
 
 NOW = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
 WALLET = "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
+
+# Sentinel for make_snapshot's game_maintenance default. A plain `None` default can't
+# serve here because `None` is itself a meaningful, distinct value -- it means
+# "gameMaintenance absent from /health" -- and callers (e.g.
+# test_game_paused_gate_blocks_when_game_maintenance_is_none) rely on being able to pass
+# it explicitly. _UNSET marks "caller didn't specify," so the default `GameMaintenance`
+# instance is built fresh inside the function body on every call, instead of being a
+# single mutable object shared across every make_snapshot() call at import time.
+_UNSET = object()
 
 
 def make_policy(**overrides) -> Policy:
@@ -83,12 +93,16 @@ def make_planet(**overrides) -> PlanetSnapshot:
     return PlanetSnapshot(**base)
 
 
-def make_snapshot(*, planets=None, health_ok=True, abi_hash=guard.PINNED_ABI_HASH, **overrides) -> Snapshot:
+def make_snapshot(
+    *, planets=None, health_ok=True, abi_hash=guard.PINNED_ABI_HASH,
+    game_maintenance=_UNSET, **overrides,
+) -> Snapshot:
     base = dict(
         taken_at=NOW,
         wallet=WALLET,
         health_ok=health_ok,
         deployment_abi_hash=abi_hash,
+        game_maintenance=GameMaintenance(paused=False) if game_maintenance is _UNSET else game_maintenance,
         planets=planets if planets is not None else [make_planet()],
     )
     base.update(overrides)
@@ -132,28 +146,30 @@ def verdict(report, gate: str):
 
 
 # --------------------------------------------------------------------------------------
-# All 18 gates are always present, never short-circuited.
+# All 19 gates are always present, never short-circuited.
 #
-# Was 17 (this test's own name is now one gate stale, kept for git-blame continuity) until
-# Phase 5c (docs/SPEC.md §5.5) added the `mission_type` gate for `launchFleetMission` --
-# see guard.py's `_gate_mission_type` and `_ALLOWED_MISSION_TYPES`. This is the one
-# pre-existing test this phase's brief anticipated might need to change ("if one must
-# change, stop and justify rather than editing the assertion"): a new *mandatory* gate
-# necessarily changes the fixed-length enumeration this test pins, and there is no way to
-# add "the most important item in the task" (AGENTS.md's own words for this gate) without
-# that. The gate itself is additive and PASSes trivially for every non-fleet action (see
-# below), so this is the only place its addition is visible in a pre-existing test.
+# Was 17, then 18 (this test's own name is now two gates stale, kept for git-blame
+# continuity) until this change added the `game_paused` gate (`_gate_game_paused`) as the
+# second, independent line of defense behind `plan.py`'s rung `1b` for a chain-side
+# maintenance pause -- see that function's docstring. Before it, Phase 5c (docs/SPEC.md
+# §5.5) added `mission_type` for `launchFleetMission` -- see guard.py's
+# `_gate_mission_type` and `_ALLOWED_MISSION_TYPES`. Each of these is the same situation
+# this test's own comment already described: a new *mandatory* gate necessarily changes
+# the fixed-length enumeration this test pins, and there is no way to add a gate without
+# that. Both gates are additive and PASS trivially for the routine build action used
+# here (see below), so this is the only place their addition is visible in a
+# pre-existing test.
 # --------------------------------------------------------------------------------------
 
 
-def test_all_eighteen_gates_always_present_even_when_blocked():
+def test_all_nineteen_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 18
+    assert report.total == 19
     gates = {v.gate for v in report.verdicts}
     assert gates == {
-        "killswitch", "tier", "mission_type", "prerequisites", "address", "abi_hash", "health", "index_lag",
-        "affordability", "energy", "storage_overflow", "fields", "reserve",
+        "killswitch", "tier", "mission_type", "prerequisites", "address", "abi_hash", "health", "game_paused",
+        "index_lag", "affordability", "energy", "storage_overflow", "fields", "reserve",
         "gas", "eth_floor", "value_ceiling", "idempotency", "revert_streak",
     }
     assert report.decision is Decision.BLOCK
@@ -162,6 +178,8 @@ def test_all_eighteen_gates_always_present_even_when_blocked():
     # mission_type PASSes trivially for a non-launchFleetMission action -- it never adds
     # noise to a routine build/research/ship/defense proposal.
     assert verdict(report, "mission_type").status is GuardStatus.PASS
+    # game_paused PASSes given make_snapshot's default not-paused game_maintenance.
+    assert verdict(report, "game_paused").status is GuardStatus.PASS
 
 
 def test_full_allow_at_economy_tier_with_all_live_data_supplied():
@@ -867,6 +885,43 @@ def test_health_blocks_when_not_ok():
 def test_health_passes_when_ok():
     report = evaluate(make_build_action(), make_snapshot(health_ok=True), make_policy())
     assert verdict(report, "health").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# game_paused -- second, independent line of defense behind plan.py's rung 1b.
+# --------------------------------------------------------------------------------------
+
+
+def test_game_paused_gate_passes_when_not_paused():
+    report = evaluate(
+        make_build_action(), make_snapshot(game_maintenance=GameMaintenance(paused=False)), make_policy()
+    )
+    assert verdict(report, "game_paused").status is GuardStatus.PASS
+
+
+def test_game_paused_gate_blocks_when_paused():
+    report = evaluate(
+        make_build_action(),
+        make_snapshot(
+            game_maintenance=GameMaintenance(paused=True, pause_age_seconds=90),
+            degradation_reasons=["game_paused"],
+        ),
+        make_policy(),
+    )
+    verdict_ = verdict(report, "game_paused")
+    assert verdict_.status is GuardStatus.BLOCK
+    assert "game_paused" in verdict_.detail
+    assert report.decision is Decision.BLOCK
+
+
+def test_game_paused_gate_blocks_when_game_maintenance_is_none():
+    """Fail-closed: absent gameMaintenance is "cannot confirm", not "confirmed clear" --
+    the explicit case models.py's docstring warns against ever reading `game_paused=False`
+    alone as confirmation."""
+    report = evaluate(make_build_action(), make_snapshot(game_maintenance=None), make_policy())
+    verdict_ = verdict(report, "game_paused")
+    assert verdict_.status is GuardStatus.BLOCK
+    assert "missing" in verdict_.detail.lower()
 
 
 # --------------------------------------------------------------------------------------

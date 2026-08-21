@@ -6,6 +6,9 @@ Ladder, first match wins, exactly as docs/SPEC.md §5.4 specifies:
 ```
 0. KILLSWITCH present                -> HALT
 1. /health not ok                    -> NO-OP, reason recorded
+1b. gameMaintenance.paused           -> ESCALATE (or NO-OP if escalation.on_game_paused
+                                         is false) -- game reports a chain-side
+                                         maintenance pause; any write would revert
 2. pending tx unreconciled           -> NO-OP, reconcile first
 3. mission Resolving > 60s           -> resolveFleetMission   (permissionless, free)
 4. incoming hostile fleet            -> ESCALATE, no proposal (fleet-visibility.incoming)
@@ -185,6 +188,33 @@ def plan_next_action(
             kind=ActionKind.NOOP,
             rule="1:health-not-ok",
             rationale="/health reported not ok / not ready; refusing to plan against a possibly-stale snapshot.",
+        )
+
+    if snapshot.game_paused:
+        detail = ""
+        if snapshot.game_maintenance is not None:
+            age = snapshot.game_maintenance.pause_age_seconds
+            since = snapshot.game_maintenance.paused_since
+            if age:
+                detail = f" ({age // 60}m{age % 60}s so far"
+                detail += f", since {since.isoformat()})" if since else ")"
+            elif since:
+                detail = f" (since {since.isoformat()})"
+        reasons = ", ".join(snapshot.degradation_reasons) or "game_paused"
+        if policy.escalation.on_game_paused:
+            return Action(
+                kind=ActionKind.ESCALATE,
+                rule="1b:game-paused",
+                rationale=(
+                    f"Game reports a chain-side maintenance pause{detail} "
+                    f"(readiness.degradationReasons: {reasons}); escalating rather than "
+                    "proposing an action that would revert on-chain."
+                ),
+            )
+        return Action(
+            kind=ActionKind.NOOP,
+            rule="1b:game-paused",
+            rationale=f"Game reports a maintenance pause{detail}; escalation.on_game_paused is false.",
         )
 
     if pending_tx_unreconciled:

@@ -144,6 +144,19 @@ class QueueEntry(Base):
     seconds_remaining: int | None = None
 
 
+class GameMaintenance(Base):
+    """From /health's gameMaintenance block -- confirmed live (2026-08-21) to always be
+    present, `{"paused": false, ...}` when not paused. `None` on Snapshot is defensive
+    fail-closed handling for a malformed/future-changed response, not the normal
+    not-paused shape -- treat `None` as "unknown", never as "confirmed not paused"."""
+
+    paused: bool
+    paused_since: datetime | None = None
+    #: Seconds paused so far, from the API directly -- prefer this over computing
+    #: duration from paused_since client-side (avoids clock-skew/timezone math).
+    pause_age_seconds: int = 0
+
+
 class IncomingFleet(Base):
     """From /wallet/{addr}/fleet-visibility.incoming — the hostile-fleet escalation trigger."""
 
@@ -204,6 +217,16 @@ class Snapshot(Base):
     wallet: str
     #: True only when /health reports ok AND readiness.ready. Replica nulls are not outages.
     health_ok: bool
+    #: True only when gameMaintenance.paused is confirmed true. Cheap flat flag for
+    #: plan.py/guard.py; game_maintenance carries the detail for rationale/BLOCK strings.
+    #: NOT itself the fail-closed signal -- `game_maintenance is None` is (see that
+    #: model's docstring). A gate must never read `game_paused` alone as "confirmed not
+    #: paused"; it means that *or* "unknown."
+    game_paused: bool = False
+    game_maintenance: GameMaintenance | None = None
+    #: From readiness.degradationReasons -- generic, not pause-specific (see docstring
+    #: note on gameMaintenance/degradationReasons in read.py's `_game_maintenance`).
+    degradation_reasons: list[str] = Field(default_factory=list)
     indexed_state: str | None = None          # "healthy" is the value that matters
     safe_to_serve_indexed_state: bool | None = None
     latest_indexed_block: int | None = None
@@ -261,6 +284,7 @@ class ActionsCfg(Base):
 
 class EscalationCfg(Base):
     on_incoming_fleet: bool = True
+    on_game_paused: bool = True
     on_abi_hash_change: bool = True
     on_health_unhealthy_minutes: int = 30
     on_revert_count: int = 2

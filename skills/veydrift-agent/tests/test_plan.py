@@ -22,6 +22,7 @@ from veydrift_agent.models import (
     EnergyBalance,
     Entity,
     EscalationCfg,
+    GameMaintenance,
     IncomingFleet,
     Limits,
     PlanetSnapshot,
@@ -217,6 +218,55 @@ def test_unhealthy_snapshot_is_a_noop():
 
     assert action.kind == ActionKind.NOOP
     assert action.rule == "1:health-not-ok"
+
+
+def test_game_paused_escalates_when_flag_is_true():
+    snapshot = load_snapshot("planet_664.json")
+    paused_snapshot = snapshot.model_copy(
+        update={
+            "game_paused": True,
+            "game_maintenance": GameMaintenance(paused=True, pause_age_seconds=125),
+            "degradation_reasons": ["game_paused"],
+        }
+    )
+    policy = make_policy(planets=[664], escalation=EscalationCfg(on_game_paused=True))
+
+    action = plan_next_action(paused_snapshot, policy)
+
+    assert action.kind == ActionKind.ESCALATE
+    assert action.rule == "1b:game-paused"
+    assert action.function is None
+    assert "game_paused" in action.rationale
+
+
+def test_game_paused_noops_when_flag_is_false():
+    snapshot = load_snapshot("planet_664.json")
+    paused_snapshot = snapshot.model_copy(
+        update={
+            "game_paused": True,
+            "game_maintenance": GameMaintenance(paused=True, pause_age_seconds=60),
+            "degradation_reasons": ["game_paused"],
+        }
+    )
+    policy = make_policy(planets=[664], escalation=EscalationCfg(on_game_paused=False))
+
+    action = plan_next_action(paused_snapshot, policy)
+
+    assert action.kind == ActionKind.NOOP
+    assert action.rule == "1b:game-paused"
+    assert action.function is None
+
+
+def test_game_paused_rung_does_not_fire_when_not_paused():
+    snapshot = load_snapshot("planet_664.json")
+    not_paused_snapshot = snapshot.model_copy(
+        update={"game_paused": False, "game_maintenance": GameMaintenance(paused=False)}
+    )
+    policy = make_policy(planets=[664], escalation=EscalationCfg(on_game_paused=True))
+
+    action = plan_next_action(not_paused_snapshot, policy)
+
+    assert action.rule != "1b:game-paused"
 
 
 def test_pending_tx_unreconciled_is_a_noop():

@@ -140,6 +140,53 @@ notes. Full untrimmed captures are in `tests/fixtures/` (used by `test_read.py`'
 No params. Shape and gating rule: §1. Server-side response cache TTL: 10s
 (`apps/backend/src/server.ts:2604`) — separate from `vd`'s own 15s disk cache; see §10.
 
+**`gameMaintenance` / `readiness.degradationReasons` — confirmed live 2026-08-20/21, not
+in the original 2026-08-12 capture above.** An agent session checking live status found
+the game genuinely paused for chain-side maintenance; a follow-up live fetch the same day
+(game no longer paused) confirmed the field's normal, not-paused shape:
+
+```json
+"readiness": {
+  "ready": true, "degraded": false, "degradationReasons": [],
+  "gamePaused": false, "gamePauseAgeSeconds": 0
+},
+"gameMaintenance": {
+  "paused": false, "observedAt": "2026-08-20T22:59:26.727Z",
+  "pausedSince": null, "pauseAgeSeconds": 0
+}
+```
+
+Key findings:
+
+- **`gameMaintenance` is always present**, not absent when not paused — `{"paused":
+  false, ...}` is the normal shape. `veydrift_agent.models.GameMaintenance` on `Snapshot`
+  is `None` only for a malformed/future-changed response (or an older backend that
+  predates the field, e.g. this file's own `health.json` fixture, captured 2026-08-12) —
+  never read `None` as "confirmed not paused."
+- **`gameMaintenance.pauseAgeSeconds`** is an int, seconds-paused-so-far, straight from
+  the API — preferred over computing duration from `pausedSince` client-side (avoids
+  clock-skew/timezone math).
+- **`readiness` carries its own flattened `gamePaused`/`gamePauseAgeSeconds`**, redundant
+  with `gameMaintenance`. `read.py`'s `_game_maintenance` deliberately reads only from
+  `gameMaintenance` as the single source of truth, not both.
+- **`degradationReasons` is genuinely free-form**, now actually consumed (previously
+  documented but unused — see the "Undocumented-but-live" style caveats elsewhere in this
+  file). `tests/fixtures/health_unhealthy.json` already carries a *different* real reason
+  ("Upstream RPC unfinished requests are growing or stale."), so a consumer must never
+  assume `"game_paused"` is the only possible entry.
+- **`ok: false` and a game pause are independent signals.** The same 2026-08-20 live check
+  found `/health`'s top-level `ok: false` for a reason unrelated to any pause
+  (`randomnessReadiness.ready: false`, a randomness-safety-check issue) while
+  `readiness.ready`/`degraded` were both fine — confirming `_health_ok`'s existing
+  `ok`/`readiness.ready` check is a broad, multi-cause signal, and exactly why a dedicated
+  `gameMaintenance.paused` check (`plan.py` rung `1b`, `guard.py`'s `game_paused` gate)
+  needed to be a separate signal rather than folded into `health_ok`.
+- `tests/fixtures/health_paused.json` is a hand-edited copy of the 2026-08-20 live capture
+  with `gameMaintenance.paused: true`, a real-shaped `pausedSince`/`pauseAgeSeconds`, and
+  `readiness.degradationReasons: ["game_paused"]` — synthesized rather than captured
+  during an actual pause, per this file's own existing convention for `health_unhealthy.json`
+  and the wallet-route synthetic fixtures (§4/§5).
+
 ### 3.2 `/runtime-config` (target: `config`)
 
 No params. Confirmed live 2026-08-12:

@@ -105,6 +105,11 @@
           "title": "On Abi Hash Change",
           "type": "boolean"
         },
+        "on_game_paused": {
+          "default": true,
+          "title": "On Game Paused",
+          "type": "boolean"
+        },
         "on_health_unhealthy_minutes": {
           "default": 30,
           "title": "On Health Unhealthy Minutes",

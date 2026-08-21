@@ -245,11 +245,11 @@ change called out:
     "allow_building": true, "allow_research": true,
     "allow_defense": false,           // flip to true once you want defense proposals
     "allow_ships": false,             // flip to true once you want ship proposals
-    "allow_fleet_noncombat": false,   // reserved for tier 3; no proposer uses it yet
+    "allow_fleet_noncombat": false,   // gates Transport/Harvest proposals -- operator tier, see §12
     "allow_combat": false             // ignored everywhere on purpose -- see §14
   },
   "escalation": {
-    "on_incoming_fleet": true, "on_abi_hash_change": true,
+    "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,
     "on_health_unhealthy_minutes": 30, "on_revert_count": 2
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },
@@ -427,6 +427,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | Field | Type | Legal values / range | Default |
 | --- | --- | --- | --- |
 | `on_incoming_fleet` | bool | `true`/`false` | `true` |
+| `on_game_paused` | bool | `true`/`false` | `true` |
 | `on_abi_hash_change` | bool | `true`/`false` | `true` |
 | `on_health_unhealthy_minutes` | int | unconstrained | `30` |
 | `on_revert_count` | int | unconstrained | `2` |
@@ -646,7 +647,7 @@ it off at this tier. Real output, captured against this repo's reference planet:
 │     alts:   1 considered and not selected --                                │
 │              [energy] Solar Satellite (unscored) -- locked: needs Shipyard   │
 │ 1 (have 0)                                                                   │
-│     guards: 15/18 pass (block)                                               │
+│     guards: 16/19 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -676,7 +677,7 @@ knowing before you move on to §10's scheduling options:
 
 A few things worth understanding about that block before you trust it:
 
-- **`guards: 15/18 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
+- **`guards: 16/19 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
   itself blocks — every onchain proposal is blocked at tier 1 by design, since advisor
   mode may never submit. That's what makes tier 1 safe *by construction*, not by
   discipline: the decision genuinely is `BLOCK`, so nothing past that point ever runs.
@@ -782,7 +783,7 @@ picking a target is a judgement call this codebase leaves to you for now.
 Both of these only ever fire at `operator` tier, behind the same guardrail evaluation as
 everything else — including a new gate, `mission_type`, that independently re-checks the
 mission type against the same allowed set the wallet engine enforces (§9 covers what
-`guards: N/18` means).
+`guards: N/19` means).
 
 **Before you promote from `advisor` to `economy`:**
 
@@ -825,7 +826,7 @@ room, not less.
 | `vd tick` says `readiness.ready` is not true, or health nulls | Almost always transient backend replica lag, not an outage — the agent already treats this correctly and will retry. If it persists past `on_health_unhealthy_minutes` (default 30), it escalates instead of retrying forever. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
-| Guards read `15/18 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |
+| Guards read `16/19 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 

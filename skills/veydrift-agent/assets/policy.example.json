@@ -21,7 +21,7 @@
     "allow_fleet_noncombat": false, "allow_combat": false
   },
   "escalation": {
-    "on_incoming_fleet": true, "on_abi_hash_change": true,
+    "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,
     "on_health_unhealthy_minutes": 30, "on_revert_count": 2
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },

@@ -98,6 +98,9 @@ Rungs 0-4 are vetoes; rungs 5-9 are a four-band candidate pipeline (`candidates.
 
 0. KILLSWITCH present → HALT
 1. `/health` not ok → NO-OP, reason recorded
+1b. game paused → ESCALATE (or NO-OP if `escalation.on_game_paused` is false) —
+    `gameMaintenance.paused` from `/health`; any write would revert during a
+    chain-side maintenance pause
 2. pending tx unreconciled → NO-OP, reconcile first
 3. a mission has been Resolving > 60s → `resolveFleetMission` (permissionless, free)
 4. incoming hostile fleet → ESCALATE, no proposal
@@ -135,7 +138,8 @@ current wiring status: `references/guardrails.md`.
 
 `killswitch` · `tier` (action's function ∈ tier's allowed set) · `address` (destination ∈
 live `/runtime-config`) · `abi_hash` (live hash == pinned, else block every write) ·
-`health` · `index_lag` · `affordability` (live `cost` vs `resourcesAsOfNow`) · `energy`
+`health` · `game_paused` (`gameMaintenance.paused` — BLOCKs unconditionally, fail-closed
+on missing data) · `index_lag` · `affordability` (live `cost` vs `resourcesAsOfNow`) · `energy`
 (post-action `produced ≥ required`) · `storage_overflow` · `fields` · `reserve` ·
 `gas_per_tx` / `gas_per_day` · `eth_floor` · `value_ceiling` (spend over
 `escalate_above_pct_of_resources` → ESCALATE, not BLOCK) · `idempotency` · `revert_streak`

@@ -1,4 +1,4 @@
-# Guardrails — `vd guard`, the 18 gates
+# Guardrails — `vd guard`, the 19 gates
 
 Source of truth for *what* each gate checks, *why*, what data it needs, what it does when
 that data is missing, and how to configure it. `guard.py` is the frozen contract this
@@ -28,8 +28,9 @@ rest of this codebase is shaped:
   below).
 
 Every gate is evaluated on every tick, regardless of what earlier gates decided —
-`GuardReport.verdicts` is a fixed-length list of exactly 18 entries every time (17
-through Phase 4; Phase 5c, 2026-08-17, added `mission_type` — see its own row below). A blocked
+`GuardReport.verdicts` is a fixed-length list of exactly 19 entries every time (17
+through Phase 4; Phase 5c, 2026-08-17, added `mission_type`; this change, 2026-08-20,
+added `game_paused` — see its own row below). A blocked
 proposal is exactly as informative as an allowed one, which is the entire point of never
 short-circuiting: `logs/proposals.jsonl` is the audit trail, not just the last mile. (A
 content-identical repeat of the immediately-previous proposal is not re-persisted to
@@ -57,7 +58,7 @@ This mirrors the same posture `plan.py` takes with `killswitch_active` /
 the one module that's allowed to touch the network/subprocess (`tick.py`) gather the
 facts.
 
-## The 18 gates
+## The 19 gates
 
 | # | Gate | What it checks | Data it needs | On missing data |
 | - | --- | --- | --- | --- |
@@ -68,17 +69,32 @@ facts.
 | 5 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
 | 6 | `abi_hash` | live `deploymentAbiHash` == pinned | `Snapshot.deployment_abi_hash` | missing or mismatched → BLOCK **all** writes |
 | 7 | `health` | `/health` reported `ok && readiness.ready` | `Snapshot.health_ok` (never `None`) | n/a |
-| 8 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
-| 9 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
-| 10 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
-| 11 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
-| 12 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
-| 13 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
-| 14 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
-| 15 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
-| 16 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
-| 17 | `idempotency` | no pending tx for the same `(planet, function, entity)` key | `AgentState.pending` | n/a — presence/absence is always knowable |
-| 18 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
+| 8 | `game_paused` | **(this change, 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
+| 9 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
+| 10 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
+| 11 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
+| 12 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
+| 13 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
+| 14 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
+| 15 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
+| 16 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
+| 17 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
+| 18 | `idempotency` | no pending tx for the same `(planet, function, entity)` key | `AgentState.pending` | n/a — presence/absence is always knowable |
+| 19 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
+
+**`game_paused` is the second, independent line of defense behind `plan.py`'s rung `1b`**
+(the first). Where `1b` is discretionary — `escalation.on_game_paused` lets an operator
+choose ESCALATE vs. NO-OP — `game_paused` BLOCKs unconditionally: by the time a proposal
+reaches `guard.py`, a confirmed pause is a hard safety fact, not a policy choice, and a
+stale/racy proposal built just before a pause began must still be caught here even if
+rung `1b` didn't fire on it. Fail-closed exactly like `energy`: `Snapshot.game_maintenance
+is None` means "this check could not run" (the `/health` response didn't carry
+`gameMaintenance` — genuinely possible on an older backend shape, confirmed against the
+pre-2026-08-20 `health.json` fixture, which predates the field entirely), never "confirmed
+not paused." `Snapshot.game_paused` (the flat bool) is a convenience flag for `plan.py`
+and must never substitute for checking `game_maintenance` here — see `models.py`'s own
+docstring on that field. Takes only `snapshot`, not `action`: unlike `energy` (scoped to
+one planet) a pause blocks every write universally.
 
 **`mission_type` mirrors `veydrift-wallet`'s `allowlist.ts` calldata-level mission-type check**
 — `guard._ALLOWED_MISSION_TYPES` and `allowlist.ts`'s `OPERATOR_ALLOWED_MISSION_TYPES` are the
@@ -188,6 +204,11 @@ engine is ever re-pinned or its tier map changes, both copies need updating toge
 `prerequisites` has no policy knob — it is derived entirely from `Snapshot` (building/
 technology levels) against the fixed `techtree.py` table, the same posture `abi_hash`
 takes toward its pinned constant.
+
+`game_paused` also has no policy knob of its own — `escalation.on_game_paused` only
+governs `plan.py`'s rung `1b` (ESCALATE vs. NO-OP, the discretionary call), not this gate,
+which BLOCKs unconditionally on a confirmed pause regardless of that flag. See its row
+above and the paragraph directly under the gate table.
 
 ## Offline testing: `vd guard run`
 

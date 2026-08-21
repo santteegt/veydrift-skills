@@ -1,0 +1,87 @@
+{
+  "ok": true,
+  "service": "veydrift-backend",
+  "configured": true,
+  "backend": {
+    "build": {
+      "deploymentAbiHash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+      "deploymentCommit": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+      "deploymentTimestamp": "2026-07-28T17:56:35.000Z",
+      "gitSha": "b5ae8b8eb6022536df2134cc878164679426ad4b",
+      "gitShaSource": "VEYDRIFT_BUILD_ARTIFACT"
+    },
+    "worker": {
+      "count": 10,
+      "defaultMaxWorkerCount": 2,
+      "index": 7,
+      "role": "reader"
+    }
+  },
+  "chain": {
+    "allianceContractConfigured": true,
+    "chainId": 8453,
+    "deploymentMode": "production",
+    "gameContractConfigured": true,
+    "hasRpcUrl": true,
+    "moonContractConfigured": true,
+    "migrationContractConfigured": true,
+    "missionResolutionEnabled": true,
+    "missionResolverConfigured": true,
+    "randomnessEngineConfigured": true,
+    "randomnessCommitterConfigured": true,
+    "referralSignerConfigured": true,
+    "referralIndexFromBlock": "48735699",
+    "paidAllianceInviteIndexFromBlock": "49640197",
+    "resourceTokensConfigured": {
+      "crystal": true,
+      "deuterium": true,
+      "metal": true
+    },
+    "rpcSource": "custom-url",
+    "rpcFallbackConfigured": false,
+    "rpcFallbackCount": 0,
+    "wsRpcSource": "custom-url",
+    "hasWsRpcUrl": true,
+    "resourceTokenAddressesConfigured": true,
+    "settlementContractConfigured": true,
+    "settlementStartPriceConfigured": true,
+    "indexFromBlock": "48295091",
+    "logChunkSpan": "90000",
+    "qaSyntheticStationedDefenders": false
+  },
+  "readiness": {
+    "ready": true,
+    "degraded": true,
+    "degradationReasons": [
+      "game_paused"
+    ],
+    "configurationReady": true,
+    "chainSyncConnected": null,
+    "subscribedToHeads": null,
+    "subscribedToLogs": null,
+    "indexedState": null,
+    "safeToServeIndexedState": null,
+    "missionResolutionStatus": null,
+    "gamePaused": true,
+    "gamePauseAgeSeconds": 754,
+    "rpcUnfinishedRequests": 0,
+    "rpcOldestUnfinishedRequestAgeMs": null,
+    "rpcUnfinishedRequestGrowthDetected": false
+  },
+  "chainSync": null,
+  "missionResolution": null,
+  "gameMaintenance": {
+    "paused": true,
+    "observedAt": "2026-08-20T22:59:26.727Z",
+    "pausedSince": "2026-08-20T22:46:52.727Z",
+    "pauseAgeSeconds": 754
+  },
+  "randomnessCommitter": null,
+  "indexer": null,
+  "rpc": null,
+  "randomnessReadiness": {
+    "ready": true,
+    "reasons": [],
+    "updatedAt": "2026-08-21T00:35:46.907Z"
+  }
+}

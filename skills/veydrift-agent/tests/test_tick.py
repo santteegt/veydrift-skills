@@ -32,6 +32,7 @@ from veydrift_agent.models import (
     Decision,
     EnergyBalance,
     Entity,
+    GameMaintenance,
     GuardReport,
     GuardStatus,
     Limits,
@@ -83,6 +84,7 @@ def _healthy_snapshot(**overrides) -> Snapshot:
         health_ok=True,
         deployment_abi_hash=guard_mod.PINNED_ABI_HASH,
         latest_indexed_block=100,
+        game_maintenance=GameMaintenance(paused=False),
         planets=[planet],
     )
     base.update(overrides)
@@ -184,6 +186,41 @@ def test_killswitch_halts_and_touches_only_health(isolated_home, monkeypatch):
     assert len(proposals) == 1
     assert proposals[0]["kind"] == "halt"
     assert not log.actions_path().exists()
+
+
+@respx.mock
+def test_killswitch_health_paused_payload_still_reports_health_ok_and_game_paused(isolated_home, monkeypatch):
+    """`_fetch_health_only`'s new 4-tuple return, exercised through the real killswitch
+    path (tick.py's only caller). Uses the same `health_paused.json` fixture as
+    test_read.py -- `ok: true`/`readiness.ready: true` alongside `gameMaintenance.paused:
+    true`, matching the confirmed live observation that reads keep working during a
+    pause. Functionally inert under killswitch_active=True (rung 0 always wins), but the
+    halted Snapshot/GuardReport should carry the real data, not defaults."""
+    _write_policy()
+    from veydrift_agent.state import killswitch_path
+
+    killswitch_path().touch()
+    health_paused = json.loads((Path(__file__).parent / "fixtures" / "health_paused.json").read_text())
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json=health_paused))
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not fetch a snapshot while KILLSWITCH is active")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", _boom)
+    monkeypatch.setattr(tick, "_live_addresses", _boom)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+    proposals = log.read_proposals()
+    assert len(proposals) == 1
+    assert proposals[0]["kind"] == "halt"  # rung 0 killswitch still wins over rung 1b
+    # The halted Snapshot isn't itself logged, but the guard report is -- and
+    # `_gate_game_paused` reads straight off `snapshot.game_maintenance`, so a BLOCK here
+    # is proof the halted Snapshot carried the real parsed data, not defaults.
+    verdicts = {v["gate"]: v["status"] for v in proposals[0]["guard_verdicts"]}
+    assert verdicts["game_paused"] == "block"
+    assert verdicts["health"] == "pass"  # health_ok=True came through too
 
 
 # --------------------------------------------------------------------------------------
@@ -1510,7 +1547,7 @@ def _allow_guard(monkeypatch):
     """Force guard.evaluate_guardrails to ALLOW, the same trick
     test_dry_run_at_tier1_never_sends_even_when_guard_would_allow already uses -- lets
     these tests isolate the require_confirmation branch without needing every one of the
-    18 gates to genuinely pass."""
+    19 gates to genuinely pass."""
     import veydrift_agent.guard as guard_module
 
     monkeypatch.setattr(
@@ -1757,9 +1794,10 @@ def test_load_policy_is_silent_when_allow_fleet_noncombat_is_false(isolated_home
 def test_structural_tier_block_alone_does_not_append_to_strategy_md(isolated_home, monkeypatch):
     """At tier 1 with no wallet configured, a routine onchain proposal's only non-passing
     gates are `tier` (BLOCK) + `gas`/`eth_floor` (ESCALATE, missing data) -- exactly the
-    `15/18 pass (block)` cluster README.md's worked example shows (`14/17` before Phase
-    5c added the `mission_type` gate). That is expected noise, not new information, so it
-    must not accrue a strategy.md entry every single tick."""
+    `16/19 pass (block)` cluster README.md's worked example shows (`15/18` before this
+    change added the `game_paused` gate, `14/17` before Phase 5c added `mission_type`).
+    That is expected noise, not new information, so it must not accrue a strategy.md
+    entry every single tick."""
     _write_policy()  # tier advisor
     tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
     _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx)  # gas=None -> gas gate ESCALATEs too
