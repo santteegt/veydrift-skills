@@ -1059,7 +1059,68 @@ def generate_proactive_storage_candidates(snapshot: Snapshot, policy: Policy, pl
 # policy declares intent for everything else"), so it wins outright. Left unset (the
 # default), this new step never fires and the function is behaviourally identical to
 # Phase 2 (AC pinned in tests/test_candidates.py).
+#
+# Storage-cap precondition (post-Phase-3 fix): a winning pick whose cost exceeds the
+# planet's *current* storage cap for a resource it needs can never be saved up to --
+# production stops accumulating past cap, so this is not "not affordable yet" (guard.py's
+# `_gate_affordability` already covers that and BLOCKs it at execution time), it is "not
+# affordable ever" until storage is raised. Before this fix, `generate_proactive_storage_
+# candidates` only ever appeared as an informational alternative (its own module comment
+# said so explicitly) and could never outrank a scored mine/energy pick or a declared
+# `building_priority` target -- so the ladder would keep re-proposing the same
+# guard.py-doomed pick every tick. `_resolve_storage_precondition` below is the hard
+# precondition that was missing: applied to every tentative winner this function
+# produces, it substitutes the matching storage candidate when the winner is capped, and
+# falls through to the next candidate (energy-first-style) when no storage substitute is
+# available either.
 # --------------------------------------------------------------------------------------
+
+
+def _exceeds_storage_cap(cost: Resources, storage_caps: Resources) -> int | None:
+    """First resource index (0=metal, 1=crystal, 2=deuterium, matching `_RESOURCE_LABELS`
+    / `_STORAGE_BUILDING_FOR_RESOURCE`) whose `cost` exceeds `storage_caps` for that
+    resource -- i.e. a cost that can never be saved up to at the planet's *current*
+    storage level, not merely one current resources don't cover yet. `None` if `cost`
+    fits under every cap it needs."""
+    for index, (need, cap) in enumerate(
+        ((cost.metal, storage_caps.metal), (cost.crystal, storage_caps.crystal), (cost.deuterium, storage_caps.deuterium))
+    ):
+        if need > cap:
+            return index
+    return None
+
+
+def _resolve_storage_precondition(
+    candidate: Candidate, planet: PlanetSnapshot, proactive_storage_candidates: list[Candidate]
+) -> Candidate | None:
+    """Applies the storage-cap precondition to one tentative winner. Returns `candidate`
+    unchanged when its cost fits under every storage cap it needs; the matching
+    proactive-storage candidate (with a rationale explaining the substitution) when it
+    doesn't and a storage candidate for the exceeded resource is available; or `None`
+    when it doesn't and no substitute is available either -- the caller's signal to
+    treat `candidate` like an unsafe mine and fall through to the next one."""
+    index = _exceeds_storage_cap(candidate.action.cost, planet.storage_caps)
+    if index is None:
+        return candidate
+    building_id = _STORAGE_BUILDING_FOR_RESOURCE[index]
+    storage_candidate = next((c for c in proactive_storage_candidates if c.action.entity_id == building_id), None)
+    if storage_candidate is None:
+        return None
+    label = _RESOURCE_LABELS[index]
+    need = getattr(candidate.action.cost, label)
+    cap = getattr(planet.storage_caps, label)
+    rationale = (
+        f"{candidate.action.entity_name} would cost {need} {label}, more than the planet's "
+        f"current {label} storage cap ({cap}) -- that cost can never be saved up to without "
+        f"first raising {storage_candidate.action.entity_name}, so proposing that instead of "
+        "a pick guard.py's affordability gate would only ever BLOCK."
+    )
+    return Candidate(
+        action=storage_candidate.action.model_copy(update={"rationale": rationale}),
+        family=storage_candidate.family,
+        score=storage_candidate.score,
+        score_basis=storage_candidate.score_basis,
+    )
 
 
 def select_building_candidate(
@@ -1072,12 +1133,29 @@ def select_building_candidate(
         infra_candidates = generate_infrastructure_candidates(snapshot, policy, planet)
         selectable_infra = [c for c in infra_candidates if not c.score_basis.startswith("locked:")]
         if selectable_infra:
-            winner = selectable_infra[0]
-            remaining_infra = [c for c in infra_candidates if c is not winner]
-            mine_pool = generate_mine_candidates(snapshot, policy, planet)
-            energy_pool = generate_energy_candidates(snapshot, policy, planet)
             storage_pool = generate_proactive_storage_candidates(snapshot, policy, planet)
-            return winner, rank_candidates(remaining_infra + mine_pool + energy_pool + storage_pool)
+            infra_winner: Candidate | None = None
+            demoted_infra: list[Candidate] = []
+            for infra_candidate in selectable_infra:
+                resolved = _resolve_storage_precondition(infra_candidate, planet, storage_pool)
+                if resolved is None:
+                    demoted_infra.append(infra_candidate)
+                    continue
+                if resolved is not infra_candidate:
+                    demoted_infra.append(infra_candidate)
+                infra_winner = resolved
+                break
+            if infra_winner is not None:
+                excluded_ids = {id(c) for c in demoted_infra} | {id(infra_winner)}
+                remaining_infra = [c for c in infra_candidates if id(c) not in excluded_ids] + demoted_infra
+                winner_key = (infra_winner.family, infra_winner.action.entity_id)
+                storage_remaining = [c for c in storage_pool if (c.family, c.action.entity_id) != winner_key]
+                mine_pool = generate_mine_candidates(snapshot, policy, planet)
+                energy_pool = generate_energy_candidates(snapshot, policy, planet)
+                return infra_winner, rank_candidates(remaining_infra + mine_pool + energy_pool + storage_remaining)
+            # Every declared infra pick is either locked or storage-capped with no
+            # substitute available -- fall through to the ordinary economic picker below,
+            # same as when `building_priority` yields nothing selectable at all.
 
     mine_candidates = {c.action.entity_id: c for c in generate_mine_candidates(snapshot, policy, planet)}
     energy_candidates = generate_energy_candidates(snapshot, policy, planet)
@@ -1100,7 +1178,13 @@ def select_building_candidate(
             alternatives.append(candidate)
             continue
         if candidate is not None:
-            winner = candidate
+            resolved = _resolve_storage_precondition(candidate, planet, proactive_storage_candidates)
+            if resolved is None:
+                alternatives.append(candidate)
+                continue
+            if resolved is not candidate:
+                alternatives.append(candidate)
+            winner = resolved
             break
 
         # No mine candidate at all -- either "no data" (already handled above) or the
@@ -1133,13 +1217,20 @@ def select_building_candidate(
             f"{'Solar Plant' if kind == 'solar_plant' else 'a Solar Satellite'} is currently the "
             f"cheaper energy source per point on this planet (satellite energy/unit={satellite_energy})."
         )
-        winner = Candidate(
+        energy_candidate = Candidate(
             action=chosen_energy.action.model_copy(update={"rationale": rationale}),
             family="energy",
             score=chosen_energy.score,
             score_basis=chosen_energy.score_basis,
         )
         alternatives.extend(c for c in energy_candidates if c is not chosen_energy)
+        resolved = _resolve_storage_precondition(energy_candidate, planet, proactive_storage_candidates)
+        if resolved is None:
+            alternatives.append(energy_candidate)
+            continue
+        if resolved is not energy_candidate:
+            alternatives.append(energy_candidate)
+        winner = resolved
         break
 
     if winner is None:

@@ -1362,6 +1362,17 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `"game_paused"` — `tests/test_read.py::test_snapshot_parses_game_maintenance_paused`,
     `::test_snapshot_parses_game_paused_false_and_none_maintenance_on_older_backend_shape`,
     `tests/test_tick.py::test_killswitch_health_paused_payload_still_reports_health_ok_and_game_paused`.
+61. **Correction, 2026-08-21, superseding §5.4's Phase 3 "storage, proactively" note above** (the
+    latter kept verbatim as history, not edited): a scored mine/energy winner, or a declared
+    `building_priority` winner, whose cost exceeds the planet's *current* storage cap for a resource
+    it needs is now replaced by the matching proactive-storage candidate (or, absent one, falls
+    through to the next candidate) — `generate_proactive_storage_candidates` is no longer additive-
+    to-`alternatives`-only; it can win Band 2. Before this fix, `guard.py`'s `_gate_affordability`
+    would BLOCK such a pick forever ("never affordable: cost exceeds storage cap") while `plan.py`
+    kept re-proposing it every tick, with the real fix demoted to an informational alternative —
+    `tests/test_candidates.py::test_mine_winner_capped_by_storage_is_replaced_by_matching_storage_candidate`,
+    `::test_mine_winner_capped_by_storage_falls_through_when_no_storage_substitute_available`,
+    `::test_building_priority_winner_capped_by_storage_is_replaced_by_matching_storage_candidate`.
 
 ---
 

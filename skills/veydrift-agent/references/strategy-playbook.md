@@ -286,7 +286,16 @@ where it moved.
      Fusion Reactor never substitutes for a blocked mine automatically, only appears as
      an ordinary scored candidate.
    - `generate_proactive_storage_candidates` adds storage as an always-`score=None`
-     alternative, visible before the reactive overflow trigger (rung 5) would ever fire.
+     candidate, visible before the reactive overflow trigger (rung 5) would ever fire.
+     **Fix, 2026-08-21:** it's no longer purely informational. If the mine/energy (or
+     `building_priority`) pick that would otherwise win this rung costs more than the
+     planet's *current* storage cap for a resource it needs — a cost that can never be
+     saved up to, not merely one current resources don't cover yet — the matching
+     proactive-storage candidate takes its place instead (or, if none is available, the
+     capped pick is skipped in favour of the next one, same as an energy-unsafe mine).
+     Before this fix `guard.py`'s `_gate_affordability` would BLOCK such a pick forever
+     ("never affordable: cost exceeds storage cap") while the ladder kept re-proposing it
+     every tick.
    - If `policy.strategy.building_priority` is set, `select_building_candidate` checks
      `generate_infrastructure_candidates` (Robotics Factory, Nanite Factory, Shipyard,
      Research Lab, Terraformer, Missile Silo, `score=None`, in declared order) **first**,

@@ -693,6 +693,107 @@ def test_building_priority_selects_first_unlocked_declared_building():
     assert winner.family == "infrastructure"
 
 
+# --------------------------------------------------------------------------------------
+# Storage-cap precondition on the winning pick. Before this fix, a scored mine/energy (or
+# declared building_priority) winner whose cost exceeded the planet's *current* storage
+# cap was still crowned winner -- `generate_proactive_storage_candidates` only ever
+# appeared as an informational alternative, never able to outrank it, so the ladder kept
+# re-proposing a pick guard.py's `_gate_affordability` would BLOCK forever ("never
+# affordable: cost exceeds storage cap"). `_resolve_storage_precondition` makes this a
+# hard precondition instead: substitute the matching storage candidate, or (if none is
+# available) fall through to the next candidate, exactly like the energy-first filter.
+# --------------------------------------------------------------------------------------
+
+
+def _capped_planet(*, with_metal_storage: bool = True) -> PlanetSnapshot:
+    """Metal Mine's next upgrade is energy-safe and would ordinarily win Band 2's
+    scoring, but its cost (200 metal) exceeds this planet's tiny metal storage cap (50)
+    -- that cost can never be saved up to without raising Metal Storage first. Crystal
+    Mine is energy-safe and fits comfortably under its own (large) crystal cap, so it's
+    the fallback winner when no Metal Storage candidate is available to substitute."""
+    buildings = [
+        Entity(id=ids.Building.METAL_MINE, name="Metal Mine", level=0, cost=Resources(metal=200, crystal=50)),
+        Entity(id=ids.Building.CRYSTAL_MINE, name="Crystal Mine", level=0, cost=Resources(metal=48, crystal=24)),
+        Entity(
+            id=ids.Building.DEUTERIUM_SYNTHESIZER,
+            name="Deuterium Synthesizer",
+            level=0,
+            cost=Resources(metal=225, crystal=75),
+        ),
+        Entity(id=ids.Building.SOLAR_PLANT, name="Solar Plant", level=0, cost=Resources(metal=75, crystal=30)),
+    ]
+    if with_metal_storage:
+        buildings.append(
+            Entity(id=ids.Building.METAL_STORAGE, name="Metal Storage", level=0, cost=Resources(metal=40, crystal=0))
+        )
+    return PlanetSnapshot(
+        planet_id=2,
+        metal_multiplier_bps=10_000,
+        crystal_multiplier_bps=10_000,
+        deuterium_multiplier_bps=10_000,
+        resources_as_of_now=Resources(metal=10, crystal=10, deuterium=10),
+        storage_caps=Resources(metal=50, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(metal=0, crystal=0, deuterium=0),
+        energy=EnergyBalance(produced=1_000, required=0, scale_bps=10_000, solar_satellite_energy=4),
+        buildings=buildings,
+        ships=[],
+        defenses=[],
+    )
+
+
+def test_mine_winner_capped_by_storage_is_replaced_by_matching_storage_candidate():
+    planet = _capped_planet(with_metal_storage=True)
+    snapshot = Snapshot(taken_at="2026-08-21T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[2])
+
+    winner, alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    assert winner.family == "storage"
+    assert winner.action.entity_id == ids.Building.METAL_STORAGE
+    assert "more than the planet's current metal storage cap" in winner.action.rationale
+    # The capped mine pick is demoted to an alternative, not dropped.
+    demoted = [c for c in alternatives if c.action.entity_id == ids.Building.METAL_MINE and c.family == "mine"]
+    assert demoted
+
+
+def test_mine_winner_capped_by_storage_falls_through_when_no_storage_substitute_available():
+    planet = _capped_planet(with_metal_storage=False)
+    snapshot = Snapshot(taken_at="2026-08-21T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[2])
+
+    winner, alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    # No Metal Storage entity on this planet to substitute -- falls through to the next
+    # mine in priority order instead of getting stuck on the capped Metal Mine pick.
+    assert winner.action.entity_id == ids.Building.CRYSTAL_MINE
+    assert winner.family == "mine"
+    demoted = [c for c in alternatives if c.action.entity_id == ids.Building.METAL_MINE and c.family == "mine"]
+    assert demoted
+
+
+def test_building_priority_winner_capped_by_storage_is_replaced_by_matching_storage_candidate():
+    planet = _capped_planet(with_metal_storage=True)
+    buildings = planet.buildings + [
+        Entity(id=ids.Building.ROBOTICS_FACTORY, name="Robotics Factory", level=0, cost=Resources(metal=200, crystal=50))
+    ]
+    planet = planet.model_copy(update={"buildings": buildings})
+    snapshot = Snapshot(taken_at="2026-08-21T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[2], strategy=StrategyCfg(building_priority=["Robotics Factory"]))
+
+    winner, alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    # Robotics Factory has no prerequisite (so it's selectable), but its cost also
+    # exceeds the tiny metal storage cap -- the same precondition applies to a declared
+    # building_priority winner, not only the scored mine/energy path.
+    assert winner.family == "storage"
+    assert winner.action.entity_id == ids.Building.METAL_STORAGE
+    demoted = [c for c in alternatives if c.action.entity_id == ids.Building.ROBOTICS_FACTORY]
+    assert demoted
+
+
 def test_research_priority_overrides_lowest_level_first():
     snapshot = load_snapshot("planet_664.json")
     planet = snapshot.planet(664)

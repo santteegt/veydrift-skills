@@ -11,6 +11,42 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-08-21
+
+### Fixed
+
+- **Storage-cap precondition on the winning building pick.** `select_building_candidate`
+  (Band 2, `candidates.py`) could crown a mine/energy pick, or a declared
+  `building_priority` target, whose cost exceeded the planet's *current* storage cap for
+  a resource it needed — not merely "not affordable yet" (`guard.py`'s
+  `_gate_affordability` already covers that and BLOCKs it at execution time) but "not
+  affordable ever" until storage is raised, since production stops accumulating past cap.
+  `generate_proactive_storage_candidates` already existed for exactly this situation, but
+  only ever appeared as an informational `alternatives` entry — by design, per its own
+  module comment, it could "never outrank a scored mine/energy pick." So the ladder kept
+  re-proposing the same guard.py-doomed pick every tick, with the actual fix (raise the
+  matching storage building) demoted to an alternative note instead of surfacing as the
+  next step.
+  - `candidates.py`: new `_exceeds_storage_cap` / `_resolve_storage_precondition` helpers,
+    applied to every tentative winner `select_building_candidate` produces — the scored
+    mine, the energy substitute, and a declared `building_priority` target alike.
+    Mirrors the existing energy-first hard-filter pattern: a capped pick with a matching
+    storage candidate available is replaced by it; a capped pick with none available
+    falls through to the next candidate instead of getting stuck (next mine in priority
+    order, or the next declared `building_priority` entry).
+  - No `guard.py` change — `_gate_affordability`'s BLOCK/ETA behavior is unchanged; this
+    fix reduces how often that BLOCK is reached by fixing the upstream proposal, not by
+    touching the gate itself.
+  - `tests/test_candidates.py`: three new tests — a capped mine winner replaced by its
+    matching storage candidate, the same case with no storage candidate available
+    (falls through to the next mine), and a capped `building_priority` winner replaced
+    the same way. `tests/test_plan.py`'s
+    `test_matched_building_levels_isolate_temperature_as_the_only_variable` fixture
+    also had its synthetic planet's storage caps bumped to match `planet_hot.json`'s —
+    its stock 10,000 caps were a level-0-ish leftover that this fix correctly started
+    tripping on a 32,842-metal Solar Plant cost, for a storage reason unrelated to the
+    test's actual (temperature) point.
+
 ## [1.2.0] - 2026-08-20
 
 ### Added
