@@ -223,6 +223,38 @@ def test_killswitch_health_paused_payload_still_reports_health_ok_and_game_pause
     assert verdicts["health"] == "pass"  # health_ok=True came through too
 
 
+@respx.mock
+def test_killswitch_recovers_a_5xx_health_body_and_reports_combat_only_degradation(isolated_home, monkeypatch):
+    """`_fetch_health_only`'s VeydriftServerError branch, exercised through the real
+    killswitch path. Uses health_randomness_degraded.json -- a live capture (2026-08-22)
+    of the real, persistent condition this fix addresses -- served as the actual HTTP 503
+    this backend returns for it. Functionally inert under killswitch_active=True (rung 0
+    still wins), but the halted Snapshot/GuardReport should show the recovery worked:
+    `health` reads PASS (combat-only degradation, positively confirmed), not BLOCK."""
+    _write_policy()
+    from veydrift_agent.state import killswitch_path
+
+    killswitch_path().touch()
+    health_degraded = json.loads((Path(__file__).parent / "fixtures" / "health_randomness_degraded.json").read_text())
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(503, json=health_degraded))
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not fetch a snapshot while KILLSWITCH is active")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", _boom)
+    monkeypatch.setattr(tick, "_live_addresses", _boom)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+    proposals = log.read_proposals()
+    assert len(proposals) == 1
+    assert proposals[0]["kind"] == "halt"  # rung 0 killswitch still wins
+    verdicts = {v["gate"]: v["status"] for v in proposals[0]["guard_verdicts"]}
+    assert verdicts["health"] == "pass"  # recovered body, positively confirmed combat-only
+    assert verdicts["game_paused"] == "pass"  # gameMaintenance.paused was false in the recovered body
+
+
 # --------------------------------------------------------------------------------------
 # The dry-run end-to-end path (tier 1): proposal logged, tick markdown written,
 # actions.jsonl NEVER created, send NEVER called.

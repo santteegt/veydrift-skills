@@ -824,6 +824,7 @@ room, not less.
 | Symptom | What's actually happening |
 | --- | --- |
 | `vd tick` says `readiness.ready` is not true, or health nulls | Almost always transient backend replica lag, not an outage — the agent already treats this correctly and will retry. If it persists past `on_health_unhealthy_minutes` (default 30), it escalates instead of retrying forever. |
+| `/health` reports `ok: false`, but the tick still runs normally | Expected as of 2026-08-22: `ok:false` caused *solely* by a combat-related backend readiness issue (a "New attacks are temporarily paused"-style condition) no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy, so that specific condition can't affect what it would propose. Any other cause of `ok:false` still blocks/escalates as before. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
 | Guards read `16/19 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |

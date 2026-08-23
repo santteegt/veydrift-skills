@@ -92,6 +92,7 @@ from veydrift_agent.models import (
     GuardStatus,
     GuardVerdict,
     Policy,
+    RandomnessReadiness,
     Snapshot,
     Tier,
     UnsignedTx,
@@ -768,19 +769,29 @@ def _fetch_snapshot(
     return Snapshot.model_validate(json.loads(out_file.read_text()))
 
 
-def _fetch_health_only() -> tuple[bool, bool, GameMaintenance | None, list[str]]:
+def _fetch_health_only() -> tuple[bool, bool, GameMaintenance | None, list[str], bool, RandomnessReadiness | None]:
     """Used only on the killswitch path (step 2): the ONE network call allowed before a
     halt (acceptance criterion: "halts before any network call beyond health"). Shares
-    `read._health_ok`/`read._game_maintenance` rather than re-implementing the same
-    parsing here -- this codebase has an explicit cautionary tale (AGENTS.md §5) about
-    two independent implementations of the same check drifting apart."""
+    `read._health_ok`/`read._game_maintenance`/`read._randomness_readiness` rather than
+    re-implementing the same parsing here -- this codebase has an explicit cautionary
+    tale (AGENTS.md §5) about two independent implementations of the same check drifting
+    apart. Also shares `read._recover_health_body` for the same reason a 5xx `/health`
+    body gets recovered on the main tick path -- functionally inert here (rung 0 always
+    wins under killswitch_active=True regardless of health), this is audit-record
+    honesty for the halted Snapshot, not a behaviour change."""
     try:
         data = http.fetch("/health")
+    except http.VeydriftServerError as exc:
+        data = read._recover_health_body("/health", exc)
+        if data is None:
+            return False, False, None, [], False, None
     except http.VeydriftAPIError:
-        return False, False, None, []
+        return False, False, None, [], False, None
     health_ok = read._health_ok(data)
     game_paused, game_maintenance, degradation_reasons = read._game_maintenance(data)
-    return health_ok, game_paused, game_maintenance, degradation_reasons
+    readiness_ready = (data.get("readiness") or {}).get("ready") is True
+    randomness_readiness = read._randomness_readiness(data)
+    return health_ok, game_paused, game_maintenance, degradation_reasons, readiness_ready, randomness_readiness
 
 
 # --------------------------------------------------------------------------------------
@@ -1161,7 +1172,9 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
 
     # Step 2: killswitch check -- ONE health call, nothing else, if active.
     if _killswitch_active():
-        health_ok, game_paused, game_maintenance, degradation_reasons = _fetch_health_only()
+        health_ok, game_paused, game_maintenance, degradation_reasons, readiness_ready, randomness_readiness = (
+            _fetch_health_only()
+        )
         halted_snapshot = Snapshot(
             taken_at=now,
             wallet=policy_model.wallet,
@@ -1169,6 +1182,8 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
             game_paused=game_paused,
             game_maintenance=game_maintenance,
             degradation_reasons=degradation_reasons,
+            readiness_ready=readiness_ready,
+            randomness_readiness=randomness_readiness,
         )
         action = plan_mod.plan_next_action(halted_snapshot, policy_model, killswitch_active=True)
         guard_report = guard_mod.evaluate_guardrails(action, halted_snapshot, policy_model, agent_state, killswitch_active=True, now=now)

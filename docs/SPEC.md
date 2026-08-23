@@ -352,6 +352,19 @@ battle-reports · highscores · snapshot`.
 `lastReconciledBlock` ↔ `latestIndexedBlock` gap — it is ~1.5M blocks by design. Freshness comes from
 `indexedState: "healthy"` + `safeToServeIndexedState: true` on the wallet routes.
 
+> **Correction, 2026-08-22.** `_health_ok()`'s raw `ok`/`readiness.ready` definition above is
+> unchanged — this adds a narrowly-scoped exception layered on top, not a redefinition.
+> `Snapshot.combat_only_degradation()` positively confirms `ok === false` is caused *solely* by
+> `randomnessReadiness` (a combat-only subsystem this codebase can never touch, since
+> `allow_combat` is read-and-ignored everywhere) while everything else — `readiness.ready`, no
+> other `degradationReasons`, `gameMaintenance.paused` — is confirmed fine; only then does
+> `plan.py`'s rung 1 / `guard.py`'s `health` gate proceed instead of blocking. Confirmed live,
+> persistent (not one-off): `/health` currently returns this via HTTP 503, not only a
+> 200-with-`ok:false` body — `read._fetch_or_exit()` defensively recovers a parseable `/health`
+> 5xx body specifically (every other route's 5xx behaviour is unaffected) so this check can even
+> run. See §9's new acceptance criteria (62-63) and `skills/veydrift-agent/references/
+> guardrails.md`'s `health` gate section for the full design.
+
 > **Phase 3 of the general-strategy-engine program, 2026-08-16.** `PlanetSnapshot` gains two fields,
 > both sourced from routes `snapshot` already fetches (no new HTTP call): `missile_silo_level` ←
 > `/defenses`'s `missileSiloLevel` (needed for the defense-target missile-slot cap, §5.4), and
@@ -1373,6 +1386,28 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `tests/test_candidates.py::test_mine_winner_capped_by_storage_is_replaced_by_matching_storage_candidate`,
     `::test_mine_winner_capped_by_storage_falls_through_when_no_storage_substitute_available`,
     `::test_building_priority_winner_capped_by_storage_is_replaced_by_matching_storage_candidate`.
+62. A confirmed combat-only `/health` degradation (`randomnessReadiness.ready == false`, with
+    `readiness.ready == true`, no other `degradation_reasons`, and `gameMaintenance.paused ==
+    false` all positively confirmed) does not reach a NOOP/BLOCK — `Snapshot.combat_only_
+    degradation()` is fail-closed (any other combination, including `readiness_ready == false`,
+    still blocks exactly as before `health_ok` itself became relevant) —
+    `tests/test_plan.py::test_health_not_ok_falls_through_when_combat_only_degradation_is_confirmed`,
+    `::test_health_not_ok_still_noops_when_readiness_itself_is_not_ready`,
+    `::test_health_not_ok_still_noops_on_a_genuinely_different_degradation`,
+    `tests/test_guard.py::test_health_passes_on_confirmed_combat_only_degradation`,
+    `::test_health_still_blocks_when_readiness_itself_is_not_ready`,
+    `::test_health_still_blocks_on_a_genuinely_different_degradation`.
+63. `read._fetch_or_exit()` defensively recovers a `/health` HTTP 5xx whose captured error body
+    parses as a real health-response shape, instead of hard-aborting — scoped narrowly to
+    `/health`: every other route's 5xx still exits exactly as before, and an unparseable `/health`
+    5xx body still exits too. `tick.py`'s killswitch-only `_fetch_health_only()` shares the same
+    recovery (`read._recover_health_body`), functionally inert under `killswitch_active=True` but
+    keeping the halted `Snapshot`'s audit record honest —
+    `tests/test_read.py::test_fetch_or_exit_recovers_a_parseable_5xx_health_body`,
+    `::test_fetch_or_exit_still_exits_2_on_an_unparseable_5xx_health_body`,
+    `::test_fetch_or_exit_never_recovers_a_5xx_on_a_non_health_route`,
+    `::test_snapshot_parses_randomness_readiness_and_readiness_ready_from_a_recovered_5xx`,
+    `tests/test_tick.py::test_killswitch_recovers_a_5xx_health_body_and_reports_combat_only_degradation`.
 
 ---
 

@@ -68,7 +68,7 @@ facts.
 | 4 | `prerequisites` | the proposed entity's on-chain requirements (`techtree.py`, transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`) are met on the target planet, plus shield-dome/missile-slot caps | target planet's building levels, account technology levels | any unmet requirement, or any level the snapshot didn't report → BLOCK; a shield-dome/missile-slot count the snapshot didn't report → BLOCK |
 | 5 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
 | 6 | `abi_hash` | live `deploymentAbiHash` == pinned | `Snapshot.deployment_abi_hash` | missing or mismatched → BLOCK **all** writes |
-| 7 | `health` | `/health` reported `ok && readiness.ready` | `Snapshot.health_ok` (never `None`) | n/a |
+| 7 | `health` | `/health` reported `ok && readiness.ready`, **or** (2026-08-22) a positively confirmed combat-only degradation — `Snapshot.combat_only_degradation()` | `Snapshot.health_ok`, `.readiness_ready`, `.degradation_reasons`, `.game_maintenance`, `.randomness_readiness` | n/a — `combat_only_degradation()` is itself fail-closed (see below) |
 | 8 | `game_paused` | **(this change, 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
 | 9 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
 | 10 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
@@ -81,6 +81,29 @@ facts.
 | 17 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
 | 18 | `idempotency` | no pending tx for the same `(planet, function, entity)` key | `AgentState.pending` | n/a — presence/absence is always knowable |
 | 19 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
+
+**`health`'s exception for a combat-only degradation (2026-08-22).** Live, during this
+fix's own planning: `/health` returned HTTP 503 (persistently, not a one-off), with a
+body reporting `ok: false` while `readiness.ready: true`, `readiness.degradationReasons:
+[]`, `gameMaintenance.paused: false`, and `randomnessReadiness.ready: false` — a
+combat-only subsystem ("New attacks are temporarily paused"). `allow_combat` is
+read-and-ignored everywhere in this codebase (`ActionsCfg.allow_combat`'s own docstring),
+so combat is unconditionally unreachable regardless of policy, and this signal can never
+affect a proposal this codebase would make. `Snapshot.combat_only_degradation()` is a
+structural, fail-closed positive-confirmation check — `readiness_ready` True, no other
+`degradation_reasons`, `game_maintenance` positively confirmed not paused, and
+`randomness_readiness` positively confirmed not-ready (never `None`/unconfirmed) — never
+an allowlist of known-safe reason strings, so it stays robust if
+`randomness_readiness.reasons`' wording changes. Any other combination (a genuinely
+unhealthy `readiness.ready`, a real pause, an unrelated degradation reason like
+`health_unhealthy.json`'s RPC-unfinished-requests) still `BLOCK`s exactly as before. Both
+`plan.py`'s rung 1 and this gate independently call the same `Snapshot` method — the
+`game_maintenance`/`degradation_reasons` sharing precedent, not a parsing-drift risk
+(`AGENTS.md` §5): the two-layer property is about independent *decisions* (NO-OP vs
+BLOCK), not independently re-parsing raw JSON. `read.py`'s `_fetch_or_exit` also
+defensively recovers a parseable `/health` 5xx body (narrowly scoped to `/health`
+specifically — every other route's 5xx still hard-fails unchanged), since this backend
+signals the same condition via HTTP 503 as often as via a 200-with-`ok:false` body.
 
 **`game_paused` is the second, independent line of defense behind `plan.py`'s rung `1b`**
 (the first). Where `1b` is discretionary — `escalation.on_game_paused` lets an operator

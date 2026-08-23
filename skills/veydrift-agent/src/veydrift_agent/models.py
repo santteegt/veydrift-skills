@@ -157,6 +157,18 @@ class GameMaintenance(Base):
     pause_age_seconds: int = 0
 
 
+class RandomnessReadiness(Base):
+    """From /health's randomnessReadiness block -- combat-only (gates new attacks via a
+    randomness safety check). `allow_combat` is read-and-ignored everywhere in this
+    codebase (see `ActionsCfg.allow_combat`'s own docstring) -- combat is unconditionally
+    unreachable regardless of policy, so this signal can never affect a proposal this
+    codebase would make. `None` on Snapshot means unconfirmed -- same fail-closed
+    convention as `GameMaintenance`, never read as "combat readiness is fine."""
+
+    ready: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
 class IncomingFleet(Base):
     """From /wallet/{addr}/fleet-visibility.incoming — the hostile-fleet escalation trigger."""
 
@@ -227,6 +239,13 @@ class Snapshot(Base):
     #: From readiness.degradationReasons -- generic, not pause-specific (see docstring
     #: note on gameMaintenance/degradationReasons in read.py's `_game_maintenance`).
     degradation_reasons: list[str] = Field(default_factory=list)
+    #: The raw readiness.ready flag, recovered separately from the combined `health_ok`
+    #: bool (which folds `ok` AND `readiness.ready` together and so can't distinguish
+    #: "ok=false but readiness.ready=true" from "readiness.ready=false" on its own).
+    #: Needed by `combat_only_degradation` below. Defaults `False` (fail-closed).
+    readiness_ready: bool = False
+    #: `None` means unconfirmed -- see `RandomnessReadiness`'s own docstring.
+    randomness_readiness: RandomnessReadiness | None = None
     indexed_state: str | None = None          # "healthy" is the value that matters
     safe_to_serve_indexed_state: bool | None = None
     latest_indexed_block: int | None = None
@@ -245,6 +264,26 @@ class Snapshot(Base):
 
     def planet(self, planet_id: int) -> PlanetSnapshot | None:
         return next((p for p in self.planets if p.planet_id == planet_id), None)
+
+    def combat_only_degradation(self) -> bool:
+        """True only when every subsystem this codebase can ever act on is positively
+        confirmed healthy, even though `health_ok` is False -- i.e. `ok` is false SOLELY
+        because randomnessReadiness (combat-only) is degraded. Fail-closed: requires
+        `readiness_ready` True, no other `degradation_reasons`, `game_maintenance`
+        positively confirmed not paused, and `randomness_readiness` positively confirmed
+        not-ready (never `None`/unconfirmed) -- any other combination returns `False`,
+        unchanged from the plain `health_ok` check. Structural (positively confirms
+        everything else is fine), not an allowlist of known-safe reason strings -- this
+        never inspects `randomness_readiness.reasons`' text, so it's robust against that
+        wording changing."""
+        return (
+            self.readiness_ready
+            and not self.degradation_reasons
+            and self.game_maintenance is not None
+            and not self.game_maintenance.paused
+            and self.randomness_readiness is not None
+            and not self.randomness_readiness.ready
+        )
 
 
 # --------------------------------------------------------------------------------------

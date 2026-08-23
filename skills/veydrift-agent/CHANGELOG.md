@@ -11,6 +11,48 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-22
+
+### Added
+
+- **A combat-only `/health` degradation no longer blocks the peaceful ladder.** Live,
+  during this session's planning: `/health` returned HTTP 503, persistently, with a
+  well-formed JSON body reporting `ok: false` while `readiness.ready: true`,
+  `readiness.degradationReasons: []`, `gameMaintenance.paused: false`, and
+  `randomnessReadiness.ready: false` (a combat-only subsystem — "New attacks are
+  temporarily paused"). Before this fix, `vd tick` aborted entirely, indefinitely, for a
+  reason that can never affect this codebase's own behaviour: `allow_combat` is
+  read-and-ignored everywhere (`ActionsCfg.allow_combat`'s own docstring), so combat is
+  unconditionally unreachable regardless of policy.
+  - `models.py`: new `RandomnessReadiness` model, `Snapshot.readiness_ready` /
+    `randomness_readiness` fields, and `Snapshot.combat_only_degradation()` — a
+    structural, fail-closed positive-confirmation check (readiness.ready True, no other
+    degradation reasons, game not paused, randomnessReadiness positively confirmed
+    not-ready), never an allowlist of known-safe reason text.
+  - `read.py`: new `_recover_health_body()`, narrowly scoped to `/health` — a 5xx that
+    survives retries has its captured error body defensively parsed and, if it's a real
+    health-response shape, evaluated exactly like a normal 200 instead of aborting.
+    Every other route's 5xx behaviour through `_fetch_or_exit` is unaffected. New
+    `_randomness_readiness()` parser, wired into `snapshot()` alongside the existing
+    `game_maintenance`/`degradation_reasons` parsing. Diagnostic message for a recovered
+    5xx routed to a new `_stderr_console` so it never corrupts `--json`/`--out`'s
+    stdout contract (a real bug caught by this feature's own new snapshot test).
+  - `tick.py`: `_fetch_health_only()` (killswitch path) gets the same recovery and grows
+    to a 6-tuple, mirroring how it grew for `game_paused` previously — functionally
+    inert under `killswitch_active=True` (rung 0 always wins), audit-record honesty.
+  - `plan.py` rung 1 / `guard.py`'s `health` gate: both fall through / PASS instead of
+    NO-OP / BLOCK when `Snapshot.combat_only_degradation()` is positively confirmed,
+    independently re-deriving the same shared fields (mirrors the `game_paused` two-layer
+    shape). Rung 1's still-blocking rationale also now surfaces `degradation_reasons`
+    instead of a fixed, detail-free string.
+  - Verified live end-to-end against the real, currently-degraded API: `vd tick
+    --dry-run` now builds a full snapshot and reaches the ordinary decision ladder
+    (NOOP: queues busy) instead of aborting with "could not fetch a snapshot" — and
+    `vd tick`'s own guard report shows `health: pass` with the combat-only-degradation
+    detail message, `game_paused: pass`.
+  - `tests/fixtures/health_randomness_degraded.json`: a live capture (2026-08-22, not
+    synthesized), reused directly as the mocked 503 body in the new tests.
+
 ## [1.2.1] - 2026-08-21
 
 ### Fixed

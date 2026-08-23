@@ -29,6 +29,7 @@ from veydrift_agent.models import (
     Policy,
     QueueEntry,
     QueueKind,
+    RandomnessReadiness,
     Resources,
     Snapshot,
     StorageCfg,
@@ -222,6 +223,66 @@ def test_unhealthy_snapshot_is_a_noop():
     policy = make_policy(planets=[664])
 
     action = plan_next_action(unhealthy, policy)
+
+    assert action.kind == ActionKind.NOOP
+    assert action.rule == "1:health-not-ok"
+
+
+def _combat_only_degraded_update() -> dict:
+    """Positively confirms everything except randomnessReadiness -- the exact live shape
+    captured 2026-08-22 (see tests/fixtures/health_randomness_degraded.json)."""
+    return {
+        "health_ok": False,
+        "readiness_ready": True,
+        "degradation_reasons": [],
+        "game_maintenance": GameMaintenance(paused=False),
+        "randomness_readiness": RandomnessReadiness(ready=False, reasons=["randomness safety check unavailable"]),
+    }
+
+
+def test_health_not_ok_falls_through_when_combat_only_degradation_is_confirmed():
+    snapshot = load_snapshot("planet_664.json")
+    degraded = snapshot.model_copy(update=_combat_only_degraded_update())
+    policy = make_policy(planets=[664])
+
+    action = plan_next_action(degraded, policy)
+
+    assert action.kind != ActionKind.NOOP or action.rule != "1:health-not-ok"
+    assert action.entity_id == ids.Building.SOLAR_PLANT  # the ladder proceeded normally
+
+
+def test_health_not_ok_still_noops_when_readiness_itself_is_not_ready():
+    """readiness_ready=False alone must still block -- combat_only_degradation is
+    fail-closed, not "randomness_readiness present therefore fine"."""
+    snapshot = load_snapshot("planet_664.json")
+    update = _combat_only_degraded_update()
+    update["readiness_ready"] = False
+    degraded = snapshot.model_copy(update=update)
+    policy = make_policy(planets=[664])
+
+    action = plan_next_action(degraded, policy)
+
+    assert action.kind == ActionKind.NOOP
+    assert action.rule == "1:health-not-ok"
+
+
+def test_health_not_ok_still_noops_on_a_genuinely_different_degradation():
+    """A non-randomness degradation reason (the pre-existing health_unhealthy.json case,
+    RPC-unfinished-requests) must still block -- confirms no regression on the real
+    prior case this fix sits next to."""
+    snapshot = load_snapshot("planet_664.json")
+    degraded = snapshot.model_copy(
+        update={
+            "health_ok": False,
+            "readiness_ready": True,
+            "degradation_reasons": ["Upstream RPC unfinished requests are growing or stale."],
+            "game_maintenance": GameMaintenance(paused=False),
+            "randomness_readiness": RandomnessReadiness(ready=True),
+        }
+    )
+    policy = make_policy(planets=[664])
+
+    action = plan_next_action(degraded, policy)
 
     assert action.kind == ActionKind.NOOP
     assert action.rule == "1:health-not-ok"

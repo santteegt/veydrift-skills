@@ -40,10 +40,18 @@ from typing import Any, NoReturn
 
 import typer
 from rich import print as rprint
+from rich.console import Console
 
 from veydrift_agent import fmt, http, models
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+
+#: For diagnostics that must not land on stdout when a caller continues past them (e.g.
+#: a recovered `/health` body) -- `--json`/`--out` output is a structured contract on
+#: stdout, and a message interleaved there would corrupt it for any parser. Every other
+#: `rprint(...)` in this module is immediately followed by `raise typer.Exit(...)`, so it
+#: never reaches that risk -- this console exists only for the one path that continues.
+_stderr_console = Console(stderr=True)
 
 # --------------------------------------------------------------------------------------
 # Entity ID -> name tables: prefer ids.py (WP2), fall back to a local transcription of
@@ -195,12 +203,38 @@ def _need_planet_id(planet_id: int | None) -> int:
     return planet_id
 
 
+def _recover_health_body(path: str, exc: http.VeydriftServerError) -> dict[str, Any] | None:
+    """Narrow, defensive recovery for `/health` specifically -- confirmed live
+    (2026-08-22, twice): this backend signals `ok:false` via HTTP 503 on this route, not
+    only via a 200-with-`ok:false` body -- a persistent, not one-off, condition. Every
+    other route's 5xx behaviour through `_fetch_or_exit` is completely unaffected: this
+    only ever returns non-`None` for `path == "/health"`, and only when the captured
+    error body parses as a real health-response shape. Recovering the body never means
+    "the game is fine" -- the recovered dict still goes through the exact same
+    `_health_ok` / `Snapshot.combat_only_degradation` checks a normal 200 response
+    would."""
+    if path.rstrip("/") != "/health":
+        return None
+    try:
+        recovered = json.loads(exc.body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return recovered if isinstance(recovered, dict) and "readiness" in recovered else None
+
+
 def _fetch_or_exit(path: str, params: dict[str, Any] | None = None, *, max_age: float | None = None) -> dict[str, Any]:
     try:
         return http.fetch(path, params, max_age=max_age)
     except http.VeydriftHTTPError as exc:
         _fail(str(exc))
     except http.VeydriftServerError as exc:
+        recovered = _recover_health_body(path, exc)
+        if recovered is not None:
+            _stderr_console.print(
+                f"[yellow]/health returned HTTP {exc.status_code} but the body parsed -- "
+                "evaluating it instead of aborting.[/yellow]"
+            )
+            return recovered
         rprint(f"[red]API unhealthy:[/] {exc}")
         raise typer.Exit(code=2)
     except http.VeydriftNetworkError as exc:
@@ -252,6 +286,19 @@ def _game_maintenance(data: dict) -> tuple[bool, models.GameMaintenance | None, 
         pause_age_seconds=maintenance_raw.get("pauseAgeSeconds") or 0,
     )
     return paused, maintenance, reasons
+
+
+def _randomness_readiness(data: dict) -> models.RandomnessReadiness | None:
+    """Parses /health's randomnessReadiness block. `None` means unconfirmed (route
+    absent/malformed) -- see `RandomnessReadiness`'s own docstring for why this must
+    never be read as "combat readiness is fine." Distinct object from `readiness`
+    (top-level, own key `randomnessReadiness`), with its own `reasons` list -- not the
+    same as `readiness.degradationReasons`, confirmed live 2026-08-22: the latter was
+    empty while randomnessReadiness.ready was false."""
+    raw = data.get("randomnessReadiness")
+    if raw is None:
+        return None
+    return models.RandomnessReadiness(ready=raw.get("ready") is True, reasons=list(raw.get("reasons") or []))
 
 
 def _resources(raw: dict[str, Any] | None) -> models.Resources:
@@ -893,6 +940,8 @@ def snapshot(
     health_raw = _fetch_or_exit("/health", max_age=max_age)
     health_ok = _health_ok(health_raw)
     game_paused, game_maintenance, degradation_reasons = _game_maintenance(health_raw)
+    readiness_ready = (health_raw.get("readiness") or {}).get("ready") is True
+    randomness_readiness = _randomness_readiness(health_raw)
 
     if planet_id is not None:
         planet_ids = [planet_id]
@@ -964,6 +1013,8 @@ def snapshot(
         game_paused=game_paused,
         game_maintenance=game_maintenance,
         degradation_reasons=degradation_reasons,
+        readiness_ready=readiness_ready,
+        randomness_readiness=randomness_readiness,
         indexed_state=indexer_block.get("indexedState"),
         safe_to_serve_indexed_state=indexer_block.get("safeToServeIndexedState"),
         latest_indexed_block=_maybe_int(indexer_block.get("latestIndexedBlock")),

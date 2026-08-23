@@ -22,10 +22,18 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
+import typer
 from typer.testing import CliRunner
 
 from veydrift_agent import http
-from veydrift_agent.read import _parse_datetime, app, fetch_activity, fetch_fleet_visibility
+from veydrift_agent.read import (
+    _fetch_or_exit,
+    _parse_datetime,
+    _randomness_readiness,
+    app,
+    fetch_activity,
+    fetch_fleet_visibility,
+)
 
 BASE = http.API_BASE_URL
 WALLET = "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
@@ -396,6 +404,109 @@ def test_snapshot_parses_game_paused_false_and_none_maintenance_on_older_backend
     assert data["game_paused"] is False
     assert data["game_maintenance"] is None
     assert data["degradation_reasons"] == []
+
+
+# --------------------------------------------------------------------------------------
+# randomnessReadiness / the storage-cap-style "combat-only degradation" fix (2026-08-22).
+# `health_randomness_degraded.json` is a live capture (curl'd directly during planning,
+# not synthesized) of a real, persistent condition: /health returns HTTP 503 with a
+# well-formed JSON body -- ok:false, readiness.ready:true, readiness.degradationReasons:
+# [], gameMaintenance.paused:false, randomnessReadiness.ready:false. See _fetch_or_exit's
+# `_recover_health_body` and Snapshot.combat_only_degradation.
+# --------------------------------------------------------------------------------------
+
+
+def test_randomness_readiness_parses_from_a_real_payload():
+    data = load("health_randomness_degraded.json")
+
+    rr = _randomness_readiness(data)
+
+    assert rr is not None
+    assert rr.ready is False
+    assert "randomness safety check" in rr.reasons[0]
+
+
+def test_randomness_readiness_none_when_absent():
+    assert _randomness_readiness({}) is None
+
+
+def test_randomness_readiness_ready_true_on_the_2026_08_12_capture():
+    """health.json's randomnessReadiness is {ready: true, reasons: []} -- the healthy
+    shape, distinct from health_randomness_degraded.json's ready:false case above."""
+    rr = _randomness_readiness(load("health.json"))
+    assert rr is not None
+    assert rr.ready is True
+    assert rr.reasons == []
+
+
+@respx.mock
+def test_fetch_or_exit_recovers_a_parseable_5xx_health_body():
+    body = load("health_randomness_degraded.json")
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(503, json=body))
+
+    result = _fetch_or_exit("/health", max_age=0)
+
+    assert result == body
+
+
+@respx.mock
+def test_fetch_or_exit_still_exits_2_on_an_unparseable_5xx_health_body():
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(503, text="bad gateway"))
+
+    with pytest.raises(typer.Exit) as excinfo:
+        _fetch_or_exit("/health", max_age=0)
+
+    assert excinfo.value.exit_code == 2
+
+
+@respx.mock
+def test_fetch_or_exit_never_recovers_a_5xx_on_a_non_health_route():
+    """Recovery is scoped narrowly to /health -- confirms every other route's 5xx
+    behaviour through _fetch_or_exit is completely unaffected, even with a body shaped
+    exactly like a recoverable health response."""
+    body = load("health_randomness_degraded.json")
+    respx.get(f"{BASE}/wallet/{WALLET}/overview", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(503, json=body)
+    )
+
+    with pytest.raises(typer.Exit) as excinfo:
+        _fetch_or_exit(f"/wallet/{WALLET}/overview", {"planetId": PLANET}, max_age=0)
+
+    assert excinfo.value.exit_code == 2
+
+
+@respx.mock
+def test_snapshot_parses_randomness_readiness_and_readiness_ready_from_a_recovered_5xx():
+    """The full snapshot() command still exits 2 on health_ok=False regardless of
+    combat_only_degradation (that decision belongs to plan.py/guard.py, not this CLI
+    command's own exit code) -- but the recovered 5xx body is still fully parsed onto
+    the Snapshot, which is what tick.py's _fetch_snapshot actually consumes."""
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(503, json=load("health_randomness_degraded.json")))
+    respx.get(f"{BASE}/wallet/{WALLET}/research", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_research.json"))
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/overview", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_overview.json"))
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/infrastructure", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_infrastructure.json"))
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/shipyard", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_shipyard.json"))
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/defenses", params={"planetId": str(PLANET)}).mock(
+        return_value=httpx.Response(200, json=load("wallet_defenses.json"))
+    )
+
+    result = runner.invoke(app, ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET), "--json"])
+
+    assert result.exit_code == 2  # unchanged CLI convention -- health_ok is still False
+    data = json.loads(result.stdout)
+    assert data["health_ok"] is False
+    assert data["readiness_ready"] is True
+    assert data["randomness_readiness"]["ready"] is False
+    assert data["degradation_reasons"] == []
+    assert data["game_maintenance"]["paused"] is False
 
 
 @respx.mock

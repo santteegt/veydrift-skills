@@ -186,6 +186,29 @@ Key findings:
   `readiness.degradationReasons: ["game_paused"]` — synthesized rather than captured
   during an actual pause, per this file's own existing convention for `health_unhealthy.json`
   and the wallet-route synthetic fixtures (§4/§5).
+- **`randomnessReadiness`-only degradation confirmed persistent, and confirmed served via
+  HTTP 503 (2026-08-22).** Re-observed live (`curl`, twice, moments apart): still
+  `ok: false`, `randomnessReadiness.ready: false`, everything else fine — this is not a
+  one-off. New this observation: the HTTP status was **503**, not 200 — this backend
+  apparently signals `ok:false` via a non-2xx status on `/health` specifically, not only
+  via a 200-with-`ok:false` body (the 2026-08-20 observation didn't record HTTP status,
+  so it's unconfirmed whether that one was also a 503). `randomnessReadiness` is its own
+  top-level object, with its own `reasons` array (plural) — **not** the same list as
+  `readiness.degradationReasons`, which was empty (`[]`) in this same response:
+  ```json
+  "randomnessReadiness": {
+    "ready": false,
+    "reasons": ["The randomness safety check is unavailable. New attacks are temporarily paused."],
+    "updatedAt": "2026-08-22T05:37:42.301Z"
+  }
+  ```
+  `read._recover_health_body()` defensively parses a `/health` 5xx's captured error body
+  (JSON-shaped, has a `readiness` key) instead of hard-aborting, narrowly scoped to this
+  one route; `Snapshot.combat_only_degradation()` (`skills/veydrift-agent/references/
+  guardrails.md`'s `health` gate section has the full design) is what then decides
+  whether that's safe to proceed past. `tests/fixtures/health_randomness_degraded.json`
+  is this exact live capture, used directly (not hand-edited) as the mocked 503 body in
+  the new tests.
 
 ### 3.2 `/runtime-config` (target: `config`)
 

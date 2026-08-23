@@ -548,9 +548,21 @@ def _gate_abi_hash(action: Action, snapshot: Snapshot) -> GuardVerdict:
 
 
 def _gate_health(snapshot: Snapshot) -> GuardVerdict:
-    if not snapshot.health_ok:
-        return _verdict("health", GuardStatus.BLOCK, "/health reported not ok / not ready")
-    return _verdict("health", GuardStatus.PASS, "/health ok and ready")
+    """`plan.py`'s rung 1 is the first line of defense for the same distinction below --
+    this is the second, independent one (same two-layer shape as `_gate_game_paused`):
+    a proposal reaching `guard.py` must still be re-checked, not trusted from upstream."""
+    if snapshot.health_ok:
+        return _verdict("health", GuardStatus.PASS, "/health ok and ready")
+    if snapshot.combat_only_degradation():
+        return _verdict(
+            "health",
+            GuardStatus.PASS,
+            "/health reported ok=false, but positively confirmed as a randomness/combat-"
+            "readiness-only degradation (readiness.ready=true, no other degradation "
+            "reasons, game not paused) -- irrelevant to this codebase, which never "
+            "proposes combat regardless of policy",
+        )
+    return _verdict("health", GuardStatus.BLOCK, "/health reported not ok / not ready")
 
 
 def _gate_game_paused(snapshot: Snapshot) -> GuardVerdict:

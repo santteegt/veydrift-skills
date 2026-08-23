@@ -26,6 +26,7 @@ from veydrift_agent.models import (
     Limits,
     PlanetSnapshot,
     Policy,
+    RandomnessReadiness,
     Resources,
     Snapshot,
     Tier,
@@ -885,6 +886,41 @@ def test_health_blocks_when_not_ok():
 def test_health_passes_when_ok():
     report = evaluate(make_build_action(), make_snapshot(health_ok=True), make_policy())
     assert verdict(report, "health").status is GuardStatus.PASS
+
+
+def test_health_passes_on_confirmed_combat_only_degradation():
+    """Second, independent layer of the same fix plan.py's rung 1 has -- confirms
+    guard.py re-derives the same positive confirmation rather than trusting a proposal
+    that already made it past rung 1."""
+    snapshot = make_snapshot(
+        health_ok=False,
+        readiness_ready=True,
+        degradation_reasons=[],
+        randomness_readiness=RandomnessReadiness(ready=False, reasons=["randomness safety check unavailable"]),
+    )
+    report = evaluate(make_build_action(), snapshot, make_policy())
+    assert verdict(report, "health").status is GuardStatus.PASS
+
+
+def test_health_still_blocks_when_readiness_itself_is_not_ready():
+    snapshot = make_snapshot(
+        health_ok=False,
+        readiness_ready=False,
+        randomness_readiness=RandomnessReadiness(ready=False, reasons=["randomness safety check unavailable"]),
+    )
+    report = evaluate(make_build_action(), snapshot, make_policy())
+    assert verdict(report, "health").status is GuardStatus.BLOCK
+
+
+def test_health_still_blocks_on_a_genuinely_different_degradation():
+    snapshot = make_snapshot(
+        health_ok=False,
+        readiness_ready=True,
+        degradation_reasons=["Upstream RPC unfinished requests are growing or stale."],
+        randomness_readiness=RandomnessReadiness(ready=True),
+    )
+    report = evaluate(make_build_action(), snapshot, make_policy())
+    assert verdict(report, "health").status is GuardStatus.BLOCK
 
 
 # --------------------------------------------------------------------------------------

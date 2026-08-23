@@ -5,7 +5,9 @@ Ladder, first match wins, exactly as docs/SPEC.md §5.4 specifies:
 
 ```
 0. KILLSWITCH present                -> HALT
-1. /health not ok                    -> NO-OP, reason recorded
+1. /health not ok                    -> NO-OP, reason recorded (unless positively
+                                         confirmed randomness/combat-only -- see
+                                         Snapshot.combat_only_degradation, 2026-08-22)
 1b. gameMaintenance.paused           -> ESCALATE (or NO-OP if escalation.on_game_paused
                                          is false) -- game reports a chain-side
                                          maintenance pause; any write would revert
@@ -183,12 +185,20 @@ def plan_next_action(
     if killswitch_active:
         return Action(kind=ActionKind.HALT, rule="0:killswitch", rationale="KILLSWITCH file present; halting before any further action.")
 
-    if not snapshot.health_ok:
+    if not snapshot.health_ok and not snapshot.combat_only_degradation():
+        reasons = ", ".join(snapshot.degradation_reasons) or "no reason given"
         return Action(
             kind=ActionKind.NOOP,
             rule="1:health-not-ok",
-            rationale="/health reported not ok / not ready; refusing to plan against a possibly-stale snapshot.",
+            rationale=(
+                f"/health reported not ok / not ready ({reasons}); refusing to plan "
+                "against a possibly-stale snapshot."
+            ),
         )
+    # Either health_ok, or a positively confirmed randomness/combat-only degradation
+    # (Snapshot.combat_only_degradation) -- everything this codebase can act on is
+    # healthy, and combat is unconditionally unreachable here regardless of policy, so
+    # fall through to the rest of the ladder instead of NO-OPing on an irrelevant signal.
 
     if snapshot.game_paused:
         detail = ""

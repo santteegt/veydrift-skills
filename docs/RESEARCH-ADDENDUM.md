@@ -352,6 +352,32 @@ live pause. `skills/veydrift-agent/references/api-routes.md` §3.1 has the full 
 writeup; `skills/veydrift-agent/references/guardrails.md`'s `game_paused` gate and
 `plan.py`'s rung `1b` are the two consumers.
 
+**2026-08-22 follow-up: the `randomnessReadiness`-only degradation above turned out to be
+persistent, not a single-capture blip, and served via HTTP 503 specifically.** A `vd tick`
+report claimed `/health` returning 503 with `ok:false` meant "the CLI's health gate trips
+on the top-level `ok:false` regardless" of cause — tracing the actual code path showed
+this was a misdiagnosis: `http.fetch()` raises on any HTTP ≥500 status **before the JSON
+body is ever parsed**, so `_health_ok()` (the function that actually checks
+`ok`/`readiness.ready`) was never invoked in that failure mode; the abort happened at the
+HTTP-status layer. A direct live re-check (two `curl`s, moments apart) confirmed the
+underlying condition is real and ongoing, though: `/health` returning HTTP 503 with a
+full, well-formed JSON body — `ok: false`, `readiness.ready: true`,
+`readiness.degradationReasons: []`, `configurationReady: true`,
+`gameMaintenance.paused: false`, `randomnessReadiness.ready: false`. Since `allow_combat`
+is read-and-ignored everywhere in this codebase (combat unconditionally unreachable
+regardless of policy), this degradation can never affect what this codebase would
+propose — `veydrift-agent` 1.3.0 adds `Snapshot.combat_only_degradation()` (a structural,
+fail-closed positive-confirmation check, not a reason-text allowlist) and
+`read._recover_health_body()` (narrow, `/health`-only 5xx body recovery) so `plan.py`'s
+rung 1 and `guard.py`'s `health` gate both proceed past this specific, verified-safe
+condition instead of blocking indefinitely. Verified live end-to-end: `vd tick --dry-run`
+against the still-degraded real API now builds a full snapshot and reaches the ordinary
+ladder (NOOP: queues busy) instead of aborting. Full design:
+`skills/veydrift-agent/references/guardrails.md`'s `health` gate section;
+`skills/veydrift-agent/references/api-routes.md` §3.1 has the field-level writeup and the
+exact `randomnessReadiness` shape (its own `reasons` array, distinct from
+`readiness.degradationReasons`).
+
 ---
 
 ## 5. Formulas confirmed against `docs.md`
