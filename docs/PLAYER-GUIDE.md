@@ -71,7 +71,7 @@ output — reads as plain English instead of jargon.
 | --- | --- |
 | **Tick** | One complete, atomic run of the agent's pipeline: load your policy, check for a killswitch, reconcile any pending transaction, read your planet's live state, decide on zero or one next action, run every safety check against it, and — only at tier ≥2 with a real send — submit it. Nothing schedules a tick by itself; something else (you, typing a command; a loop; a scheduler) decides *when* to call one. §8 and §10 cover running them. |
 | **Tier** | How much the agent is trusted to *submit*, not what it's allowed to *think about* — it always proposes the same way regardless of tier. Three tiers: `advisor` (propose only, never send — where you start), `economy` (can submit building/research/production actions), `operator` (also non-combat fleet missions). Advancing tiers is always a manual edit you make, never automatic — §12. |
-| **Guard** | One of 18 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no, so a blocked tick is exactly as inspectable as an allowed one. §9 shows what this looks like in real output. |
+| **Guard** | One of 19 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no, so a blocked tick is exactly as inspectable as an allowed one. §9 shows what this looks like in real output. |
 | **Snapshot** | The live read of your planet — resources, queues, energy, incoming fleets — that a tick's decision is computed against. Always fetched fresh from Veydrift's own API at the start of the tick; a decision is never made against stale or cached numbers. |
 | **Proposal vs. action** | A *proposal* is what the agent decided it would do. An *action* is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction doesn't matter until tier 2, where it becomes the whole point of `logs/proposals.jsonl` vs. `logs/actions.jsonl` (§11). |
 | **Policy** | The one file, `policy.json`, that holds every setting governing what the agent's allowed to do for your account — tier, wallet, planet(s), spending limits, which action types are enabled. §6 walks through every field. |
@@ -684,7 +684,7 @@ A few things worth understanding about that block before you trust it:
   itself blocks — every onchain proposal is blocked at tier 1 by design, since advisor
   mode may never submit. That's what makes tier 1 safe *by construction*, not by
   discipline: the decision genuinely is `BLOCK`, so nothing past that point ever runs.
-  (One of the 18 is `mission_type`, which only ever has anything to check on a fleet-mission
+  (One of the 19 is `mission_type`, which only ever has anything to check on a fleet-mission
   proposal — see §12's note on operator tier below. It passes trivially for everything else,
   so a routine building or research tick simply shows it among the passes.)
 - **`why:`** states the actual numbers behind the decision, not a canned explanation. If

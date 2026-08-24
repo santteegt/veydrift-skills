@@ -11,6 +11,19 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-22
+
+### Added
+- **`npm run wallet:new`** (`scripts/gen-keystore.mjs`), an interactive keystore-creation
+  helper, replacing `PLAYER-GUIDE.md`'s old inline `npx tsx -e '...'` recipe. The old
+  recipe took the encryption password as a plaintext literal inside the script itself —
+  visible in shell history and, briefly, in a process listing. The new script prompts for
+  it interactively instead (`@inquirer/prompts`, masked, typed twice to catch a typo,
+  rejected if empty), and prompts for the output directory too (defaulting to
+  `~/.veydrift`, matching the `VEYDRIFT_KEYSTORE` convention the rest of the guide already
+  assumes). Generates a brand-new random address only — same limitation as the recipe it
+  replaces, still cannot import an existing key.
+
 ## [0.4.1] - 2026-08-19
 
 ### Fixed
