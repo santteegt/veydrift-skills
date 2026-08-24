@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from veydrift_agent import candidates, ids
+from veydrift_agent import candidates, ids, techtree
 from veydrift_agent.models import (
     ActionKind,
     ActionsCfg,
@@ -476,7 +476,7 @@ def test_unknown_research_priority_name_fails_loudly():
     policy = make_policy(planets=[700], actions=ActionsCfg(allow_research=True), strategy=StrategyCfg(research_priority=["Not A Real Tech"]))
 
     with pytest.raises(ValueError, match="does not match any known entity name"):
-        candidates._research_priority_order(snapshot, policy)
+        candidates._research_priority_order(snapshot, policy, building_levels={}, technology_levels={})
 
 
 def test_second_small_shield_dome_is_refused():
@@ -693,6 +693,35 @@ def test_building_priority_selects_first_unlocked_declared_building():
     assert winner.family == "infrastructure"
 
 
+def test_infrastructure_fallback_order_prefers_unlock_breadth_over_level(monkeypatch):
+    """Isolates the sort key itself from the real requirement graph's actual content
+    (already covered by test_techtree.py's own unlock_breadth tests) by controlling what
+    each id's unlock_breadth reports: Robotics Factory (level 5, one full unlock) must
+    still outrank Nanite Factory (level 0, only a partial advance) despite its much lower
+    level -- proving unlock_breadth, not level, is the primary key."""
+    scores = {
+        ids.Building.ROBOTICS_FACTORY: (1, 0),
+        ids.Building.NANITE_FACTORY: (0, 1),
+    }
+    monkeypatch.setattr(candidates, "unlock_breadth", lambda family, entity_id, **kw: scores.get(entity_id, (0, 0)))
+    building_levels = {b: 0 for b in candidates._INFRASTRUCTURE_BUILDING_IDS}
+    building_levels[ids.Building.ROBOTICS_FACTORY] = 5  # much higher level than Nanite Factory's 0
+
+    order = candidates._infrastructure_fallback_order(building_levels=building_levels, technology_levels={})
+
+    assert order[0] == ids.Building.ROBOTICS_FACTORY
+    assert order.index(ids.Building.ROBOTICS_FACTORY) < order.index(ids.Building.NANITE_FACTORY)
+
+
+def test_infrastructure_fallback_order_reachable_without_any_declaration():
+    """generate_infrastructure_candidates itself still requires building_priority to be
+    non-empty (its own reachability switch, unchanged by this fix) -- but the ordering
+    function underneath it is now always computable and never returns an empty list, so
+    a future caller that wants infra reachable by default has a real order to use."""
+    order = candidates._infrastructure_fallback_order(building_levels={}, technology_levels={})
+    assert sorted(order) == sorted(candidates._INFRASTRUCTURE_BUILDING_IDS)
+
+
 # --------------------------------------------------------------------------------------
 # Storage-cap precondition on the winning pick. Before this fix, a scored mine/energy (or
 # declared building_priority) winner whose cost exceeded the planet's *current* storage
@@ -826,8 +855,38 @@ def test_research_fallback_is_explicitly_labelled_default():
     winner, _alternatives = candidates.select_research_candidate(snapshot, policy, [planet])
 
     assert winner is not None
-    assert winner.action.entity_id == ids.Technology.ENERGY  # lowest level (0), tie-break by id
+    # Every technology is level 0 with zero unlock_breadth on this fixture, so the new
+    # ranking degenerates to its own tiebreak (level, then id) -- Energy (id 0) wins for
+    # the same reason it always did, not because unlock_breadth was exercised here. See
+    # test_research_fallback_order_prefers_unlock_breadth_over_level below for a case
+    # where it actually decides the outcome.
+    assert winner.action.entity_id == ids.Technology.ENERGY
     assert winner.score_basis.startswith("default:")
+
+
+def test_research_fallback_order_prefers_unlock_breadth_over_level():
+    """Energy Technology at level 1 fully unlocks Laser Technology (needs Energy >= 2);
+    Combustion Drive at level 0 only partially advances something else (Reaper's
+    five-way conjunction, still locked on its other legs). Energy's higher unlock_breadth
+    outranks its higher level -- confirms the fallback tail is genuinely ranked by
+    unlock_breadth first, not merely falling back to the old lowest-level-first order."""
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    lab = next(b for b in planet.buildings if b.id == ids.Building.RESEARCH_LAB)
+    lab.level = 2
+    energy_tech = next(t for t in snapshot.technologies if t.id == ids.Technology.ENERGY)
+    energy_tech.level = 1
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=False, allow_research=True))
+
+    building_levels = candidates._level_vector(planet.buildings)
+    technology_levels = candidates._level_vector(snapshot.technologies)
+    order, _declared = candidates._research_priority_order(
+        snapshot, policy, building_levels=building_levels, technology_levels=technology_levels
+    )
+
+    assert order[0] == ids.Technology.ENERGY
+    assert order.index(ids.Technology.ENERGY) < order.index(ids.Technology.COMBUSTION_DRIVE)
 
 
 # --------------------------------------------------------------------------------------
@@ -847,9 +906,18 @@ def test_empty_strategy_targets_generate_nothing_new():
     assert candidates.generate_ship_target_candidates(snapshot, policy, planet) == []
     assert candidates.generate_defense_target_candidates(snapshot, policy, planet) == []
     assert candidates.generate_infrastructure_candidates(snapshot, policy, planet) == []
-    order, declared = candidates._research_priority_order(snapshot, policy)
+    building_levels = candidates._level_vector(planet.buildings)
+    technology_levels = candidates._level_vector(snapshot.technologies)
+    order, declared = candidates._research_priority_order(
+        snapshot, policy, building_levels=building_levels, technology_levels=technology_levels
+    )
     assert declared == set()
-    assert order == [t.id for t in sorted(snapshot.technologies, key=lambda t: ((t.level or 0), t.id))]
+    # Dated correction (docs/SPEC.md): the empty-research_priority fallback is no longer
+    # pure lowest-level-then-id -- it's ranked by techtree.unlock_breadth descending,
+    # with level-then-id only as the tiebreak. See test_unlock_breadth_fallback_order_*
+    # below for the ranking itself; this test only pins that every known technology id
+    # still appears exactly once (nothing dropped, nothing invented).
+    assert sorted(order) == sorted(t.id for t in snapshot.technologies)
 
 
 def test_empty_strategy_targets_select_building_candidate_matches_phase_2_exactly():

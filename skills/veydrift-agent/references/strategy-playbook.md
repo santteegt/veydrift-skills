@@ -303,17 +303,25 @@ where it moved.
      and wins outright, per this phase's governing principle (below). Left unset, this
      never fires.
 7. **Research queue empty -> next research.** Deliberately the least-derived rung in this
-   module: picks the technology with the lowest current level account-wide, ties broken
-   by ascending contract id, filtered through `techtree.unmet()` (a locked candidate is
-   skipped in favour of the next unlocked one). This is *not* as rich as the energy
-   invariant on purpose — the SPEC's rung 7 only asks for "next research," not a
-   tech-tree strategy. `candidates.select_research_candidate` (Phase 2) always scores a
-   research candidate `None` — nothing in `calc.py` models a technology moving
-   `production_per_hour`. **Phase 3**: if `policy.strategy.research_priority` names
-   technologies (case-insensitive), those are tried first, in declared order; the
-   lowest-level-first walk becomes the *fallback* for everything not named, and its
-   `score_basis` is explicitly prefixed `"default: ..."` so a reader can tell "this is
-   the fallback" from "this is what the operator asked for" at a glance.
+   module: filtered through `techtree.unmet()` (a locked candidate is skipped in favour
+   of the next unlocked one). This is *not* as rich as the energy invariant on purpose —
+   the SPEC's rung 7 only asks for "next research," not a tech-tree strategy.
+   `candidates.select_research_candidate` (Phase 2) always scores a research candidate
+   `None` — nothing in `calc.py` models a technology moving `production_per_hour`.
+   **Phase 3**: if `policy.strategy.research_priority` names technologies
+   (case-insensitive), those are tried first, in declared order; everything not named
+   becomes the *fallback*, and its `score_basis` is explicitly prefixed `"default: ..."`
+   so a reader can tell "this is the fallback" from "this is what the operator asked for"
+   at a glance. **Dated correction (see docs/SPEC.md)**: the fallback used to be pure
+   lowest-current-level-account-wide, ties broken by ascending id (Phase 2's original
+   ordering) — it's now ranked by `techtree.unlock_breadth` descending instead (fully-
+   unlocked-count first, partial-advance count as tiebreak, level then id only as the
+   final tiebreak), so a level-up that actually opens something up (e.g. Energy
+   Technology reaching the level Laser Technology needs) is preferred over one that
+   doesn't, computed purely from `techtree.py`'s already-verified requirement tables —
+   never an invented value judgement. `generate_infrastructure_candidates`'s own
+   undeclared-tail ordering (point above, "in declared order") got the identical
+   treatment at the same time.
 8. **Shipyard idle AND economy on track -> ships/defense per policy.** Fires only if
    `policy.actions.allow_ships` or `allow_defense` is true (both default `false` in
    `assets/policy.example.json`, so this rung rarely fires in practice) and something

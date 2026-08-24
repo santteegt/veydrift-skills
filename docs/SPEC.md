@@ -1200,7 +1200,8 @@ reachable (§5.4/§5.6):**
     overflow urgency — `tests/test_candidates.py::test_proactive_storage_candidate_scored_none_and_
     present_regardless_of_urgency`.
 31. `building_priority` orders the new `infrastructure` family, taking precedence over the ordinary
-    mine walk when set; `research_priority` overrides the lowest-level-first order, and the fallback
+    mine walk when set; `research_priority` overrides the fallback order (originally
+    lowest-level-first; see criterion 64 for its 2026-08-22 replacement), and the fallback
     pick's reason is explicitly labelled `"default: ..."` —
     `tests/test_candidates.py::test_building_priority_orders_infrastructure_candidates`,
     `::test_building_priority_selects_first_unlocked_declared_building`,
@@ -1408,6 +1409,28 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `::test_fetch_or_exit_never_recovers_a_5xx_on_a_non_health_route`,
     `::test_snapshot_parses_randomness_readiness_and_readiness_ready_from_a_recovered_5xx`,
     `tests/test_tick.py::test_killswitch_recovers_a_5xx_health_body_and_reports_combat_only_degradation`.
+64. **Correction, 2026-08-22, replacing criterion 31's "lowest-level-first" fallback description.**
+    `research_priority`/`building_priority`'s undeclared fallback tail is ranked by
+    `techtree.unlock_breadth` descending (fully-unlocked-count first, partially-advanced count as
+    tiebreak, current level ascending, then id ascending only as the final tiebreak) instead of pure
+    lowest-level-then-id. A new `techtree.unlock_breadth(family, entity_id, *, building_levels,
+    technology_levels)` computes the ranking purely by re-calling the already-verified,
+    already-tested `unmet()` against every known building/ship/defense/research id before and after
+    a hypothetical +1 — a structural fact re-derived from data already used to check legality, never
+    an invented value judgement, so this does not cross the "no ROI verdict" line drawn for economic
+    scoring (§5.2, `candidates.py`'s own module docstring). Scoped narrowly: only the *ordering*
+    computation inside `_infrastructure_priority_order`/`_research_priority_order`'s fallback
+    branches changes — `select_building_candidate`/`select_research_candidate`'s first-unlocked-wins
+    selection logic, `Candidate.score`, and `rank_candidates` are all untouched, and a declared
+    priority list's own entries still take precedence exactly as before this change —
+    `tests/test_techtree.py::test_unlock_breadth_robotics_factory_0_to_1_unlocks_research_lab_only`,
+    `::test_unlock_breadth_robotics_factory_1_to_2_unlocks_shipyard`,
+    `::test_unlock_breadth_entity_with_no_requirers_returns_zero`,
+    `::test_unlock_breadth_counts_partial_when_a_conjunction_has_other_unmet_legs`,
+    `::test_unlock_breadth_runs_over_the_full_real_graph_without_crashing`,
+    `tests/test_candidates.py::test_research_fallback_order_prefers_unlock_breadth_over_level`,
+    `::test_infrastructure_fallback_order_prefers_unlock_breadth_over_level`,
+    `::test_infrastructure_fallback_order_reachable_without_any_declaration`.
 
 ---
 

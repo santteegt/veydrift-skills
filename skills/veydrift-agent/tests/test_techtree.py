@@ -29,6 +29,7 @@ from veydrift_agent.techtree import (
     graviton_energy_requirement,
     missile_silo_capacity,
     next_step_toward,
+    unlock_breadth,
     unmet,
 )
 
@@ -564,3 +565,88 @@ def test_next_step_toward_returns_unlockstep_namedtuple_shape():
     )
     assert isinstance(step, UnlockStep)
     assert step.depth == len(step.chain)
+
+
+# --------------------------------------------------------------------------------------
+# unlock_breadth — the forward mirror of next_step_toward's backward walk: how many
+# other entities does leveling this one directly unlock, computed by re-calling unmet()
+# rather than a hand-built reverse index.
+# --------------------------------------------------------------------------------------
+
+
+def test_unlock_breadth_robotics_factory_0_to_1_unlocks_research_lab_only():
+    """Research Lab needs Robotics Factory >= 1 (test_research_lab_requires_robotics_
+    factory_1); Shipyard needs Robotics Factory >= 2, so 0->1 doesn't touch it -- Shipyard's
+    unmet() count is unchanged by this specific bump, confirming this counts requirements
+    actually crossed, not distance narrowed toward a threshold."""
+    fully, partially = unlock_breadth(
+        EntityFamily.BUILDING,
+        ids.Building.ROBOTICS_FACTORY,
+        building_levels={**_ALL_ZERO_BUILDING_LEVELS, ids.Building.ROBOTICS_FACTORY: 0},
+        technology_levels=_ALL_ZERO_TECHNOLOGY_LEVELS,
+    )
+    assert fully == 1
+    assert partially == 0
+
+
+def test_unlock_breadth_robotics_factory_1_to_2_unlocks_shipyard():
+    fully, partially = unlock_breadth(
+        EntityFamily.BUILDING,
+        ids.Building.ROBOTICS_FACTORY,
+        building_levels={**_ALL_ZERO_BUILDING_LEVELS, ids.Building.ROBOTICS_FACTORY: 1},
+        technology_levels=_ALL_ZERO_TECHNOLOGY_LEVELS,
+    )
+    assert fully == 1  # Shipyard, its only remaining requirement
+    assert partially == 0
+
+
+def test_unlock_breadth_entity_with_no_requirers_returns_zero():
+    """Metal Mine is never named in any requirement table -- leveling it can never unlock
+    anything else, regardless of current levels."""
+    fully, partially = unlock_breadth(
+        EntityFamily.BUILDING,
+        ids.Building.METAL_MINE,
+        building_levels={**_ALL_ZERO_BUILDING_LEVELS, ids.Building.METAL_MINE: 5},
+        technology_levels=_ALL_ZERO_TECHNOLOGY_LEVELS,
+    )
+    assert (fully, partially) == (0, 0)
+
+
+def test_unlock_breadth_counts_partial_when_a_conjunction_has_other_unmet_legs():
+    """test_reaper_five_way_conjunction: Reaper needs Shipyard>=9, HS Drive>=7,
+    Hyperspace>=6, Graviton>=1, Combustion>=6 all at once. Raising just one of those
+    (Combustion) to its threshold, with the others still at 0, removes exactly one
+    requirement from Reaper's unmet() list without emptying it -- a partial advance, not
+    a full unlock."""
+    building_levels = dict(_ALL_ZERO_BUILDING_LEVELS)
+    technology_levels = {**_ALL_ZERO_TECHNOLOGY_LEVELS, ids.Technology.COMBUSTION_DRIVE: 5}
+
+    fully, partially = unlock_breadth(
+        EntityFamily.RESEARCH,
+        ids.Technology.COMBUSTION_DRIVE,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+    )
+
+    assert fully == 0  # nothing gets fully unlocked by this specific bump
+    assert partially >= 1  # Reaper's Combustion leg specifically drops out
+
+
+def test_unlock_breadth_runs_over_the_full_real_graph_without_crashing():
+    """Smoke test over every id in every real requirement table (the same universe
+    test_real_requirement_graph_is_acyclic exercises), all-zero levels -- every call must
+    return a well-formed (int, int) with both non-negative, and nothing should raise."""
+    for family, table in (
+        (EntityFamily.BUILDING, BUILDING_REQUIREMENTS),
+        (EntityFamily.SHIP, SHIP_REQUIREMENTS),
+        (EntityFamily.DEFENSE, DEFENSE_REQUIREMENTS),
+        (EntityFamily.RESEARCH, RESEARCH_REQUIREMENTS),
+    ):
+        for entity_id in table:
+            fully, partially = unlock_breadth(
+                family,
+                entity_id,
+                building_levels=_ALL_ZERO_BUILDING_LEVELS,
+                technology_levels=_ALL_ZERO_TECHNOLOGY_LEVELS,
+            )
+            assert fully >= 0 and partially >= 0

@@ -11,6 +11,49 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-22
+
+### Added
+
+- **`research_priority`/`building_priority`'s undeclared fallback tail is now ranked by
+  what it unlocks, not by level.** Following up on this session's round-robin finding
+  (both fields stick on their first declared entry forever, no completion criterion):
+  the question of whether the planner could consider *all* research/infrastructure
+  options instead of only the defaults or a hand-maintained list turned out to have a
+  cheap, low-risk answer that needed no new formulas and no economic exchange rate --
+  `techtree.py`'s already-transcribed, already-tested requirement tables already carry
+  everything needed to answer "how many other things does leveling this one directly
+  unlock," a structural fact rather than a value judgement.
+  - `techtree.py`: new `unlock_breadth(family, entity_id, *, building_levels,
+    technology_levels)` — `(fully_unlocked_count, partially_advanced_count)` if the
+    entity's level were +1, computed by re-calling the existing `unmet()` against every
+    known building/ship/defense/research id (never a hand-built reverse index that could
+    drift from the forward tables). Direct unlocks only, one hop, mirroring
+    `next_step_toward`'s own one-hop-at-a-time backward walk in the opposite direction.
+  - `candidates.py`: `_infrastructure_priority_order`/`_research_priority_order`'s
+    fallback-tail sort now uses `unlock_breadth` descending (fully-unlocked count first,
+    partially-advanced count as tiebreak, current level ascending, id ascending as the
+    final tiebreak) instead of a flat default order / pure lowest-level-first. Nothing
+    else moves: `select_building_candidate`/`select_research_candidate`'s
+    first-unlocked-wins selection, `Candidate.score`, and `rank_candidates` are all
+    untouched, and a declared priority list's own entries still take precedence exactly
+    as before. This deliberately stops short of scoring research/infrastructure against
+    mines on one axis (`calc.production_per_hour` doesn't model most of them, and
+    inventing a resources/hour-vs-unlock-count exchange rate would be exactly the kind
+    of invented doctrine this codebase's own docstrings have refused three times already
+    — see `candidates.py`'s `generate_unlock_chain_candidates`) — this only reorders
+    candidates *within* the already-existing research/infrastructure families.
+  - **Dated correction**: this changes the empty-`research_priority` default's exact
+    output, previously pinned as reproducing Phase 2 byte-for-byte (`docs/SPEC.md`
+    AC25-31) — a deliberate, scoped break of that one guarantee, documented at AC64.
+  - `tests/test_techtree.py`: five new tests for `unlock_breadth` itself, including a
+    full-real-graph smoke test. `tests/test_candidates.py`: fallback-ordering tests for
+    both families (the infrastructure one via a controlled monkeypatch, isolating the
+    sort key from the real graph's specific content — hand-picking a clean two-candidate
+    example in the real, fully-interconnected graph turned out to be unreliable, since
+    Shipyard's implicit `shipyardLevel>=1` floor on every ship/defense dominates almost
+    any other comparison from a bare account).
+
 ## [1.3.0] - 2026-08-22
 
 ### Added

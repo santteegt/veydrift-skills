@@ -33,6 +33,7 @@ from veydrift_agent.models import (
     Resources,
     Snapshot,
     StorageCfg,
+    StrategyCfg,
 )
 from veydrift_agent.plan import _next_building_action, plan_next_action
 
@@ -506,19 +507,25 @@ def test_research_proposes_lowest_level_unlocked_technology_once_research_lab_is
 
 
 def test_research_skips_a_locked_lower_candidate_in_favour_of_the_next_unlocked_one():
-    """Laser Technology (id 1) sorts before Combustion Drive (id 3) at the same level (0),
-    but Laser requires Energy Technology >= 2 (`VeydriftDependencies.sol:requireResearch`)
-    while this planet's Energy is only level 1 -- locked. Combustion Drive only needs
-    Energy >= 1, which is met. The fix must skip the locked first choice and propose the
-    next unlocked one, never fall straight through to a rung-9 NOOP just because the
-    *first* candidate by the tie-break was illegal."""
+    """Laser Technology requires Energy Technology >= 2
+    (`VeydriftDependencies.sol:requireResearch`) while this planet's Energy is only level
+    1 -- locked. Combustion Drive only needs Energy >= 1, which is met. Declares both via
+    research_priority (rather than relying on the unlock-breadth fallback order's
+    tie-breaking specifics -- covered by its own dedicated tests) to isolate exactly what
+    this test checks: `select_research_candidate` must skip a locked *declared* first
+    choice and propose the next one, never fall straight through to a rung-9 NOOP just
+    because the first candidate in priority order was illegal."""
     snapshot = load_snapshot("planet_664.json")
     planet = snapshot.planet(664)
     lab = next(b for b in planet.buildings if b.id == ids.Building.RESEARCH_LAB)
     lab.level = 2  # unlocks both Laser (lab>=1) and Combustion Drive (lab>=1)
     energy_tech = next(t for t in snapshot.technologies if t.id == ids.Technology.ENERGY)
     energy_tech.level = 1  # unlocks Combustion Drive (needs energy>=1) but not Laser (needs energy>=2)
-    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=False, allow_research=True))
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=False, allow_research=True),
+        strategy=StrategyCfg(research_priority=["Laser Technology", "Combustion Drive"]),
+    )
 
     action = plan_next_action(snapshot, policy)
 

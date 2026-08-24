@@ -42,6 +42,7 @@ constraint, restated for this module: nothing here computes `base * factor ** le
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from veydrift_agent import calc, ids
@@ -64,6 +65,7 @@ from veydrift_agent.techtree import (
     describe,
     missile_silo_capacity,
     next_step_toward,
+    unlock_breadth,
     unmet,
 )
 
@@ -672,20 +674,46 @@ _INFRASTRUCTURE_BUILDING_IDS: tuple[int, ...] = (
 )
 
 
-def _infrastructure_priority_order(policy: Policy) -> list[int]:
+def _infrastructure_fallback_order(
+    building_levels: Mapping[int, int | None], technology_levels: Mapping[int, int | None]
+) -> list[int]:
+    """`_INFRASTRUCTURE_BUILDING_IDS` sorted by `techtree.unlock_breadth` descending --
+    fully-unlocked count first, partially-advanced count as tiebreak, current level
+    ascending, then `_INFRASTRUCTURE_BUILDING_IDS`'s own declaration order for full
+    determinism when even that ties. Replaces the flat fixed-id fallback order **(dated
+    correction, see docs/SPEC.md)** -- a level-up that unlocks something concrete (e.g.
+    Robotics Factory unlocking Shipyard/Research Lab) is preferred over one that doesn't,
+    computed purely from `techtree.py`'s already-verified requirement tables, never an
+    invented value judgement (see `unlock_breadth`'s own docstring)."""
+    declaration_index = {building_id: index for index, building_id in enumerate(_INFRASTRUCTURE_BUILDING_IDS)}
+
+    def key(building_id: int) -> tuple[int, int, int, int]:
+        fully, partially = unlock_breadth(
+            EntityFamily.BUILDING, building_id, building_levels=building_levels, technology_levels=technology_levels
+        )
+        level = building_levels.get(building_id) or 0
+        return (-fully, -partially, level, declaration_index[building_id])
+
+    return sorted(_INFRASTRUCTURE_BUILDING_IDS, key=key)
+
+
+def _infrastructure_priority_order(
+    policy: Policy, *, building_levels: Mapping[int, int | None], technology_levels: Mapping[int, int | None]
+) -> list[int]:
     """`policy.strategy.building_priority`'s named buildings first (in declared order,
     resolved via `ids.building_id` -- case-insensitive, raises `ValueError` on an unknown
     name per `_resolve_name_id`), then any of the six infrastructure ids not mentioned, in
-    their `_INFRASTRUCTURE_BUILDING_IDS` default order. A `building_priority` name outside
-    this family's six ids (e.g. a mine) is simply not relevant here and is dropped --
-    `generate_infrastructure_candidates` only ever proposes the six infrastructure
-    buildings, never a mine/storage/energy building through this path."""
+    `_infrastructure_fallback_order`'s unlock-breadth-ranked order. A `building_priority`
+    name outside this family's six ids (e.g. a mine) is simply not relevant here and is
+    dropped -- `generate_infrastructure_candidates` only ever proposes the six
+    infrastructure buildings, never a mine/storage/energy building through this path."""
+    fallback = _infrastructure_fallback_order(building_levels, technology_levels)
     if not policy.strategy.building_priority:
-        return list(_INFRASTRUCTURE_BUILDING_IDS)
+        return fallback
     named = [_resolve_name_id(name, ids.building_id) for name in policy.strategy.building_priority]
     named = [building_id for building_id in named if building_id in _INFRASTRUCTURE_BUILDING_IDS]
     seen = set(named)
-    remaining = [building_id for building_id in _INFRASTRUCTURE_BUILDING_IDS if building_id not in seen]
+    remaining = [building_id for building_id in fallback if building_id not in seen]
     return named + remaining
 
 
@@ -706,7 +734,7 @@ def generate_infrastructure_candidates(snapshot: Snapshot, policy: Policy, plane
     technology_levels = _level_vector(snapshot.technologies)
 
     out: list[Candidate] = []
-    for building_id in _infrastructure_priority_order(policy):
+    for building_id in _infrastructure_priority_order(policy, building_levels=building_levels, technology_levels=technology_levels):
         entity = _entity(planet.buildings, building_id)
         if entity is None or entity.level is None:
             continue
@@ -1380,16 +1408,39 @@ def select_storage_candidate(
 # --------------------------------------------------------------------------------------
 
 
-def _research_priority_order(snapshot: Snapshot, policy: Policy) -> tuple[list[int], set[int]]:
+def _research_priority_order(
+    snapshot: Snapshot,
+    policy: Policy,
+    *,
+    building_levels: Mapping[int, int | None],
+    technology_levels: Mapping[int, int | None],
+) -> tuple[list[int], set[int]]:
     """`(order, declared_ids)` -- `order` is every technology id known to the snapshot,
     `policy.strategy.research_priority`'s named technologies first (resolved via
     `ids.technology_id`, case-insensitive, raises loudly on an unknown name per
-    `_resolve_name_id`), then the remaining ids in the pre-Phase-3 lowest-level-then-id
-    fallback order. `declared_ids` is which of those ids came from `research_priority`,
-    so the caller can label a pick as policy-declared-by-name vs. the default fallback.
-    Empty `research_priority` returns the fallback order unchanged and an empty
-    `declared_ids` set -- exactly Phase 2's ordering."""
-    fallback_order = [t.id for t in sorted(snapshot.technologies, key=lambda t: ((t.level or 0), t.id))]
+    `_resolve_name_id`), then the remaining ids ranked by `techtree.unlock_breadth`
+    descending -- fully-unlocked count first, partially-advanced count as tiebreak,
+    current level ascending, then id ascending for full determinism. `declared_ids` is
+    which of those ids came from `research_priority`, so the caller can label a pick as
+    policy-declared-by-name vs. the default fallback.
+
+    Empty `research_priority` returns this fallback order and an empty `declared_ids`
+    set. **Dated correction, see docs/SPEC.md**: this fallback used to be pure
+    lowest-level-then-id (Phase 2's exact ordering) -- replaced with the unlock-breadth
+    ranking above so an empty policy considers *what a level-up actually opens up*, not
+    only which technology happens to be numerically cheapest to bump. `unlock_breadth`
+    is purely a structural fact re-derived from `techtree.py`'s already-verified
+    requirement tables (never an invented value judgement -- see its own docstring), so
+    this does not cross the "no ROI verdict" line Phase 2/3 drew for economic scoring."""
+
+    def fallback_key(tech_id: int) -> tuple[int, int, int, int]:
+        fully, partially = unlock_breadth(
+            EntityFamily.RESEARCH, tech_id, building_levels=building_levels, technology_levels=technology_levels
+        )
+        level = technology_levels.get(tech_id) or 0
+        return (-fully, -partially, level, tech_id)
+
+    fallback_order = sorted((t.id for t in snapshot.technologies), key=fallback_key)
     if not policy.strategy.research_priority:
         return fallback_order, set()
     known_ids = {t.id for t in snapshot.technologies}
@@ -1413,7 +1464,9 @@ def generate_research_candidates(snapshot: Snapshot, policy: Policy, target_plan
     planet = target_planets[0]
     building_levels = _level_vector(planet.buildings)
     technology_levels = _level_vector(snapshot.technologies)
-    order, declared_ids = _research_priority_order(snapshot, policy)
+    order, declared_ids = _research_priority_order(
+        snapshot, policy, building_levels=building_levels, technology_levels=technology_levels
+    )
     by_id = {t.id: t for t in snapshot.technologies}
     declared_positions = {tid: position + 1 for position, tid in enumerate(tid for tid in order if tid in declared_ids)}
 

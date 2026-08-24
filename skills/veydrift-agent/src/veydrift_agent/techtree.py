@@ -662,3 +662,55 @@ def next_step_toward(
         frontier = next_frontier
 
     return None  # depth-bounded out, or every branch dead-ended unresolvable
+
+
+def unlock_breadth(
+    family: EntityFamily,
+    entity_id: int,
+    *,
+    building_levels: Mapping[int, int | None],
+    technology_levels: Mapping[int, int | None],
+) -> tuple[int, int]:
+    """`(fully_unlocked_count, partially_advanced_count)` if `(family, entity_id)`'s level
+    were bumped by exactly one -- how many *other* buildings/ships/defenses/research
+    technologies would have this move drop out of their own `unmet()` list. `fully` counts
+    a target where this was its last unmet requirement (it becomes buildable outright);
+    `partially` counts one where it was one of several (still locked, but one step closer).
+
+    **Direct unlocks only** -- this looks one hop forward (does anything require
+    `(family, entity_id)` directly?), the mirror image of `next_step_toward`'s one-hop-at-
+    a-time *backward* walk from a locked target. It is not a transitive closure: leveling
+    Robotics Factory counts Shipyard/Research Lab (which name it directly) but not whatever
+    Shipyard itself would go on to unlock. A pure count of a graph fact, computed by
+    re-calling `unmet()` on every known entity before and after a hypothetical +1 -- never
+    a hand-built reverse index that could drift from the forward tables, and never a value
+    judgement: this is "how many things does this open up," not "how much is that worth"
+    (`calc.py`'s cost-scaling ban and `candidates.py`'s "no ROI verdict" refusal are both
+    about the latter question, which this function never asks).
+
+    Used to order the undeclared fallback tail of `research_priority`/`building_priority`
+    (`candidates.py`'s `_research_priority_order`/`_infrastructure_priority_order`) --
+    never to decide *whether* something is proposed, only which order candidates are
+    considered in once they're already reachable."""
+    bumped_building = dict(building_levels)
+    bumped_technology = dict(technology_levels)
+    current = building_levels if family is EntityFamily.BUILDING else technology_levels
+    bumped = bumped_building if family is EntityFamily.BUILDING else bumped_technology
+    bumped[entity_id] = (current.get(entity_id) or 0) + 1
+    req_source = ReqSource.BUILDING if family is EntityFamily.BUILDING else ReqSource.TECHNOLOGY
+
+    fully = partially = 0
+    for target_family, table in _TABLES.items():
+        for target_id in table:
+            if target_family is family and target_id == entity_id:
+                continue  # never counts itself
+            before = unmet(target_family, target_id, building_levels=building_levels, technology_levels=technology_levels)
+            if not any(u.requirement.source is req_source and u.requirement.entity_id == entity_id for u in before):
+                continue  # this entity_id isn't even a requirement of target -- irrelevant
+            after = unmet(target_family, target_id, building_levels=bumped_building, technology_levels=bumped_technology)
+            if len(after) < len(before):
+                if len(after) == 0:
+                    fully += 1
+                else:
+                    partially += 1
+    return fully, partially

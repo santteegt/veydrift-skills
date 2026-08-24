@@ -123,7 +123,7 @@ From this repository's root:
 npx skills add . -g -a claude-code -a hermes-agent -y
 ```
 
-Verified output (from this repo, 2026-08-12):
+Verified output (from this repo):
 
 ```
 ◇  Installed 2 skills
@@ -272,7 +272,7 @@ change called out:
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },
   "strategy": {
-    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },   // added 2026-08-16
+    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },   // weights the payback-hours comparison across resources
     "max_alternatives": 5,            // caps how many runner-up options each proposal lists
     "ship_targets": [{"name": "Small Cargo", "count": 1}],  // a target not yet buildable now drives its own build-up (see below)
     "defense_targets": [],            // same shape, e.g. [{"name": "Small Shield Dome", "count": 1}]
@@ -293,9 +293,10 @@ rather than doing something unexpected.
 
 **`ship_targets`/`defense_targets`/`research_priority`/`building_priority`.** All four
 default to `[]`. Empty on all four means: energy still comes only from Solar Plant/Solar Satellite,
-defense still means only the Rocket Launcher, research still walks lowest-level-first,
-and nothing proposes Robotics Factory/Nanite Factory/Shipyard/Research Lab/Terraformer/
-Missile Silo at all. Declare a target to unlock the rest of the entity list:
+defense still means only the Rocket Launcher, research still walks its default order (see
+below — no longer purely lowest-level-first), and nothing proposes
+Robotics Factory/Nanite Factory/Shipyard/Research Lab/Terraformer/Missile Silo at all.
+Declare a target to unlock the rest of the entity list:
 
 - `ship_targets`/`defense_targets` are standing-count declarations: `{"name": "Crawler",
   "count": 20}` means "keep producing Crawlers, one at a time, until 20 are built or
@@ -309,9 +310,13 @@ Missile Silo at all. Declare a target to unlock the rest of the entity list:
   *same* entry indefinitely — it only moves on to the next name if the first ever
   becomes locked (an unmet prerequisite), never because it decided the first one is
   "done." See the round-robin callout below before declaring more than one name
-  expecting them to take turns. Names not declared fall back to the default ordering
-  (lowest-level-first for research; nothing at all for infrastructure, since that
-  family only exists once you declare a priority).
+  expecting them to take turns. Names not declared fall back to a default order, ranked
+  by how many other buildings/ships/defenses/research technologies a level-up would
+  directly unlock (most first) — a real, structural fact re-derived from the same
+  prerequisite tables `techtree.py` already uses to check legality, not an invented
+  priority; level and id are only the tiebreak when that's equal. Infrastructure has no
+  fallback candidates to rank at all unless you declare a priority — that family still
+  only exists once you do.
 - **A name that doesn't match anything is a hard error on the next tick** for
   `ship_targets`, `defense_targets`, and `research_priority` — the same "typo must never
   mean silence" posture the rest of `policy.json` already takes for an unrecognized key.
@@ -472,7 +477,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `max_alternatives` | int | unconstrained — `0` legally means "log no alternatives"; there's no upper cap either | `5` |
 | `ship_targets` | list of `{name, id, count}` | `name` resolved case-insensitively against `references/entity-ids.md`'s Ship table (or use a numeric `id` instead); an unrecognized `name` is a hard error on the next tick. `count` defaults `0` and **is not constrained to be non-negative** (see footgun below). **Empty: this rule is off** — no standing ship target is proposed at all (Solar Satellite's separate energy-driven path is unaffected either way). | `[]` |
 | `defense_targets` | list of `{name, id, count}` | same shape and same rules, against the Defense table. **Empty: falls back to the old hardcoded default** — a single Rocket Launcher, unconditionally — not off, just undeclared. | `[]` |
-| `research_priority` | list of string | ordered Technology names; an unrecognized name is a hard error on the next tick. **Empty: falls back to lowest-level-first** across all technologies — research proposals still happen, just unprioritized by name. **Does not round-robin — see callout below.** | `[]` |
+| `research_priority` | list of string | ordered Technology names; an unrecognized name is a hard error on the next tick. **Empty: falls back to an unlock-breadth-ranked default order** (most-directly-unlocking technology first; level then id only as the tiebreak — see callout below) across all technologies — research proposals still happen, just unprioritized by name. **Does not round-robin — same callout.** | `[]` |
 | `building_priority` | list of string | ordered Building names — **asymmetric with the three fields above; see callout below**. **Empty: the infrastructure family never fires** — rung 6 falls through to its ordinary payback-scored mine/energy comparison, i.e. the decision is delegated entirely to scoring. **Does not round-robin either — same callout.** | `[]` |
 | `enable_crawler` | bool | `true`/`false` | `false` |
 
@@ -492,6 +497,18 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 > error, no warning, nothing in the logs. Add `"Metal Mine"` to `building_priority`
 > expecting it to do something, and it will be quietly ignored forever with zero
 > feedback. Stick to the six infrastructure names in this field.
+
+> **The undeclared fallback order is ranked by what it unlocks, not by level.**
+> For every name you *don't* declare, the planner ranks candidates by
+> `techtree.unlock_breadth` — how many other buildings/ships/defenses/research
+> technologies would have one of their own requirements satisfied by this specific
+> level-up, computed by re-checking the same prerequisite tables `techtree.py` already
+> uses to decide legality. A building/technology that unlocks something outright is
+> preferred over one that doesn't, regardless of which one is numerically cheaper or
+> lower-level; level and id only break a genuine tie. This is a structural fact, not an
+> economic judgement — it never compares against a mine's resources/hour payback, and it
+> only decides ordering *within* the research/infrastructure families, never whether they
+> outrank a mine.
 
 > **A multi-name `research_priority`/`building_priority` does not round-robin.** Both
 > fields always propose the first declared name that's currently unlocked, and keep
@@ -950,7 +967,7 @@ asks it to invent numbers it doesn't have.
 | Symptom | What's actually happening |
 | --- | --- |
 | `vd tick` says `readiness.ready` is not true, or health nulls | Almost always transient backend replica lag, not an outage — the agent already treats this correctly and will retry. If it persists past `on_health_unhealthy_minutes` (default 30), it escalates instead of retrying forever. |
-| `/health` reports `ok: false`, but the tick still runs normally | Expected as of 2026-08-22: `ok:false` caused *solely* by a combat-related backend readiness issue (a "New attacks are temporarily paused"-style condition) no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy, so that specific condition can't affect what it would propose. Any other cause of `ok:false` still blocks/escalates as before. |
+| `/health` reports `ok: false`, but the tick still runs normally | Expected: `ok:false` caused *solely* by a combat-related backend readiness issue (a "New attacks are temporarily paused"-style condition) no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy, so that specific condition can't affect what it would propose. Any other cause of `ok:false` still blocks/escalates as before. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
 | Guards read `16/19 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |
