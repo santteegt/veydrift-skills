@@ -992,22 +992,22 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
 
   <h3>keystore — recommended</h3>
   <p>An encrypted, password-protected JSON file holding your key — the standard geth/EIP-2335 format. Nobody who gets the file alone can use it; they'd also need the password, which is never stored anywhere in this repo.</p>
-  <p>If you need to create one — a genuine, verified recipe, run from <code>skills/veydrift-wallet/</code>:</p>
+  <p>If you need to create one, run this from <code>skills/veydrift-wallet/</code>:</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>shell — creates a keystore file</span></div>
-    <div class="codeblock-body"><pre>npx tsx -e '
-import { Wallet } from "ethers";
-import { writeFileSync } from "fs";
-const wallet = Wallet.createRandom();
-console.log("New address:", wallet.address);
-const password = "choose a real passphrase here";
-const json = await wallet.encrypt(password);
-writeFileSync("veydrift-keystore.json", json);
-'</pre></div>
+    <div class="codeblock-body"><pre>npm run wallet:new
+
+New address: 0x7Cd117B9a5e8E5e9E11a5Db0C1e489dF899eda9A
+? Output directory: ~/.veydrift
+? Keystore password: ********
+? Confirm password: ********
+Encrypting (this takes a few seconds)...
+Wrote keystore to /Users/you/.veydrift/keystore.json</pre></div>
   </div>
+  <p>It prompts for the output directory (defaults to <code>~/.veydrift</code>, so it lands exactly where <code>export VEYDRIFT_KEYSTORE=...</code> below expects it, if you take the default) and the password — masked, typed twice to catch a typo, rejected if empty. The password never appears in your shell history, a script file, or a process list: unlike a one-liner that takes it as a literal, this is an interactive prompt (<code>scripts/gen-keystore.mjs</code>, <code>@inquirer/prompts</code>) for exactly that reason.</p>
   <div class="callout caution">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
-    <div><strong class="callout-title">Read before running this for real</strong><p><code>Wallet.createRandom()</code> makes a <strong>brand-new</strong> address with no history. It cannot access an existing planet — a Veydrift planet is permanently bound to the address that settled it, with no transfer function on the contract at all. Use this recipe to settle a <em>new</em> account. If you already have a planet, import that specific key into a keystore instead of generating a random one.</p></div>
+    <div><strong class="callout-title">Read before running this for real</strong><p>It makes a <strong>brand-new</strong> address with no history. It cannot access an existing planet — a Veydrift planet is permanently bound to the address that settled it, with no transfer function on the contract at all. Use it to settle a <em>new</em> account. If you already have a planet, <code>wallet:new</code> can't help — import that specific key into a keystore instead, via most wallet software (MetaMask, <code>cast wallet</code>, a hardware wallet's export flow).</p></div>
   </div>
   <p>Point the skill at your file, leave the password unset so it prompts you interactively:</p>
   <div class="codeblock">

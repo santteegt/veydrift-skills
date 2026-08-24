@@ -15,7 +15,8 @@
     "walletctl": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "wallet:new": "node scripts/gen-keystore.mjs"
   },
   "dependencies": {
     "commander": "^12.1.0",
@@ -23,6 +24,7 @@
     "viem": "^2.21.54"
   },
   "devDependencies": {
+    "@inquirer/prompts": "^8.6.0",
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

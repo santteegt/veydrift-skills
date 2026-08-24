@@ -488,34 +488,37 @@ anywhere in this repo or its config.
 **If you already have a keystore file** (exported from another wallet), skip to
 "Point the skill at it" below.
 
-**If you need to create one**, this is a genuine, verified recipe — run from
-`skills/veydrift-wallet/`:
+**If you need to create one**, run this from `skills/veydrift-wallet/`:
 
 ```bash
-$ npx tsx -e '
-import { Wallet } from "ethers";
-import { writeFileSync } from "fs";
-const wallet = Wallet.createRandom();
-console.log("New address:", wallet.address);
-const password = "choose a real passphrase here, not this one";
-const json = await wallet.encrypt(password);
-writeFileSync("veydrift-keystore.json", json);
-console.log("Wrote veydrift-keystore.json");
-'
+$ npm run wallet:new
+
+New address: 0x7Cd117B9a5e8E5e9E11a5Db0C1e489dF899eda9A
+? Output directory: ~/.veydrift
+? Keystore password: ********
+? Confirm password: ********
+Encrypting (this takes a few seconds)...
+Wrote keystore to /Users/you/.veydrift/keystore.json
 ```
 
-**Read this before running it for real:** `Wallet.createRandom()` generates a **brand
-new** address with no history. It cannot access an existing planet — a Veydrift planet is
-permanently bound to the address that settled it (no transfer function exists on the
-contract at all; see [`README.md`](../README.md)'s key-custody section). So:
+It prompts for the output directory (defaults to `~/.veydrift`, so it lands exactly where
+`export VEYDRIFT_KEYSTORE=...` below expects it, if you take the default) and the
+password — masked, typed twice to catch a typo, and rejected if empty. The password never
+appears in your shell history, a script file, or a process list: unlike a one-liner that
+takes the password as a literal, this is an interactive prompt (`scripts/gen-keystore.mjs`,
+`@inquirer/prompts`) for exactly that reason.
+
+**Read this before running it for real:** it generates a **brand new** address with no
+history. It cannot access an existing planet — a Veydrift planet is permanently bound to
+the address that settled it (no transfer function exists on the contract at all; see
+[`README.md`](../README.md)'s key-custody section). So:
 
 - If you're setting up a **new** account: generate a fresh keystore this way, fund it with
   a small amount of ETH on Base for gas, and use its address to settle your first planet.
 - If you already have an **existing** planet: you need the private key that already
-  settled it, not a freshly generated one. Import that specific key into a keystore
-  instead of generating a random one — most wallet software (MetaMask, `cast wallet`, a
-  hardware wallet's export flow) can do this. The point of the recipe above is showing the
-  *shape* of a working keystore, not prescribing where the key comes from.
+  settled it, not a freshly generated one. `wallet:new` only ever generates a fresh
+  random key, so it can't help here — import that specific key into a keystore instead,
+  via most wallet software (MetaMask, `cast wallet`, a hardware wallet's export flow).
 
 **Point the skill at it**, wherever the file lives:
 
