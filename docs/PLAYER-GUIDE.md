@@ -303,10 +303,15 @@ Missile Silo at all. Declare a target to unlock the rest of the entity list:
   `"Small Shield Dome"`) or a numeric `"id"` from `references/entity-ids.md`. Declaring
   `defense_targets` **replaces** the old hardcoded Rocket-Launcher-only default
   entirely — leave it empty if you're happy with that default.
-- `research_priority`/`building_priority` are ordered name lists — the planner tries
-  each in turn, falling back to its own default ordering (lowest-level-first for
-  research; nothing at all for infrastructure, since that family only exists once you
-  declare a priority) for anything not named.
+- `research_priority`/`building_priority` are ordered name lists, but "ordered" means
+  *preference*, not a queue that advances: the planner always proposes the first
+  declared name that's currently buildable, and keeps proposing further levels of that
+  *same* entry indefinitely — it only moves on to the next name if the first ever
+  becomes locked (an unmet prerequisite), never because it decided the first one is
+  "done." See the round-robin callout below before declaring more than one name
+  expecting them to take turns. Names not declared fall back to the default ordering
+  (lowest-level-first for research; nothing at all for infrastructure, since that
+  family only exists once you declare a priority).
 - **A name that doesn't match anything is a hard error on the next tick** for
   `ship_targets`, `defense_targets`, and `research_priority` — the same "typo must never
   mean silence" posture the rest of `policy.json` already takes for an unrecognized key.
@@ -467,8 +472,8 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `max_alternatives` | int | unconstrained — `0` legally means "log no alternatives"; there's no upper cap either | `5` |
 | `ship_targets` | list of `{name, id, count}` | `name` resolved case-insensitively against `references/entity-ids.md`'s Ship table (or use a numeric `id` instead); an unrecognized `name` is a hard error on the next tick. `count` defaults `0` and **is not constrained to be non-negative** (see footgun below). **Empty: this rule is off** — no standing ship target is proposed at all (Solar Satellite's separate energy-driven path is unaffected either way). | `[]` |
 | `defense_targets` | list of `{name, id, count}` | same shape and same rules, against the Defense table. **Empty: falls back to the old hardcoded default** — a single Rocket Launcher, unconditionally — not off, just undeclared. | `[]` |
-| `research_priority` | list of string | ordered Technology names; an unrecognized name is a hard error on the next tick. **Empty: falls back to lowest-level-first** across all technologies — research proposals still happen, just unprioritized by name. | `[]` |
-| `building_priority` | list of string | ordered Building names — **asymmetric with the three fields above; see callout below**. **Empty: the infrastructure family never fires** — rung 6 falls through to its ordinary payback-scored mine/energy comparison, i.e. the decision is delegated entirely to scoring. | `[]` |
+| `research_priority` | list of string | ordered Technology names; an unrecognized name is a hard error on the next tick. **Empty: falls back to lowest-level-first** across all technologies — research proposals still happen, just unprioritized by name. **Does not round-robin — see callout below.** | `[]` |
+| `building_priority` | list of string | ordered Building names — **asymmetric with the three fields above; see callout below**. **Empty: the infrastructure family never fires** — rung 6 falls through to its ordinary payback-scored mine/energy comparison, i.e. the decision is delegated entirely to scoring. **Does not round-robin either — same callout.** | `[]` |
 | `enable_crawler` | bool | `true`/`false` | `false` |
 
 > **Footgun — a negative `count` is a silent no-op, not an error.** `ship_targets`/
@@ -487,6 +492,18 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 > error, no warning, nothing in the logs. Add `"Metal Mine"` to `building_priority`
 > expecting it to do something, and it will be quietly ignored forever with zero
 > feedback. Stick to the six infrastructure names in this field.
+
+> **A multi-name `research_priority`/`building_priority` does not round-robin.** Both
+> fields always propose the first declared name that's currently unlocked, and keep
+> re-proposing further levels of that *same* entry every tick, forever — there's no
+> "build it once, then move to the next name" logic, because neither field has a target
+> level or count to complete against (unlike `ship_targets`/`defense_targets`'s `count`).
+> Declaring `research_priority: ["Energy Technology", "Espionage Technology"]` permanently
+> locks research onto Energy Technology, never touching Espionage Technology, until you
+> edit the list yourself — leveling a technology or building doesn't un-satisfy its own
+> prerequisites, so it never naturally cedes the slot to the next name. Treat these
+> fields as "my #1 priority, with the rest as fallback names for if #1 ever becomes
+> locked," not as a build order the planner works through.
 
 </details>
 
