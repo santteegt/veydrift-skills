@@ -24,8 +24,9 @@ account-specific (your wallet, your planet), that's called out.
 10. [Running on a schedule](#10-running-on-a-schedule)
 11. [Reading the logs](#11-reading-the-logs)
 12. [Evolving through the tiers](#12-evolving-through-the-tiers)
-13. [Troubleshooting](#13-troubleshooting)
-14. [Safety reminders, one more time](#14-safety-reminders-one-more-time)
+13. [Example prompt and looping for tier>=1 agent operators](#13-example-prompt-and-looping-for-tier1-agent-operators)
+14. [Troubleshooting](#14-troubleshooting)
+15. [Safety reminders, one more time](#15-safety-reminders-one-more-time)
 
 ---
 
@@ -172,9 +173,9 @@ done by hand, or handed straight to your agent session: both skills ship a `SKIL
 tells Claude Code or Hermes exactly when to trigger and what to do, so once installed (§4)
 a plain-language request is enough.
 
-Open a fresh session and say something like — keep the first paragraph as-is for future
-sessions, and swap the second for whatever you actually want next (§10 covers this ongoing
-use):
+Open a fresh session and say something like — keep the first three paragraphs as-is for
+future sessions, and swap the last for whatever you actually want next (§10 covers this
+ongoing use):
 
 ```
 You're an agent that helps me play Veydrift, an on-chain space-strategy game on
@@ -182,6 +183,23 @@ Base, using the Veydrift skills installed in this environment. You read my
 planet's state, propose what to build next, and explain your reasoning in
 plain terms — but you never submit a transaction until I've explicitly raised
 your tier past advisor.
+
+Beyond the single next action a tick proposes, look at all four queues —
+building, research, ship, defense — every time you check in, and treat an
+idle one as something to investigate, not a routine state to report and move
+past. Favor keeping every queue occupied, balanced against infra payback:
+if the strongest economic pick is still a mine or infrastructure upgrade,
+take it — don't fill a queue with a weak pick just to avoid idle time — but
+if a queue is idle purely because nothing is declared for it to build, that's
+waste worth closing.
+
+When the planet's growth looks bottlenecked by policy rather than by what's
+actually buildable — no ship_targets/defense_targets/research_priority
+declared, or building_priority that hasn't kept pace with infrastructure
+you've already unlocked (Shipyard, Research Lab, Nanite Factory, and so on)
+— tell me directly and propose the specific policy.json edit, not just a
+one-off action. I'd rather you flag a stagnating config than quietly work
+around it tick after tick.
 
 My wallet is <your address> and my settled planet is <your planet id or
 coordinates>. Initialize my policy file for a cautious first run in advisor
@@ -246,7 +264,7 @@ change called out:
     "allow_defense": false,           // flip to true once you want defense proposals
     "allow_ships": false,             // flip to true once you want ship proposals
     "allow_fleet_noncombat": false,   // gates Transport/Harvest proposals -- operator tier, see §12
-    "allow_combat": false             // ignored everywhere on purpose -- see §14
+    "allow_combat": false             // ignored everywhere on purpose -- see §15
   },
   "escalation": {
     "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,
@@ -420,7 +438,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `allow_defense` | bool | `true`/`false` | `false` |
 | `allow_ships` | bool | `true`/`false` | `false` |
 | `allow_fleet_noncombat` | bool | `true`/`false` | `false` |
-| `allow_combat` | bool | `true`/`false` — legal to set, but **read and then unconditionally ignored by every code path.** Enabling `Attack`/`AcsAttack`/`MissileAttack`/`Intercept` requires an actual source change, not a config edit — see §14. | `false` |
+| `allow_combat` | bool | `true`/`false` — legal to set, but **read and then unconditionally ignored by every code path.** Enabling `Attack`/`AcsAttack`/`MissileAttack`/`Intercept` requires an actual source change, not a config edit — see §15. | `false` |
 
 **`escalation`**
 
@@ -531,7 +549,7 @@ without echoing what you type, every time it needs to sign. That's deliberate �
 an env var is one `printenv` or one compromised process away from being read; a prompt
 requires a human at the keyboard for every single send. If you want the convenience of not
 typing it every time (for example, unattended tier-2+ operation), you can set
-`VEYDRIFT_KEYSTORE_PASSWORD` instead, but understand what you're trading away: see §14.
+`VEYDRIFT_KEYSTORE_PASSWORD` instead, but understand what you're trading away: see §15.
 
 Verify it's wired up correctly:
 
@@ -822,7 +840,95 @@ or promote while a guard is failing *intermittently* rather than consistently pa
 intermittent failures are the ones worth understanding before you give the agent more
 room, not less.
 
-## 13. Troubleshooting
+## 13. Example prompt and looping for tier>=1 agent operators
+
+Everything so far assumes you're checking in on the agent yourself, one tick at a time.
+This section is for the other mode: a standing agent "commander" that runs your planet
+continuously via `/loop`, proposing — and, once you've promoted past `advisor`, actually
+submitting — on its own between check-ins. Read §12 before using this for real; nothing
+below changes what tier does. It's still the only thing that decides whether a proposal
+can ever actually send.
+
+**One field decides whether this is truly unattended: `wallet_engine.require_confirmation`.**
+It defaults to `true`, and at `true`, a tier ≥2 tick never sends on its own — it prints
+"AWAITING HUMAN CONFIRMATION" and hands you a `walletctl send --confirm` command instead,
+every single time. That's the safe default, and a reasonable place to stay if you want a
+human in the loop on every send. For the agent to actually run unattended, set it to
+`false` yourself, deliberately — which is exactly why the agent prompt below carves that
+field out from what it's allowed to change on its own, right alongside `tier`.
+
+### Agent prompt
+
+Paste this into a fresh session, filling in your own wallet address and planet
+coordinates. Unlike §5's bootstrap prompt, this one assumes you've already promoted past
+`advisor` (§12) — at tier 1 it's harmless (nothing can send regardless of what the prompt
+claims, since the `tier` gate blocks every onchain function structurally), but it's
+written for the tier where it actually does something:
+
+```
+You're Wayfinder Automata, an agent commander playing Veydrift, an on-chain
+space-strategy game on Base, using the Veydrift skills installed in this
+environment. Your wallet address is <your address> and your home planet's
+coordinates are <your planet's coordinates, e.g. 7:291:4>.
+
+You command this planet to grow its empire: prepare a resource surplus, and
+prioritize infrastructure, research, and shipyard production, plus
+non-combat fleet missions once you have the fleet to run them. Look at all
+four queues — building, research, ship, defense — every time you act, and
+treat an idle one as something to investigate, balanced against infra
+payback: don't fill a queue with a weak pick just to avoid idle time, but
+don't leave one idle just because nothing is declared for it either.
+Combat, ACS, and alliances are out of scope for this skill at every tier,
+by design — never propose or imply progress toward them, even if I ask.
+
+Every time you act: read the planet's live state, propose what to build
+next, execute it, and give me a final summary in plain terms, including a
+link to the on-chain transaction (https://basescan.org/tx/<hash>, since
+this is Base) whenever one was actually sent. You're allowed to submit
+on-chain transactions unless I've explicitly lowered your tier to advisor.
+
+You're free to update policy.json as your strategy evolves — including
+declaring new ship_targets/defense_targets/research_priority/
+building_priority as infrastructure unlocks new options, so growth doesn't
+stagnate on a config that hasn't kept up — with two exceptions that are
+mine to set, not yours: tier, and wallet_engine.require_confirmation.
+Report any other change you make to policy in the same summary that made
+it — I should never have to diff the file to find out what changed.
+
+Maintain your own durable, cross-session memory of what should survive
+between sessions — this planet's long-term strategy, its strengths and
+constraints, and decisions you've already made and why — and keep it
+current whenever anything changes. Keep it to what's genuinely durable:
+never store data that's already live in the game state (resources, queue
+timers, prices) — that's what the next tick is for.
+```
+
+### User prompt — kick off the loop
+
+Once the agent prompt above is the standing context for the session, this is what
+actually starts the loop. `/loop` with no fixed interval lets the agent self-pace between
+iterations instead of ticking on a dumb timer:
+
+```
+/loop Run one Veydrift gameplay tick (not a dry run) and let your strategy
+adjust each iteration per your standing instructions. Then send me a report
+covering: the action taken this iteration (including the on-chain tx link,
+if one sent), any policy.json change you made and why, and a proposal for
+the next actionable moment — a busy queue's QueueEntry.seconds_remaining
+(or ready_at), or the affordability-gate's ETA string ("affordable in
+~Xh Ym") when the winning pick isn't affordable yet. Schedule the next
+wakeup for whichever of those is soonest, floored at policy.cadence's
+relevant *_minutes field so we never tick faster than the policy allows,
+and capped at 3600s per wakeup — chain multiple wakeups for a longer wait
+instead of one long sleep. If nothing gives an ETA (idle queue, no pending
+mine target), fall back to the cadence default.
+```
+
+`QueueEntry.seconds_remaining`/`ready_at` and the affordability gate's ETA string are both
+real fields the agent already has access to from a normal tick's output — nothing here
+asks it to invent numbers it doesn't have.
+
+## 14. Troubleshooting
 
 | Symptom | What's actually happening |
 | --- | --- |
@@ -834,7 +940,7 @@ room, not less.
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 
-## 14. Safety reminders, one more time
+## 15. Safety reminders, one more time
 
 - **The wallet *is* the account.** There is no password reset and no recovery path for a
   lost keystore password or lost key. A Veydrift planet cannot be transferred to a

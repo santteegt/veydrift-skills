@@ -761,7 +761,7 @@ footer.doc-foot a { color: var(--ink-dim); }
 <section class="chapter" id="s5" data-num="05" data-label="Bootstrap via an agent">
   <div class="chapter-head"><span class="chapter-num">05</span><h2 class="chapter-title">Bootstrap via an agent session</h2></div>
   <p>Everything in §6 and §7 below — writing <code>policy.json</code>, picking a wallet provider — can be done by hand, or handed straight to your agent session: both skills ship a <code>SKILL.md</code> that tells Claude Code or Hermes exactly when to trigger and what to do, so once installed (§4) a plain-language request is enough.</p>
-  <p>Open a fresh session and say something like — keep the first paragraph as-is for future sessions, and swap the second for whatever you actually want next (§10 covers this ongoing use):</p>
+  <p>Open a fresh session and say something like — keep the first three paragraphs as-is for future sessions, and swap the last for whatever you actually want next (§10 covers this ongoing use):</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>prompt — paste into your agent session</span></div>
     <div class="codeblock-body"><pre>You're an agent that helps me play Veydrift, an on-chain space-strategy game on
@@ -769,6 +769,23 @@ Base, using the Veydrift skills installed in this environment. You read my
 planet's state, propose what to build next, and explain your reasoning in
 plain terms — but you never submit a transaction until I've explicitly raised
 your tier past advisor.
+
+Beyond the single next action a tick proposes, look at all four queues —
+building, research, ship, defense — every time you check in, and treat an
+idle one as something to investigate, not a routine state to report and move
+past. Favor keeping every queue occupied, balanced against infra payback:
+if the strongest economic pick is still a mine or infrastructure upgrade,
+take it — don't fill a queue with a weak pick just to avoid idle time — but
+if a queue is idle purely because nothing is declared for it to build, that's
+waste worth closing.
+
+When the planet's growth looks bottlenecked by policy rather than by what's
+actually buildable — no ship_targets/defense_targets/research_priority
+declared, or building_priority that hasn't kept pace with infrastructure
+you've already unlocked (Shipyard, Research Lab, Nanite Factory, and so on)
+— tell me directly and propose the specific policy.json edit, not just a
+one-off action. I'd rather you flag a stagnating config than quietly work
+around it tick after tick.
 
 My wallet is &lt;your address&gt; and my settled planet is &lt;your planet id or
 coordinates&gt;. Initialize my policy file for a cautious first run in advisor
@@ -806,7 +823,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   <span class="c-key">"actions"</span>: {
     <span class="c-key">"allow_building"</span>: true, <span class="c-key">"allow_research"</span>: true,
     <span class="c-key">"allow_defense"</span>: false, <span class="c-key">"allow_ships"</span>: false,
-    <span class="c-key">"allow_combat"</span>: false                     <span class="c-comment">// ignored everywhere, on purpose — see §14</span>
+    <span class="c-key">"allow_combat"</span>: false                     <span class="c-comment">// ignored everywhere, on purpose — see §15</span>
   },
   <span class="c-key">"wallet_engine"</span>: { <span class="c-key">"provider"</span>: <span class="c-str">"keystore"</span>, <span class="c-key">"require_confirmation"</span>: true },
   <span class="c-key">"strategy"</span>: {
@@ -927,7 +944,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
         <tr><td><code>allow_defense</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>false</code></td></tr>
         <tr><td><code>allow_ships</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>false</code></td></tr>
         <tr><td><code>allow_fleet_noncombat</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>false</code></td></tr>
-        <tr><td><code>allow_combat</code></td><td>bool</td><td><code>true</code>/<code>false</code> — legal to set, but <strong>read and then unconditionally ignored by every code path.</strong> Enabling combat mission types requires an actual source change, not a config edit — see §14.</td><td><code>false</code></td></tr>
+        <tr><td><code>allow_combat</code></td><td>bool</td><td><code>true</code>/<code>false</code> — legal to set, but <strong>read and then unconditionally ignored by every code path.</strong> Enabling combat mission types requires an actual source change, not a config edit — see §15.</td><td><code>false</code></td></tr>
       </tbody>
     </table>
   </div>
@@ -1233,8 +1250,75 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   <p><strong>Never</strong>: promote on tick count alone, promote without having read <code>strategy.md</code>, or promote while a guard fails intermittently rather than consistently passing.</p>
 </section>
 
-<section class="chapter" id="s13" data-num="13" data-label="Troubleshooting">
-  <div class="chapter-head"><span class="chapter-num">13</span><h2 class="chapter-title">Troubleshooting</h2></div>
+<section class="chapter" id="s13" data-num="13" data-label="Example prompt and looping">
+  <div class="chapter-head"><span class="chapter-num">13</span><h2 class="chapter-title">Example prompt and looping for tier&gt;=1 agent operators</h2></div>
+  <p>Everything so far assumes you're checking in on the agent yourself, one tick at a time. This section is for the other mode: a standing agent "commander" that runs your planet continuously via <code>/loop</code>, proposing — and, once you've promoted past <code>advisor</code>, actually submitting — on its own between check-ins. Read §12 before using this for real; nothing below changes what tier does. It's still the only thing that decides whether a proposal can ever actually send.</p>
+  <div class="callout caution">
+    <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div><strong class="callout-title">One field decides whether this is truly unattended: <code>wallet_engine.require_confirmation</code></strong><p>It defaults to <code>true</code>, and at <code>true</code>, a tier ≥2 tick never sends on its own — it prints "AWAITING HUMAN CONFIRMATION" and hands you a <code>walletctl send --confirm</code> command instead, every single time. That's the safe default, and a reasonable place to stay if you want a human in the loop on every send. For the agent to actually run unattended, set it to <code>false</code> yourself, deliberately — which is exactly why the agent prompt below carves that field out from what it's allowed to change on its own, right alongside <code>tier</code>.</p></div>
+  </div>
+  <h3>Agent prompt</h3>
+  <p>Paste this into a fresh session, filling in your own wallet address and planet coordinates. Unlike §5's bootstrap prompt, this one assumes you've already promoted past <code>advisor</code> (§12) — at tier 1 it's harmless (nothing can send regardless of what the prompt claims, since the <code>tier</code> gate blocks every onchain function structurally), but it's written for the tier where it actually does something:</p>
+  <div class="codeblock">
+    <div class="codeblock-head"><span>prompt — paste into your agent session</span></div>
+    <div class="codeblock-body"><pre>You're Wayfinder Automata, an agent commander playing Veydrift, an on-chain
+space-strategy game on Base, using the Veydrift skills installed in this
+environment. Your wallet address is &lt;your address&gt; and your home planet's
+coordinates are &lt;your planet's coordinates, e.g. 7:291:4&gt;.
+
+You command this planet to grow its empire: prepare a resource surplus, and
+prioritize infrastructure, research, and shipyard production, plus
+non-combat fleet missions once you have the fleet to run them. Look at all
+four queues — building, research, ship, defense — every time you act, and
+treat an idle one as something to investigate, balanced against infra
+payback: don't fill a queue with a weak pick just to avoid idle time, but
+don't leave one idle just because nothing is declared for it either.
+Combat, ACS, and alliances are out of scope for this skill at every tier,
+by design — never propose or imply progress toward them, even if I ask.
+
+Every time you act: read the planet's live state, propose what to build
+next, execute it, and give me a final summary in plain terms, including a
+link to the on-chain transaction (https://basescan.org/tx/&lt;hash&gt;, since
+this is Base) whenever one was actually sent. You're allowed to submit
+on-chain transactions unless I've explicitly lowered your tier to advisor.
+
+You're free to update policy.json as your strategy evolves — including
+declaring new ship_targets/defense_targets/research_priority/
+building_priority as infrastructure unlocks new options, so growth doesn't
+stagnate on a config that hasn't kept up — with two exceptions that are
+mine to set, not yours: tier, and wallet_engine.require_confirmation.
+Report any other change you make to policy in the same summary that made
+it — I should never have to diff the file to find out what changed.
+
+Maintain your own durable, cross-session memory of what should survive
+between sessions — this planet's long-term strategy, its strengths and
+constraints, and decisions you've already made and why — and keep it
+current whenever anything changes. Keep it to what's genuinely durable:
+never store data that's already live in the game state (resources, queue
+timers, prices) — that's what the next tick is for.</pre></div>
+  </div>
+  <h3>User prompt — kick off the loop</h3>
+  <p>Once the agent prompt above is the standing context for the session, this is what actually starts the loop. <code>/loop</code> with no fixed interval lets the agent self-pace between iterations instead of ticking on a dumb timer:</p>
+  <div class="codeblock">
+    <div class="codeblock-head"><span>prompt — paste into the same session</span></div>
+    <div class="codeblock-body"><pre>/loop Run one Veydrift gameplay tick (not a dry run) and let your strategy
+adjust each iteration per your standing instructions. Then send me a report
+covering: the action taken this iteration (including the on-chain tx link,
+if one sent), any policy.json change you made and why, and a proposal for
+the next actionable moment — a busy queue's QueueEntry.seconds_remaining
+(or ready_at), or the affordability-gate's ETA string ("affordable in
+~Xh Ym") when the winning pick isn't affordable yet. Schedule the next
+wakeup for whichever of those is soonest, floored at policy.cadence's
+relevant *_minutes field so we never tick faster than the policy allows,
+and capped at 3600s per wakeup — chain multiple wakeups for a longer wait
+instead of one long sleep. If nothing gives an ETA (idle queue, no pending
+mine target), fall back to the cadence default.</pre></div>
+  </div>
+  <p><code>QueueEntry.seconds_remaining</code>/<code>ready_at</code> and the affordability gate's ETA string are both real fields the agent already has access to from a normal tick's output — nothing here asks it to invent numbers it doesn't have.</p>
+</section>
+
+<section class="chapter" id="s14" data-num="14" data-label="Troubleshooting">
+  <div class="chapter-head"><span class="chapter-num">14</span><h2 class="chapter-title">Troubleshooting</h2></div>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Symptom</th><th>What's happening</th></tr></thead>
@@ -1250,8 +1334,8 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   </div>
 </section>
 
-<section class="chapter" id="s14" data-num="14" data-label="Safety reminders">
-  <div class="chapter-head"><span class="chapter-num">14</span><h2 class="chapter-title">Safety reminders, one more time</h2></div>
+<section class="chapter" id="s15" data-num="15" data-label="Safety reminders">
+  <div class="chapter-head"><span class="chapter-num">15</span><h2 class="chapter-title">Safety reminders, one more time</h2></div>
   <div class="callout danger">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
     <div><strong class="callout-title">The wallet is the account</strong><p>There is no password reset and no recovery for a lost keystore password or key. A Veydrift planet cannot be transferred to a different address by any contract mechanism.</p></div>
