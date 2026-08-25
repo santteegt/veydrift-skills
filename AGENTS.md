@@ -376,6 +376,25 @@ enough to call out here specifically, not a duplicate of that ledger.
   "no cost-scaling function" invariant is about never *computing* one, not about having
   verified the real curve), and every other selector's queue/settlement behaviour above
   level 0 is still unexercised by this system's own observation, mainnet included.
+- **A declared `research_priority`/`building_priority` entry never cedes its slot once it
+  becomes reachable.** Neither field has a completion criterion — unlike `ship_targets`/
+  `defense_targets`'s `count` — so a multi-name list gets stuck on entry #1 forever instead
+  of advancing once that entry is built/researched. `candidates.py`'s `unlock_breadth`
+  fallback ranking (`docs/SPEC.md` AC64) makes the *undeclared* tail smarter but does
+  nothing for this; fixing it needs a structured replacement for `list[str]` carrying an
+  optional `target_level` (mirroring `EntityTarget`'s `count`), touching `models.py`, both
+  `select_*` functions in `candidates.py`, ~2 dozen test call sites, `policy.example.json`,
+  and the inline JSON examples in `docs/PLAYER-GUIDE.md`/`.html`.
+- **An empty `building_priority` makes all six infrastructure buildings (Robotics Factory,
+  Nanite Factory, Shipyard, Research Lab, Terraformer, Missile Silo) structurally
+  unreachable**, not merely deprioritized — `generate_infrastructure_candidates`
+  (`candidates.py:703`) returns `[]` unconditionally when the list is empty, unlike
+  `research_priority`, which already falls back to ranking every undeclared technology.
+  Giving the empty case the same kind of fallback `unlock_breadth` gives research would
+  close this, but touches the pinned Phase 2/3 byte-identical-empty-`StrategyCfg`
+  acceptance criterion (`docs/SPEC.md` AC25-31) and needs a ladder-position decision —
+  does the fallback outrank mines, or sit behind them like research/ship/defense already
+  do.
 
 ## 11. Pointers into `docs/`
 
