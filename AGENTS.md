@@ -76,9 +76,9 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **264 Python tests, 104 TypeScript tests**, both suites green. Run both before
-calling any change done; they are independent projects but cover a system with two
-enforcement layers that must agree (§6).
+baseline: **518 Python tests, 123 TypeScript tests** (121 passed + 2 intentionally
+skipped), both suites green. Run both before calling any change done; they are independent
+projects but cover a system with two enforcement layers that must agree (§6).
 
 **Never run these against your real `$VEYDRIFT_HOME`.** Point `VEYDRIFT_HOME` at a scratch
 directory for any manual testing — ticks, mock policies, anything — so you don't corrupt a
@@ -388,7 +388,7 @@ enough to call out here specifically, not a duplicate of that ledger.
 - **An empty `building_priority` makes all six infrastructure buildings (Robotics Factory,
   Nanite Factory, Shipyard, Research Lab, Terraformer, Missile Silo) structurally
   unreachable**, not merely deprioritized — `generate_infrastructure_candidates`
-  (`candidates.py:703`) returns `[]` unconditionally when the list is empty, unlike
+  (`candidates.py:732`) returns `[]` unconditionally when the list is empty, unlike
   `research_priority`, which already falls back to ranking every undeclared technology.
   Giving the empty case the same kind of fallback `unlock_breadth` gives research would
   close this, but touches the pinned Phase 2/3 byte-identical-empty-`StrategyCfg`
