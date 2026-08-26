@@ -147,6 +147,25 @@ current (zero) levels, but it sits much closer to crystal's density than it woul
 much wider gap). The lean is real and derived from the live multiplier; it is not an
 overstated "deuterium always wins here" claim.
 
+**Breaking an exact tie.** `(current_level + 1) / density` can land on the identical
+float for two mines — e.g. Metal level 14 and Crystal level 9 at 1x multipliers both
+score `5.00e-4` (`(15)/30 == (10)/20`), and this recurs any time the two mines' levels
+happen to sit at the corresponding ratio, not just that one pair. Rather than let that
+default to Python's dict-declaration order (which always favored Metal Mine, an
+incidental artifact never a deliberate rule), the walk breaks an exact tie by each
+tied mine's own already-computed payback score (`score_payback`, the same number
+`Action.alternatives` already displays) — ascending, so the cheaper-to-recoup mine
+wins. This is a genuinely narrow exception, not a backdoor into letting payback drive
+the whole ranking: it only ever fires on an exact tie, using a number already computed
+for the same family, never an invented cross-family judgement. One side effect worth
+knowing: if the *other* tied mine is currently energy-blocked, this now lets the safe
+one win directly as a mine, instead of the blocked one winning by dict-order luck and
+forcing an energy-substitute proposal (Solar Plant/Satellite) that a live tie-break
+would have avoided. One accepted gap: the winning mine's rationale text doesn't
+currently say a tie was broken this way — if you're explaining a proposal to a user and
+it names a mine that doesn't obviously have the lowest raw density, check whether it
+tied with another mine before assuming something's wrong.
+
 ## 5. Deriving the energy source: cost per energy point
 
 When the energy-first check *does* fire, `plan.py` chooses between Solar Plant and Solar

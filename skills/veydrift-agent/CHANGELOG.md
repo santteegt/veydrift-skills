@@ -11,6 +11,8 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-08-26
+
 ### Fixed
 
 - `read.py` dropped the dead `except ImportError` fallback for the entity ID -> name
@@ -25,6 +27,16 @@ skills are not versioned in lockstep.
   work package. `state.py` is unconditionally present now, the fallback was `pragma: no
   cover`, and no test depended on it. Replaced with a plain top-level import from
   `state.py`; the now-unused `os` import was dropped too. No behavior change.
+- **`_mine_priority_order`'s exact-tie handling now breaks by ascending payback hours,
+  not dict-declaration order.** An exact density tie between two mines (real, recurring
+  case — not hypothetical) previously always favored Metal Mine by accident of Python
+  dict ordering, and could force an energy-substitute proposal over a tied-but-safe mine
+  when the dict-order favorite was itself energy-blocked. New optional keyword-only
+  `_mine_priority_order(planet, *, tie_break=None)`; every call site except
+  `select_building_candidate`'s leaves it `None`, reproducing today's exact output
+  byte-for-byte (checked directly against every existing fixture — none reaches an exact
+  tie). See `docs/SPEC.md`'s dated correction (criterion 65) for the full writeup,
+  including the two consequences accepted deliberately rather than engineered around.
 
 ## [1.4.0] - 2026-08-22
 

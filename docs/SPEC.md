@@ -1431,6 +1431,46 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `tests/test_candidates.py::test_research_fallback_order_prefers_unlock_breadth_over_level`,
     `::test_infrastructure_fallback_order_prefers_unlock_breadth_over_level`,
     `::test_infrastructure_fallback_order_reachable_without_any_declaration`.
+65. **Correction, 2026-08-26.** `_mine_priority_order`'s exact-tie handling — previously
+    a pure accident of Python dict-declaration order (`METAL_MINE` listed first,
+    `docs/COVERAGE.md`'s "Mine selection ignores the payback score it computes" row) —
+    now breaks an exact density tie by ascending `score_payback` hours (each mine's
+    already-computed payback, the same number `Candidate.score` already carries for
+    display) instead. New optional keyword-only `_mine_priority_order(planet, *,
+    tie_break: Mapping[int, float] | None = None)`; `select_building_candidate` builds
+    the map from data it already has (`mine_candidates`, built before the walk) and
+    passes it; every other call site (including `generate_mine_candidates`'s own
+    internal use, whose list order is never winner-load-bearing downstream) leaves
+    `tie_break` at its default `None`, under which the secondary sort key is constant
+    and the stable sort reproduces today's exact dict-order output — byte-identical. A
+    mine missing from the map (locked, energy-unsafe, or a `score_payback`-returns-`None`
+    edge case) sorts last, never preferentially winning an unknown value over a known
+    one. This is the same move `generate_unlock_chain_candidates` already makes — its
+    own docstring: weighted cost as "not an ROI comparison... just a tie-break among
+    otherwise-incomparable proposals" — applied to a same-family, already-computed
+    number, not an invented cross-family exchange rate, so it does not cross the "no ROI
+    verdict" line either. Scoped narrowly: the primary `(level+1)/density` ranking is
+    completely untouched, and criterion 23's byte-identical-to-pre-Phase-2 guarantee
+    still holds for every existing fixture — checked directly (planet_664, planet_hot,
+    `_ready_snapshot`, `_blocked_planet`): none of them reaches an exact density tie, so
+    none of their pinned output changes.
+
+    Two consequences accepted deliberately, not overlooked: **(a)** a tie between an
+    energy-blocked mine and an energy-safe one now resolves to the safe mine directly
+    (as a mine, not via the energy-first substitute) instead of the blocked mine
+    forcing an energy-substitute proposal by dict-order luck — a genuine improvement,
+    not just "a different mine wins," and pinned by its own test. **(b)** the winning
+    mine's `Action.rationale` (generated inside `generate_mine_candidates`, before the
+    tie-break is known) does not currently say a tie was broken by payback, even in the
+    scenario that motivated this change — accepted rather than adding a second
+    mechanism to thread that state through purely for UX polish.
+
+    `tests/test_candidates.py::test_mine_priority_order_default_tie_break_is_dict_declaration_order`,
+    `::test_mine_priority_order_tie_break_prefers_lower_payback`,
+    `::test_mine_priority_order_tie_break_with_no_scores_falls_back_to_dict_order`,
+    `::test_select_building_candidate_breaks_a_real_tie_by_computed_payback`,
+    `::test_mine_tie_with_an_energy_blocked_twin_prefers_the_energy_safe_one_directly`,
+    `::test_mine_tie_break_winner_still_defers_to_storage_precondition`.
 
 ---
 

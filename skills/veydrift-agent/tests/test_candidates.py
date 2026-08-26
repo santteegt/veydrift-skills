@@ -180,6 +180,164 @@ def test_energy_safe_mine_is_generated_once_solar_plant_covers_it():
 
 
 # --------------------------------------------------------------------------------------
+# 3b. _mine_priority_order's tie-break: an exact density tie is broken by ascending
+# payback hours when supplied, and falls back to today's dict-declaration-order
+# (Metal Mine first) when not -- Metal(level 2)/Crystal(level 1)/Deuterium(level 5) at
+# 1x multipliers is an exact tie between Metal and Crystal (both score 1e-5); Deuterium
+# is deliberately left off the tie (6e-5) so the fixture isolates a clean two-way tie.
+# --------------------------------------------------------------------------------------
+
+
+def _tied_mine_planet(
+    *,
+    energy_produced: int = 100_000,
+    crystal_storage_cap: int = 100_000,
+    metal_cost: Resources = Resources(metal=60, crystal=15),
+    crystal_cost: Resources = Resources(metal=20, crystal=10),
+) -> PlanetSnapshot:
+    """Metal level 2, Crystal level 1, Deuterium level 5, all 1x multipliers -- an exact
+    density tie between Metal and Crystal ((2+1)/30 == (1+1)/20 == 1e-5), Deuterium
+    clearly behind (6e-5). Solar Plant level 10 keeps `calc.production_per_hour`'s
+    internal energy check unthrottled so payback scores are real, nonzero numbers;
+    `energy_produced` separately controls the energy-*safety* filter
+    (`_mine_energy_safe`/`_produced_now`, which reads `planet.energy.produced` directly,
+    not the Solar Plant level) -- the two are independent knobs on purpose, matching how
+    the real code separates them."""
+    return PlanetSnapshot(
+        planet_id=1,
+        metal_multiplier_bps=10_000,
+        crystal_multiplier_bps=10_000,
+        deuterium_multiplier_bps=10_000,
+        resources_as_of_now=Resources(metal=10_000, crystal=10_000, deuterium=10_000),
+        storage_caps=Resources(metal=100_000, crystal=crystal_storage_cap, deuterium=100_000),
+        production_per_hour=Resources(metal=0, crystal=0, deuterium=0),
+        energy=EnergyBalance(produced=energy_produced, required=0, scale_bps=10_000, solar_satellite_energy=4),
+        buildings=[
+            Entity(id=ids.Building.METAL_MINE, name="Metal Mine", level=2, cost=metal_cost),
+            Entity(id=ids.Building.CRYSTAL_MINE, name="Crystal Mine", level=1, cost=crystal_cost),
+            Entity(
+                id=ids.Building.DEUTERIUM_SYNTHESIZER,
+                name="Deuterium Synthesizer",
+                level=5,
+                cost=Resources(metal=225, crystal=75),
+            ),
+            Entity(id=ids.Building.SOLAR_PLANT, name="Solar Plant", level=10, cost=Resources(metal=75, crystal=30)),
+            Entity(id=ids.Building.CRYSTAL_STORAGE, name="Crystal Storage", level=0, cost=Resources(metal=1_000, crystal=500)),
+        ],
+        ships=[],
+        defenses=[],
+    )
+
+
+def test_mine_priority_order_default_tie_break_is_dict_declaration_order():
+    """Pins today's default explicitly for the first time -- no existing test asserted
+    this before. `tie_break=None` (the default, and every call site except
+    `select_building_candidate`'s) must stay byte-identical: Metal Mine first on the
+    tie, exactly as before this parameter existed."""
+    planet = _tied_mine_planet()
+
+    order = candidates._mine_priority_order(planet)
+
+    assert order[0] == ids.Building.METAL_MINE
+    assert order[1] == ids.Building.CRYSTAL_MINE
+
+
+def test_mine_priority_order_tie_break_prefers_lower_payback():
+    planet = _tied_mine_planet()
+
+    order = candidates._mine_priority_order(
+        planet, tie_break={ids.Building.METAL_MINE: 10.0, ids.Building.CRYSTAL_MINE: 5.0}
+    )
+    assert order[0] == ids.Building.CRYSTAL_MINE
+
+    # Direction check, not just "something changed": swap which one has the lower number.
+    order_reversed = candidates._mine_priority_order(
+        planet, tie_break={ids.Building.METAL_MINE: 5.0, ids.Building.CRYSTAL_MINE: 10.0}
+    )
+    assert order_reversed[0] == ids.Building.METAL_MINE
+
+
+def test_mine_priority_order_tie_break_with_no_scores_falls_back_to_dict_order():
+    """An explicitly-supplied (non-`None`) map that simply doesn't cover either tied id
+    -- e.g. both mines' `score_payback` returned `None` -- must degrade to the same
+    dict-declaration-order fallback as `tie_break=None`, not crash or reorder
+    arbitrarily. Distinct from the `tie_break=None` test above: this pins the
+    `.get(id, inf)` fallback path specifically."""
+    planet = _tied_mine_planet()
+
+    order = candidates._mine_priority_order(planet, tie_break={})
+
+    assert order[0] == ids.Building.METAL_MINE
+    assert order[1] == ids.Building.CRYSTAL_MINE
+
+
+def test_select_building_candidate_breaks_a_real_tie_by_computed_payback():
+    """Integration-level, self-verifying: reads the *actual* computed payback scores
+    (never hand-predicted) and asserts the winner is whichever tied mine really has the
+    lower one -- proving the values flow generate_mine_candidates -> mine_tie_break ->
+    _mine_priority_order -> select_building_candidate's winner, not just that
+    _mine_priority_order's own sort key is correct in isolation (the tests above)."""
+    planet = _tied_mine_planet()
+    snapshot = Snapshot(taken_at="2026-08-16T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[1])
+
+    mine_candidates = candidates.generate_mine_candidates(snapshot, policy, planet)
+    metal_c = next(c for c in mine_candidates if c.action.entity_id == ids.Building.METAL_MINE)
+    crystal_c = next(c for c in mine_candidates if c.action.entity_id == ids.Building.CRYSTAL_MINE)
+    assert metal_c.score is not None and crystal_c.score is not None
+    assert metal_c.score != crystal_c.score  # tie-break must have something real to resolve
+
+    winner, _alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    expected_winner_id = min([metal_c, crystal_c], key=lambda c: c.score).action.entity_id
+    assert winner is not None
+    assert winner.family == "mine"
+    assert winner.action.entity_id == expected_winner_id
+
+
+def test_mine_tie_with_an_energy_blocked_twin_prefers_the_energy_safe_one_directly():
+    """Family-flip case: before this fix, an energy-blocked mine that ties on primary
+    density still won the priority walk by dict order, forcing an energy-substitute
+    proposal even though the *other* tied mine was energy-safe and could have been
+    proposed directly. An energy-unsafe mine is never in `mine_tie_break` (it was never
+    generated as a candidate in the first place), so it now always sorts last on a tie
+    -- the safe, tied mine wins directly as a mine, and no energy building is proposed."""
+    planet = _tied_mine_planet(energy_produced=210)  # 211 required if Metal upgrades, 209 if Crystal does
+    snapshot = Snapshot(taken_at="2026-08-16T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[1])
+
+    safe, required_metal = candidates._mine_energy_safe(planet, snapshot, ids.Building.METAL_MINE, produced_now=210)
+    assert safe is False and required_metal == 211
+    safe, required_crystal = candidates._mine_energy_safe(planet, snapshot, ids.Building.CRYSTAL_MINE, produced_now=210)
+    assert safe is True and required_crystal == 209
+
+    winner, _alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    assert winner.family == "mine"
+    assert winner.action.entity_id == ids.Building.CRYSTAL_MINE
+
+
+def test_mine_tie_break_winner_still_defers_to_storage_precondition():
+    """The tie-break changes *which* mine is the tentative winner, but must not bypass
+    the storage-cap precondition (`_resolve_storage_precondition`) that already applies
+    to whatever `_mine_priority_order` hands it. Crystal Mine wins the payback tie-break
+    (see test_select_building_candidate_breaks_a_real_tie_by_computed_payback), but its
+    cost (10 crystal) exceeds a deliberately tiny crystal storage cap here -- the winner
+    must become the matching storage substitute, not Crystal Mine directly, and not
+    Metal Mine (today's dict-order winner) either."""
+    planet = _tied_mine_planet(crystal_storage_cap=5)  # Crystal Mine costs 10 crystal -- exceeds this
+    snapshot = Snapshot(taken_at="2026-08-16T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[1])
+
+    winner, _alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    assert winner.family == "storage"
+    assert winner.action.entity_id == ids.Building.CRYSTAL_STORAGE
+
+
+# --------------------------------------------------------------------------------------
 # 4. score_payback returns None for a storage building (never moves production_per_hour).
 # --------------------------------------------------------------------------------------
 

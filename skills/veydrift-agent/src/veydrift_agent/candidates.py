@@ -21,7 +21,12 @@ program"). Before this module, each rung both decided the action *family* and ha
   order `plan.py` used before this module existed (priority-ordered mine walk with the
   energy-first hard filter, lowest-level-then-id research walk, ship-then-defense
   shipyard walk) so the winning `Action` this phase produces is byte-identical to the
-  pre-Phase-2 ladder — this phase's own acceptance criterion (docs/SPEC.md §9 AC23).
+  pre-Phase-2 ladder — this phase's own acceptance criterion (docs/SPEC.md §9 AC23) —
+  **with one dated exception**: `_mine_priority_order`'s exact-density-tie break now
+  prefers ascending payback hours over dict-declaration order (docs/SPEC.md's dated
+  correction on this). That exception fires only when two mines score identically on the
+  primary density ranking; every fixture this criterion was originally pinned against
+  never reaches that case, so the criterion still holds for all of them.
   Each returns `(winner: Candidate | None, alternatives: list[Candidate])`; `plan.py`
   attaches `alternatives` to the winning `Action` (capped at
   `policy.strategy.max_alternatives`), ranked, informational only.
@@ -294,13 +299,26 @@ def _score_level_delta(
 _MINE_BUILDING_IDS = (ids.Building.METAL_MINE, ids.Building.CRYSTAL_MINE, ids.Building.DEUTERIUM_SYNTHESIZER)
 
 
-def _mine_priority_order(planet: PlanetSnapshot) -> list[int]:
+def _mine_priority_order(planet: PlanetSnapshot, *, tie_break: Mapping[int, float] | None = None) -> list[int]:
     """Ranks Metal / Crystal / Deuterium mines by resource "value density" on this
     planet: contract base production rate (`VeydriftFormulas.sol:70-72`: metal 30,
     crystal 20, deuterium 10 per scaled level) times this planet's live multiplier,
-    ordered by `(current_level + 1) / density` (lower = higher priority). Ported
-    verbatim from `plan.py`'s pre-Phase-2 `_mine_priority_order` — see
-    `references/strategy-playbook.md` for the full derivation."""
+    ordered by `(current_level + 1) / density` (lower = higher priority). This primary
+    ranking is ported verbatim from `plan.py`'s pre-Phase-2 `_mine_priority_order` — see
+    `references/strategy-playbook.md` for the full derivation.
+
+    `tie_break` (new, optional, keyword-only): a `building_id -> payback_hours` map
+    (typically each mine's already-computed `Candidate.score` from `generate_mine_
+    candidates`) used to break an *exact* density tie, ascending -- a mine missing from
+    the map (locked, energy-unsafe, or `score_payback` returned `None`) sorts last,
+    never preferentially winning an unknown value over a known one. Left `None` (every
+    call site except `select_building_candidate`'s), the secondary sort key is constant
+    and Python's stable sort preserves today's exact dict-declaration-order tie-break
+    (`METAL_MINE` first) -- byte-identical output to before this parameter existed. An
+    exact density tie is rare but real: it will recur any time
+    `(metal_level+1)*20 == (crystal_level+1)*30` at 1x multipliers (or the equivalent
+    cross-multiplied form generally), not just the specific levels that first surfaced
+    it."""
     densities = {
         ids.Building.METAL_MINE: 30 * planet.metal_multiplier_bps,
         ids.Building.CRYSTAL_MINE: 20 * planet.crystal_multiplier_bps,
@@ -313,7 +331,11 @@ def _mine_priority_order(planet: PlanetSnapshot) -> list[int]:
             return float("inf")
         return (_level(planet, building_id) + 1) / density
 
-    return sorted(densities, key=score)
+    def sort_key(building_id: int) -> tuple[float, float]:
+        secondary = tie_break.get(building_id, float("inf")) if tie_break is not None else 0.0
+        return (score(building_id), secondary)
+
+    return sorted(densities, key=sort_key)
 
 
 def _mine_energy_safe(
@@ -1186,6 +1208,7 @@ def select_building_candidate(
             # same as when `building_priority` yields nothing selectable at all.
 
     mine_candidates = {c.action.entity_id: c for c in generate_mine_candidates(snapshot, policy, planet)}
+    mine_tie_break = {mid: c.score for mid, c in mine_candidates.items() if c.score is not None}
     energy_candidates = generate_energy_candidates(snapshot, policy, planet)
     proactive_storage_candidates = generate_proactive_storage_candidates(snapshot, policy, planet)
     building_levels = _level_vector(planet.buildings)
@@ -1196,7 +1219,7 @@ def select_building_candidate(
     alternatives: list[Candidate] = []
     winner: Candidate | None = None
 
-    for mine_id in _mine_priority_order(planet):
+    for mine_id in _mine_priority_order(planet, tie_break=mine_tie_break):
         mine_entity = _entity(planet.buildings, mine_id)
         if mine_entity is None or mine_entity.level is None:
             continue
