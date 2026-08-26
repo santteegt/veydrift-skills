@@ -11,6 +11,30 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-26
+
+### Added
+
+- `vd tick --action <file>`: lets an operator/agent supply their own `Action` instead of
+  `plan_next_action`'s own choice, gated behind a new policy field
+  `strategy.allow_agent_action_override` (default `false`, refused outright without it) --
+  alongside `ship_targets`/`research_priority`/etc, since this is a strategic-override
+  lever, not a wallet-engine or top-level account setting. Only the
+  planner's choice is substituted -- every other rung of `_run_tick` (all ~19 `guard.py`
+  gates, `wallet_engine.require_confirmation`, the tier ceiling, `tick_lock()`, and full
+  audit logging) runs exactly as it does for a planner-chosen action. `Action` gained a
+  `source: "planner" | "manual_override"` field (default `"planner"`), forcibly set by
+  the CLI path so a hand-written file can't spoof it. Whenever the override fires,
+  `plan_next_action` is also called for comparison (never executed) and both choices are
+  reported together in `logs/strategy.md`, the tick's own printed report, and
+  `proposals.jsonl`'s new `"override"` key -- the disagreement with the planner is
+  captured automatically, never left to the operator's own rationale text. See
+  `references/manual-action-override.md`.
+  This closes the gap an ad hoc "override pattern" (an agent calling `walletctl` directly,
+  entirely bypassing `vd tick`) exposed in an earlier session: that pattern preserved only
+  `walletctl`'s own signing-layer allowlist re-check, not any of `guard.py`'s game-state
+  gates, the lockfile, or the audit trail.
+
 ## [1.5.0] - 2026-08-26
 
 ### Added

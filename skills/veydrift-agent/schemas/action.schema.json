@@ -230,6 +230,15 @@
       "title": "Ships",
       "type": "object"
     },
+    "source": {
+      "default": "planner",
+      "enum": [
+        "planner",
+        "manual_override"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
     "speed_pct": {
       "anyOf": [
         {

@@ -174,6 +174,7 @@ Defense enum order and the Deathstar/Dreadstar naming wrong (`references/entity-
 | Which deployed contract function does a given `Action.function` map to, and the traps in calling it (overloads, revert conditions, functions that look like reads but aren't) | `references/contract-writes.md` |
 | Exact guardrail rules, current wiring status, what blocks vs. escalates | `references/guardrails.md` |
 | How `vd tick` is driven under Claude Code, Hermes, and bare launchd | `references/scheduling.md` |
+| When and how to supply your own `Action` instead of the planner's choice (`vd tick --action`) | `references/manual-action-override.md` |
 
 Every row above is a file bundled with this skill — it travels with the install and is all
 you need. (Any `docs/*.md` mention elsewhere in this skill's files is a build-time

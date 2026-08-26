@@ -400,6 +400,18 @@ class StrategyCfg(Base):
     #: exactly the AC docs/SPEC.md §9 / this field's own docstring say must not happen.
     #: This flag is what makes that outcome opt-in rather than automatic.
     enable_crawler: bool = False
+    #: Gates `vd tick --action <file>` (tick.py): lets an operator/agent supply their own
+    #: `Action` instead of `plan.py`'s own choice, for the case where their reasoning about
+    #: the best next move genuinely diverges from the planner's and that divergence is
+    #: blocking real strategy progress -- not a general substitute for planner judgement.
+    #: Default `False` means the flag is refused outright, never silently ignored. Every
+    #: other rung of `_run_tick` (guard evaluation, tier gates, `require_confirmation`,
+    #: the lockfile, audit logging) still runs exactly as it does for a planner-chosen
+    #: action; this only substitutes which `Action` is evaluated. Lives under `strategy`
+    #: rather than at the top level because it's a strategic-override lever, the same
+    #: family as `ship_targets`/`research_priority`/etc, not a wallet-engine or top-level
+    #: account setting. See `references/manual-action-override.md`.
+    allow_agent_action_override: bool = False
 
 
 class Policy(Base):
@@ -462,6 +474,13 @@ class Action(Base):
     #: only (docs/SPEC.md §5.4 Phase 2) — never an ROI verdict, never consulted by
     #: `guard.py` or any `Decision` logic.
     alternatives: list[AlternativeNote] = Field(default_factory=list)
+    #: Where this `Action` came from -- `"planner"` (the default, `plan.py`'s own choice)
+    #: or `"manual_override"` (`vd tick --action <file>`, tick.py). `tick.py`'s CLI path
+    #: forcibly overwrites this after validating a supplied file, so a stray `"source"`
+    #: key inside a hand-written override JSON can never spoof it as planner-chosen.
+    #: Purely a provenance tag for `proposals.jsonl`/`actions.jsonl` auditability -- never
+    #: consulted by `guard.py` or any `Decision` logic.
+    source: Literal["planner", "manual_override"] = "planner"
 
     # ----------------------------------------------------------------------------------
     # Fleet-mission fields (Phase 5c). All `None`/empty for every other `ActionKind` —

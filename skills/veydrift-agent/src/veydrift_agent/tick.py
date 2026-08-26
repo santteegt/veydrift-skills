@@ -12,6 +12,13 @@
                                     9. pretty report -> stdout + logs/ticks/
 ```
 
+**`--action <file>` (step 5) substitutes a caller-supplied `Action` for the planner's own
+choice, gated by `policy.strategy.allow_agent_action_override` (default `false`, refused
+otherwise)** — every step after this one runs identically regardless of which one fired,
+including the full `guard.py` pipeline, the tier ceiling, `require_confirmation`, and this
+docstring's own dedup/logging contract. See `references/manual-action-override.md` and
+`_load_override_action`/`_describe_override` below.
+
 **Repeated identical proposals are deduped, not re-logged** (step 8): `_finish_tick`
 fingerprints the record it's about to write (`_fingerprint_proposal`, sha256 over every
 field except `ts`/`tick`) and compares it against `AgentState.last_proposal_fingerprint`.
@@ -965,6 +972,57 @@ def _maybe_check_human_activity(
     return record, line
 
 
+def _describe_override(
+    override_action: Action,
+    snapshot: Snapshot,
+    policy_model: Policy,
+    *,
+    pending_tx_unreconciled: bool,
+    resolvable_mission_ids: list[int],
+) -> tuple[dict[str, Any], str]:
+    """`(override_record, override_line)` for a `vd tick --action`-supplied action --
+    the code-enforced disagreement record `references/manual-action-override.md`
+    promises: the operator never has to hand-describe what the planner would have
+    proposed instead, because this calls `plan_next_action` itself, with the exact same
+    inputs `_run_tick`'s own planner branch would have used, purely for comparison. This
+    is a pure, side-effect-free call over data already in hand (the fetched `snapshot`),
+    so it costs nothing beyond the CPU time of a second scoring pass, and its result is
+    never executed -- only recorded, in `proposals.jsonl` (`override_record`), `logs/
+    strategy.md` and the printed tick report (`override_line`, both via `_finish_tick`).
+
+    Never called on the killswitch path (`_run_tick`'s halted-snapshot branch) -- that
+    path's own contract ("halts before any network call beyond /health") is unaffected by
+    this, since `plan_next_action` here makes no network call, but there is nothing to
+    compare against a halt in the first place, and `guard.py`'s `killswitch` gate BLOCKs
+    any action unconditionally regardless of source."""
+    planner_choice = plan_mod.plan_next_action(
+        snapshot,
+        policy_model,
+        killswitch_active=False,
+        pending_tx_unreconciled=pending_tx_unreconciled,
+        resolvable_mission_ids=resolvable_mission_ids,
+    )
+    record = {
+        "operator_action": {
+            "rule": override_action.rule,
+            "function": override_action.function,
+            "rationale": override_action.rationale,
+        },
+        "planner_would_have_proposed": {
+            "rule": planner_choice.rule,
+            "kind": planner_choice.kind.value,
+            "function": planner_choice.function,
+            "rationale": planner_choice.rationale,
+        },
+    }
+    line = (
+        f"OVERRIDE: operator chose {override_action.rule or override_action.function or override_action.kind.value} "
+        f"({override_action.rationale}) instead of the planner's "
+        f"{planner_choice.rule or planner_choice.kind.value} ({planner_choice.rationale})."
+    )
+    return record, line
+
+
 # --------------------------------------------------------------------------------------
 # Phase 5 (docs/SPEC.md §5.4): revives plan.py's rung 3 (`resolveFleetMission`).
 #
@@ -1089,12 +1147,18 @@ def _proposal_lines(
     *,
     send_outcome: str | None = None,
     confirm_hint: str | None = None,
+    override_line: str | None = None,
 ) -> list[str]:
     verb = "EXECUTE" if executed else "PROPOSE"
     if action.kind in (ActionKind.NOOP, ActionKind.ESCALATE, ActionKind.HALT):
-        return [f"{action.kind.value.upper():9s} {action.rationale}"]
+        lines = [f"{action.kind.value.upper():9s} {action.rationale}"]
+        if override_line:
+            lines.append(f"  {override_line}")
+        return lines
     header = f"{verb:9s} {action.function}(planet={action.planet_id}, entity={action.entity_id})"
     lines = [header]
+    if override_line:
+        lines.append(f"  {override_line}")
     if action.cost.metal or action.cost.crystal or action.cost.deuterium:
         lines.append(f"  cost:   M {action.cost.metal}  C {action.cost.crystal}  D {action.cost.deuterium}")
     lines.append(f"  why:    {action.rationale}")
@@ -1132,6 +1196,29 @@ def _proposal_lines(
     return lines
 
 
+def _load_override_action(path: Path, policy_model: Policy) -> Action:
+    """Parse+validate `--action`'s file into an `Action`, forcing `source="manual_override"`
+    regardless of what the file itself claims. Hard stop (never a silent fallback to the
+    planner) on a missing policy opt-in or a malformed/invalid file -- mirrors
+    `_load_policy`'s own JSON/pydantic error handling."""
+    if not policy_model.strategy.allow_agent_action_override:
+        raise typer.BadParameter(
+            "--action requires policy.strategy.allow_agent_action_override=true -- see "
+            "references/manual-action-override.md before enabling it."
+        )
+    if not path.exists():
+        raise typer.BadParameter(f"--action file not found: {path}")
+    try:
+        raw = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"{path} is not valid JSON: {exc}") from exc
+    try:
+        action = Action.model_validate(raw)
+    except Exception as exc:  # pydantic.ValidationError
+        raise typer.BadParameter(f"{path} failed Action validation: {exc}") from exc
+    return action.model_copy(update={"source": "manual_override"})
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -1139,10 +1226,18 @@ def main(
     dry_run: bool = typer.Option(False, "--dry-run", help="Build/plan/guard but never send. Always true at tier 1."),
     readiness: bool = typer.Option(False, "--readiness", help="Print promotion evidence instead of running a tick."),
     format: str = typer.Option("md", "--format", help="Report format: md or json."),
+    action: Path = typer.Option(  # noqa: B008
+        None,
+        "--action",
+        help="Path to an Action JSON to use instead of the planner's own choice -- "
+        "requires policy.strategy.allow_agent_action_override=true. See "
+        "references/manual-action-override.md.",
+    ),
 ) -> None:
-    """`vd tick [--policy PATH] [--dry-run] [--readiness] [--format md|json]` — run one
-    tick (see this module's docstring for the 9-step contract), unless a subcommand
-    (`init`) was given, in which case that runs instead and this callback is a no-op."""
+    """`vd tick [--policy PATH] [--dry-run] [--readiness] [--format md|json] [--action PATH]`
+    — run one tick (see this module's docstring for the 9-step contract), unless a
+    subcommand (`init`) was given, in which case that runs instead and this callback is a
+    no-op."""
     if ctx.invoked_subcommand is not None:
         return
     if readiness:
@@ -1153,15 +1248,17 @@ def main(
     policy_model = _load_policy(policy_file)
     effective_dry_run = _effective_dry_run(policy_model, dry_run)
 
+    override_action = _load_override_action(action, policy_model) if action is not None else None
+
     try:
         with tick_lock():
-            _run_tick(policy_model, effective_dry_run, format)
+            _run_tick(policy_model, effective_dry_run, format, override_action=override_action)
     except TickLockedError as exc:
         _console.print(f"[yellow]{exc}[/yellow]")
         raise typer.Exit(code=0)
 
 
-def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> None:
+def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, override_action: Action | None = None) -> None:
     now = datetime.now(UTC)
     agent_state = load_agent_state()
     # Captured BEFORE this tick's own state mutations -- describes what this tick should
@@ -1212,14 +1309,29 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
     # tick.
     resolvable_mission_ids = _resolvable_mission_ids(policy_model.wallet)
 
-    # Step 5: plan.
-    action = plan_mod.plan_next_action(
-        snapshot,
-        policy_model,
-        killswitch_active=False,
-        pending_tx_unreconciled=pending_unreconciled,
-        resolvable_mission_ids=resolvable_mission_ids,
-    )
+    # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
+    # choice only -- every rung after this one (guard, tier gates, require_confirmation,
+    # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
+    # an override exactly as it does to a planner-chosen action.
+    override_record: dict[str, Any] | None = None
+    override_line: str | None = None
+    if override_action is not None:
+        action = override_action
+        override_record, override_line = _describe_override(
+            override_action,
+            snapshot,
+            policy_model,
+            pending_tx_unreconciled=pending_unreconciled,
+            resolvable_mission_ids=resolvable_mission_ids,
+        )
+    else:
+        action = plan_mod.plan_next_action(
+            snapshot,
+            policy_model,
+            killswitch_active=False,
+            pending_tx_unreconciled=pending_unreconciled,
+            resolvable_mission_ids=resolvable_mission_ids,
+        )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an
     # off-chain action (noop/escalate/halt) needs none of this and triggers no extra
@@ -1316,6 +1428,8 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str) -> Non
         tx_hash=tx_hash,
         human_activity_record=human_activity_record,
         human_activity_line=human_activity_line,
+        override_record=override_record,
+        override_line=override_line,
     )
 
 
@@ -1529,6 +1643,8 @@ def _finish_tick(
     tx_hash: str | None = None,
     human_activity_record: dict[str, Any] | None = None,
     human_activity_line: str | None = None,
+    override_record: dict[str, Any] | None = None,
+    override_line: str | None = None,
 ) -> None:
     proposal_record = {
         "ts": now.isoformat(),
@@ -1544,6 +1660,7 @@ def _finish_tick(
         "target_level": action.target_level,
         "quantity": action.quantity,
         "cost": action.cost.model_dump(),
+        "source": action.source,
         "rationale": action.rationale,
         "expected_effect": action.expected_effect,
         "alternatives": [alt.model_dump() for alt in action.alternatives],
@@ -1554,6 +1671,7 @@ def _finish_tick(
         "send_outcome": send_outcome,
         "executed": executed,
         "human_activity_check": human_activity_record,
+        "override": override_record,
     }
 
     # Dedup: a content-identical repeat of the immediately-previous logged proposal (e.g.
@@ -1605,7 +1723,14 @@ def _finish_tick(
         queues_line=_queues_summary(snapshot, action.planet_id),
         incoming_line=f"{len(snapshot.incoming_fleets)} fleet(s)" if snapshot.incoming_fleets else "none",
         proposal_lines=_proposal_lines(
-            action, guard_report, unsigned_tx, executed, policy_model.tier, send_outcome=send_outcome, confirm_hint=confirm_hint
+            action,
+            guard_report,
+            unsigned_tx,
+            executed,
+            policy_model.tier,
+            send_outcome=send_outcome,
+            confirm_hint=confirm_hint,
+            override_line=override_line,
         ),
         duplicate_of=duplicate_note,
         human_activity_line=human_activity_line,
@@ -1613,6 +1738,13 @@ def _finish_tick(
 
     if not is_duplicate:
         log.log_proposal(proposal_record)
+
+    # An override is never routine enough to suppress -- reported to strategy.md
+    # immediately and unconditionally, regardless of the structural-tier-block/duplicate
+    # suppression the next block applies to routine narration (design decision 7,
+    # references/manual-action-override.md).
+    if override_line is not None:
+        log.append_strategy(f"tick {agent_state.tick_count}: {override_line}", now=now)
 
     # Fix 5: a *structural* tier block (the ONLY reason decision != ALLOW is the `tier`
     # gate itself) is expected at every tick until the policy is promoted and carries no
@@ -1640,6 +1772,7 @@ def _finish_tick(
                     "executed": executed,
                     "send_outcome": send_outcome,
                     "duplicate": is_duplicate,
+                    "override": override_record,
                 },
                 indent=2,
             )

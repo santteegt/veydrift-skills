@@ -32,6 +32,7 @@
     "defense_targets": [],
     "research_priority": [],
     "building_priority": [],
-    "enable_crawler": false
+    "enable_crawler": false,
+    "allow_agent_action_override": false
   }
 }

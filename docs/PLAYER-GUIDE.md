@@ -20,13 +20,14 @@ account-specific (your wallet, your planet), that's called out.
 6. [Create your policy](#6-create-your-policy)
 7. [Set up your wallet](#7-set-up-your-wallet)
 8. [Your first tick](#8-your-first-tick)
-9. [Reading what the agent tells you](#9-reading-what-the-agent-tells-you)
-10. [Running on a schedule](#10-running-on-a-schedule)
-11. [Reading the logs](#11-reading-the-logs)
-12. [Evolving through the tiers](#12-evolving-through-the-tiers)
-13. [Example prompt and looping for tier>=1 agent operators](#13-example-prompt-and-looping-for-tier1-agent-operators)
-14. [Troubleshooting](#14-troubleshooting)
-15. [Safety reminders, one more time](#15-safety-reminders-one-more-time)
+9. [Manual action override — `vd tick --action`](#9-manual-action-override-vd-tick---action)
+10. [Reading what the agent tells you](#10-reading-what-the-agent-tells-you)
+11. [Running on a schedule](#11-running-on-a-schedule)
+12. [Reading the logs](#12-reading-the-logs)
+13. [Evolving through the tiers](#13-evolving-through-the-tiers)
+14. [Example prompt and looping for tier>=1 agent operators](#14-example-prompt-and-looping-for-tier1-agent-operators)
+15. [Troubleshooting](#15-troubleshooting)
+16. [Safety reminders, one more time](#16-safety-reminders-one-more-time)
 
 ---
 
@@ -45,7 +46,7 @@ They start in **advisor mode**: the agent will tell you exactly what it would do
 a ready-to-submit transaction, but nothing gets sent until you decide otherwise. That's not
 a training-wheels mode you're meant to graduate out of quickly — running in advisor mode
 for a real stretch of time, and reading what it proposed against what you'd have done
-yourself, is the actual point. §12 below covers when and how to move past it.
+yourself, is the actual point. §13 below covers when and how to move past it.
 
 ## 2. Prerequisites
 
@@ -70,11 +71,11 @@ output — reads as plain English instead of jargon.
 
 | Term | Means |
 | --- | --- |
-| **Tick** | One complete, atomic run of the agent's pipeline: load your policy, check for a killswitch, reconcile any pending transaction, read your planet's live state, decide on zero or one next action, run every safety check against it, and — only at tier ≥2 with a real send — submit it. Nothing schedules a tick by itself; something else (you, typing a command; a loop; a scheduler) decides *when* to call one. §8 and §10 cover running them. |
-| **Tier** | How much the agent is trusted to *submit*, not what it's allowed to *think about* — it always proposes the same way regardless of tier. Three tiers: `advisor` (propose only, never send — where you start), `economy` (can submit building/research/production actions), `operator` (also non-combat fleet missions). Advancing tiers is always a manual edit you make, never automatic — §12. |
-| **Guard** | One of 19 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no, so a blocked tick is exactly as inspectable as an allowed one. §9 shows what this looks like in real output. |
+| **Tick** | One complete, atomic run of the agent's pipeline: load your policy, check for a killswitch, reconcile any pending transaction, read your planet's live state, decide on zero or one next action, run every safety check against it, and — only at tier ≥2 with a real send — submit it. Nothing schedules a tick by itself; something else (you, typing a command; a loop; a scheduler) decides *when* to call one. §8 and §11 cover running them. |
+| **Tier** | How much the agent is trusted to *submit*, not what it's allowed to *think about* — it always proposes the same way regardless of tier. Three tiers: `advisor` (propose only, never send — where you start), `economy` (can submit building/research/production actions), `operator` (also non-combat fleet missions). Advancing tiers is always a manual edit you make, never automatic — §13. |
+| **Guard** | One of 19 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no, so a blocked tick is exactly as inspectable as an allowed one. §10 shows what this looks like in real output. |
 | **Snapshot** | The live read of your planet — resources, queues, energy, incoming fleets — that a tick's decision is computed against. Always fetched fresh from Veydrift's own API at the start of the tick; a decision is never made against stale or cached numbers. |
-| **Proposal vs. action** | A *proposal* is what the agent decided it would do. An *action* is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction doesn't matter until tier 2, where it becomes the whole point of `logs/proposals.jsonl` vs. `logs/actions.jsonl` (§11). |
+| **Proposal vs. action** | A *proposal* is what the agent decided it would do. An *action* is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction doesn't matter until tier 2, where it becomes the whole point of `logs/proposals.jsonl` vs. `logs/actions.jsonl` (§12). |
 | **Policy** | The one file, `policy.json`, that holds every setting governing what the agent's allowed to do for your account — tier, wallet, planet(s), spending limits, which action types are enabled. §6 walks through every field. |
 | **Alternatives** | The runner-up options the agent considered for a proposal but didn't pick, each with a one-line reason ("payback 47h vs 31h" for a worse economic option, or "locked: needs Shipyard 2 (have 0)" for one you can't build yet). Purely informational — it never overrides the actual proposal, and the agent never re-evaluates it as a decision. Shown in `vd tick`'s report and `proposals.jsonl` whenever there was more than one option to consider. |
 
@@ -156,7 +157,7 @@ sections set them up; this is the reference to come back to:
 
 | Variable | Skill | Purpose | Default |
 | --- | --- | --- | --- |
-| `VEYDRIFT_HOME` | both | Where policy, logs and cached state live — see §6 and §11. | `~/.veydrift` |
+| `VEYDRIFT_HOME` | both | Where policy, logs and cached state live — see §6 and §12. | `~/.veydrift` |
 | `VEYDRIFT_RPC_URL` | wallet | Base RPC endpoint for every read/write. | `https://mainnet.base.org` |
 | `WALLET_PROVIDER` | wallet | Which provider to sign with (`keystore`/`envkey`). | `keystore` |
 | `VEYDRIFT_KEYSTORE` | wallet | Path to the encrypted keystore JSON (`keystore` provider). | — (required by that provider) |
@@ -174,7 +175,7 @@ tells Claude Code or Hermes exactly when to trigger and what to do, so once inst
 a plain-language request is enough.
 
 Open a fresh session and say something like — keep the first three paragraphs as-is for
-future sessions, and swap the last for whatever you actually want next (§10 covers this
+future sessions, and swap the last for whatever you actually want next (§11 covers this
 ongoing use):
 
 ```
@@ -241,7 +242,7 @@ change called out:
 ```jsonc
 {
   "version": 1,
-  "tier": "advisor",                 // <-- start here. See §12 before ever changing this.
+  "tier": "advisor",                 // <-- start here. See §13 before ever changing this.
   "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",   // <-- YOUR wallet address
   "planets": [664],                  // <-- YOUR planet id(s). [] auto-discovers all of them
   "chain_id": 8453,                  // Base mainnet. Leave this alone.
@@ -263,8 +264,8 @@ change called out:
     "allow_building": true, "allow_research": true,
     "allow_defense": false,           // flip to true once you want defense proposals
     "allow_ships": false,             // flip to true once you want ship proposals
-    "allow_fleet_noncombat": false,   // gates Transport/Harvest proposals -- operator tier, see §12
-    "allow_combat": false             // ignored everywhere on purpose -- see §15
+    "allow_fleet_noncombat": false,   // gates Transport/Harvest proposals -- operator tier, see §13
+    "allow_combat": false             // ignored everywhere on purpose -- see §16
   },
   "escalation": {
     "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,
@@ -278,7 +279,8 @@ change called out:
     "defense_targets": [],            // same shape, e.g. [{"name": "Small Shield Dome", "count": 1}]
     "research_priority": [],          // ordered technology names, e.g. ["Energy Technology"]
     "building_priority": [],          // ordered infrastructure names (Robotics Factory etc.)
-    "enable_crawler": false           // opt-in for the scored Crawler family — see below
+    "enable_crawler": false,          // opt-in for the scored Crawler family — see below
+    "allow_agent_action_override": false  // vd tick --action opt-in -- see §9
   }
 }
 ```
@@ -376,7 +378,7 @@ target it's working toward and `expected_effect` for what's still left after thi
 
 Everything else in `limits`/`reserves`/`actions`/`escalation` is a reasonable starting
 point. Don't loosen `limits` or flip on `allow_defense`/`allow_ships` until you've watched
-the agent propose things under the defaults for a while — see §12.
+the agent propose things under the defaults for a while — see §13.
 
 <details>
 <summary><strong>Full field reference</strong> — every <code>policy.json</code> field, its legal values, and its default (click to expand)</summary>
@@ -448,7 +450,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `allow_defense` | bool | `true`/`false` | `false` |
 | `allow_ships` | bool | `true`/`false` | `false` |
 | `allow_fleet_noncombat` | bool | `true`/`false` | `false` |
-| `allow_combat` | bool | `true`/`false` — legal to set, but **read and then unconditionally ignored by every code path.** Enabling `Attack`/`AcsAttack`/`MissileAttack`/`Intercept` requires an actual source change, not a config edit — see §15. | `false` |
+| `allow_combat` | bool | `true`/`false` — legal to set, but **read and then unconditionally ignored by every code path.** Enabling `Attack`/`AcsAttack`/`MissileAttack`/`Intercept` requires an actual source change, not a config edit — see §16. | `false` |
 
 **`escalation`**
 
@@ -480,6 +482,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `research_priority` | list of string | ordered Technology names; an unrecognized name is a hard error on the next tick. **Empty: falls back to an unlock-breadth-ranked default order** (most-directly-unlocking technology first; level then id only as the tiebreak — see callout below) across all technologies — research proposals still happen, just unprioritized by name. **Does not round-robin — same callout.** | `[]` |
 | `building_priority` | list of string | ordered Building names — **asymmetric with the three fields above; see callout below**. **Empty: the infrastructure family never fires** — rung 6 falls through to its ordinary value-density mine/energy walk, which payback scoring does not drive except to break an exact tie between two mines. **Does not round-robin either — same callout.** | `[]` |
 | `enable_crawler` | bool | `true`/`false` | `false` |
+| `allow_agent_action_override` | bool | `true`/`false` — gates `vd tick --action <file>`. See §9. | `false` |
 
 > **`resource_weights` is used to tie-break, not to pick a family — it only ever changes
 > the winning proposal in three narrow places, and only ever changes a *displayed* number
@@ -613,7 +616,7 @@ without echoing what you type, every time it needs to sign. That's deliberate �
 an env var is one `printenv` or one compromised process away from being read; a prompt
 requires a human at the keyboard for every single send. If you want the convenience of not
 typing it every time (for example, unattended tier-2+ operation), you can set
-`VEYDRIFT_KEYSTORE_PASSWORD` instead, but understand what you're trading away: see §15.
+`VEYDRIFT_KEYSTORE_PASSWORD` instead, but understand what you're trading away: see §16.
 
 Verify it's wired up correctly:
 
@@ -712,7 +715,7 @@ $ uv run --directory skills/veydrift-agent vd tick --dry-run
 Recall from §3: a tick is one atomic pass through the whole pipeline — load policy, check
 the killswitch, reconcile any pending transaction, snapshot your planet, decide on an
 action, run every guard, and (tier ≥2 only) send. `vd tick` is the single command that
-does all of that; nothing about it schedules repetition — §10 covers running many of them.
+does all of that; nothing about it schedules repetition — §11 covers running many of them.
 
 At tier 1 (`advisor`, the default), `--dry-run` is **always on** — there's no flag to turn
 it off at this tier. Real output, captured against this repo's reference planet:
@@ -745,7 +748,7 @@ proposed action with its cost and reasoning, and confirmation that nothing was s
 ### Options worth knowing
 
 `vd tick` takes a handful of flags, and there are a couple of sibling commands worth
-knowing before you move on to §10's scheduling options:
+knowing before you move on to §11's scheduling options:
 
 | Command | What it does |
 | --- | --- |
@@ -753,12 +756,37 @@ knowing before you move on to §10's scheduling options:
 | `vd tick --dry-run` | Never sends, no matter what tier allows — useful for checking what the agent *would* do without any possibility of a real submission. Always on automatically at tier 1. |
 | `vd tick --format json` | Same tick, machine-readable output instead of the pretty panel — useful for piping into a script or another log. `md` (the pretty panel) is the default. |
 | `vd tick --policy PATH` | Run against a specific policy file instead of `$VEYDRIFT_HOME/policy.json` — handy for testing a config change, or managing more than one account/planet from the same machine. |
-| `vd tick --readiness` | Doesn't run a tick at all — prints your tier-promotion evidence instead (tick count, uptime, proposals vs. what you actually executed, guardrail fires). §12 covers reading this before promoting. |
+| `vd tick --readiness` | Doesn't run a tick at all — prints your tier-promotion evidence instead (tick count, uptime, proposals vs. what you actually executed, guardrail fires). §13 covers reading this before promoting. |
 | `vd tick init` | Writes a fresh `policy.json` from the template — the command §6 uses to bootstrap. Safe to re-run; won't overwrite an existing file without `--force`. |
 | `vd doctor` | Reports which subcommands are actually wired up in the copy you're running — useful if you ever pull a checkout mid-update. |
-| `vd log --digest 24h` | A rollup of the last day: what got built, resources produced, gas spent, and everything the agent refused to do and why. §11 covers this in full. |
+| `vd log --digest 24h` | A rollup of the last day: what got built, resources produced, gas spent, and everything the agent refused to do and why. §12 covers this in full. |
 
-## 9. Reading what the agent tells you
+## 9. Manual action override — `vd tick --action`
+
+Most of the time, let `plan_next_action` choose. `vd tick --action <file>` exists for the
+narrower case where the agent's own reasoning about the best next move genuinely
+diverges from the planner's, and that divergence is blocking real strategy progress — a
+situational move the planner has no rung for at all, not a general substitute for its
+judgement. Full detail, the `Action` JSON shape, and what it does and doesn't skip:
+`skills/veydrift-agent/references/manual-action-override.md`.
+
+The short version:
+
+- Gated by `strategy.allow_agent_action_override` (default `false`) — refused outright
+  without it.
+- Only substitutes **which** `Action` is evaluated. Every gate in `guard.py`, the tier
+  ceiling, `wallet_engine.require_confirmation`, the tick lockfile, and the full audit
+  trail all still apply exactly as they do to a planner-chosen action — this is not a way
+  to bypass any of them.
+- The disagreement with the planner is captured automatically: `vd tick` also computes
+  what the planner would have proposed, purely for comparison, and reports both choices
+  together in `logs/strategy.md`, the tick's own printed output, and `proposals.jsonl`'s
+  `"override"` key — you don't have to write that comparison down yourself.
+- This is **not** the same thing as calling `walletctl` directly and skipping `vd tick`
+  entirely — that bypasses every one of the guarantees above and leaves no audit trail.
+  If you ever see that pattern suggested, prefer `--action` instead.
+
+## 10. Reading what the agent tells you
 
 A few things worth understanding about that block before you trust it:
 
@@ -767,7 +795,7 @@ A few things worth understanding about that block before you trust it:
   mode may never submit. That's what makes tier 1 safe *by construction*, not by
   discipline: the decision genuinely is `BLOCK`, so nothing past that point ever runs.
   (One of the 19 is `mission_type`, which only ever has anything to check on a fleet-mission
-  proposal — see §12's note on operator tier below. It passes trivially for everything else,
+  proposal — see §13's note on operator tier below. It passes trivially for everything else,
   so a routine building or research tick simply shows it among the passes.)
 - **`why:`** states the actual numbers behind the decision, not a canned explanation. If
   it says a mine upgrade needs 11 energy against 0 produced, that's a live comparison
@@ -780,12 +808,12 @@ A few things worth understanding about that block before you trust it:
 - **The transaction shown is real and complete**, not a mockup — `tx: to ... data ...` is
   exactly what would be submitted if you were at a tier that could submit it. That's
   deliberate: it's what makes a later promotion decision evidence-based rather than a
-  guess (§12).
+  guess (§13).
 
-## 10. Running on a schedule
+## 11. Running on a schedule
 
 One tick by hand is enough to see how it works; the useful mode is many ticks over time so
-you (and later, §12's promotion evidence) have something to look at. Every option below
+you (and later, §13's promotion evidence) have something to look at. Every option below
 runs the exact same `vd tick` command with the exact same safety posture — the only thing
 that differs between them is *who decides when to call it*. `vd tick`'s own lockfile makes
 two overlapping calls a benign skip rather than a race, so running it from more than one
@@ -794,7 +822,7 @@ place at once on the same machine is safe, if occasionally redundant.
 | Harness | How | Notes |
 | --- | --- | --- |
 | Claude Code, interactive | `/loop 10m` driving `vd tick --format md` | A human is present — each tick's report lands directly in your chat as it happens. |
-| Claude Code, unattended | Schedule `claude -p "run a veydrift tick"` via `launchd` or a scheduled task | The agent invokes `vd tick` itself with nobody watching in real time — `strategy.md` and `proposals.jsonl` (§11) become what you review afterward, not the immediate output. |
+| Claude Code, unattended | Schedule `claude -p "run a veydrift tick"` via `launchd` or a scheduled task | The agent invokes `vd tick` itself with nobody watching in real time — `strategy.md` and `proposals.jsonl` (§12) become what you review afterward, not the immediate output. |
 | Hermes | Register `vd tick` on Hermes' own scheduler at `policy.cadence.economy_minutes` (10 minutes by default) | Hermes owns the interval; `vd tick` behaves identically regardless of who's calling it. |
 | Bare OS, no agent harness | `skills/veydrift-agent/assets/com.veydrift.agent.plist.template` — a launchd template with a documented install/uninstall recipe in its own header comment | Not installed automatically — you fill in its four placeholders and run `launchctl load` yourself. A reasonable interval is `cadence.economy_minutes * 60` seconds, but nothing keeps the plist and `policy.json` in sync automatically; that's on you if you change one. |
 
@@ -812,7 +840,7 @@ Whichever you pick, `$VEYDRIFT_HOME` is shared across every invocation on the sa
 machine — if you're testing something and don't want it mixed into your real history, set
 `VEYDRIFT_HOME` to a scratch directory for that session.
 
-## 11. Reading the logs
+## 12. Reading the logs
 
 Everything accumulates under `$VEYDRIFT_HOME/logs/`, never inside the skill's own
 directory (which gets wiped on every reinstall):
@@ -833,7 +861,7 @@ worth reading first, not last — **everything the agent refused to do, and why.
 day where nothing fired is not the same as a day where fires were checked and correctly
 resolved; the digest tells them apart.
 
-## 12. Evolving through the tiers
+## 13. Evolving through the tiers
 
 | Tier | What it can propose | What it can actually submit |
 | --- | --- | --- |
@@ -867,7 +895,7 @@ picking a target is a judgement call this codebase leaves to you for now.
 
 Both of these only ever fire at `operator` tier, behind the same guardrail evaluation as
 everything else — including a new gate, `mission_type`, that independently re-checks the
-mission type against the same allowed set the wallet engine enforces (§9 covers what
+mission type against the same allowed set the wallet engine enforces (§10 covers what
 `guards: N/19` means).
 
 **Before you promote from `advisor` to `economy`:**
@@ -904,12 +932,12 @@ or promote while a guard is failing *intermittently* rather than consistently pa
 intermittent failures are the ones worth understanding before you give the agent more
 room, not less.
 
-## 13. Example prompt and looping for tier>=1 agent operators
+## 14. Example prompt and looping for tier>=1 agent operators
 
 Everything so far assumes you're checking in on the agent yourself, one tick at a time.
 This section is for the other mode: a standing agent "commander" that runs your planet
 continuously via `/loop`, proposing — and, once you've promoted past `advisor`, actually
-submitting — on its own between check-ins. Read §12 before using this for real; nothing
+submitting — on its own between check-ins. Read §13 before using this for real; nothing
 below changes what tier does. It's still the only thing that decides whether a proposal
 can ever actually send.
 
@@ -925,7 +953,7 @@ field out from what it's allowed to change on its own, right alongside `tier`.
 
 Paste this into a fresh session, filling in your own wallet address and planet
 coordinates. Unlike §5's bootstrap prompt, this one assumes you've already promoted past
-`advisor` (§12) — at tier 1 it's harmless (nothing can send regardless of what the prompt
+`advisor` (§13) — at tier 1 it's harmless (nothing can send regardless of what the prompt
 claims, since the `tier` gate blocks every onchain function structurally), but it's
 written for the tier where it actually does something:
 
@@ -992,7 +1020,7 @@ mine target), fall back to the cadence default.
 real fields the agent already has access to from a normal tick's output — nothing here
 asks it to invent numbers it doesn't have.
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 | Symptom | What's actually happening |
 | --- | --- |
@@ -1000,11 +1028,11 @@ asks it to invent numbers it doesn't have.
 | `/health` reports `ok: false`, but the tick still runs normally | Expected: `ok:false` caused *solely* by a combat-related backend readiness issue (a "New attacks are temporarily paused"-style condition) no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy, so that specific condition can't affect what it would propose. Any other cause of `ok:false` still blocks/escalates as before. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
-| Guards read `16/19 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §9. This is not an error state. |
+| Guards read `16/19 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 
-## 15. Safety reminders, one more time
+## 16. Safety reminders, one more time
 
 - **The wallet *is* the account.** There is no password reset and no recovery path for a
   lost keystore password or lost key. A Veydrift planet cannot be transferred to a
@@ -1013,13 +1041,13 @@ asks it to invent numbers it doesn't have.
 - **`allow_combat` in `policy.json` does nothing, on purpose.** Every code path that reads
   it ignores it. Enabling `Attack`/`AcsAttack`/`MissileAttack`/`Intercept` requires an
   actual source code change, not a config edit — that friction is deliberate.
-- **No transaction has ever been submitted to Veydrift on mainnet from this codebase.**
-  The full write path — build, simulate, send, receipt — has however been exercised for
-  real against a local Anvil fork of Base: all 7 allowlisted selectors have been
-  live-sent and confirmed successful there, proving the contract-facing mechanics
-  genuinely work. Mainnet itself is untouched; the first real mainnet submission will
-  still be yours, at your T1→T2 promotion. Budget extra attention there, and re-read
-  §12's checklist before you do.
+- **Real transactions have already been submitted to Veydrift on mainnet from this
+  codebase** — at tier 2 (`economy`) and tier 3 (`operator`), through the real
+  `build → simulate → send` path, not a fixture or a fork. See `README.md`'s Status
+  section for the current tier. That doesn't make your own T1→T2 promotion any less
+  consequential — no code path advances the tier on its own; only you, editing
+  `policy.json`, do — so budget the same care §13's checklist asks for regardless of what
+  this account or any other has already done.
 - **`--confirm` can never become automatic.** No environment variable, no policy field,
   and no flag combination makes `walletctl send` skip that explicit flag. If you ever see
   a transaction submit without you having typed `--confirm` on that exact command

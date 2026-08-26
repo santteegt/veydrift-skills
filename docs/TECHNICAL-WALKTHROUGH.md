@@ -160,7 +160,7 @@ under Claude Code, Hermes, or bare `launchd`).
 | `techtree.py` | ~720 | On-chain prerequisite table for all four entity families, transcribed from the deployed contract (Phase 1). `unmet()` is the fail-closed core every other module's legality checks build on (`plan.py`/`candidates.py` never propose a locked entity; `guard.py`'s `prerequisites` gate independently re-checks). Phase 4 adds `next_step_toward` — a breadth-first walk of `unmet()`'s own output, backwards, to find the shallowest currently-buildable prerequisite toward a locked target; no cost math, same "compare levels only" discipline as `unmet()`. Also adds `unlock_breadth` — the forward mirror of that walk, one hop only: how many other entities would have a requirement drop out of their own `unmet()` if this one's level were +1, re-derived by re-calling `unmet()` rather than a hand-built reverse index. Feeds `candidates.py`'s `_infrastructure_priority_order`/`_research_priority_order` fallback ranking; a structural fact, never a value judgement, so it stays clear of `calc.py`'s cost-scaling ban and `candidates.py`'s "no ROI verdict" refusal. |
 | `guard.py` | ~1170 | **19** guardrail gates (17 through Phase 4; Phase 5c added `mission_type` — a default-deny check on `launchFleetMission`'s mission type, independent of `tier`; a later addition added `game_paused` — the second, independent line of defense behind rung `1b`, BLOCKing unconditionally on a confirmed `gameMaintenance.paused`, fail-closed on missing data), every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. **Fix:** `health` gains a narrow exception, `Snapshot.combat_only_degradation()` — `/health`'s `ok:false` caused *solely* by a combat-only `randomnessReadiness` degradation (positively confirmed, everything else on the snapshot fine) now PASSes instead of BLOCKing, since combat is unconditionally unreachable in this codebase regardless of policy. Confirmed live and persistent, served via HTTP 503 — `read._fetch_or_exit()` now defensively recovers a parseable `/health` 5xx body (narrowly scoped to that one route) instead of hard-aborting before this check could ever run. |
 | `state.py` | 349 | `$VEYDRIFT_HOME` resolution, `AgentState` (pending txs, cumulative gas, revert counts), the tick lockfile, `KILLSWITCH` detection. |
-| `tick.py` | 1727 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`. The second-largest module after `candidates.py`, and where the criticals a first-pass judge review found actually lived (`AGENTS.md` §5's unit-mismatch and revert-recording invariants). |
+| `tick.py` | 1860 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`, `--action`'s manual-override substitution point. The second-largest module after `candidates.py`, and where the criticals a first-pass judge review found actually lived (`AGENTS.md` §5's unit-mismatch and revert-recording invariants). |
 | `log.py` | 392 | Four log sinks, secret scrubbing (`0x[0-9a-fA-F]{64}` patterns that aren't a known tx hash never get written), the pretty-report renderer, `--digest`. |
 
 ## 6. `veydrift-wallet`, module by module
@@ -209,6 +209,11 @@ Anvil fork with an impersonated account; `AGENTS.md` §10's fork-round history).
 4. snapshot                     →  read.py: /health, /infrastructure, /research, /shipyard,
                                     /defenses, /fleet-visibility -- composed into one Snapshot
 5. plan                         →  plan.py: the decision ladder, zero or one Action out
+                                    (or: `vd tick --action <file>`, gated by
+                                    policy.strategy.allow_agent_action_override, substitutes
+                                    an operator-supplied Action here — every step after this
+                                    one, including guard, runs identically either way; see
+                                    references/manual-action-override.md)
 6. guard                        →  guard.py: all 19 gates, full verdict list, one Decision
 7. if ALLOW and tier>=2         →  walletctl build -> simulate -> send, await receipt,
    and not --dry-run               THEN await INDEXED (a confirmed receipt is not the
@@ -417,7 +422,7 @@ Precision matters here more than a clean "it's tested" claim would suggest.
 | This document | `docs/TECHNICAL-WALKTHROUGH.md` |
 | Everything the agent skill needs at a glance, routed to `references/` on demand | `skills/veydrift-agent/SKILL.md` |
 | Same, for the wallet skill | `skills/veydrift-wallet/SKILL.md` |
-| API routes, formulas, canonical enums, the strategy derivation, contract-write traps, guardrails, scheduling | `skills/veydrift-agent/references/*.md` |
+| API routes, formulas, canonical enums, the strategy derivation, contract-write traps, guardrails, scheduling, the `vd tick --action` manual override | `skills/veydrift-agent/references/*.md` |
 | ABI pinning, wallet providers, transaction safety | `skills/veydrift-wallet/references/*.md` |
 
 **A maintenance note, since this table and the two "101"/walkthrough documents above it are

@@ -654,9 +654,8 @@ footer.doc-foot a { color: var(--ink-dim); }
       <p>The only thing that ever touches your private key. Builds the transaction, checks it against an independent allowlist, and signs only when you explicitly type <code>--confirm</code>.</p>
     </div>
   </div>
-  <p>They start in <strong>advisor mode</strong>: the agent tells you exactly what it would do and prints a ready-to-submit transaction, but nothing gets sent until you decide otherwise. That's not a training-wheels mode to graduate out of quickly — running it for a real stretch of time, and reading what it proposed against what you'd have done yourself, is the actual point. §12 covers when and how to move past it.</p>
+  <p>They start in <strong>advisor mode</strong>: the agent tells you exactly what it would do and prints a ready-to-submit transaction, but nothing gets sent until you decide otherwise. That's not a training-wheels mode to graduate out of quickly — running it for a real stretch of time, and reading what it proposed against what you'd have done yourself, is the actual point. §13 covers when and how to move past it.</p>
 </section>
-
 <section class="chapter" id="s2" data-num="02" data-label="Prerequisites">
   <div class="chapter-head"><span class="chapter-num">02</span><h2 class="chapter-title">Prerequisites</h2></div>
   <div class="table-wrap">
@@ -673,7 +672,6 @@ footer.doc-foot a { color: var(--ink-dim); }
   </div>
   <p>Nothing else. You do <strong>not</strong> need <code>git</code>, a clone of the contracts repo, or your own Base RPC key — the wallet skill talks to a public Base RPC by default and the read API is free and unauthenticated. (An RPC key becomes <em>useful</em>, not required, once you're making a lot of calls — §7 covers it.)</p>
 </section>
-
 <section class="chapter" id="s3" data-num="03" data-label="Terminology">
   <div class="chapter-head"><span class="chapter-num">03</span><h2 class="chapter-title">Terminology</h2></div>
   <p>A handful of words carry specific meaning throughout this guide and in everything the agent prints. Knowing them now means the rest of this guide — and the agent's own output — reads as plain English instead of jargon.</p>
@@ -681,11 +679,11 @@ footer.doc-foot a { color: var(--ink-dim); }
     <table>
       <thead><tr><th>Term</th><th>Means</th></tr></thead>
       <tbody>
-        <tr><td><strong>Tick</strong></td><td>One complete, atomic run of the agent's pipeline: load your policy, check for a killswitch, reconcile any pending transaction, read your planet's live state, decide on zero or one next action, run every safety check against it, and — only at tier ≥2 with a real send — submit it. Nothing schedules a tick by itself; something else decides <em>when</em> to call one. §8 and §10 cover running them.</td></tr>
-        <tr><td><strong>Tier</strong></td><td>How much the agent is trusted to <em>submit</em>, not what it's allowed to <em>think about</em> — it always proposes the same way regardless of tier. Three tiers: <code>advisor</code> (propose only, never send — where you start), <code>economy</code>, <code>operator</code>. Advancing tiers is always a manual edit you make, never automatic — §12.</td></tr>
-        <tr><td><strong>Guard</strong></td><td>One of 19 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no. §9 shows what this looks like in real output.</td></tr>
+        <tr><td><strong>Tick</strong></td><td>One complete, atomic run of the agent's pipeline: load your policy, check for a killswitch, reconcile any pending transaction, read your planet's live state, decide on zero or one next action, run every safety check against it, and — only at tier ≥2 with a real send — submit it. Nothing schedules a tick by itself; something else decides <em>when</em> to call one. §8 and §11 cover running them.</td></tr>
+        <tr><td><strong>Tier</strong></td><td>How much the agent is trusted to <em>submit</em>, not what it's allowed to <em>think about</em> — it always proposes the same way regardless of tier. Three tiers: <code>advisor</code> (propose only, never send — where you start), <code>economy</code>, <code>operator</code>. Advancing tiers is always a manual edit you make, never automatic — §13.</td></tr>
+        <tr><td><strong>Guard</strong></td><td>One of 19 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no. §10 shows what this looks like in real output.</td></tr>
         <tr><td><strong>Snapshot</strong></td><td>The live read of your planet — resources, queues, energy, incoming fleets — that a tick's decision is computed against. Always fetched fresh, never stale or cached numbers driving a decision.</td></tr>
-        <tr><td><strong>Proposal vs. action</strong></td><td>A <em>proposal</em> is what the agent decided it would do. An <em>action</em> is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction becomes the whole point of <code>proposals.jsonl</code> vs. <code>actions.jsonl</code> at tier 2 — §11.</td></tr>
+        <tr><td><strong>Proposal vs. action</strong></td><td>A <em>proposal</em> is what the agent decided it would do. An <em>action</em> is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction becomes the whole point of <code>proposals.jsonl</code> vs. <code>actions.jsonl</code> at tier 2 — §12.</td></tr>
         <tr><td><strong>Policy</strong></td><td>The one file, <code>policy.json</code>, that holds every setting governing what the agent's allowed to do for your account — tier, wallet, planet(s), spending limits, which action types are enabled. §6 walks through every field.</td></tr>
         <tr><td><strong>Alternatives</strong></td><td>The runner-up options the agent considered for a proposal but didn't pick, each with a one-line reason ("payback 47h vs 31h" for a worse economic option, or "locked: needs Shipyard 2 (have 0)" for one you can't build yet). Purely informational — it never overrides the actual proposal. Shown in <code>vd tick</code>'s report and <code>proposals.jsonl</code> whenever there was more than one option to consider.</td></tr>
       </tbody>
@@ -715,7 +713,6 @@ footer.doc-foot a { color: var(--ink-dim); }
     <div><strong class="callout-title">If you've played OGame before</strong><p>Veydrift's numbering does <strong>not</strong> follow OGame convention. Small Shield Dome is id 3, sitting <em>before</em> Gauss Cannon (4) and Ion Cannon (5) — reversed from OGame's usual order. And ship id 11 is officially <strong>"Deathstar,"</strong> not "Dreadstar" — the contract's own enum spells it that way, though this codebase accepts "Dreadstar" as an alias when you type it.</p></div>
   </div>
 </section>
-
 <section class="chapter" id="s4" data-num="04" data-label="Install the skills">
   <div class="chapter-head"><span class="chapter-num">04</span><h2 class="chapter-title">Install the skills</h2></div>
   <p>From this repository's root:</p>
@@ -744,7 +741,7 @@ footer.doc-foot a { color: var(--ink-dim); }
     <table>
       <thead><tr><th>Variable</th><th>Skill</th><th>Purpose</th><th>Default</th></tr></thead>
       <tbody>
-        <tr><td><code>VEYDRIFT_HOME</code></td><td>both</td><td>Where policy, logs and cached state live — see §6 and §11.</td><td><code>~/.veydrift</code></td></tr>
+        <tr><td><code>VEYDRIFT_HOME</code></td><td>both</td><td>Where policy, logs and cached state live — see §6 and §12.</td><td><code>~/.veydrift</code></td></tr>
         <tr><td><code>VEYDRIFT_RPC_URL</code></td><td>wallet</td><td>Base RPC endpoint for every read/write.</td><td><code>https://mainnet.base.org</code></td></tr>
         <tr><td><code>WALLET_PROVIDER</code></td><td>wallet</td><td>Which provider to sign with (<code>keystore</code>/<code>envkey</code>).</td><td><code>keystore</code></td></tr>
         <tr><td><code>VEYDRIFT_KEYSTORE</code></td><td>wallet</td><td>Path to the encrypted keystore JSON (<code>keystore</code> provider).</td><td>— (required by that provider)</td></tr>
@@ -757,11 +754,10 @@ footer.doc-foot a { color: var(--ink-dim); }
     </table>
   </div>
 </section>
-
 <section class="chapter" id="s5" data-num="05" data-label="Bootstrap via an agent">
   <div class="chapter-head"><span class="chapter-num">05</span><h2 class="chapter-title">Bootstrap via an agent session</h2></div>
   <p>Everything in §6 and §7 below — writing <code>policy.json</code>, picking a wallet provider — can be done by hand, or handed straight to your agent session: both skills ship a <code>SKILL.md</code> that tells Claude Code or Hermes exactly when to trigger and what to do, so once installed (§4) a plain-language request is enough.</p>
-  <p>Open a fresh session and say something like — keep the first three paragraphs as-is for future sessions, and swap the last for whatever you actually want next (§10 covers this ongoing use):</p>
+  <p>Open a fresh session and say something like — keep the first three paragraphs as-is for future sessions, and swap the last for whatever you actually want next (§11 covers this ongoing use):</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>prompt — paste into your agent session</span></div>
     <div class="codeblock-body"><pre>You're an agent that helps me play Veydrift, an on-chain space-strategy game on
@@ -797,7 +793,6 @@ strategy for my first 24 hours. Finally, run my first tick.</pre></div>
   <p>Coordinates (<code>7:181:14</code>, the format shown in-game) work as well as the raw id — the agent resolves them via <code>vd read planets --wallet &lt;address&gt;</code>, which lists both.</p>
   <p>This isn't magic: it's the agent running the same <code>vd tick init</code> and <code>vd tick --dry-run</code> commands this guide documents by hand, then explaining what it finds. Read what it wrote anyway — §6 is the same file, explained field by field, if you'd rather check its work or do this yourself.</p>
 </section>
-
 <section class="chapter" id="s6" data-num="06" data-label="Create your policy">
   <div class="chapter-head"><span class="chapter-num">06</span><h2 class="chapter-title">Create your policy</h2></div>
   <p>If you just used §5 to have an agent session do this for you, treat this section as the reference for understanding exactly what it wrote — read it anyway, since it's the file that governs everything downstream. If you're setting this up by hand instead, start here.</p>
@@ -811,7 +806,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   <div class="codeblock">
     <div class="codeblock-head"><span>policy.json</span><span>edit these two</span></div>
     <div class="codeblock-body"><pre>{
-  <span class="c-key">"tier"</span>: <span class="c-str">"advisor"</span>,                              <span class="c-comment">// start here — see §12</span>
+  <span class="c-key">"tier"</span>: <span class="c-str">"advisor"</span>,                              <span class="c-comment">// start here — see §13</span>
   <span class="c-key">"wallet"</span>: <span class="c-flag">"0xYOUR_WALLET_ADDRESS"</span>,               <span class="c-comment">// &lt;- edit this</span>
   <span class="c-key">"planets"</span>: <span class="c-flag">[664]</span>,                                <span class="c-comment">// &lt;- your planet id(s), or []</span>
   <span class="c-key">"chain_id"</span>: 8453,
@@ -823,7 +818,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   <span class="c-key">"actions"</span>: {
     <span class="c-key">"allow_building"</span>: true, <span class="c-key">"allow_research"</span>: true,
     <span class="c-key">"allow_defense"</span>: false, <span class="c-key">"allow_ships"</span>: false,
-    <span class="c-key">"allow_combat"</span>: false                     <span class="c-comment">// ignored everywhere, on purpose — see §15</span>
+    <span class="c-key">"allow_combat"</span>: false                     <span class="c-comment">// ignored everywhere, on purpose — see §16</span>
   },
   <span class="c-key">"wallet_engine"</span>: { <span class="c-key">"provider"</span>: <span class="c-str">"keystore"</span>, <span class="c-key">"require_confirmation"</span>: true },
   <span class="c-key">"strategy"</span>: {
@@ -834,7 +829,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   }
 }</pre></div>
   </div>
-  <p><code>wallet</code> is the address that settled the planet(s) you want managed. <code>planets: []</code> auto-discovers every planet that wallet holds. This field only ever holds numeric ids — if you only know your coordinates (the <code>galaxy:system:position</code> shown in the game's UI, e.g. <code>7:181:14</code>), not the id, editing this file by hand means finding the id first: <code>vd read planets --wallet &lt;your address&gt;</code> lists every planet you own with both, so you can match yours by coordinates. Everything else shown is a reasonable default — don't loosen <code>limits</code> or flip on <code>allow_defense</code>/<code>allow_ships</code> until you've watched the agent for a while (§12).</p>
+  <p><code>wallet</code> is the address that settled the planet(s) you want managed. <code>planets: []</code> auto-discovers every planet that wallet holds. This field only ever holds numeric ids — if you only know your coordinates (the <code>galaxy:system:position</code> shown in the game's UI, e.g. <code>7:181:14</code>), not the id, editing this file by hand means finding the id first: <code>vd read planets --wallet &lt;your address&gt;</code> lists every planet you own with both, so you can match yours by coordinates. Everything else shown is a reasonable default — don't loosen <code>limits</code> or flip on <code>allow_defense</code>/<code>allow_ships</code> until you've watched the agent for a while (§13).</p>
   <div class="callout note">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
     <div><strong class="callout-title">Strict validation</strong><p><code>policy.json</code> is validated on every tick — an unrecognized key is a hard error, not a silent ignore. If you break the JSON, the next tick tells you exactly what's wrong instead of guessing.</p></div>
@@ -945,7 +940,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
         <tr><td><code>allow_defense</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>false</code></td></tr>
         <tr><td><code>allow_ships</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>false</code></td></tr>
         <tr><td><code>allow_fleet_noncombat</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>false</code></td></tr>
-        <tr><td><code>allow_combat</code></td><td>bool</td><td><code>true</code>/<code>false</code> — legal to set, but <strong>read and then unconditionally ignored by every code path.</strong> Enabling combat mission types requires an actual source change, not a config edit — see §15.</td><td><code>false</code></td></tr>
+        <tr><td><code>allow_combat</code></td><td>bool</td><td><code>true</code>/<code>false</code> — legal to set, but <strong>read and then unconditionally ignored by every code path.</strong> Enabling combat mission types requires an actual source change, not a config edit — see §16.</td><td><code>false</code></td></tr>
       </tbody>
     </table>
   </div>
@@ -989,6 +984,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
         <tr><td><code>research_priority</code></td><td>list of string</td><td>ordered Technology names; an unrecognized name is a hard error on the next tick. <strong>Empty: falls back to an unlock-breadth-ranked default order</strong> (most-directly-unlocking technology first; level then id only as the tiebreak — see callouts below) across all technologies — research proposals still happen, just unprioritized by name. <strong>Does not round-robin — same callouts.</strong></td><td><code>[]</code></td></tr>
         <tr><td><code>building_priority</code></td><td>list of string</td><td>ordered Building names — <strong>asymmetric with the three fields above; see callout below</strong>. <strong>Empty: the infrastructure family never fires</strong> — rung 6 falls through to its ordinary value-density mine/energy walk, which payback scoring does not drive except to break an exact tie between two mines. <strong>Does not round-robin either — same callout.</strong></td><td><code>[]</code></td></tr>
         <tr><td><code>enable_crawler</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>false</code></td></tr>
+        <tr><td><code>allow_agent_action_override</code></td><td>bool</td><td><code>true</code>/<code>false</code> — gates <code>vd tick --action &lt;file&gt;</code>. See §9.</td><td><code>false</code></td></tr>
       </tbody>
     </table>
   </div>
@@ -1021,7 +1017,6 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   </div>
   </details>
 </section>
-
 <section class="chapter" id="s7" data-num="07" data-label="Set up your wallet">
   <div class="chapter-head"><span class="chapter-num">07</span><h2 class="chapter-title">Set up your wallet</h2></div>
   <p>Two provider choices. <strong>Use <code>keystore</code> unless you have a specific reason not to</strong> — it's the default, and the one the rest of this guide assumes.</p>
@@ -1094,10 +1089,9 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   </div>
   </details>
 </section>
-
 <section class="chapter" id="s8" data-num="08" data-label="Your first tick">
   <div class="chapter-head"><span class="chapter-num">08</span><h2 class="chapter-title">Your first tick</h2></div>
-  <p>With <code>policy.json</code> written and the wallet skill verified, run one tick. Recall from §3: a tick is one atomic pass through the whole pipeline — load policy, check the killswitch, reconcile any pending transaction, snapshot your planet, decide on an action, run every guard, and (tier ≥2 only) send. <code>vd tick</code> is the single command that does all of that; nothing about it schedules repetition — §10 covers running many of them.</p>
+  <p>With <code>policy.json</code> written and the wallet skill verified, run one tick. Recall from §3: a tick is one atomic pass through the whole pipeline — load policy, check the killswitch, reconcile any pending transaction, snapshot your planet, decide on an action, run every guard, and (tier ≥2 only) send. <code>vd tick</code> is the single command that does all of that; nothing about it schedules repetition — §11 covers running many of them.</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>shell</span></div>
     <div class="codeblock-body"><pre>uv run --directory skills/veydrift-agent vd tick --dry-run</pre></div>
@@ -1144,7 +1138,7 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   <p>Your own first tick will show your planet's actual state, but the shape is the same: current resources and queues, whether anything hostile is inbound, one proposed action with its cost and reasoning, and confirmation that nothing was submitted.</p>
 
   <h3>Options worth knowing</h3>
-  <p><code>vd tick</code> takes a handful of flags, and there are a couple of sibling commands worth knowing before §10's scheduling options:</p>
+  <p><code>vd tick</code> takes a handful of flags, and there are a couple of sibling commands worth knowing before §11's scheduling options:</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
@@ -1153,34 +1147,56 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
         <tr><td><code>vd tick --dry-run</code></td><td>Never sends, no matter what tier allows — check what the agent <em>would</em> do with no possibility of a real submission. Always on automatically at tier 1.</td></tr>
         <tr><td><code>vd tick --format json</code></td><td>Same tick, machine-readable output instead of the pretty panel — useful for piping into a script or another log. <code>md</code> (the pretty panel) is the default.</td></tr>
         <tr><td><code>vd tick --policy PATH</code></td><td>Run against a specific policy file instead of <code>$VEYDRIFT_HOME/policy.json</code> — handy for testing a config change, or managing more than one account/planet from the same machine.</td></tr>
-        <tr><td><code>vd tick --readiness</code></td><td>Doesn't run a tick at all — prints your tier-promotion evidence instead (tick count, uptime, proposals vs. what you actually executed, guardrail fires). §12 covers reading this before promoting.</td></tr>
+        <tr><td><code>vd tick --readiness</code></td><td>Doesn't run a tick at all — prints your tier-promotion evidence instead (tick count, uptime, proposals vs. what you actually executed, guardrail fires). §13 covers reading this before promoting.</td></tr>
         <tr><td><code>vd tick init</code></td><td>Writes a fresh <code>policy.json</code> from the template — the command §6 uses to bootstrap. Safe to re-run; won't overwrite an existing file without <code>--force</code>.</td></tr>
         <tr><td><code>vd doctor</code></td><td>Reports which subcommands are actually wired up in the copy you're running — useful if you ever pull a checkout mid-update.</td></tr>
-        <tr><td><code>vd log --digest 24h</code></td><td>A rollup of the last day: what got built, resources produced, gas spent, and everything the agent refused to do and why. §11 covers this in full.</td></tr>
+        <tr><td><code>vd log --digest 24h</code></td><td>A rollup of the last day: what got built, resources produced, gas spent, and everything the agent refused to do and why. §12 covers this in full.</td></tr>
       </tbody>
     </table>
   </div>
 </section>
-
-<section class="chapter" id="s9" data-num="09" data-label="Reading the output">
-  <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">Reading what the agent tells you</h2></div>
+<section class="chapter" id="s9" data-num="09" data-label="Manual action override">
+  <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">Manual action override — <code>vd tick --action</code></h2></div>
+  <p>Most of the time, let <code>plan_next_action</code> choose. <code>vd tick --action &lt;file&gt;</code> exists for the narrower case where the agent's own reasoning about the best next move genuinely diverges from the planner's, and that divergence is blocking real strategy progress — a situational move the planner has no rung for at all, not a general substitute for its judgement. Full detail, the <code>Action</code> JSON shape, and what it does and doesn't skip: <code>skills/veydrift-agent/references/manual-action-override.md</code>.</p>
+  <div class="codeblock">
+    <div class="codeblock-head"><span>action.json</span><span>a minimal example</span></div>
+    <div class="codeblock-body"><pre>{
+  <span class="c-key">"kind"</span>: <span class="c-str">"build"</span>,
+  <span class="c-key">"function"</span>: <span class="c-str">"startBuildingUpgrade"</span>,
+  <span class="c-key">"planet_id"</span>: <span class="c-flag">664</span>,
+  <span class="c-key">"entity_id"</span>: <span class="c-flag">3</span>,
+  <span class="c-key">"rule"</span>: <span class="c-str">"operator override"</span>,
+  <span class="c-key">"rationale"</span>: <span class="c-str">"storage is about to overflow metal while blocked on deuterium"</span>
+}</pre></div>
+  </div>
+  <ul>
+    <li>Gated by <code>strategy.allow_agent_action_override</code> (default <code>false</code>) — refused outright without it.</li>
+    <li>Only substitutes <strong>which</strong> <code>Action</code> is evaluated. Every gate in <code>guard.py</code>, the tier ceiling, <code>wallet_engine.require_confirmation</code>, the tick lockfile, and the full audit trail all still apply exactly as they do to a planner-chosen action — this is not a way to bypass any of them.</li>
+    <li>The disagreement with the planner is captured automatically: <code>vd tick</code> also computes what the planner would have proposed, purely for comparison, and reports both choices together in <code>logs/strategy.md</code>, the tick's own printed output, and <code>proposals.jsonl</code>'s <code>"override"</code> key — you don't have to write that comparison down yourself.</li>
+  </ul>
+  <div class="callout danger">
+    <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div><strong class="callout-title">Not the same thing as calling <code>walletctl</code> directly</strong><p>Bypassing <code>vd tick</code> entirely and calling <code>walletctl</code> by hand skips every guarantee above and leaves no audit trail. If you ever see that pattern suggested, prefer <code>--action</code> instead.</p></div>
+  </div>
+</section>
+<section class="chapter" id="s10" data-num="10" data-label="Reading the output">
+  <div class="chapter-head"><span class="chapter-num">10</span><h2 class="chapter-title">Reading what the agent tells you</h2></div>
   <ul>
     <li><strong>16 / 19 guards pass at tier 1 is expected, not a problem.</strong> The tier gate itself blocks every onchain proposal at tier 1 by design — that's what makes tier 1 safe <em>by construction</em>, not by discipline.</li>
     <li><strong>The "why" states real numbers</strong>, not a canned explanation — a live comparison against your planet's current state, computed fresh every tick.</li>
     <li><strong>The build order is derived from your planet's actual traits</strong> — temperature, multipliers, current levels — never a generic order copy-pasted for every planet. A cold planet leans toward Deuterium Synthesizer earlier; a hot one gets offered Solar Satellites a cold planet never would.</li>
-    <li><strong>The transaction shown is real and complete</strong>, not a mockup. That's what makes a later promotion decision evidence-based rather than a guess (§12).</li>
+    <li><strong>The transaction shown is real and complete</strong>, not a mockup. That's what makes a later promotion decision evidence-based rather than a guess (§13).</li>
   </ul>
 </section>
-
-<section class="chapter" id="s10" data-num="10" data-label="Running on a schedule">
-  <div class="chapter-head"><span class="chapter-num">10</span><h2 class="chapter-title">Running on a schedule</h2></div>
-  <p>One tick by hand is enough to see how it works; the useful mode is many ticks over time so you (and later, §12's promotion evidence) have something to look at. Every option below runs the exact same <code>vd tick</code> command with the exact same safety posture — the only thing that differs is <em>who decides when to call it</em>. Its own lockfile makes two overlapping calls a benign skip rather than a race.</p>
+<section class="chapter" id="s11" data-num="11" data-label="Running on a schedule">
+  <div class="chapter-head"><span class="chapter-num">11</span><h2 class="chapter-title">Running on a schedule</h2></div>
+  <p>One tick by hand is enough to see how it works; the useful mode is many ticks over time so you (and later, §13's promotion evidence) have something to look at. Every option below runs the exact same <code>vd tick</code> command with the exact same safety posture — the only thing that differs is <em>who decides when to call it</em>. Its own lockfile makes two overlapping calls a benign skip rather than a race.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Harness</th><th>How</th><th>Notes</th></tr></thead>
       <tbody>
         <tr><td>Claude Code, interactive</td><td><code>/loop 10m</code> driving <code>vd tick --format md</code></td><td>A human is present — each tick's report lands directly in your chat.</td></tr>
-        <tr><td>Claude Code, unattended</td><td>Schedule <code>claude -p "run a veydrift tick"</code> via <code>launchd</code></td><td>The agent invokes <code>vd tick</code> itself, nobody watching in real time — <code>strategy.md</code> / <code>proposals.jsonl</code> (§11) become what you review afterward.</td></tr>
+        <tr><td>Claude Code, unattended</td><td>Schedule <code>claude -p "run a veydrift tick"</code> via <code>launchd</code></td><td>The agent invokes <code>vd tick</code> itself, nobody watching in real time — <code>strategy.md</code> / <code>proposals.jsonl</code> (§12) become what you review afterward.</td></tr>
         <tr><td>Hermes</td><td>Register <code>vd tick</code> on Hermes' own scheduler</td><td>Hermes owns the interval; <code>vd tick</code> behaves identically regardless of who's calling it.</td></tr>
         <tr><td>Bare OS</td><td>Launchd template in <code>assets/</code>, not installed automatically</td><td>You fill in four placeholders and run <code>launchctl load</code> yourself. Keep the plist interval and <code>policy.json</code>'s cadence in sync by hand.</td></tr>
       </tbody>
@@ -1191,9 +1207,8 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   <p>You don't need a schedule to use the agent through a session — §5 already showed this for setup, and the same thing works for ongoing use. In any Claude Code or Hermes session with both skills installed, plain language like <em>"run a Veydrift tick,"</em> <em>"check my queues,"</em> or <em>"is my planet under attack"</em> is enough to trigger <code>veydrift-agent</code> on its own — it's listed directly in the skill's own trigger phrases. This is the same <code>vd tick</code> underneath, just invoked conversationally instead of from a schedule; useful for a one-off check without setting up any of the harnesses above.</p>
   <p><code>$VEYDRIFT_HOME</code> is shared across every invocation on a machine — point it at a scratch directory for any testing you don't want mixed into real history.</p>
 </section>
-
-<section class="chapter" id="s11" data-num="11" data-label="Reading the logs">
-  <div class="chapter-head"><span class="chapter-num">11</span><h2 class="chapter-title">Reading the logs</h2></div>
+<section class="chapter" id="s12" data-num="12" data-label="Reading the logs">
+  <div class="chapter-head"><span class="chapter-num">12</span><h2 class="chapter-title">Reading the logs</h2></div>
   <div class="table-wrap">
     <table>
       <thead><tr><th>File</th><th>Contents</th></tr></thead>
@@ -1211,9 +1226,8 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   </div>
   <p>Prints a daily rollup — worth reading the refusals first, not the successes. A quiet day is not the same as a day where fires were checked and correctly resolved; the digest tells them apart.</p>
 </section>
-
-<section class="chapter" id="s12" data-num="12" data-label="Evolving through the tiers">
-  <div class="chapter-head"><span class="chapter-num">12</span><h2 class="chapter-title">Evolving through the tiers</h2></div>
+<section class="chapter" id="s13" data-num="13" data-label="Evolving through the tiers">
+  <div class="chapter-head"><span class="chapter-num">13</span><h2 class="chapter-title">Evolving through the tiers</h2></div>
   <p>Nothing in this codebase ever advances the tier on its own — always a manual <code>policy.json</code> edit, and it should be a real decision, not a config toggle.</p>
 
   <div class="ladder">
@@ -1268,16 +1282,15 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   </ol>
   <p><strong>Never</strong>: promote on tick count alone, promote without having read <code>strategy.md</code>, or promote while a guard fails intermittently rather than consistently passing.</p>
 </section>
-
-<section class="chapter" id="s13" data-num="13" data-label="Example prompt and looping">
-  <div class="chapter-head"><span class="chapter-num">13</span><h2 class="chapter-title">Example prompt and looping for tier&gt;=1 agent operators</h2></div>
-  <p>Everything so far assumes you're checking in on the agent yourself, one tick at a time. This section is for the other mode: a standing agent "commander" that runs your planet continuously via <code>/loop</code>, proposing — and, once you've promoted past <code>advisor</code>, actually submitting — on its own between check-ins. Read §12 before using this for real; nothing below changes what tier does. It's still the only thing that decides whether a proposal can ever actually send.</p>
+<section class="chapter" id="s14" data-num="14" data-label="Example prompt and looping">
+  <div class="chapter-head"><span class="chapter-num">14</span><h2 class="chapter-title">Example prompt and looping for tier&gt;=1 agent operators</h2></div>
+  <p>Everything so far assumes you're checking in on the agent yourself, one tick at a time. This section is for the other mode: a standing agent "commander" that runs your planet continuously via <code>/loop</code>, proposing — and, once you've promoted past <code>advisor</code>, actually submitting — on its own between check-ins. Read §13 before using this for real; nothing below changes what tier does. It's still the only thing that decides whether a proposal can ever actually send.</p>
   <div class="callout caution">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
     <div><strong class="callout-title">One field decides whether this is truly unattended: <code>wallet_engine.require_confirmation</code></strong><p>It defaults to <code>true</code>, and at <code>true</code>, a tier ≥2 tick never sends on its own — it prints "AWAITING HUMAN CONFIRMATION" and hands you a <code>walletctl send --confirm</code> command instead, every single time. That's the safe default, and a reasonable place to stay if you want a human in the loop on every send. For the agent to actually run unattended, set it to <code>false</code> yourself, deliberately — which is exactly why the agent prompt below carves that field out from what it's allowed to change on its own, right alongside <code>tier</code>.</p></div>
   </div>
   <h3>Agent prompt</h3>
-  <p>Paste this into a fresh session, filling in your own wallet address and planet coordinates. Unlike §5's bootstrap prompt, this one assumes you've already promoted past <code>advisor</code> (§12) — at tier 1 it's harmless (nothing can send regardless of what the prompt claims, since the <code>tier</code> gate blocks every onchain function structurally), but it's written for the tier where it actually does something:</p>
+  <p>Paste this into a fresh session, filling in your own wallet address and planet coordinates. Unlike §5's bootstrap prompt, this one assumes you've already promoted past <code>advisor</code> (§13) — at tier 1 it's harmless (nothing can send regardless of what the prompt claims, since the <code>tier</code> gate blocks every onchain function structurally), but it's written for the tier where it actually does something:</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>prompt — paste into your agent session</span></div>
     <div class="codeblock-body"><pre>You're Wayfinder Automata, an agent commander playing Veydrift, an on-chain
@@ -1335,9 +1348,8 @@ mine target), fall back to the cadence default.</pre></div>
   </div>
   <p><code>QueueEntry.seconds_remaining</code>/<code>ready_at</code> and the affordability gate's ETA string are both real fields the agent already has access to from a normal tick's output — nothing here asks it to invent numbers it doesn't have.</p>
 </section>
-
-<section class="chapter" id="s14" data-num="14" data-label="Troubleshooting">
-  <div class="chapter-head"><span class="chapter-num">14</span><h2 class="chapter-title">Troubleshooting</h2></div>
+<section class="chapter" id="s15" data-num="15" data-label="Troubleshooting">
+  <div class="chapter-head"><span class="chapter-num">15</span><h2 class="chapter-title">Troubleshooting</h2></div>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Symptom</th><th>What's happening</th></tr></thead>
@@ -1346,15 +1358,14 @@ mine target), fall back to the cadence default.</pre></div>
         <tr><td><code>/health</code> reports <code>ok: false</code>, tick still runs</td><td>Expected: a combat-only backend readiness issue no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy</td></tr>
         <tr><td><code>walletctl status</code> refuses to run</td><td>Expected with no provider configured — not a bug</td></tr>
         <tr><td><code>verify-abi</code> shows a mismatch</td><td>The deployed contract's ABI changed. Every write is blocked until resolved — deliberate</td></tr>
-        <tr><td>Guards read 16/19 at tier 1</td><td>Correct and expected — see §9</td></tr>
+        <tr><td>Guards read 16/19 at tier 1</td><td>Correct and expected — see §10</td></tr>
         <tr><td><code>policy.json</code> edits rejected</td><td>Schema validated strictly — the error names the exact field</td></tr>
       </tbody>
     </table>
   </div>
 </section>
-
-<section class="chapter" id="s15" data-num="15" data-label="Safety reminders">
-  <div class="chapter-head"><span class="chapter-num">15</span><h2 class="chapter-title">Safety reminders, one more time</h2></div>
+<section class="chapter" id="s16" data-num="16" data-label="Safety reminders">
+  <div class="chapter-head"><span class="chapter-num">16</span><h2 class="chapter-title">Safety reminders, one more time</h2></div>
   <div class="callout danger">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
     <div><strong class="callout-title">The wallet is the account</strong><p>There is no password reset and no recovery for a lost keystore password or key. A Veydrift planet cannot be transferred to a different address by any contract mechanism.</p></div>
@@ -1365,7 +1376,7 @@ mine target), fall back to the cadence default.</pre></div>
   </div>
   <div class="callout note">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-    <div><strong class="callout-title">No transaction has ever been submitted on mainnet from this codebase</strong><p>The full write path — build, simulate, send, receipt — has however been exercised for real against a local Anvil fork of Base: all 7 allowlisted selectors have been live-sent and confirmed successful there, proving the contract-facing mechanics genuinely work. Mainnet itself is untouched; the first real mainnet submission will still be yours, at your T1→T2 promotion — re-read §12's checklist before you do.</p></div>
+    <div><strong class="callout-title">Real transactions have already been submitted on mainnet from this codebase</strong><p>At tier 2 (<code>economy</code>) and tier 3 (<code>operator</code>), through the real build → simulate → send path, not a fixture or a fork — see <code>README.md</code>'s Status section for the current tier. That doesn't make your own T1→T2 promotion any less consequential — no code path advances the tier on its own; only you, editing <code>policy.json</code>, do — so budget the same care §13's checklist asks for regardless of what this account or any other has already done.</p></div>
   </div>
   <div class="callout caution">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>

@@ -352,6 +352,182 @@ def test_noop_action_produces_no_tx_and_no_extra_network_calls(isolated_home, mo
 
 
 # --------------------------------------------------------------------------------------
+# `vd tick --action`: a supported override of the planner's own choice
+# (policy.strategy.allow_agent_action_override), fully guard-evaluated and reported like
+# any other action -- see references/manual-action-override.md.
+# --------------------------------------------------------------------------------------
+
+
+def _write_policy_allowing_override(**overrides):
+    """`_write_policy`, but with `strategy.allow_agent_action_override` forced true --
+    the field lives nested under `strategy`, not at the top level, so it needs its own
+    helper rather than `_write_policy`'s flat `policy.update(overrides)`."""
+    policy = json.loads((Path(__file__).parent.parent / "assets" / "policy.example.json").read_text())
+    policy["strategy"]["allow_agent_action_override"] = True
+    policy.update(overrides)
+    init_policy()
+    from veydrift_agent.state import policy_path
+
+    policy_path().write_text(json.dumps(policy))
+    return policy_path()
+
+
+def _write_override_action_file(tmp_path, **overrides) -> Path:
+    action = dict(
+        kind="build",
+        function="startBuildingUpgrade",
+        planet_id=664,
+        entity_id=3,
+        entity_name="Solar Plant",
+        target_level=1,
+        rule="operator override",
+        rationale="topping off storage while blocked on deuterium",
+    )
+    action.update(overrides)
+    path = tmp_path / "override_action.json"
+    path.write_text(json.dumps(action))
+    return path
+
+
+def test_action_flag_refused_without_the_policy_opt_in(isolated_home, monkeypatch, tmp_path):
+    _write_policy()  # strategy.allow_agent_action_override defaults to False
+    _patch_common(monkeypatch)
+    action_file = _write_override_action_file(tmp_path)
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+    assert result.exit_code != 0
+    assert "strategy.allow_agent_action_override" in result.output
+    assert log.read_proposals() == []
+    assert not log.strategy_path().exists()
+
+
+def test_action_flag_refused_on_malformed_json(isolated_home, tmp_path):
+    _write_policy_allowing_override()
+    bad_file = tmp_path / "bad.json"
+    bad_file.write_text("{not valid json")
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(bad_file)])
+    assert result.exit_code != 0
+    assert log.read_proposals() == []
+
+
+def test_action_flag_refused_on_invalid_action_schema(isolated_home, tmp_path):
+    _write_policy_allowing_override()
+    bad_file = tmp_path / "bad_action.json"
+    bad_file.write_text(json.dumps({"kind": "not-a-real-kind"}))
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(bad_file)])
+    assert result.exit_code != 0
+    assert log.read_proposals() == []
+
+
+def test_action_flag_supplies_the_action_instead_of_the_planner(isolated_home, monkeypatch, tmp_path):
+    _write_policy_allowing_override()
+    tx = UnsignedTx(to="0xf397910F005151b09644228573a4353818D3755d", data="0x165715e3" + "00" * 32, gas=None)
+    planner_choice = Action(
+        kind=ActionKind.BUILD,
+        function="startResearch",
+        planet_id=664,
+        entity_id=0,
+        rule="9:planner-rule",
+        rationale="planner rationale",
+    )
+    _patch_common(
+        monkeypatch,
+        live_addresses={"0xf397910F005151b09644228573a4353818D3755d"},
+        unsigned_tx=tx,
+        action=planner_choice,
+    )
+    action_file = _write_override_action_file(tmp_path)
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+    assert result.exit_code == 0, result.output
+
+    proposals = log.read_proposals()
+    assert len(proposals) == 1
+    # The override, not the planner's `startResearch` -- the planner's own return value
+    # is only ever recorded (in "override"), never executed.
+    assert proposals[0]["function"] == "startBuildingUpgrade"
+    assert proposals[0]["rationale"] == "topping off storage while blocked on deuterium"
+    assert proposals[0]["source"] == "manual_override"
+
+
+def test_action_flag_source_is_forced_even_if_the_file_claims_planner(isolated_home, monkeypatch, tmp_path):
+    _write_policy_allowing_override()
+    _patch_common(monkeypatch)
+    action_file = _write_override_action_file(tmp_path, source="planner")  # spoof attempt
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+    assert result.exit_code == 0, result.output
+    proposals = log.read_proposals()
+    assert proposals[0]["source"] == "manual_override"
+
+
+def test_action_flag_reports_the_disagreement_immediately(isolated_home, monkeypatch, tmp_path):
+    """Design decisions 6-7: the planner's own would-have-proposed action is captured
+    automatically (never left to the operator's rationale text) and surfaced in
+    logs/strategy.md, the tick's printed report, and proposals.jsonl's "override" key --
+    all in the same tick the override fires, not deferred."""
+    _write_policy_allowing_override()
+    planner_choice = Action(
+        kind=ActionKind.BUILD,
+        function="startResearch",
+        planet_id=664,
+        entity_id=0,
+        rule="9:planner-rule",
+        rationale="planner would have researched instead",
+    )
+    _patch_common(monkeypatch, action=planner_choice)
+    action_file = _write_override_action_file(tmp_path)
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+    assert result.exit_code == 0, result.output
+
+    strategy_text = log.strategy_path().read_text()
+    assert "OVERRIDE:" in strategy_text
+    assert "planner would have researched instead" in strategy_text
+
+    proposals = log.read_proposals()
+    override = proposals[0]["override"]
+    assert override is not None
+    assert override["operator_action"]["function"] == "startBuildingUpgrade"
+    assert override["planner_would_have_proposed"]["function"] == "startResearch"
+    assert override["planner_would_have_proposed"]["rationale"] == "planner would have researched instead"
+
+    result_json = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file), "--format", "json"])
+    assert result_json.exit_code == 0, result_json.output
+    payload = json.loads(result_json.output)
+    assert payload["override"]["planner_would_have_proposed"]["function"] == "startResearch"
+
+
+def test_action_flag_ignored_while_killswitch_is_active(isolated_home, monkeypatch, tmp_path):
+    _write_policy_allowing_override()
+    from veydrift_agent.state import killswitch_path
+
+    killswitch_path().touch()
+    respx.get(f"{BASE}/health").mock(
+        return_value=httpx.Response(200, json={"ok": True, "readiness": {"ready": True}})
+    )
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not fetch a snapshot while KILLSWITCH is active")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", _boom)
+    monkeypatch.setattr(tick, "_live_addresses", _boom)
+    action_file = _write_override_action_file(tmp_path)
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+    assert result.exit_code == 0, result.output
+
+    proposals = log.read_proposals()
+    assert len(proposals) == 1
+    assert proposals[0]["kind"] == "halt"
+    assert proposals[0]["override"] is None
+    strategy_file = log.strategy_path()
+    assert not strategy_file.exists() or "OVERRIDE:" not in strategy_file.read_text()
+
+
+# --------------------------------------------------------------------------------------
 # --format json
 # --------------------------------------------------------------------------------------
 

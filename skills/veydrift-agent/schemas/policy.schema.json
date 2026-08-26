@@ -203,6 +203,11 @@
     "StrategyCfg": {
       "description": "Phase 2 (docs/SPEC.md \u00a75.4/\u00a75.6) added `resource_weights`/`max_alternatives`;\nPhase 3 adds the four fields below. All are additive \u2014 an older `policy.json` with\nno `strategy` key, or one that sets `strategy` but omits these newer keys, still\nloads (defaults below reproduce pre-Phase-3 behaviour exactly), but a policy file\nthat sets one of these new keys is rejected by any agent build predating this field\n(`Policy.model_config` is `extra=\"forbid\"`).",
       "properties": {
+        "allow_agent_action_override": {
+          "default": false,
+          "title": "Allow Agent Action Override",
+          "type": "boolean"
+        },
         "building_priority": {
           "items": {
             "type": "string"
