@@ -186,22 +186,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-fam
 .diagram-frame svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
 .diagram-caption { text-align: center; font-size: 12px; color: var(--ink-faint); margin-top: 12px; font-family: "Plex Mono", monospace; }
 
-/* corrections list */
-.correction { border: 1px solid var(--warn); border-left-width: 3px; border-radius: var(--radius-s); background: var(--warn-soft); padding: 14px 16px; margin-bottom: 14px; }
-.correction-head { display: flex; align-items: center; gap: 8px; font-family: "Plex Mono", monospace; font-size: 11px; font-weight: 700; letter-spacing: .06em; color: var(--warn); text-transform: uppercase; margin-bottom: 8px; }
-.correction p { font-size: 14px; margin: 0; }
-
-/* seam diagram (two defects) */
-.defect-card { border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface); margin-bottom: 16px; overflow: hidden; }
-.defect-head { display: flex; align-items: center; gap: 10px; padding: 12px 18px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
-.defect-lang { font-family: "Plex Mono", monospace; font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 3px 8px; border-radius: 4px; }
-.defect-lang.py { background: var(--data-soft); color: var(--data); }
-.defect-lang.ts { background: var(--accent-soft); color: var(--accent); }
-.defect-title { font-weight: 600; font-size: 14px; }
-.defect-body { padding: 16px 18px; font-size: 14px; color: var(--ink-dim); }
-.defect-body code { font-size: 12.5px; }
-.defect-arrow { display: flex; align-items: center; justify-content: center; padding: 4px 0; color: var(--ink-faint); }
-
 .divider { border: none; border-top: 1px solid var(--border); margin: 8px 0 36px; }
 footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color: var(--ink-faint); font-size: 13px; }
 
@@ -256,8 +240,8 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
       <p class="page-lede">A full review for a developer extending, auditing, or maintaining this codebase — not a replacement for the primary sources it cites, but a synthesis of them. Where this document simplifies, the primary source is named so you can go deeper.</p>
 
       <div class="factstrip">
-        <div class="fact"><div class="fact-label">Codebase</div><div class="fact-value">~7,500 lines</div></div>
-        <div class="fact"><div class="fact-label">Tests</div><div class="fact-value">257 + 104</div></div>
+        <div class="fact"><div class="fact-label">Codebase</div><div class="fact-value">~12,300 lines</div></div>
+        <div class="fact"><div class="fact-label">Tests</div><div class="fact-value">518 + 123</div></div>
         <div class="fact"><div class="fact-label">Languages</div><div class="fact-value">Python · TS</div></div>
         <div class="fact"><div class="fact-label">Judge passes</div><div class="fact-value">2 · both found defects</div></div>
       </div>
@@ -265,7 +249,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
       <!-- SECTIONS INJECTED BELOW -->
       <section class="chapter" id="t1" data-num="01" data-label="The one-paragraph version">
   <div class="chapter-head"><span class="chapter-num">01</span><h2 class="chapter-title">The one-paragraph version</h2></div>
-  <p>An agent reads Veydrift's public game API, runs deterministic calculators against it, and proposes at most one action per tick — a typed <code>Action</code>, never signed bytes. A completely separate program builds the actual transaction for that action, checks it against its own independent allowlist regardless of what the first program already validated, and only submits it if a human types an exact confirmation flag. A three-tier policy field, edited by hand, is the only thing that ever lets more of that pipeline run for real. <strong>Nothing has ever submitted a transaction from this codebase to Veydrift.</strong></p>
+  <p>An agent reads Veydrift's public game API, runs deterministic calculators against it, and proposes at most one action per tick — a typed <code>Action</code>, never signed bytes. A completely separate program builds the actual transaction for that action, checks it against its own independent allowlist regardless of what the first program already validated, and only submits it if a human types an exact confirmation flag. A three-tier policy field — <code>advisor</code> (propose only), <code>economy</code> (also executes building/research/defense/ship actions), <code>operator</code> (also executes fleet logistics) — edited by hand, is the only thing that ever lets more of that pipeline run for real.</p>
 
   <div class="toc-box">
     <div class="toc-box-label">On this page</div>
@@ -316,13 +300,13 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
     <p class="diagram-caption">allowlist re-derived independently — not trusted from the agent side</p>
   </div>
 
-  <p><code>veydrift-agent</code> is Python, reads an HTTP API, and <strong>never imports a signing library</strong> — <code>grep -rn "viem\|ethers\|web3\|eth_account" skills/veydrift-agent/src/</code> returning nothing is an actual, checked invariant, not a description. <code>veydrift-wallet</code> is TypeScript, is the only thing that ever calls <code>signAndSend</code>, and independently re-derives its own allowlist from a live <code>/runtime-config</code> fetch and the pinned ABI — it does not trust anything the agent skill already checked. A fully compromised <code>veydrift-agent</code> can construct any <code>Action</code> it wants and hand it to <code>walletctl build</code>/<code>simulate</code> freely; it cannot make <code>walletctl send</code> submit anything without <code>--confirm</code> on that exact command line, and even then the destination, selector, and (at tier 3) mission type are checked again from scratch.</p>
+  <p><code>veydrift-agent</code> is a skill with scripts written in Python that reads an HTTP API and <strong>never imports a signing library</strong> — this is an actual, checked invariant, not a description. <code>veydrift-wallet</code> is a skill with scripts written in TypeScript that is the only thing that ever calls <code>signAndSend</code>, and independently re-derives its own allowlist from a live <code>/runtime-config</code> fetch and the pinned ABI — it does not trust anything the agent skill already checked. A fully compromised <code>veydrift-agent</code> can construct any <code>Action</code> it wants and hand it to <code>walletctl build</code>/<code>simulate</code> freely; it cannot make <code>walletctl send</code> submit anything without <code>--confirm</code> on that exact command line, and even then the destination, selector, and (at tier 3) mission type are checked again from scratch.</p>
   <p>The practical benefit: the two languages can't accidentally share a dependency, a global, or a mutable object that lets a proposal bypass the allowlist. The practical cost: the two enforcement layers have to be kept in sync by hand across a language boundary — exactly the kind of thing that drifts silently. §8 covers how that drift actually happened once, and the test that now catches it.</p>
 </section>
 
 <section class="chapter" id="t3" data-num="03" data-label="The spec, reviewed">
   <div class="chapter-head"><span class="chapter-num">03</span><h2 class="chapter-title">The spec, reviewed</h2></div>
-  <p>The full spec is <code>docs/SPEC.md</code> (620+ lines, v2.1). Read that for acceptance criteria and work-package breakdown; this section is what matters for the <em>shape</em> of the result.</p>
+  <p>The full spec is <code>docs/SPEC.md</code> (1,500+ lines, v2.1). Read that for acceptance criteria and work-package breakdown; this section is what matters for the <em>shape</em> of the result.</p>
 
   <h3>Decisions taken, and why</h3>
   <div class="table-wrap">
@@ -339,24 +323,6 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   </div>
 
   <p><strong>What the spec explicitly does not attempt:</strong> combat, alliances, ACS, migration, referrals, NFT burns, the ERC-20 market bridge, and any raid-profitability model — <code>protectedResources</code>' actual semantics are unconfirmed, so nothing here builds loot logic on it.</p>
-
-  <h3>The spec was wrong at least three times — and says so</h3>
-  <p>Worth reading these specifically, because each describes a real defect that shipped and was later caught. Each is dated and marked as a correction, not silently rewritten as if it were always right.</p>
-
-  <div class="correction">
-    <div class="correction-head"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 9v4M12 17h.01"/></svg>Correction 1 — dead config</div>
-    <p>§4's original tier table never allocated <code>startShipProduction</code> to any tier, while the planner could propose it — a config knob (<code>allow_ships</code>) that could never actually work.</p>
-  </div>
-  <div class="correction">
-    <div class="correction-head"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 9v4M12 17h.01"/></svg>Correction 2 — an impossible example</div>
-    <p>§5.9's worked pretty-print example showed <code>guards: 16/16 pass</code> at tier 1, which is impossible — the tier gate must fail at tier 1 by definition. Left uncorrected, every tier-1 proposal would report <code>decision=block</code> and drown the promotion-evidence signal <code>--readiness</code> exists to surface.</p>
-  </div>
-  <div class="correction">
-    <div class="correction-head"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 9v4M12 17h.01"/></svg>Correction 3 — an unspecified trust boundary</div>
-    <p>§6.4 never said where <code>walletctl</code> should read the tier it enforces from — the implementation took it from the caller, which is exactly the actor the check exists to defend against.</p>
-  </div>
-
-  <p>If you're auditing this codebase, that inline history is worth reading — it's a record of what a reviewer should specifically re-check in code that looks similar.</p>
 </section>
 
 <section class="chapter" id="t4" data-num="04" data-label="Repository architecture">
@@ -366,14 +332,15 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
     <div class="codeblock-body"><pre>skills/
 ├── <span class="c-key">veydrift-agent/</span>        <span class="c-comment"># Python (uv). Reads, calculates, plans. Never signs.</span>
 │   ├── SKILL.md          <span class="c-comment"># progressive-disclosure entry point</span>
-│   ├── src/veydrift_agent/  <span class="c-comment"># 9 modules, ~5,700 lines — §5</span>
+│   ├── src/veydrift_agent/  <span class="c-comment"># 14 modules, ~10,350 lines — §5</span>
 │   ├── schemas/          <span class="c-comment"># GENERATED — don't hand-edit</span>
-│   ├── references/       <span class="c-comment"># 10 files, ~2,700 lines, on demand</span>
-│   └── tests/             <span class="c-str">257 tests</span>
+│   ├── references/       <span class="c-comment"># 7 files, ~2,700 lines, on demand</span>
+│   └── tests/             <span class="c-str">518 tests</span>
 └── <span class="c-key">veydrift-wallet/</span>       <span class="c-comment"># TypeScript. Signs. Nothing else does.</span>
-    ├── abi/               <span class="c-comment"># pinned ABI + provenance — §6, §9</span>
-    ├── src/               <span class="c-comment"># 10 modules, ~1,800 lines — §6</span>
-    └── tests/              <span class="c-str">104 tests</span></pre></div>
+    ├── abi/               <span class="c-comment"># pinned ABI + provenance — §6; traps: AGENTS.md §7</span>
+    ├── scripts/           <span class="c-comment"># gen-keystore.mjs — npm run wallet:new</span>
+    ├── src/               <span class="c-comment"># 11 modules, ~1,970 lines — §6</span>
+    └── tests/              <span class="c-str">123 tests</span></pre></div>
   </div>
   <p>Both trees are self-contained on purpose: <code>npx skills add</code> copies only <code>skills/&lt;name&gt;/</code> into wherever a harness keeps its skills, so nothing at the repository root travels with an install. Every citation inside a <code>SKILL.md</code> or <code>references/*.md</code> file to something outside its own skill tree is either a link to the sibling skill (explicitly framed as conditional), a link to the deployed contract's public GitHub source, or gone — internal-repo citations were deliberately stripped from both skills' shipped files once this was audited.</p>
   <div class="callout note">
@@ -384,32 +351,41 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
 
 <section class="chapter" id="t5" data-num="05" data-label="veydrift-agent, module by module">
   <div class="chapter-head"><span class="chapter-num">05</span><h2 class="chapter-title"><code>veydrift-agent</code>, module by module</h2></div>
-  <div class="module-row"><div class="module-name">models.py</div><div class="module-lines">332</div><div class="module-desc"><strong>Frozen.</strong> Every pydantic model — <code>Policy</code>, <code>Action</code>, <code>Snapshot</code>, <code>GuardReport</code> — is the on-disk JSON shape for <code>policy.json</code>, both log files, and the generated schemas.</div></div>
+  <p><strong>What it does.</strong> Reads Veydrift's public game API, runs the deterministic calculators in <code>calc.py</code> against it, and proposes at most one <code>Action</code> per tick through the decision ladder (§7) — it never signs or submits anything itself; that's <code>veydrift-wallet</code>'s job exclusively (§2).</p>
+  <p><strong>How it's triggered.</strong> As an installed Claude/Hermes skill, <code>SKILL.md</code>'s frontmatter routes to it on a Veydrift planet id/coordinate, "what should I build next," "run a tick," or the tier/guardrail/promotion vocabulary. Standalone, it's a single entrypoint: <code>uv run --directory &lt;path&gt; vd &lt;subcommand&gt;</code>; run <code>vd doctor</code> first to confirm what's wired.</p>
+  <p><strong>References, loaded on demand.</strong> <code>api-routes.md</code> (route table, health-gating), <code>formulas.md</code> (every formula's derivation), <code>entity-ids.md</code> (id↔name tables, the fleet-tuple index shift), <code>strategy-playbook.md</code> (why the planner proposed <em>this</em> action), <code>contract-writes.md</code> (which <code>Action.function</code> maps to which entrypoint, and its traps), <code>guardrails.md</code> (every gate), <code>scheduling.md</code> (driving <code>vd tick</code> under different harnesses).</p>
+  <h3>Module by module</h3>
+  <div class="module-row"><div class="module-name">models.py</div><div class="module-lines">546</div><div class="module-desc"><strong>Frozen.</strong> Every pydantic model — <code>Policy</code>, <code>Action</code>, <code>Snapshot</code>, <code>GuardReport</code> — is the on-disk JSON shape for <code>policy.json</code>, both log files, and the generated schemas.</div></div>
   <div class="module-row"><div class="module-name">cli.py</div><div class="module-lines">59</div><div class="module-desc"><strong>Frozen.</strong> Mounts each module's <code>app: typer.Typer</code> with tolerant imports — a half-built tree still runs the parts that exist.</div></div>
   <div class="module-row"><div class="module-name">ids.py</div><div class="module-lines">362</div><div class="module-desc">The six canonical contract enums, transcribed directly from the deployed contract source — not from Veydrift's own docs, which get two of them wrong.</div></div>
   <div class="module-row"><div class="module-name">http.py</div><div class="module-lines">199</div><div class="module-desc">The API client: <code>httpx</code>, <code>tenacity</code> retry (5xx/network only), a disk cache honoring per-route max-age.</div></div>
-  <div class="module-row"><div class="module-name">read.py</div><div class="module-lines">830</div><div class="module-desc">One <code>vd read</code> subcommand per route (18 targets). <code>--summary</code> is capped near 2KB; <code>battle-reports</code>/<code>highscores</code> refuse stdout entirely — up to 2.2MB uncompressed.</div></div>
-  <div class="module-row"><div class="module-name">calc.py</div><div class="module-lines">737</div><div class="module-desc">Pure formulas, no network. Contains <strong>no cost-scaling function</strong> by design — live cost always comes from the API, since recomputing the unpublished per-building factors is exactly how affordability checks go wrong silently.</div></div>
-  <div class="module-row"><div class="module-name">techtree.py</div><div class="module-lines">~500</div><div class="module-desc">The on-chain prerequisite table (buildings/ships/defenses/research), transcribed from <code>VeydriftDependencies.sol</code>/<code>VeydriftCatalog.sol</code>. <code>unmet()</code> fails closed on absent data — an unreported level is never assumed high enough.</div></div>
-  <div class="module-row"><div class="module-name">plan.py</div><div class="module-lines">~320</div><div class="module-desc">Rungs 0-4 of the decision ladder (vetoes) plus the ladder's four-band precedence calling into <code>candidates.py</code>. As of Phase 2 (the general-strategy-engine program) it no longer decides <em>which entity</em>. Phase 4 adds rung <code>8b</code>, the ladder's fourth and final band.</div></div>
-  <div class="module-row"><div class="module-name">candidates.py</div><div class="module-lines">~2000</div><div class="module-desc">New in Phase 2, roughly doubled in Phase 3, gained a fifth family in Phase 4 and a sixth in Phase 5c. The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family — <code>mine</code>, <code>energy</code>, <code>storage</code>, <code>research</code>, <code>ship</code>, <code>defense</code>, Phase 3's <code>infrastructure</code> and <code>crawler</code>, Phase 4's <code>unlock</code>, Phase 5c's <code>logistics</code> — <code>score_payback</code> (payback-hours, scored iff a level change moves <code>calc.production_per_hour</code>'s output), a <code>select_*</code> function per rung. Energy-first lives here: post-upgrade <code>required</code> vs. current <code>produced</code>, computed fresh every tick — never a fixed offset. Phase 3 adds declared-target stock-keeping (<code>ship_targets</code>/<code>defense_targets</code>) and priority ordering (<code>research_priority</code>/<code>building_priority</code>), all defaulting empty and reproducing Phase 2's output exactly when unset. Phase 4 adds <code>generate_unlock_chain_candidates</code>/<code>select_unlock_chain_candidate</code>, driven by <code>techtree.next_step_toward</code> rather than any new policy field. Phase 5c adds <code>generate_transport_candidates</code>/<code>generate_harvest_candidates</code> — non-combat <code>launchFleetMission</code> proposals, gated on <code>policy.actions.allow_fleet_noncombat</code> (default <code>false</code>).</div></div>
-  <div class="module-row"><div class="module-name">techtree.py</div><div class="module-lines">~640</div><div class="module-desc">On-chain prerequisite table for all four entity families, transcribed from the deployed contract (Phase 1). <code>unmet()</code> is the fail-closed core every other module's legality checks build on. Phase 4 adds <code>next_step_toward</code> — a breadth-first walk of <code>unmet()</code>'s own output, backwards, to find the shallowest currently-buildable prerequisite toward a locked target; no cost math, same "compare levels only" discipline as <code>unmet()</code>. Also adds <code>unlock_breadth</code> — the forward mirror of that walk, one hop only: how many other entities would have a requirement drop out of their own <code>unmet()</code> if this one's level were +1. Feeds <code>candidates.py</code>'s fallback ranking for <code>research_priority</code>/<code>building_priority</code>; a structural fact, never a value judgement.</div></div>
-  <div class="module-row"><div class="module-name">guard.py</div><div class="module-lines">~800</div><div class="module-desc"><strong>19</strong> gates (17 through Phase 4; Phase 5c added <code>mission_type</code>, a default-deny check on <code>launchFleetMission</code>'s mission type; a later addition added <code>game_paused</code>, the second independent line of defense behind rung <code>1b</code>), every one evaluated and reported — never short-circuited. Missing data resolves toward <code>BLOCK</code>/<code>ESCALATE</code>, never <code>PASS</code>. <strong>Fix:</strong> <code>health</code> gains a narrow exception, <code>Snapshot.combat_only_degradation()</code> — a combat-only <code>randomnessReadiness</code> degradation (positively confirmed, everything else fine) now PASSes instead of BLOCKing, since combat is unconditionally unreachable here regardless of policy. Confirmed live and persistent, served via HTTP 503 — <code>read._fetch_or_exit()</code> now defensively recovers a parseable <code>/health</code> 5xx body (narrowly scoped to that route) instead of hard-aborting first.</div></div>
-  <div class="module-row"><div class="module-name">state.py</div><div class="module-lines">287</div><div class="module-desc"><code>$VEYDRIFT_HOME</code> resolution, <code>AgentState</code>, the tick lockfile, <code>KILLSWITCH</code> detection.</div></div>
-  <div class="module-row"><div class="module-name">tick.py</div><div class="module-lines">978</div><div class="module-desc">The orchestrator — the nine-step loop (§7), the <code>walletctl</code> subprocess bridge, <code>--readiness</code>. Largest module, and where both criticals in §10 actually lived.</div></div>
-  <div class="module-row"><div class="module-name">log.py</div><div class="module-lines">377</div><div class="module-desc">Four log sinks, secret scrubbing, the pretty-report renderer, <code>--digest</code>.</div></div>
+  <div class="module-row"><div class="module-name">read.py</div><div class="module-lines">1041</div><div class="module-desc">One <code>vd read</code> subcommand per route (18 targets). <code>--summary</code> is capped near 2KB; <code>battle-reports</code>/<code>highscores</code> refuse stdout entirely — up to 2.2MB uncompressed.</div></div>
+  <div class="module-row"><div class="module-name">fmt.py</div><div class="module-lines">242</div><div class="module-desc">Rich-based summary rendering behind <code>read.py</code>'s <code>--summary</code> output — enforces <code>snapshot</code>'s &lt;=2KB budget, self-truncating if a render ever overruns it.</div></div>
+  <div class="module-row"><div class="module-name">calc.py</div><div class="module-lines">897</div><div class="module-desc">Pure formulas, no network. Contains <strong>no cost-scaling function</strong> by design — live cost always comes from the API, since recomputing the unpublished per-building factors is exactly how affordability checks go wrong silently.</div></div>
+  <div class="module-row"><div class="module-name">plan.py</div><div class="module-lines">~370</div><div class="module-desc">Rungs 0-4 of the decision ladder (vetoes) plus the ladder's four-band precedence calling into <code>candidates.py</code>. As of Phase 2 (the general-strategy-engine program) it no longer decides <em>which entity</em>. Phase 4 adds rung <code>8b</code>, the ladder's fourth and final band.</div></div>
+  <div class="module-row"><div class="module-name">candidates.py</div><div class="module-lines">~2270</div><div class="module-desc">New in Phase 2, roughly doubled in Phase 3, gained a fifth family in Phase 4 and a sixth in Phase 5c. The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family — <code>mine</code>, <code>energy</code>, <code>storage</code>, <code>research</code>, <code>ship</code>, <code>defense</code>, Phase 3's <code>infrastructure</code> and <code>crawler</code>, Phase 4's <code>unlock</code>, Phase 5c's <code>logistics</code> — <code>score_payback</code> (payback-hours, scored iff a level change moves <code>calc.production_per_hour</code>'s output), a <code>select_*</code> function per rung. Energy-first lives here: post-upgrade <code>required</code> vs. current <code>produced</code>, computed fresh every tick — never a fixed offset. Phase 3 adds declared-target stock-keeping (<code>ship_targets</code>/<code>defense_targets</code>) and priority ordering (<code>research_priority</code>/<code>building_priority</code>), all defaulting empty and reproducing Phase 2's output exactly when unset. Phase 4 adds <code>generate_unlock_chain_candidates</code>/<code>select_unlock_chain_candidate</code>, driven by <code>techtree.next_step_toward</code> rather than any new policy field. Phase 5c adds <code>generate_transport_candidates</code>/<code>generate_harvest_candidates</code> — non-combat <code>launchFleetMission</code> proposals, gated on <code>policy.actions.allow_fleet_noncombat</code> (default <code>false</code>).</div></div>
+  <div class="module-row"><div class="module-name">techtree.py</div><div class="module-lines">~720</div><div class="module-desc">On-chain prerequisite table for all four entity families, transcribed from the deployed contract (Phase 1). <code>unmet()</code> is the fail-closed core every other module's legality checks build on. Phase 4 adds <code>next_step_toward</code> — a breadth-first walk of <code>unmet()</code>'s own output, backwards, to find the shallowest currently-buildable prerequisite toward a locked target; no cost math, same "compare levels only" discipline as <code>unmet()</code>. Also adds <code>unlock_breadth</code> — the forward mirror of that walk, one hop only: how many other entities would have a requirement drop out of their own <code>unmet()</code> if this one's level were +1. Feeds <code>candidates.py</code>'s fallback ranking for <code>research_priority</code>/<code>building_priority</code>; a structural fact, never a value judgement.</div></div>
+  <div class="module-row"><div class="module-name">guard.py</div><div class="module-lines">~1170</div><div class="module-desc"><strong>19</strong> gates (17 through Phase 4; Phase 5c added <code>mission_type</code>, a default-deny check on <code>launchFleetMission</code>'s mission type; a later addition added <code>game_paused</code>, the second independent line of defense behind rung <code>1b</code>), every one evaluated and reported — never short-circuited. Missing data resolves toward <code>BLOCK</code>/<code>ESCALATE</code>, never <code>PASS</code>. <strong>Fix:</strong> <code>health</code> gains a narrow exception, <code>Snapshot.combat_only_degradation()</code> — a combat-only <code>randomnessReadiness</code> degradation (positively confirmed, everything else fine) now PASSes instead of BLOCKing, since combat is unconditionally unreachable here regardless of policy. Confirmed live and persistent, served via HTTP 503 — <code>read._fetch_or_exit()</code> now defensively recovers a parseable <code>/health</code> 5xx body (narrowly scoped to that route) instead of hard-aborting first.</div></div>
+  <div class="module-row"><div class="module-name">state.py</div><div class="module-lines">349</div><div class="module-desc"><code>$VEYDRIFT_HOME</code> resolution, <code>AgentState</code>, the tick lockfile, <code>KILLSWITCH</code> detection.</div></div>
+  <div class="module-row"><div class="module-name">tick.py</div><div class="module-lines">1727</div><div class="module-desc">The orchestrator — the nine-step loop (§7), the <code>walletctl</code> subprocess bridge, <code>--readiness</code>. Second-largest module after <code>candidates.py</code>, and where the criticals a first-pass judge review found actually lived (<code>AGENTS.md</code> §5's unit-mismatch and revert-recording invariants).</div></div>
+  <div class="module-row"><div class="module-name">log.py</div><div class="module-lines">392</div><div class="module-desc">Four log sinks, secret scrubbing, the pretty-report renderer, <code>--digest</code>.</div></div>
 </section>
 
 <section class="chapter" id="t6" data-num="06" data-label="veydrift-wallet, module by module">
   <div class="chapter-head"><span class="chapter-num">06</span><h2 class="chapter-title"><code>veydrift-wallet</code>, module by module</h2></div>
+  <p><strong>What it does.</strong> The only thing in this repo that builds real calldata, signs, or submits a transaction — <code>build</code>/<code>simulate</code>/<code>send</code>/<code>receipt</code> via <code>walletctl</code>. Independently re-validates every transaction against its own allowlist regardless of what <code>veydrift-agent</code> already checked (§2); never decides <em>what</em> to do, only signs and sends what it's given.</p>
+  <p><strong>How it's triggered.</strong> As an installed skill, <code>SKILL.md</code>'s frontmatter routes to it on "sign this," "send the tx," <code>walletctl</code>, wallet/provider status checks, ABI-pin verification, or fleet-mission encoding. Standalone: <code>npx tsx src/cli.ts &lt;subcommand&gt;</code> from the skill's own directory.</p>
+  <p><strong>References, loaded on demand.</strong> <code>providers.md</code> (provider selection, the address-binding constraint), <code>tx-safety.md</code> (allowlist checks, the <code>--confirm</code> invariant), <code>abi-pinning.md</code> (pin provenance, the rebuild recipe), <code>fork-testing.md</code> (exercising tier≥2 sends against a local Anvil fork; <code>AGENTS.md</code> §10's fork-round history).</p>
+  <h3>Module by module</h3>
   <div class="module-row"><div class="module-name">abi.ts</div><div class="module-lines">225</div><div class="module-desc">Loads the pinned ABI, resolves a function by <strong>full canonical signature</strong> — never a bare name, since <code>launchFleetMission</code> is overloaded on the deployed contract.</div></div>
-  <div class="module-row"><div class="module-name">allowlist.ts</div><div class="module-lines">214</div><div class="module-desc"><code>checkAllowlist</code> — five checks, always all five evaluated: live destination, tier-scoped selector, <code>value==0</code>, <code>chainId==8453</code>, and at <code>operator</code>, the mission-type argument decoded from calldata.</div></div>
-  <div class="module-row"><div class="module-name">tx.ts</div><div class="module-lines">400</div><div class="module-desc"><code>build</code>/<code>simulate</code>/<code>send</code>/<code>receipt</code>. Emits <code>estimatedCostWei</code> (gas units × live fee), not a bare gas-unit number — §10. <code>receipt</code> reports real <code>status</code>, never synthesized.</div></div>
-  <div class="module-row"><div class="module-name">fleet.ts</div><div class="module-lines">147</div><div class="module-desc"><code>shipCountsToFleetTuple()</code> — the one function permitted to build the 14-slot fleet-mission tuple. §9.</div></div>
+  <div class="module-row"><div class="module-name">allowlist.ts</div><div class="module-lines">250</div><div class="module-desc"><code>checkAllowlist</code> — five checks, always all five evaluated: live destination, tier-scoped selector, <code>value==0</code>, <code>chainId==8453</code>, and at <code>operator</code>, the mission-type argument decoded from calldata.</div></div>
+  <div class="module-row"><div class="module-name">tx.ts</div><div class="module-lines">400</div><div class="module-desc"><code>build</code>/<code>simulate</code>/<code>send</code>/<code>receipt</code>. Emits <code>estimatedCostWei</code> (gas units × live fee), not a bare gas-unit number — <code>AGENTS.md</code> §5's unit-mismatch invariant. <code>receipt</code> reports real <code>status</code>, never synthesized.</div></div>
+  <div class="module-row"><div class="module-name">fleet.ts</div><div class="module-lines">147</div><div class="module-desc"><code>shipCountsToFleetTuple()</code> — the one function permitted to build the 14-slot fleet-mission tuple. <code>AGENTS.md</code> §7.</div></div>
   <div class="module-row"><div class="module-name">policy.ts</div><div class="module-lines">116</div><div class="module-desc">Reads <code>tier</code> from <code>$VEYDRIFT_HOME/policy.json</code> rather than a caller flag; refuses on disagreement or a malformed file.</div></div>
   <div class="module-row"><div class="module-name">cli.ts</div><div class="module-lines">329</div><div class="module-desc">The <code>walletctl</code> surface. <code>send</code> without <code>--confirm</code> always exits non-zero — same code path as a real send, short-circuited right before <code>signAndSend</code>.</div></div>
   <div class="module-row"><div class="module-name">providers/keystore.ts</div><div class="module-lines">113</div><div class="module-desc">Default. Encrypted EIP-2335/geth JSON, decrypted via <code>ethers</code> — the one place <code>ethers</code> earns its slot in an otherwise-<code>viem</code> codebase.</div></div>
   <div class="module-row"><div class="module-name">providers/envkey.ts</div><div class="module-lines">152</div><div class="module-desc">Testing-only. Raw <code>VEYDRIFT_PRIVATE_KEY</code>, loud warning, a best-effort repo-leak check.</div></div>
+  <div class="module-row"><div class="module-name">providers/fork-impersonate.ts</div><div class="module-lines">132</div><div class="module-desc">Runs the exact production <code>sendTx</code> → <code>signAndSend</code> path against a local Anvil fork with an impersonated account instead of a held key, gated by a loopback guard inert outside a fork. See <code>references/fork-testing.md</code>.</div></div>
 </section>
 
 <section class="chapter" id="t7" data-num="07" data-label="A tick, end to end">
@@ -481,6 +457,10 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
     <p class="diagram-caption">tier 1 always exits step 7 without sending — the tier gate BLOCKs before ALLOW is ever true</p>
   </div>
 
+  <div class="callout note">
+    <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div><strong class="callout-title">"Rung" and "Phase" are two different axes</strong><p>A <em>rung</em> (<code>0</code>-<code>9</code>, <code>8b</code>, <code>8c</code>) is a position in the per-tick decision ladder below — a runtime concept <code>plan.py</code>/<code>candidates.py</code> actually check against, in order, every tick. A <em>Phase</em> (1 through 5c) is a development-time milestone from this project's build history — when a capability was added, cited for traceability, not something the running code has any notion of. The two don't map one-to-one: Phase 3 changed rungs 5-9's entity logic without adding a new rung; Phase 4 added rung <code>8b</code>; Phase 5c added rung <code>8c</code>. Reading the running code, only rung numbers matter.</p></div>
+  </div>
   <p>The decision ladder inside step 5, first match wins. Rungs 0-4 are vetoes; rungs 5-9 are a four-band candidate pipeline (<code>candidates.py</code>, added in Phase 2 of the general-strategy-engine program, extended to a fourth band by Phase 4 — see §5):</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>plan.py + candidates.py — decision ladder</span></div>
@@ -517,7 +497,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   <p>The winning <code>Action</code> also carries <code>alternatives</code> — the runner-up candidates from the same pass, ranked, each with a <code>why_not</code> (a payback-hours comparison, or a lock reason from <code>techtree.describe()</code>). Purely informational: never an ROI verdict, never read by <code>guard.py</code> or any <code>Decision</code> logic.</p>
   <div class="callout note">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-    <div><strong class="callout-title">Phase 3 — every planet-local entity reachable</strong><p>Before this change the planner could only ever propose 13 of the 51 entities <code>ids.py</code> knows. <code>policy.strategy</code> grows four target-declaration fields (<code>ship_targets</code>, <code>defense_targets</code>, <code>research_priority</code>, <code>building_priority</code>, all defaulting to <code>[]</code>) that drive the rest without inventing a doctrine: the engine computes what's legal (<code>techtree.unmet()</code>), affordable (<code>guard.py</code>, unchanged) and economically comparable (<code>score_payback</code>); the policy declares intent for everything else. <code>[]</code> on all four is this phase's own acceptance criterion — byte-identical output to Phase 2, pinned directly in <code>tests/test_candidates.py</code>/<code>tests/test_plan.py</code> and by every pre-Phase-3 test passing unmodified.</p></div>
+    <div><strong class="callout-title">Phase 3 — most planet-local entities reachable</strong><p>Before this change the planner could only ever propose 13 of the entities <code>ids.py</code> knows. <code>policy.strategy</code> grows four target-declaration fields (<code>ship_targets</code>, <code>defense_targets</code>, <code>research_priority</code>, <code>building_priority</code>, all defaulting to <code>[]</code>) that drive the rest without inventing a doctrine: the engine computes what's legal (<code>techtree.unmet()</code>), affordable (<code>guard.py</code>, unchanged) and economically comparable (<code>score_payback</code>); the policy declares intent for everything else. <code>[]</code> on all four is this phase's own acceptance criterion — byte-identical output to Phase 2, pinned directly in <code>tests/test_candidates.py</code>/<code>tests/test_plan.py</code> and by every pre-Phase-3 test passing unmodified. <strong>Checked directly against <code>ids.py</code>: 55 of 57 entities are reachable</strong> — all 15 technologies, all 16 ships, all 10 defenses, and 14 of 16 buildings. The two exceptions: Alliance Depot (alliances are a non-goal, §3) and Rift Stabilizer (mechanics unpublished, hard-capped at level 1, no generator wired) — see <code>docs/COVERAGE.md</code>.</p></div>
   </div>
   <div class="callout note">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
@@ -532,7 +512,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
 
 <section class="chapter" id="t8" data-num="08" data-label="The two enforcement layers">
   <div class="chapter-head"><span class="chapter-num">08</span><h2 class="chapter-title">The two independent enforcement layers</h2></div>
-  <p><code>guard.py</code>'s <code>_MIN_TIER_FOR_FUNCTION</code> (Python) and <code>allowlist.ts</code>'s <code>ECONOMY_SIGNATURES</code> / <code>LAUNCH_FLEET_MISSION_SIGNATURES</code> (TypeScript) encode the <strong>same</strong> tier policy in two languages, on purpose — the wallet engine re-checks independently of whatever the agent already validated, so a compromised agent can't talk its way past the allowlist by lying about the tier. They drifted once: <code>startShipProduction</code> was granted to the <code>economy</code> tier's <em>table</em> in the spec while <code>allowlist.ts</code> and the original <code>guard.py</code> map both still excluded it — Correction 1 in §3 — and nothing caught the mismatch for a while.</p>
+  <p><code>guard.py</code>'s <code>_MIN_TIER_FOR_FUNCTION</code> (Python) and <code>allowlist.ts</code>'s <code>ECONOMY_SIGNATURES</code> / <code>LAUNCH_FLEET_MISSION_SIGNATURES</code> (TypeScript) encode the <strong>same</strong> tier policy in two languages, on purpose — the wallet engine re-checks independently of whatever the agent already validated, so a compromised agent can't talk its way past the allowlist by lying about the tier. They drifted once: <code>startShipProduction</code> was granted to the <code>economy</code> tier's <em>table</em> in the spec while <code>allowlist.ts</code> and the original <code>guard.py</code> map both still excluded it, and nothing caught the mismatch for a while.</p>
   <p>The fix wasn't just adding the missing entry — it was adding a test that <strong>parses <code>allowlist.ts</code> directly</strong> (regex over the <code>const ECONOMY_SIGNATURES = [...]</code> block) and diffs the resulting set against <code>guard.py</code>'s own map, failing with the exact names on each side if they ever disagree again.</p>
   <div class="callout warn">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
@@ -540,72 +520,35 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   </div>
 </section>
 
-<section class="chapter" id="t9" data-num="09" data-label="Silent-corruption traps">
-  <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">Silent-corruption traps</h2></div>
-  <p>Two things about the deployed contract produce a <em>wrong transaction</em>, not an error, if you get them wrong — expensive precisely because nothing crashes.</p>
-
-  <h3>The 14-slot fleet tuple is not the 16-entry <code>Ship</code> enum</h3>
-  <p>Every fleet entrypoint takes a fixed <code>(uint32 × 14)</code> tuple, but <code>SolarSatellite</code> (id 9) and <code>Crawler</code> (id 15) can't fly and have no slot — every flyable ship id from 10 upward is shifted down one tuple index. A Destroyer, Ship id 10, lands at tuple index <strong>9</strong>, not 10. <code>shipCountsToFleetTuple()</code> is the <em>only</em> function permitted to build this tuple; the test pins a Destroyer at index 9 specifically, and the function throws on a non-flyable ship input even at count zero.</p>
-
-  <h3><code>launchFleetMission</code> is overloaded</h3>
-  <p>A 7-arg and a 6-arg form both exist on the deployed ABI simultaneously. Selecting by bare function name is genuinely ambiguous to both <code>viem</code> and <code>ethers</code> — <code>resolveFunctionAbi()</code> requires the full canonical signature string everywhere in this codebase, never a name lookup.</p>
-
-  <h3>Six functions that look like writes but aren't</h3>
-  <p><code>protectedResources</code>, <code>raidableResources</code>, <code>maxRaidLoot</code>, <code>debrisField</code>, <code>collectResources</code>, <code>attackProtectionStatus</code> are declared <code>nonpayable</code> — no <code>view</code>/<code>pure</code> modifier — because they lazily settle state before returning, not because they're meant to be sent as transactions. <code>walletctl send</code> refuses all six unconditionally, at every tier, even with <code>--confirm</code>; the correct path is <code>simulate</code>, or you pay real gas for what is semantically a read.</p>
-</section>
-
-<section class="chapter" id="t10" data-num="10" data-label="How this was built">
-  <div class="chapter-head"><span class="chapter-num">10</span><h2 class="chapter-title">How this was built, and what that explains</h2></div>
-  <p>This repo was built by a multi-agent pipeline: a planning pass wrote <code>docs/SPEC.md</code>, parallel Sonnet-model builder agents implemented independent work packages against that frozen spec, and Fable-model judge passes adversarially reviewed the result twice. That history is directly visible in the code.</p>
-
-  <h3>Two real defects survived 316 passing tests</h3>
-  <p>Both living exactly at the seam between the two languages — the place neither side's own test suite could see:</p>
-
-  <div class="defect-card">
-    <div class="defect-head"><span class="defect-lang ts">TS</span><span class="defect-title">Gas units compared against a wei ceiling</span></div>
-    <div class="defect-body">
-      <code>walletctl build</code> emitted <code>estimateGas</code>'s result — <strong>gas units</strong> — and <code>tick.py</code> compared it directly against <code>gas_per_tx_wei</code> — a <strong>wei</strong> ceiling. A typical Base transaction is ~10⁵ gas units against a 3×10¹⁵ wei ceiling: the gate could never fire, at any gas price.
-      <div class="defect-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></div>
-      <strong>Fixed:</strong> <code>build</code> now emits <code>estimatedCostWei</code> (gas units × live <code>maxFeePerGas</code>) as a decimal string, <code>null</code> rather than a substituted zero on a failed fee fetch, plus a dedicated unit-boundary regression test.
-    </div>
-  </div>
-
-  <div class="defect-card">
-    <div class="defect-head"><span class="defect-lang py">PY</span><span class="defect-title">Reverted transactions logged as successes</span></div>
-    <div class="defect-body">
-      <code>tick.py</code> never read <code>receipt.status</code>. A reverted transaction was logged to <code>actions.jsonl</code> — the "executed only" audit trail — as a success, and <code>AgentState.record_revert</code> was called by no production code at all, so the <code>revert_streak</code> gate could never fire.
-      <div class="defect-arrow"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg></div>
-      <strong>Fixed:</strong> <code>receipt</code> reports the real <code>status</code>; <code>tick.py</code> charges <code>actualCostWei</code> and calls <code>record_revert</code> on a revert; an unfetchable status is treated as unknown, never success.
-    </div>
-  </div>
-
-  <p>The second judge pass found the residual gap after the first round of fixes: the <code>allow_ships</code> policy flag was enforced on one path that could emit a ship-production action but not another — a hot planet's energy-first branch could still propose a Solar Satellite regardless of the flag. Same defect <em>class</em> as the tier-map drift in §8: two things that needed to agree, and nothing forced them to.</p>
+<section class="chapter" id="t9" data-num="09" data-label="How this was built">
+  <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">How this was built, and what that explains</h2></div>
+  <p>This repo was built by a multi-agent pipeline: a planning pass wrote <code>docs/SPEC.md</code>, parallel Sonnet-model builder agents implemented independent work packages against that frozen spec, and Fable-model judge passes adversarially reviewed the result twice — see <code>AGENTS.md</code> §9 for the workflow itself. That history is directly visible in the code, worth knowing before you assume something is either over-engineered or under-tested.</p>
 
   <div class="callout warn">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
-    <div><strong class="callout-title">The transferable lesson</strong><p>A config flag or an enforcement rule that's checked in one place and emitted from two is exactly where the next bug is likely to live. If you add a second path that can produce the same kind of <code>Action</code> an existing gate already checks, verify the gate actually covers the new path.</p></div>
+    <div><strong class="callout-title">The transferable lesson</strong><p>A config flag or an enforcement rule that's checked in one place and emitted from two is exactly where the next bug is likely to live — the same defect class §8's tier-map drift is, and the same class a hot-planet <code>allow_ships</code> gap turned out to be later (two things that needed to agree, and nothing forced them to, until a test was added that parses both sides). If you add a second path that can produce the same kind of <code>Action</code> an existing gate already checks, verify the gate actually covers the new path.</p></div>
   </div>
 </section>
 
-<section class="chapter" id="t11" data-num="11" data-label="Tested vs. unverified">
-  <div class="chapter-head"><span class="chapter-num">11</span><h2 class="chapter-title">What's tested, fixture-only, and genuinely unverified</h2></div>
+<section class="chapter" id="t10" data-num="10" data-label="Tested vs. unverified">
+  <div class="chapter-head"><span class="chapter-num">10</span><h2 class="chapter-title">What's tested, fixture-only, and genuinely unverified</h2></div>
   <p>Precision matters more here than a clean "it's tested" claim would suggest.</p>
   <ul>
-    <li><strong>257 Python + 104 TypeScript = 361 tests, all passing.</strong> They cover a system with two enforcement layers that must agree (§8); neither suite alone would catch a drift between them.</li>
+    <li><strong>518 Python + 123 TypeScript = 641 tests, all passing</strong> (the TypeScript figure includes 2 fork-only tests, skipped outside a live Anvil fork). They cover a system with two enforcement layers that must agree (§8); neither suite alone would catch a drift between them.</li>
     <li><strong>The read → plan → guard pipeline is exercised against the live API</strong> — <code>vd calc verify</code> re-runs three independent duration formulas against the real backend and confirms <code>universe_speed == 1</code> still holds.</li>
-    <li><strong><code>tick.py</code>'s tier-2+ send path has real, substantive test coverage</strong> — mocked at the <code>walletctl</code> subprocess boundary, asserting on execution counts, revert counts, the gas ledger, and log contents. <strong>It has never run against an actual chain.</strong> The first real run of the full <code>build → simulate → send → await receipt → await indexed</code> sequence will be someone's actual tier-2 promotion.</li>
-    <li><strong>Cost scaling, queue behavior under load, and lazy settlement above level 0 are unobserved</strong> — not undertested, <em>unobserved</em>. The reference account has taken zero on-chain actions: every level is 0, every queue is idle.</li>
+    <li><strong>No per-building cost-scaling factor has been observed or verified by this codebase at any level.</strong> Live cost always comes from the API's own <code>cost</code> field by design — this is about the unpublished scaling <em>formula</em> specifically. Queue behaviour and lazy settlement above level 0 <em>have</em> since been observed — both via a local Anvil fork exercising all 7 allowlisted selectors (<code>AGENTS.md</code> §10) and via real transactions this codebase has since submitted to mainnet itself, at tier 2/3 (<code>README.md</code>'s Status section).</li>
     <li><strong><code>walletctl</code>'s tier check defends against a misconfigured caller, not a hostile one.</strong> It falls back to a caller-supplied <code>--tier</code> when no policy file exists — a process that controls its own environment can point <code>VEYDRIFT_HOME</code> at an empty directory and assert any tier. Documented, not fixed — the fallback is legitimately needed for standalone use.</li>
   </ul>
 </section>
 
-<section class="chapter" id="t12" data-num="12" data-label="Documentation map">
-  <div class="chapter-head"><span class="chapter-num">12</span><h2 class="chapter-title">Documentation map</h2></div>
+<section class="chapter" id="t11" data-num="11" data-label="Documentation map">
+  <div class="chapter-head"><span class="chapter-num">11</span><h2 class="chapter-title">Documentation map</h2></div>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Question</th><th>Where</th></tr></thead>
       <tbody>
         <tr><td>Full spec, acceptance criteria, work-package breakdown</td><td><code>docs/SPEC.md</code></td></tr>
+        <tr><td>Standing coverage ledger — every pinned-ABI write entrypoint, regenerated against the ABI</td><td><code>docs/COVERAGE.md</code></td></tr>
         <tr><td>Contract/backend-derived corrections to earlier research</td><td><code>docs/RESEARCH-ADDENDUM.md</code></td></tr>
         <tr><td>Every wallet-provider candidate evaluated</td><td><code>docs/wallet-provider-research.md</code></td></tr>
         <tr><td>Build/test commands, invariants, known gaps</td><td><code>AGENTS.md</code></td></tr>
@@ -622,8 +565,8 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   </div>
 </section>
 
-<section class="chapter" id="t13" data-num="13" data-label="Extending this system">
-  <div class="chapter-head"><span class="chapter-num">13</span><h2 class="chapter-title">Extending this system</h2></div>
+<section class="chapter" id="t12" data-num="12" data-label="Extending this system">
+  <div class="chapter-head"><span class="chapter-num">12</span><h2 class="chapter-title">Extending this system</h2></div>
   <h3>Adding a new guardrail gate</h3>
   <p>Belongs in <code>guard.py</code>, following the pattern every existing gate follows — return a <code>GuardVerdict</code>, resolve missing data toward <code>BLOCK</code>/<code>ESCALATE</code> rather than <code>PASS</code>, and add both a happy-path and a missing-data test.</p>
   <h3>Adding a new tier-gated action</h3>
@@ -645,8 +588,8 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   var items = [
     ['02','Why two skills'], ['03','The spec, reviewed'], ['04','Repo architecture'],
     ['05','agent modules'], ['06','wallet modules'], ['07','A tick, end to end'],
-    ['08','Two enforcement layers'], ['09','Silent-corruption traps'], ['10','How this was built'],
-    ['11','Tested vs. unverified'], ['12','Documentation map'], ['13','Extending this system']
+    ['08','Two enforcement layers'], ['09','How this was built'],
+    ['10','Tested vs. unverified'], ['11','Documentation map'], ['12','Extending this system']
   ];
   items.forEach(function(it){
     var a = document.createElement('a');

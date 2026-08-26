@@ -20,11 +20,10 @@ document simplifies, the primary source (`docs/SPEC.md`, `AGENTS.md`, a specific
 6. [`veydrift-wallet`, module by module](#6-veydrift-wallet-module-by-module)
 7. [A tick, end to end](#7-a-tick-end-to-end)
 8. [The two independent enforcement layers](#8-the-two-independent-enforcement-layers)
-9. [Silent-corruption traps (and how each is closed)](#9-silent-corruption-traps-and-how-each-is-closed)
-10. [How this was built, and what that explains about the code](#10-how-this-was-built-and-what-that-explains-about-the-code)
-11. [What's tested, what's fixture-only, what's genuinely unverified](#11-whats-tested-whats-fixture-only-whats-genuinely-unverified)
-12. [Documentation map](#12-documentation-map)
-13. [Extending this system](#13-extending-this-system)
+9. [How this was built, and what that explains about the code](#9-how-this-was-built-and-what-that-explains-about-the-code)
+10. [What's tested, what's fixture-only, what's genuinely unverified](#10-whats-tested-whats-fixture-only-whats-genuinely-unverified)
+11. [Documentation map](#11-documentation-map)
+12. [Extending this system](#12-extending-this-system)
 
 ---
 
@@ -35,19 +34,20 @@ proposes at most one action per tick — a typed `Action`, never signed bytes. A
 separate program builds the actual transaction for that action, checks it against its own
 independent allowlist regardless of what the first program already validated, and only
 submits it if a human (or a tier-2+ policy that a human explicitly configured) types an
-exact confirmation flag. A three-tier policy field, edited by hand, is the only thing that
-ever lets more of that pipeline run for real. Nothing has ever submitted a transaction from
-this codebase to Veydrift.
+exact confirmation flag. A three-tier policy field — `advisor` (propose only), `economy`
+(also executes building/research/defense/ship actions), `operator` (also executes fleet
+logistics) — edited by hand, is the only thing that ever lets more of that pipeline run
+for real.
 
 ## 2. Why two skills, not one
 
 This isn't an accident of packaging — it's the load-bearing design decision, and almost
 every other choice in the repo follows from it.
 
-`veydrift-agent` is Python, reads an HTTP API, and **never imports a signing library** —
-`grep -rn "viem\|ethers\|web3\|eth_account" skills/veydrift-agent/src/` returning nothing
-is an actual, checked invariant (`AGENTS.md` §5), not a description. `veydrift-wallet` is
-TypeScript, is the only thing that ever calls `signAndSend`, and independently re-derives
+`veydrift-agent` is a skill with scripts written in Python that reads an HTTP API and
+**never imports a signing library** — this is an actual, checked invariant (`AGENTS.md`
+§5), not a description. `veydrift-wallet` is a skill with scripts written in TypeScript
+that is the only thing that ever calls `signAndSend`, and independently re-derives
 its own allowlist from a live `/runtime-config` fetch and the pinned ABI — it does not
 trust anything the agent skill already checked. A fully compromised `veydrift-agent` can
 construct any `Action` it wants and hand it to `walletctl build`/`simulate` freely; it
@@ -63,7 +63,7 @@ happened once, and the test that now catches it.
 
 ## 3. The spec, reviewed
 
-The full spec is [`SPEC.md`](SPEC.md) (620+ lines as of this writing, v2.1). Read that
+The full spec is [`SPEC.md`](SPEC.md) (1,500+ lines as of this writing, v2.1). Read that
 document for the acceptance criteria and work-package breakdown; this section is what
 matters for understanding the *shape* of the result.
 
@@ -82,24 +82,6 @@ migration, referrals, NFT burns, the ERC-20 market bridge, and any raid-profitab
 model — `protectedResources`' actual semantics are unconfirmed, so nothing here builds
 loot logic on it. Read `docs/RESEARCH-ADDENDUM.md` §6 before assuming otherwise.
 
-**The spec was wrong at least three times, and says so inline rather than being silently
-rewritten.** Worth reading these corrections specifically, because each one describes a
-real defect that shipped and was later caught:
-
-- §4's original tier table never allocated `startShipProduction` to any tier, while the
-  planner could propose it — a config knob (`allow_ships`) that could never actually work.
-- §5.9's worked pretty-print example showed `guards: 16/16 pass` at tier 1, which is
-  impossible — the tier gate must fail at tier 1 by definition. Left uncorrected, every
-  tier-1 proposal would report `decision=block` and drown the promotion-evidence signal
-  `--readiness` exists to surface.
-- §6.4 never said where `walletctl` should read the tier it enforces from — the
-  implementation took it from the caller, which is exactly the actor the check exists to
-  defend against.
-
-Each is dated and marked as a **correction**, not deleted and rewritten as if it were
-always correct. If you're auditing this codebase, that inline history is worth reading —
-it's a record of what a reviewer should specifically re-check in code that looks similar.
-
 ## 4. Repository architecture
 
 ```
@@ -107,18 +89,19 @@ skills/
 ├── veydrift-agent/            Python (uv). Reads, calculates, plans. Never signs.
 │   ├── SKILL.md                progressive-disclosure entry point
 │   ├── pyproject.toml, uv.lock
-│   ├── src/veydrift_agent/     9 modules, ~5,700 lines — see §5
+│   ├── src/veydrift_agent/     14 modules, ~10,350 lines — see §5
 │   ├── schemas/                policy.schema.json, action.schema.json — GENERATED, don't hand-edit
-│   ├── references/             10 files, ~2,700 lines, loaded on demand — see §12
+│   ├── references/             7 files, ~2,700 lines, loaded on demand — see §11
 │   ├── assets/                 policy.example.json, launchd plist template
-│   └── tests/                  257 tests
+│   └── tests/                  518 tests
 └── veydrift-wallet/            TypeScript (npm). Signs. Nothing else does.
     ├── SKILL.md
     ├── package.json, tsconfig.json
-    ├── abi/                     pinned ABI + provenance — see §6, §9
-    ├── src/                     10 modules, ~1,800 lines — see §6
-    ├── references/              3 files, ~480 lines
-    └── tests/                   104 tests
+    ├── abi/                     pinned ABI + provenance — see §6; write-path traps: AGENTS.md §7
+    ├── scripts/                 gen-keystore.mjs — interactive keystore creation (npm run wallet:new)
+    ├── src/                     11 modules, ~1,970 lines — see §6
+    ├── references/              4 files, ~1,300 lines
+    └── tests/                   123 tests (121 passed + 2 fork-only, skipped outside a live Anvil fork)
 ```
 
 Both trees are self-contained on purpose: `npx skills add` copies only `skills/<name>/`
@@ -140,35 +123,81 @@ verification.
 
 ## 5. `veydrift-agent`, module by module
 
+**What it does.** Reads Veydrift's public game API, runs the deterministic calculators in
+`calc.py` against it, and proposes at most one `Action` per tick through the decision
+ladder below (§7) — it never signs or submits anything itself; that's `veydrift-wallet`'s
+job exclusively (§2).
+
+**How it's triggered.** As an installed Claude/Hermes skill, `SKILL.md`'s frontmatter
+routes to it on a Veydrift planet id/coordinate, "what should I build next," "run a tick,"
+"check my queues/energy/resources," or the tier/guardrail/promotion vocabulary — see
+`SKILL.md`'s own `description` for the exact trigger phrases. Standalone, it's a single
+entrypoint: `uv run --directory <path-to-this-skill> vd <subcommand>`; run `vd doctor`
+first to confirm which subcommands are wired in the copy you're running against.
+
+**References, loaded on demand.** `SKILL.md` stays deliberately thin and routes to
+`references/` only when a question needs it: `api-routes.md` (route table, health-gating
+rules), `formulas.md` (every `calc.py` formula's derivation), `entity-ids.md` (id↔name
+tables, the fleet-tuple index shift), `strategy-playbook.md` (why the planner proposed
+*this specific* action, worked cold/hot-planet examples), `contract-writes.md` (which
+`Action.function` maps to which deployed entrypoint, and its traps), `guardrails.md`
+(every gate, gate-by-gate, current wiring status), `scheduling.md` (driving `vd tick`
+under Claude Code, Hermes, or bare `launchd`).
+
+### Module by module
+
 | Module | Lines | Role |
 | --- | --: | --- |
-| `models.py` | 332 | **Frozen.** Every pydantic model — `Policy`, `Action`, `Snapshot`, `GuardReport`, `UnsignedTx` — is the on-disk JSON shape for `policy.json`, both log files, and the generated schemas. Treat a field rename here as a breaking change to every log line ever written. |
+| `models.py` | 546 | **Frozen.** Every pydantic model — `Policy`, `Action`, `Snapshot`, `GuardReport`, `UnsignedTx` — is the on-disk JSON shape for `policy.json`, both log files, and the generated schemas. Treat a field rename here as a breaking change to every log line ever written. |
 | `cli.py` | 59 | **Frozen.** Mounts each module's `app: typer.Typer` with tolerant imports — a half-built tree still runs the parts that exist. Add a new module to `_SUBAPPS`, never wire a subcommand elsewhere. |
 | `ids.py` | 362 | The six canonical contract enums (Building/Technology/Ship/Defense/FleetMissionType/Resource), transcribed directly from the deployed contract source, not from Veydrift's own docs (which get two of them wrong). |
 | `http.py` | 199 | The API client: `httpx`, `tenacity` retry (5xx/network only, never 4xx), a disk cache under `$VEYDRIFT_HOME/cache/` honoring per-route max-age. |
-| `read.py` | 830 | One `vd read` subcommand per API route (18 targets). `--summary` mode is the default and is capped near 2KB; `battle-reports`/`highscores` refuse to print to stdout at all — `--out` is mandatory, since they run 60KB–2.2MB uncompressed. |
-| `calc.py` | 737 | Pure formulas, no network calls, one docstring citation per function. Contains **no cost-scaling function** by design — live cost always comes from the API's own `cost` field, since the per-building factors are unpublished rationals and recomputing them is exactly how affordability checks go wrong silently. |
-| `plan.py` | ~320 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's four-band precedence calling into `candidates.py`. As of Phase 2 (the general-strategy-engine program) it no longer decides *which entity*; that moved out. Phase 4 adds rung `8b`, the ladder's fourth and final band. A later addition adds veto rung `1b` — `gameMaintenance.paused` from `/health`, ESCALATE (or NO-OP, `escalation.on_game_paused`) before any candidate pipeline runs. |
-| `candidates.py` | ~2000 | New in Phase 2, roughly doubled in Phase 3, gained a fifth family in Phase 4 and a sixth in Phase 5c (all general-strategy-engine program). The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`, Phase 3's `infrastructure` and `crawler`, Phase 4's `unlock`, Phase 5c's `logistics`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order when nothing new is configured. The energy-first invariant lives here: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. Phase 3 adds declared-target stock-keeping for ships/defenses (`ship_targets`/`defense_targets`), priority ordering for research/infrastructure (`research_priority`/`building_priority`), and two new scored/unscored families (Crawler, proactive storage) — every one of the four new `StrategyCfg` fields defaults empty and reproduces Phase 2's output exactly when left unset. **Correction (judge finding 4):** that "reproduces exactly" claim was false for Crawler specifically — `generate_crawler_candidates` was gated only on `allow_ships`, so an unlocked, scoreable Crawler could still outrank Solar Satellite in `select_shipyard_candidate`'s ranking with every `StrategyCfg` field at its default. Fixed with a fifth `StrategyCfg` field, `enable_crawler` (default `false`): the scored Crawler family now returns `[]` unless explicitly opted into, restoring the "nothing new configured → Phase 2 behaviour" property. `ship_targets` naming `"Crawler"` explicitly is unaffected — that's a separate, always-unscored stock-keeping path (`generate_ship_target_candidates`), not gated by `enable_crawler`. Phase 4 adds `generate_unlock_chain_candidates`/`select_unlock_chain_candidate`, `score=None` always, driven by `techtree.next_step_toward` rather than any new policy field. Phase 5c adds `generate_transport_candidates`/`generate_harvest_candidates`/`select_logistics_candidate` — non-combat `launchFleetMission` proposals, gated on `policy.actions.allow_fleet_noncombat` (default `false`), using a new `calc.py` ship-movement-stats layer (`SHIP_CARGO_CAPACITY`, `ship_fuel_consumption`, `ship_speed`). **Fix:** `select_building_candidate`'s winner (mine/energy, or a declared `building_priority` target) could have a cost exceeding the planet's *current* storage cap for a resource it needed — not "not affordable yet" (`guard.py`'s `_gate_affordability` BLOCKs that at execution time) but "not affordable ever" until storage is raised. `generate_proactive_storage_candidates` existed for this but, by design, could never outrank a scored winner — so the ladder kept re-proposing a pick guard.py would BLOCK forever. New `_exceeds_storage_cap`/`_resolve_storage_precondition` helpers make this a hard precondition on every tentative winner, mirroring the energy-first filter: substitute the matching storage candidate, or fall through to the next candidate if none is available. |
-| `techtree.py` | ~640 | On-chain prerequisite table for all four entity families, transcribed from the deployed contract (Phase 1). `unmet()` is the fail-closed core every other module's legality checks build on (`plan.py`/`candidates.py` never propose a locked entity; `guard.py`'s `prerequisites` gate independently re-checks). Phase 4 adds `next_step_toward` — a breadth-first walk of `unmet()`'s own output, backwards, to find the shallowest currently-buildable prerequisite toward a locked target; no cost math, same "compare levels only" discipline as `unmet()`. Also adds `unlock_breadth` — the forward mirror of that walk, one hop only: how many other entities would have a requirement drop out of their own `unmet()` if this one's level were +1, re-derived by re-calling `unmet()` rather than a hand-built reverse index. Feeds `candidates.py`'s `_infrastructure_priority_order`/`_research_priority_order` fallback ranking; a structural fact, never a value judgement, so it stays clear of `calc.py`'s cost-scaling ban and `candidates.py`'s "no ROI verdict" refusal. |
-| `guard.py` | ~800 | **19** guardrail gates (17 through Phase 4; Phase 5c added `mission_type` — a default-deny check on `launchFleetMission`'s mission type, independent of `tier`; a later addition added `game_paused` — the second, independent line of defense behind rung `1b`, BLOCKing unconditionally on a confirmed `gameMaintenance.paused`, fail-closed on missing data), every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. **Fix:** `health` gains a narrow exception, `Snapshot.combat_only_degradation()` — `/health`'s `ok:false` caused *solely* by a combat-only `randomnessReadiness` degradation (positively confirmed, everything else on the snapshot fine) now PASSes instead of BLOCKing, since combat is unconditionally unreachable in this codebase regardless of policy. Confirmed live and persistent, served via HTTP 503 — `read._fetch_or_exit()` now defensively recovers a parseable `/health` 5xx body (narrowly scoped to that one route) instead of hard-aborting before this check could ever run. |
-| `state.py` | 287 | `$VEYDRIFT_HOME` resolution, `AgentState` (pending txs, cumulative gas, revert counts), the tick lockfile, `KILLSWITCH` detection. |
-| `tick.py` | 978 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`. The single largest module, and where both criticals a first-pass judge review found actually lived (§10, §11). |
-| `log.py` | 377 | Four log sinks, secret scrubbing (`0x[0-9a-fA-F]{64}` patterns that aren't a known tx hash never get written), the pretty-report renderer, `--digest`. |
+| `read.py` | 1041 | One `vd read` subcommand per API route (18 targets). `--summary` mode is the default and is capped near 2KB; `battle-reports`/`highscores` refuse to print to stdout at all — `--out` is mandatory, since they run 60KB–2.2MB uncompressed. |
+| `fmt.py` | 242 | Rich-based summary rendering behind `read.py`'s `--summary` output — the module that actually enforces `snapshot`'s <=2KB budget, self-truncating if a render ever overruns it. Every other target gets a best-effort compact rendering with no byte budget. |
+| `calc.py` | 897 | Pure formulas, no network calls, one docstring citation per function. Contains **no cost-scaling function** by design — live cost always comes from the API's own `cost` field, since the per-building factors are unpublished rationals and recomputing them is exactly how affordability checks go wrong silently. |
+| `plan.py` | ~370 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's four-band precedence calling into `candidates.py`. As of Phase 2 (the general-strategy-engine program) it no longer decides *which entity*; that moved out. Phase 4 adds rung `8b`, the ladder's fourth and final band. A later addition adds veto rung `1b` — `gameMaintenance.paused` from `/health`, ESCALATE (or NO-OP, `escalation.on_game_paused`) before any candidate pipeline runs. |
+| `candidates.py` | ~2270 | New in Phase 2, roughly doubled in Phase 3, gained a fifth family in Phase 4 and a sixth in Phase 5c (all general-strategy-engine program). The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`, Phase 3's `infrastructure` and `crawler`, Phase 4's `unlock`, Phase 5c's `logistics`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order when nothing new is configured. The energy-first invariant lives here: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. Phase 3 adds declared-target stock-keeping for ships/defenses (`ship_targets`/`defense_targets`), priority ordering for research/infrastructure (`research_priority`/`building_priority`), and two new scored/unscored families (Crawler, proactive storage) — every one of the four new `StrategyCfg` fields defaults empty and reproduces Phase 2's output exactly when left unset. **Correction (judge finding 4):** that "reproduces exactly" claim was false for Crawler specifically — `generate_crawler_candidates` was gated only on `allow_ships`, so an unlocked, scoreable Crawler could still outrank Solar Satellite in `select_shipyard_candidate`'s ranking with every `StrategyCfg` field at its default. Fixed with a fifth `StrategyCfg` field, `enable_crawler` (default `false`): the scored Crawler family now returns `[]` unless explicitly opted into, restoring the "nothing new configured → Phase 2 behaviour" property. `ship_targets` naming `"Crawler"` explicitly is unaffected — that's a separate, always-unscored stock-keeping path (`generate_ship_target_candidates`), not gated by `enable_crawler`. Phase 4 adds `generate_unlock_chain_candidates`/`select_unlock_chain_candidate`, `score=None` always, driven by `techtree.next_step_toward` rather than any new policy field. Phase 5c adds `generate_transport_candidates`/`generate_harvest_candidates`/`select_logistics_candidate` — non-combat `launchFleetMission` proposals, gated on `policy.actions.allow_fleet_noncombat` (default `false`), using a new `calc.py` ship-movement-stats layer (`SHIP_CARGO_CAPACITY`, `ship_fuel_consumption`, `ship_speed`). **Fix:** `select_building_candidate`'s winner (mine/energy, or a declared `building_priority` target) could have a cost exceeding the planet's *current* storage cap for a resource it needed — not "not affordable yet" (`guard.py`'s `_gate_affordability` BLOCKs that at execution time) but "not affordable ever" until storage is raised. `generate_proactive_storage_candidates` existed for this but, by design, could never outrank a scored winner — so the ladder kept re-proposing a pick guard.py would BLOCK forever. New `_exceeds_storage_cap`/`_resolve_storage_precondition` helpers make this a hard precondition on every tentative winner, mirroring the energy-first filter: substitute the matching storage candidate, or fall through to the next candidate if none is available. |
+| `techtree.py` | ~720 | On-chain prerequisite table for all four entity families, transcribed from the deployed contract (Phase 1). `unmet()` is the fail-closed core every other module's legality checks build on (`plan.py`/`candidates.py` never propose a locked entity; `guard.py`'s `prerequisites` gate independently re-checks). Phase 4 adds `next_step_toward` — a breadth-first walk of `unmet()`'s own output, backwards, to find the shallowest currently-buildable prerequisite toward a locked target; no cost math, same "compare levels only" discipline as `unmet()`. Also adds `unlock_breadth` — the forward mirror of that walk, one hop only: how many other entities would have a requirement drop out of their own `unmet()` if this one's level were +1, re-derived by re-calling `unmet()` rather than a hand-built reverse index. Feeds `candidates.py`'s `_infrastructure_priority_order`/`_research_priority_order` fallback ranking; a structural fact, never a value judgement, so it stays clear of `calc.py`'s cost-scaling ban and `candidates.py`'s "no ROI verdict" refusal. |
+| `guard.py` | ~1170 | **19** guardrail gates (17 through Phase 4; Phase 5c added `mission_type` — a default-deny check on `launchFleetMission`'s mission type, independent of `tier`; a later addition added `game_paused` — the second, independent line of defense behind rung `1b`, BLOCKing unconditionally on a confirmed `gameMaintenance.paused`, fail-closed on missing data), every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. **Fix:** `health` gains a narrow exception, `Snapshot.combat_only_degradation()` — `/health`'s `ok:false` caused *solely* by a combat-only `randomnessReadiness` degradation (positively confirmed, everything else on the snapshot fine) now PASSes instead of BLOCKing, since combat is unconditionally unreachable in this codebase regardless of policy. Confirmed live and persistent, served via HTTP 503 — `read._fetch_or_exit()` now defensively recovers a parseable `/health` 5xx body (narrowly scoped to that one route) instead of hard-aborting before this check could ever run. |
+| `state.py` | 349 | `$VEYDRIFT_HOME` resolution, `AgentState` (pending txs, cumulative gas, revert counts), the tick lockfile, `KILLSWITCH` detection. |
+| `tick.py` | 1727 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`. The second-largest module after `candidates.py`, and where the criticals a first-pass judge review found actually lived (`AGENTS.md` §5's unit-mismatch and revert-recording invariants). |
+| `log.py` | 392 | Four log sinks, secret scrubbing (`0x[0-9a-fA-F]{64}` patterns that aren't a known tx hash never get written), the pretty-report renderer, `--digest`. |
 
 ## 6. `veydrift-wallet`, module by module
+
+**What it does.** The only thing in this repo that builds real calldata, signs, or
+submits a transaction — `build`/`simulate`/`send`/`receipt` via `walletctl`.
+Independently re-validates every transaction against its own allowlist regardless of what
+`veydrift-agent` already checked (§2); never decides *what* to do, only signs and sends
+what it's given.
+
+**How it's triggered.** As an installed skill, `SKILL.md`'s frontmatter routes to it on
+"sign this," "send the tx," `walletctl`, wallet/balance/provider status checks, ABI-pin
+verification, fleet-mission encoding, or keystore/envkey provider questions — see
+`SKILL.md`'s own `description` for the exact trigger phrases. Standalone, it's
+`npx tsx src/cli.ts <subcommand>` from the skill's own directory.
+
+**References, loaded on demand.** `providers.md` (provider selection, the swap
+procedure, the address-binding constraint in full), `tx-safety.md` (the exact allowlist
+checks, the `--confirm` invariant, what this engine deliberately does not do),
+`abi-pinning.md` (pin provenance, the rebuild recipe, `main`-vs-deployed divergence),
+`fork-testing.md` (the fork-testing runbook — exercising tier≥2 sends against a local
+Anvil fork with an impersonated account; `AGENTS.md` §10's fork-round history).
+
+### Module by module
 
 | Module | Lines | Role |
 | --- | --: | --- |
 | `abi.ts` | 225 | Loads the pinned ABI, resolves a function by **full canonical signature** (never a bare name — `launchFleetMission` is overloaded on the deployed contract), computes selectors. |
 | `allowlist.ts` | ~245 | `checkAllowlist` — five checks, always all five evaluated and reported: destination against a **live** `/runtime-config` fetch, selector against the tier's set (computed from the pinned ABI, never a hand-typed hex constant), `value == 0`, `chainId == 8453`, and at `operator` tier, the `launchFleetMission` mission-type argument decoded from calldata and restricted to `OPERATOR_ALLOWED_MISSION_TYPES` — Transport/Deploy/Harvest, **plus Colonize (2) as of Phase 5b** (the one allowlist widening this project has had, added in the same change as `guard.py`'s matching `mission_type` gate). |
-| `tx.ts` | 400 | `build`/`simulate`/`send`/`receipt`. `build` emits `estimatedCostWei` (gas units × live `maxFeePerGas`), not a bare gas-unit number — see §10 for why that distinction is load-bearing. `receipt` reports real `status: "success" \| "reverted"` from the actual receipt, never synthesized. RPC target is `VEYDRIFT_RPC_URL` (default `https://mainnet.base.org`), the one chokepoint every read and write resolve through — swap in a dedicated endpoint (Alchemy etc.) to avoid the public endpoint's rate limits. |
-| `fleet.ts` | 147 | `shipCountsToFleetTuple()` — the one function permitted to build the 14-slot fleet-mission tuple; see §9. |
+| `tx.ts` | 400 | `build`/`simulate`/`send`/`receipt`. `build` emits `estimatedCostWei` (gas units × live `maxFeePerGas`), not a bare gas-unit number — see `AGENTS.md` §5's unit-mismatch invariant for why that distinction is load-bearing. `receipt` reports real `status: "success" \| "reverted"` from the actual receipt, never synthesized. RPC target is `VEYDRIFT_RPC_URL` (default `https://mainnet.base.org`), the one chokepoint every read and write resolve through — swap in a dedicated endpoint (Alchemy etc.) to avoid the public endpoint's rate limits. |
+| `fleet.ts` | 147 | `shipCountsToFleetTuple()` — the one function permitted to build the 14-slot fleet-mission tuple; see `AGENTS.md` §7. |
 | `policy.ts` | 116 | Reads `tier` from `$VEYDRIFT_HOME/policy.json` rather than trusting a caller-supplied flag; refuses (exit 4) on disagreement or a malformed file rather than falling back to a permissive default. |
 | `cli.ts` | 329 | The `walletctl` command surface: `status`, `verify-abi`, `build`, `simulate`, `send`, `receipt`. `send` without `--confirm` always exits non-zero and prints exactly what it would have sent — the same code path as a real send, short-circuited right before `provider.signAndSend`. |
 | `providers/keystore.ts` | 113 | Default provider. Encrypted EIP-2335/geth JSON keystore, decrypted via `ethers.Wallet.fromEncryptedJson` — the one place `ethers` earns its dependency slot in a codebase that otherwise uses `viem` for everything chain-side, because scrypt+AES decryption isn't something to hand-roll. |
 | `providers/envkey.ts` | 152 | Testing-only provider. Raw `VEYDRIFT_PRIVATE_KEY`, loud startup warning every use, a best-effort (not primary-control) check that refuses to start if the key value is also found anywhere in the containing git repo outside `tests/`. |
-| `providers/types.ts`, `providers/index.ts` | 37 + 40 | The `WalletProvider` interface and the selection logic (`policy.wallet_engine.provider`, overridable by `WALLET_PROVIDER`). |
+| `providers/fork-impersonate.ts` | 132 | Runs the exact production `sendTx` → `provider.signAndSend` path against a local Anvil fork with an impersonated account instead of a held key — gated by a loopback guard that makes it inert outside a fork. The intended first real exercise of a tier-2+ send path; see `references/fork-testing.md` and `AGENTS.md` §8. |
+| `providers/types.ts`, `providers/index.ts` | 37 + 44 | The `WalletProvider` interface and the selection logic (`policy.wallet_engine.provider`, overridable by `WALLET_PROVIDER`). |
 
 ## 7. A tick, end to end
 
@@ -191,6 +220,16 @@ verification.
                                     if actually executed
 9. pretty report                →  stdout + logs/ticks/<iso>.md
 ```
+
+**"Rung" and "Phase" are two different axes — easy to conflate, worth separating once.** A
+*rung* (`0`-`9`, `8b`, `8c`) is a position in the per-tick decision ladder below — a
+runtime concept `plan.py`/`candidates.py` actually check against, in order, every single
+tick. A *Phase* (1 through 5c, used throughout §5's module table and this section) is a
+development-time milestone from this project's own build history — when a capability was
+added, cited for traceability, not something the running code has any notion of. The two
+don't map one-to-one: Phase 3 changed rungs 5-9's entity-generation logic without adding a
+new rung; Phase 4 added rung `8b` specifically; Phase 5c added rung `8c`. If you're reading
+the running code, only rung numbers matter — Phase labels are documentation-only history.
 
 The decision ladder inside step 5, first match wins. Rungs 0-4 are vetoes; rungs 5-9 are
 a **five**-band candidate pipeline (`candidates.py`, added in Phase 2 of the
@@ -234,8 +273,8 @@ pass, ranked, each with a `why_not` (a payback-hours comparison, or a lock reaso
 `techtree.describe()`). Purely informational: never an ROI verdict, never read by
 `guard.py` or any `Decision` logic.
 
-**Phase 3 — every planet-local entity reachable.** Before this change the
-planner could only ever propose 13 of the 51 entities `ids.py` knows about (three mines,
+**Phase 3 — most planet-local entities reachable.** Before this change the
+planner could only ever propose 13 of the entities `ids.py` knows about (three mines,
 Solar Plant, three storages, one ship, one hardcoded defense, "whichever technology has
 the lowest level"). `policy.strategy` grows four target-declaration fields
 (`ship_targets`, `defense_targets`, `research_priority`, `building_priority`, all
@@ -245,7 +284,17 @@ computes what's legal (`techtree.unmet()`), affordable (`guard.py`, unchanged) a
 economically comparable (`score_payback`), and the policy declares intent for everything
 else. `[]` on all four is this phase's own acceptance criterion: byte-identical output to
 Phase 2 on the same fixtures, pinned in `tests/test_candidates.py`/`tests/test_plan.py`
-and by every pre-Phase-3 test passing unmodified.
+and by every pre-Phase-3 test passing unmodified. **Current count, checked directly
+against `ids.py`: 55 of 57 entities are reachable by some generator** (all 15
+technologies via `research_priority`'s fallback tail; all 16 ships and all 10 defenses via
+`ship_targets`/`defense_targets`, name-declarable without restriction; 14 of 16 buildings
+— three mines, Solar Plant, three storages, Fusion Reactor, and the six
+`_INFRASTRUCTURE_BUILDING_IDS` covered by `building_priority`). The two structural
+exceptions: **Alliance Depot** (no generator references it — alliances are an explicit
+non-goal, §3) and **Rift Stabilizer** (no generator references it either; `docs/COVERAGE.md`
+notes its mechanics are unpublished and it's hard-capped at level 1). "51" was this
+paragraph's original count at the time Phase 3 shipped; `ids.py` has since grown to 57
+entries.
 
 **Phase 4 — a locked declared target proposes its own build-up.** Phase 3
 made every entity reachable *once its prerequisites are already met*; a `ship_targets`/
@@ -287,7 +336,7 @@ languages, on purpose — the wallet engine re-checks independently of whatever 
 already validated, so a compromised agent can't talk its way past the allowlist by lying
 about the tier. They drifted once: `startShipProduction` was granted to the `economy`
 tier's *table* in the spec while `allowlist.ts` and the original `guard.py` map both still
-excluded it (§3's first spec correction), and nothing caught the mismatch for a while.
+excluded it, and nothing caught the mismatch for a while.
 
 The fix wasn't just adding the missing entry — it was adding
 `tests/test_guard.py::test_tier_map_agrees_with_the_wallet_engines_allowlist`, which
@@ -307,95 +356,44 @@ parses and diffs both mission-type sets too, not just the function-name sets —
 in the same change that added the gate, on the theory that a second duplication without
 a second test is exactly how the first one drifted.
 
-## 9. Silent-corruption traps (and how each is closed)
-
-Two things about the deployed contract produce a *wrong transaction*, not an error, if you
-get them wrong — the kind of bug that's expensive precisely because nothing crashes.
-
-**The 14-slot fleet tuple is not the 16-entry `Ship` enum.** Every fleet entrypoint takes a
-fixed `(uint32 × 14)` tuple, but `SolarSatellite` (id 9) and `Crawler` (id 15) can't fly
-and have no slot — every flyable ship id from 10 upward is shifted down one tuple index. A
-Destroyer, Ship id 10, lands at tuple index **9**, not 10. `shipCountsToFleetTuple()`
-(`fleet.ts`) is the *only* function permitted to build this tuple; `fleet.test.ts` pins a
-Destroyer at index 9 specifically, and the function throws on a non-flyable ship input even
-at count zero rather than silently dropping it.
-
-**`launchFleetMission` is overloaded.** A 7-arg and a 6-arg form both exist on the deployed
-ABI simultaneously. Selecting by bare function name is genuinely ambiguous to both `viem`
-and `ethers` — `abi.ts`'s `resolveFunctionAbi()` requires the full canonical signature
-string everywhere in this codebase, never a name lookup.
-
-A third, related class: six ABI functions (`protectedResources`, `raidableResources`,
-`maxRaidLoot`, `debrisField`, `collectResources`, `attackProtectionStatus`) are declared
-`nonpayable` — no `view`/`pure` modifier — because they lazily settle state before
-returning, not because they're meant to be sent as transactions. `walletctl send` refuses
-all six unconditionally, at every tier, even with `--confirm`; the correct path is
-`simulate`, or you pay real gas for what is semantically a read.
-
-## 10. How this was built, and what that explains about the code
+## 9. How this was built, and what that explains about the code
 
 This repo was built by a multi-agent pipeline: a planning pass wrote `docs/SPEC.md`,
 parallel Sonnet-model builder agents implemented independent work packages against that
-frozen spec, and Fable-model judge passes adversarially reviewed the result twice. That
-history is directly visible in the code, and worth knowing before you assume something is
-either over-engineered or under-tested:
-
-**Two real, previously-unnoticed defects survived 316 passing tests** before the first
-judge pass, both living exactly at the seam between the two languages — the place neither
-side's own test suite could see:
-
-- `walletctl build` emitted `estimateGas`'s result — **gas units** — and `tick.py` compared
-  it directly against `gas_per_tx_wei`/`gas_per_day_wei` — **wei** ceilings. A typical Base
-  transaction is ~10⁵ gas units against a 3×10¹⁵ wei ceiling: the gate could never fire, at
-  any gas price, because nothing crossed the package boundary in a test. Fixed by having
-  `build` emit `estimatedCostWei` (gas units × live `maxFeePerGas`) as a decimal string,
-  `null` rather than a substituted zero on a failed fee fetch, and a dedicated
-  unit-boundary regression test that asserts wei-scale numbers are what's actually compared.
-- `tick.py` never read `receipt.status`. A reverted transaction was logged to
-  `actions.jsonl` — the "executed only" audit trail — as a success, and
-  `AgentState.record_revert` was called by no production code at all, so the
-  `revert_streak` gate could never fire and `escalation.on_revert_count` was dead
-  config. Fixed by having `receipt` report the real `status` from the actual receipt,
-  `tick.py` charging `actualCostWei` and calling `record_revert` on a revert, and treating
-  an unfetchable/unknown status as unknown — never success.
-
-**The second judge pass found the residual gap after the first round of fixes**: the
-`allow_ships` policy flag was enforced on one path that could emit a ship-production action
-but not another — a hot planet's energy-first branch could still propose a Solar Satellite
-regardless of the flag, because the flag check lived at the ladder's rung-8 shipyard-idle
-path, not inside the energy-source-selection helper both paths share. Same defect *class*
-as the tier-map drift in §8: two things that needed to agree, and nothing forced them to.
+frozen spec, and Fable-model judge passes adversarially reviewed the result twice — see
+`AGENTS.md` §9 for the workflow itself, and its own text for what each pass has caught
+historically. That history is directly visible in the code, and worth knowing before you
+assume something is either over-engineered or under-tested.
 
 The practical lesson for anyone extending this code: **a config flag or an enforcement
 rule that's checked in one place and emitted from two is exactly where the next bug is
-likely to live.** If you add a second path that can produce the same kind of `Action` an
-existing gate already checks, verify the gate actually covers the new path — don't assume
-it does because it covers the first one.
+likely to live** — this is the same defect class §8's tier-map drift is, and the same
+class a hot-planet `allow_ships` gap turned out to be later (two things that needed to
+agree, and nothing forced them to, until a test was added that parses both sides). If you
+add a second path that can produce the same kind of `Action` an existing gate already
+checks, verify the gate actually covers the new path — don't assume it does because it
+covers the first one.
 
-## 11. What's tested, what's fixture-only, what's genuinely unverified
+## 10. What's tested, what's fixture-only, what's genuinely unverified
 
 Precision matters here more than a clean "it's tested" claim would suggest.
 
-- **257 Python + 104 TypeScript = 361 tests, all currently passing.** Run both before
+- **518 Python + 123 TypeScript = 641 tests, all currently passing** (the TypeScript
+  figure includes 2 fork-only tests, skipped outside a live Anvil fork). Run both before
   calling any change done (`AGENTS.md` §3); they cover a system with two enforcement
   layers that must agree (§8), and neither suite alone would catch a drift between them.
 - **The read → plan → guard pipeline is exercised against the live API**, not just
   fixtures — `vd calc verify` re-runs three independent duration formulas against
   `https://api.veydrift.com` and confirms `universe_speed == 1` still holds; a live
   `vd tick --dry-run` against the real API is part of the standard verification loop.
-- **`tick.py`'s tier-2+ send path (`_send_and_await`) has real, substantive test
-  coverage** — the tests monkeypatch the `walletctl` subprocess boundary and assert on
-  `executions_count`, `revert_counts`, the gas ledger, and `actions.jsonl` contents across
-  success/revert/unknown/send-failed cases. That is real coverage of the Python-side logic.
-  **It has never run against an actual chain.** The full `build → simulate → send → await
-  receipt → await indexed` sequence against mainnet is, as of this writing, entirely
-  unexercised in practice — the first real run of it will be someone's actual tier-2
-  promotion, not a controlled test.
-- **Cost scaling, queue behavior under load, and lazy settlement above level 0 are
-  unobserved**, full stop — not undertested, *unobserved*. The reference account this
-  system was built and verified against has taken zero on-chain actions: every level is 0,
-  every queue is idle. The duration formulas are verified live at level 0; nothing here has
-  watched a live cost or queue field respond to an actual level-up.
+- **No per-building cost-scaling factor has been observed or verified by this codebase at
+  any level.** Live cost always comes from the API's own `cost` field by design (§3) —
+  this is about the unpublished scaling *formula* specifically, not about whether real
+  actions have been taken. Queue behaviour and lazy settlement above level 0 *have* since
+  been observed — both via a local Anvil fork exercising all 7 allowlisted selectors
+  (`AGENTS.md` §10) and via real transactions this codebase has since submitted to
+  mainnet itself, at tier 2 (`economy`) and tier 3 (`operator`) — see `README.md`'s Status
+  section.
 - **`walletctl`'s tier check defends against a misconfigured caller, not a hostile one.**
   It reads tier from `policy.json`, but falls back to a caller-supplied `--tier` when no
   policy file exists at all — a process that controls its own environment can point
@@ -404,11 +402,12 @@ Precision matters here more than a clean "it's tested" claim would suggest.
   `skills/veydrift-wallet/references/tx-safety.md`'s residual-limit section before
   treating this specific check as a security boundary rather than a footgun guard.
 
-## 12. Documentation map
+## 11. Documentation map
 
 | Question | Where |
 | --- | --- |
 | The full spec, every acceptance criterion, work-package breakdown | `docs/SPEC.md` |
+| The standing coverage ledger — every pinned-ABI write entrypoint (implemented/planned/deferred/out of scope), regenerated against the ABI rather than hand-maintained | `docs/COVERAGE.md` |
 | Contract- and backend-source-derived corrections to earlier research | `docs/RESEARCH-ADDENDUM.md` |
 | Every wallet-provider candidate evaluated beyond the two shipped | `docs/wallet-provider-research.md` |
 | Earlier research inputs, superseded in places, kept for provenance | `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`, `docs/veydrift-briefing.html` |
@@ -424,7 +423,7 @@ Precision matters here more than a clean "it's tested" claim would suggest.
 **A maintenance note, since this table and the two "101"/walkthrough documents above it are
 themselves synthesis, not source of truth.** If `docs/SPEC.md` changes in a way that
 affects the tier model, the module boundaries, or an invariant listed in `AGENTS.md` §5,
-this file's §3, §7, §8, and §10 need a matching update — they restate spec content in
+this file's §3, §7, §8, and §9 need a matching update — they restate spec content in
 prose, and prose that quietly drifts from its source is worse than no prose at all. The
 same applies to `docs/PLAYER-GUIDE.md` wherever it shows a command, a policy field, or a
 verified transcript: if the underlying command or schema changes, that transcript is now
@@ -432,7 +431,7 @@ lying about what the tool does, not just stale. `AGENTS.md` and `README.md` both
 these two documents specifically so a spec change has a visible reminder to check them,
 not so they can be linked once and left in whatever state they were written.
 
-## 13. Extending this system
+## 12. Extending this system
 
 **Adding a new guardrail gate:** it belongs in `guard.py`, following the pattern every
 existing gate follows — return a `GuardVerdict`, resolve missing/absent data toward

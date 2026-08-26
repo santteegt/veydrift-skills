@@ -269,7 +269,12 @@ expecting this section to enumerate it; the bullets below are the handful of gap
 enough to call out here specifically, not a duplicate of that ledger.
 
 - **`skills/veydrift-agent/src/veydrift_agent/tick.py`'s tier≥2 send path
-  (`_send_and_await`) has never run against mainnet.** It's unit-tested by monkeypatching
+  (`_send_and_await`) has since run against mainnet for real**, at tier 2 (`economy`) and
+  tier 3 (`operator`) — see `README.md`'s Status section. That is separate from, and later
+  than, the fork-testing history this bullet otherwise documents in detail below; the fork
+  rounds (Anvil, impersonated accounts, never mainnet) predate the real mainnet use and
+  remain an accurate record of what fork testing specifically verified — they are not
+  superseded by it. It's unit-tested by monkeypatching
   the `walletctl` subprocess boundary, which is real coverage of the Python-side logic,
   and it has now run once against a real chain state: `startBuildingUpgrade` completed
   end-to-end against a local Anvil fork of Base (`status: "success"`, Metal Mine 10 → 11
@@ -340,9 +345,10 @@ enough to call out here specifically, not a duplicate of that ledger.
   `anvil_setStorageAt` write raised the account's on-chain Astrophysics level by one,
   analogous to this runbook's existing `anvil_setBalance` gas top-up. That write is test
   scaffolding for an unrelated precondition; the Colonize send and resolve themselves ran
-  against real, unmodified contract logic. **All 7 selectors are now accounted for, and
-  the two round-2 caveats are closed; mainnet remains untouched by this codebase either
-  way.**
+  against real, unmodified contract logic. **All 7 selectors are now accounted for via
+  fork testing, and the two round-2 caveats are closed.** Mainnet itself has since been
+  touched by this codebase for real, separately from this fork-testing effort — see this
+  bullet's opening and `README.md`'s Status section.
 - **`walletctl`'s tier check defends against a misconfigured caller, not a hostile one.**
   It reads tier from `$VEYDRIFT_HOME/policy.json`, but falls back to a caller-supplied
   `--tier` when no policy file exists — a process that controls its own environment can
@@ -361,9 +367,10 @@ enough to call out here specifically, not a duplicate of that ledger.
   Metal Mine 10, Crystal Mine 9, Deuterium Synthesizer 5, Solar Plant 11, Robotics Factory
   2, Shipyard 1, Research Lab 1; `cast call technologyLevel(address,uint8)` gives Energy
   Technology 2, Computer 0. That account was played by hand through the game UI, not
-  through this codebase's `walletctl` — the separate claim that this codebase has never
-  itself submitted a transaction to mainnet remains true (`docs/SPEC.md` §11's first
-  bullet, `README.md`'s status section). What changed: a local Anvil fork of Base seeded
+  through this codebase's `walletctl`, at the time this reading was taken — this codebase
+  has since submitted real transactions to mainnet itself, at tier 2 (`economy`) and tier 3
+  (`operator`); see `README.md`'s Status section. What changed first, before that: a local
+  Anvil fork of Base seeded
   from that same chain state (§10's first bullet) has since run this codebase's own
   `build → simulate → send → await receipt → await indexed` path for real, for one
   selector (`startBuildingUpgrade` on the Metal Mine, level 10 → 11) — the first time this
@@ -374,8 +381,11 @@ enough to call out here specifically, not a duplicate of that ledger.
   (1556s) for that one upgrade. What still stands, narrower than before: no per-building
   cost-scaling factor has been observed or verified by this codebase at any level (§5's
   "no cost-scaling function" invariant is about never *computing* one, not about having
-  verified the real curve), and every other selector's queue/settlement behaviour above
-  level 0 is still unexercised by this system's own observation, mainnet included.
+  verified the real curve). Every other selector's queue/settlement behaviour above level
+  0 was, at the time of this fork round, still unexercised by this system's own
+  observation — real mainnet sends have since happened separately (this bullet's opening),
+  though this entry doesn't itself catalog which selectors' queue/settlement behavior those
+  specifically exercised.
 - **A declared `research_priority`/`building_priority` entry never cedes its slot once it
   becomes reachable.** Neither field has a completion criterion — unlike `ship_targets`/
   `defense_targets`'s `count` — so a multi-name list gets stuck on entry #1 forever instead
@@ -432,8 +442,9 @@ enough to call out here specifically, not a duplicate of that ledger.
 prose: the tier table, the policy schema, the decision ladder, the guardrail list, module
 responsibilities. That restatement is deliberate — it's what makes them readable without
 first internalizing the spec — but it means they go stale exactly when `SPEC.md` changes
-underneath them, silently, unless someone remembers to check. If a change alters the tier
-model, the `Policy`/`Action` schema, the decision ladder's rungs, or a module's
-responsibilities, **grep both files for the thing you changed** before considering the
-change done. Neither document has a test that would catch drift — this note is the only
-thing that currently does.
+underneath them, silently, unless someone remembers to check. **Any change to
+`SPEC.md`** — like altering the tier model, the `Policy`/`Action` schema, the decision
+ladder's rungs, or a module's responsibilities — needs the same check:
+**grep both files for the thing you changed** before considering the change done.
+Neither document has a test that would catch drift — this note is the only thing that
+currently does.

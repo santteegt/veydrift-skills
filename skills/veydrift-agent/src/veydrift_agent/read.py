@@ -4,14 +4,8 @@ Route table, payload-shape notes and health-gating rules: `references/api-routes
 Live probes for every route were taken 2026-08-12 against wallet
 ``0x224aba5d489675a7bd3ce07786fada466b46fa0f`` / planet ``664``.
 
-Entity ID -> name tables (buildings/technologies/ships/defenses) are imported from
-`ids.py` (WP2's file, built by reading the deployed contract source directly) when it is
-importable, with a local fallback transcribed from `docs/RESEARCH-ADDENDUM.md` §3 /
-`docs/NOTES.md` §2 for a partially-built tree where it is not yet present -- Wave A
-packages build in parallel; see `cli.py`'s tolerant sub-app mounting and `http.py`'s
-`state.py` fallback for the same posture. `ids.py` is the more authoritative of the two
-(e.g. it corrects "Dreadstar" to the contract's actual enum name "Deathstar"), so once it
-exists it should win.
+Entity ID -> name tables (buildings/technologies/ships/defenses) are imported directly
+from `ids.py`, built by reading the deployed contract source directly.
 
 Fleet-mission-type name<->id resolution is kept local regardless, deliberately NOT
 sourced from `ids.py`: the live API's `missionType` field is a wire-format string like
@@ -43,6 +37,7 @@ from rich import print as rprint
 from rich.console import Console
 
 from veydrift_agent import fmt, http, models
+from veydrift_agent.ids import BUILDING_NAMES, DEFENSE_NAMES, SHIP_NAMES, TECHNOLOGY_NAMES
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
@@ -52,90 +47,6 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 #: `rprint(...)` in this module is immediately followed by `raise typer.Exit(...)`, so it
 #: never reaches that risk -- this console exists only for the one path that continues.
 _stderr_console = Console(stderr=True)
-
-# --------------------------------------------------------------------------------------
-# Entity ID -> name tables: prefer ids.py (WP2), fall back to a local transcription of
-# docs/RESEARCH-ADDENDUM.md §3 / docs/NOTES.md §2 if it isn't present yet.
-# --------------------------------------------------------------------------------------
-
-try:  # pragma: no cover - exercised automatically once ids.py exists (it does as of
-    # this WP's verification pass, but the fallback stays so this module never regains a
-    # hard dependency on another WP's file order of arrival).
-    from veydrift_agent.ids import (  # type: ignore
-        BUILDING_NAMES,
-        DEFENSE_NAMES,
-        SHIP_NAMES,
-        TECHNOLOGY_NAMES,
-    )
-except ImportError:  # TODO(WP2): drop this fallback once ids.py is guaranteed present.
-    BUILDING_NAMES: dict[int, str] = {
-        0: "Metal Mine",
-        1: "Crystal Mine",
-        2: "Deuterium Synthesizer",
-        3: "Solar Plant",
-        4: "Robotics Factory",
-        5: "Shipyard",
-        6: "Research Lab",
-        7: "Metal Storage",
-        8: "Crystal Storage",
-        9: "Deuterium Tank",
-        10: "Fusion Reactor",
-        11: "Nanite Factory",
-        12: "Terraformer",
-        13: "Alliance Depot",
-        14: "Missile Silo",
-        15: "Rift Stabilizer",
-    }
-
-    TECHNOLOGY_NAMES: dict[int, str] = {
-        0: "Energy",
-        1: "Laser",
-        2: "Ion",
-        3: "Combustion Drive",
-        4: "Computer",
-        5: "Weapons",
-        6: "Shielding",
-        7: "Armor",
-        8: "Hyperspace Technology",
-        9: "Impulse Drive",
-        10: "Hyperspace Drive",
-        11: "Plasma",
-        12: "Astrophysics",
-        13: "Intergalactic Research Network",
-        14: "Graviton",
-    }
-
-    SHIP_NAMES: dict[int, str] = {
-        0: "Small Cargo",
-        1: "Light Fighter",
-        2: "Recycler",
-        3: "Colony Ship",
-        4: "Large Cargo",
-        5: "Heavy Fighter",
-        6: "Cruiser",
-        7: "Battleship",
-        8: "Bomber",
-        9: "Solar Satellite",
-        10: "Destroyer",
-        11: "Dreadstar",
-        12: "Battlecruiser",
-        13: "Reaper",
-        14: "Pathfinder",
-        15: "Crawler",
-    }
-
-    DEFENSE_NAMES: dict[int, str] = {
-        0: "Rocket Launcher",
-        1: "Light Laser",
-        2: "Heavy Laser",
-        3: "Small Shield Dome",
-        4: "Gauss Cannon",
-        5: "Ion Cannon",
-        6: "Plasma Turret",
-        7: "Large Shield Dome",
-        8: "Anti-Ballistic Missile",
-        9: "Interplanetary Missile",
-    }
 
 #: docs/RESEARCH-ADDENDUM.md §3 -- VeydriftGameStorage.sol:174. The API's fleet-visibility
 #: rows carry `missionType` as a *string* already (evm.ts `FleetMissionSummary.missionType:

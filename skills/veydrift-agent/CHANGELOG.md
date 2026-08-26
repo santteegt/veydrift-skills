@@ -11,6 +11,21 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+### Fixed
+
+- `read.py` dropped the dead `except ImportError` fallback for the entity ID -> name
+  tables (`BUILDING_NAMES`/`TECHNOLOGY_NAMES`/`SHIP_NAMES`/`DEFENSE_NAMES`), a leftover
+  from the original multi-agent build where `ids.py` might not have landed yet from a
+  concurrent work package. That build finished long ago and `ids.py` is unconditionally
+  present now — the fallback was `pragma: no cover` (never exercised, never tested) and
+  had already silently drifted from `ids.py` itself (`"Dreadstar"` where the real enum is
+  `DEATHSTAR`). Replaced with a plain top-level import; no behavior change.
+- `http.py` dropped the same kind of dead `except ImportError` fallback for
+  `veydrift_home()`, a leftover from before `state.py` had landed from its own concurrent
+  work package. `state.py` is unconditionally present now, the fallback was `pragma: no
+  cover`, and no test depended on it. Replaced with a plain top-level import from
+  `state.py`; the now-unused `os` import was dropped too. No behavior change.
+
 ## [1.4.0] - 2026-08-22
 
 ### Added

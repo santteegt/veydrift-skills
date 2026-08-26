@@ -87,9 +87,12 @@ compromised `veydrift-agent` can construct any `Action` JSON and call `build`/`s
 freely; it cannot make this engine submit anything without a human (or a deliberately
 scripted, explicitly flagged invocation) putting `--confirm` on that exact command line.
 
-**No transaction has ever been submitted to Veydrift from this codebase.** The write path
-is built, allowlisted, and fixture-tested — never executed against mainnet. Do not describe
-this system as having "sent" anything; it hasn't.
+**Real transactions have been submitted to Veydrift from this codebase**, at tier 2
+(`economy`) and tier 3 (`operator`) — see `README.md`'s Status section for the current
+tier. That only ever happens via an explicit human `--confirm` on the exact `walletctl
+send` command line; no env var, policy field, or flag makes it implicit. Don't assume a
+send happened, and don't assume it didn't — check `$VEYDRIFT_HOME/policy.json`'s `tier`
+and the actual command being run.
 
 ## Defense in depth: the allowlist, enforced here independently of the agent skill
 

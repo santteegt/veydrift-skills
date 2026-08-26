@@ -228,21 +228,22 @@ repro with exact numbers, and `AGENTS.md` §10 for how this was found.
 
 - It never decides *when* to send — that's a human, or `veydrift-agent`'s tier-gated proposal flow,
   never this engine acting on its own initiative.
-- It never submits a transaction from a test, from CI, or during development. **No transaction has
-  ever been submitted to Veydrift from this codebase** — the write path is
-  built, allowlisted, and fixture-simulated, never executed against mainnet, by design and by
-  standing project rule.
+- It never submits a transaction from a test, from CI, or during development — that rule
+  is unaffected by, and separate from, real usage elsewhere: real transactions have since
+  been submitted to Veydrift from this codebase, at tier 2 (`economy`) and tier 3
+  (`operator`), always via an explicit human `--confirm` on `walletctl send` — see
+  `README.md`'s Status section.
 
-  **"Never against mainnet" means mainnet specifically, not "never send at all."** A local Anvil
-  fork (`http://127.0.0.1:8545` or equivalent, forked off a real Base RPC) is not mainnet — nothing
-  sent there reaches a real chain, and nothing sent there costs real gas or touches a real
-  account's real balance. `src/providers/fork-impersonate.ts` (added `dac1050`) exists precisely to
-  exercise `sendTx`'s `provider.signAndSend()` line for real, for the first time, against a fork —
-  see `references/fork-testing.md` for the runbook. This is the intended first real use of that
-  code path, not an exception carved into the standing rule above; the rule is still "never
-  mainnet," full stop, and `fork-impersonate`'s own loopback guard (`refuseIfNotLoopback`,
-  `references/providers.md`) is what keeps that true even if the provider is misselected outside a
-  fork.
+  **`fork-impersonate` specifically never touches mainnet — a separate, narrower guarantee
+  about that one provider, not a claim that the project as a whole has never sent to
+  mainnet.** A local Anvil fork (`http://127.0.0.1:8545` or equivalent, forked off a real
+  Base RPC) is not mainnet — nothing sent there reaches a real chain, and nothing sent
+  there costs real gas or touches a real account's real balance.
+  `src/providers/fork-impersonate.ts` (added `dac1050`) exists to exercise `sendTx`'s
+  `provider.signAndSend()` line against a fork without a held key — see
+  `references/fork-testing.md` for the runbook. `fork-impersonate`'s own loopback guard
+  (`refuseIfNotLoopback`, `references/providers.md`) is what keeps that specific provider
+  loopback-only even if it's misselected outside a fork.
 
   **`--confirm` remains unconditionally required even against a fork.** `fork-impersonate` changes
   *who signs* — the node, on an impersonated account's behalf, instead of a locally-held key — it

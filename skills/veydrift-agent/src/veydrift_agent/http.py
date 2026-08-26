@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -27,21 +26,7 @@ from typing import Any
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-# --------------------------------------------------------------------------------------
-# $VEYDRIFT_HOME resolution
-#
-# state.py (WP3) owns the canonical `veydrift_home()` and may not exist yet in a
-# partially-built tree -- Wave A packages are built in parallel. Prefer the real one the
-# moment it lands; until then, fall back to the same env-var/default contract SPEC.md
-# §2.1 describes, so this module never has a hard dependency on another WP's file.
-# --------------------------------------------------------------------------------------
-try:  # pragma: no cover - exercised automatically once WP3 lands state.py
-    from veydrift_agent.state import veydrift_home
-except ImportError:  # TODO(WP3): delete this fallback once veydrift_agent/state.py exists.
-
-    def veydrift_home() -> Path:
-        return Path(os.environ.get("VEYDRIFT_HOME", "~/.veydrift")).expanduser()
-
+from veydrift_agent.state import veydrift_home
 
 API_BASE_URL = "https://api.veydrift.com"
 

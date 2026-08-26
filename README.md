@@ -18,18 +18,18 @@ If you're an AI coding agent extending this codebase, read [`AGENTS.md`](AGENTS.
 — it has build commands, conventions, and the invariants a change must not break. This file
 is the product overview and the usage guide.
 
-## Status: tier 1 — advisor
+## Status: tier 2 — economy
 
-Nothing has ever been promoted. The agent proposes and pretty-prints a complete,
-ready-to-submit transaction for every action it would take, but **nothing in this codebase
-has ever caused a submission to Veydrift** — see [What this does not verify](#what-this-does-not-verify)
-before assuming otherwise. No code path in this codebase advances the tier; only a human
-editing `$VEYDRIFT_HOME/policy.json` does.
+This account has been promoted beyond tier 1 — it currently runs at tier 2 (`economy`) and
+has also been run at tier 3 (`operator`), submitting real transactions to Veydrift through
+this codebase's own `build → simulate → send` path, not merely fixtures or a fork. No code
+path in this codebase advances the tier on its own; only a human editing
+`$VEYDRIFT_HOME/policy.json` does.
 
 | Tier | May propose | May submit | Gate to enter |
 | --- | --- | --- | --- |
-| 1 `advisor` (current) | everything in scope | **nothing** | default |
-| 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
+| 1 `advisor` | everything in scope | **nothing** | default |
+| 2 `economy` (current) | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
 | 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) only | ≥7 days clean T2, human edit |
 
 Combat (`Attack`, `AcsAttack`, `MissileAttack`, `Intercept`) is unreachable **in code**, at
@@ -246,21 +246,19 @@ first when auditing a stretch of ticks, not the successes.
 
 Read before trusting a claim about this project — it's the single easiest thing to overstate:
 
-- **No transaction has ever been submitted to Veydrift from this codebase.** The write
-  path is built, allowlisted, simulated and tested against fixtures (361 tests across both
-  skills as of this writing) — never executed against mainnet. The first real submission
-  is a human decision at the T1→T2 promotion, not something this codebase has done on its
-  own initiative, ever.
-- **Cost scaling, queue behaviour and lazy settlement above level 0 are unobserved.** The
-  account this was built and tested against has taken zero on-chain actions since
-  settlement — every building/tech level is 0, every queue is idle. Formulas are verified
-  against contract source and against live level-0 data; nothing here has watched a live
-  cost, queue, or lazy-settlement path respond to an actual level-up.
+- **No per-building cost-scaling factor has been observed or verified by this codebase at
+  any level.** Live cost always comes from the API's own `cost` field by design (see
+  `AGENTS.md` §5) — this is about the unpublished scaling *formula* specifically, not
+  about whether real actions have been taken. Duration formulas (`build_seconds`,
+  `ship_seconds`, `research_seconds`) are cross-checked against live API data and, for at
+  least one upgrade, against the chain's own resolved duration exactly — see `AGENTS.md`
+  §10 for the specifics.
 - **`protectedResources` semantics remain unconfirmed.** No loot or raid-profitability
   model is built on it anywhere in this codebase.
-- **This is an advisor, not a proven autonomous system.** At tier 1 — the only tier this
-  project has ever run at — the agent proposes and pretty-prints; a human reads the
-  proposal and decides.
+- **Promotion is still a deliberate human decision at every step, never automatic.** The
+  account has been run beyond tier 1 — see Status above — but no code path in this
+  codebase advances a tier or sends a transaction on its own initiative; a human reads
+  each proposal, and a human edits `policy.json` to promote.
 - **Most of what Veydrift lets a player do, this agent doesn't touch yet.** Building,
   research, ships, defenses and mission-resolution are covered; combat, moons, debris
   fields, raiding, alliances, expeditions, referrals/migration, and colonizing a second

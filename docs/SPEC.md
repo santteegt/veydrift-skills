@@ -1453,48 +1453,55 @@ missions and colonisation (§5.4/§5.5/§6.4):**
 > `0x224aba5d489675a7bd3ce07786fada466b46fa0f`): Metal Mine 10, Crystal Mine 9, Deuterium
 > Synthesizer 5, Solar Plant 11, Robotics Factory 2, Shipyard 1, Research Lab 1, Energy
 > Technology 2, Computer 0 — the account has been played by hand through the game UI at tier
-> 1. The distinct, still-true claim is that *this codebase* has never submitted a transaction
-> or observed its own proposals resolve above level 0 (§11's first bullet below) — hand-played
-> state and this-codebase-verified state are two different facts, and only the second was ever
-> the one this project depends on. `vd calc verify` does cross-check three duration formulas
-> against live API data at the account's current (non-zero) level and passes, confirmed
-> 2026-08-17 — narrower live evidence than "unverified above level 0" alone conveys, though it
-> covers only those three formulas, not cost scaling, queue behaviour or lazy settlement
-> generally (see §11's bullet on this, also corrected 2026-08-17).
+> 1, at the time this reading was taken. **Correction, 2026-08-25:** the distinct claim this
+> paragraph made next — that *this codebase* had never submitted a transaction or observed
+> its own proposals resolve above level 0 — no longer holds either; this codebase has since
+> submitted real transactions through its own `veydrift-agent`/`veydrift-wallet` path at
+> tier 2 (`economy`) and tier 3 (`operator`) — see `README.md`'s Status section and §11's
+> first bullet below. `vd calc verify` does cross-check three duration formulas against live
+> API data at the account's current (non-zero) level and passes, confirmed 2026-08-17,
+> covering only those three formulas specifically, not cost scaling generally (see §11's
+> bullet on this).
 
 ---
 
 ## 11. What this does not verify
 
-- **No transaction has ever been submitted to Veydrift from this codebase.** The write path is
-  constructed, allowlisted, simulated and fixture-tested — never executed against mainnet. The first
-  real submission is a human decision at T1→T2.
+- ~~No transaction has ever been submitted to Veydrift from this codebase~~ — **correction,
+  2026-08-25**: no longer true. Real transactions have since been submitted to Veydrift
+  from this codebase, at tier 2 (`economy`) and tier 3 (`operator`) — see `README.md`'s
+  Status section for the current state. Promotion past tier 1 remains always a deliberate
+  human decision, never automatic (§4).
 - ~~EIP-7702 support on Base is inferred from a block header field~~ — **resolved 2026-08-12**:
   confirmed by a landed type-0x04 transaction (§6.1). Nothing in this codebase uses 7702; it is a
   future option, not a dependency.
-- **Cost scaling, queue behaviour and lazy settlement above level 0 have never been observed
-  by this codebase acting.** Not because the account is at zero state — it isn't; see the
-  correction under §10's risk table — but because no proposal this codebase generated has
-  ever been submitted and watched resolve above level 0. `vd calc verify` does cross-check
-  three duration formulas (Energy Technology research, Small Cargo ship production, Metal
-  Mine building) against live API data every run and passes, confirmed 2026-08-17, so those
-  three specifically are now live-verified beyond level 0; the broader claim — cost scaling,
-  queue behaviour, lazy settlement, and every other formula above level 0 — still holds
-  unverified by this codebase.
+- **Cost scaling above level 0 has never been observed by this codebase — queue behaviour
+  and lazy settlement no longer belong on this list.** `vd calc verify` cross-checks three
+  duration formulas (Energy Technology research, Small Cargo ship production, Metal Mine
+  building) against live API data every run and passes, confirmed 2026-08-17; a local
+  Anvil fork run additionally observed this codebase's own `build → simulate → send`
+  path populate and lazily settle a real queue above level 0 (`startBuildingUpgrade`,
+  Metal Mine 10 → 11 — `AGENTS.md` §10), and real transactions have since been submitted
+  through this codebase to mainnet itself at tier 2/3 (**correction, 2026-08-25** —
+  `README.md`'s Status section), so "no proposal this codebase generated has ever been
+  submitted and watched resolve above level 0" no longer holds either. What still stands:
+  no per-building cost-scaling *factor* has been observed or verified by this codebase at
+  any level — the formula itself, not whether real actions have been taken.
 - **`protectedResources` semantics remain unconfirmed**; no loot model is built on them.
 - **No wallet provider beyond local key custody has been evaluated in depth** — that is WP4b's output,
   and it is a research document, not a recommendation to deploy.
 - **`techtree.py`'s prerequisite table is transcribed from `VeydriftDependencies.sol`/
-  `VeydriftCatalog.sol` at the pinned commit and has never been validated against a live
-  revert.** Every table entry was read from source, spot-checked in `tests/test_techtree.py`
-  against the Solidity, and cross-checked for the two known transcription traps (the
-  9-arg vs. 5-arg `requireBuilding` overload; conjunction vs. disjunction in the source's
-  `||` clauses) — but no proposal this table declares "unlocked" or "locked" has ever
-  actually been submitted *through this codebase* and observed to succeed or revert for
-  exactly the stated reason (§10's corrected risk-table row above). The account itself has
-  since been played by hand to non-trivial levels outside this codebase, but that play was
-  never mediated by `veydrift-agent`/`veydrift-wallet`, so it provides no evidence about this
-  system's own correctness here. The shield-dome/missile-silo cap
+  `VeydriftCatalog.sol` at the pinned commit.** Every table entry was read from source,
+  spot-checked in `tests/test_techtree.py` against the Solidity, and cross-checked for the
+  two known transcription traps (the 9-arg vs. 5-arg `requireBuilding` overload;
+  conjunction vs. disjunction in the source's `||` clauses). **Correction, 2026-08-25:**
+  this bullet previously claimed no proposal this table declares "unlocked" was ever
+  submitted through this codebase and observed to succeed or revert for the stated reason,
+  reasoning that the account's non-trivial levels came only from hand-play outside this
+  codebase. That distinction no longer holds — this codebase has since submitted real
+  transactions through its own `veydrift-agent`/`veydrift-wallet` path at tier 2/3 (see
+  `README.md`'s Status section); this document doesn't itself catalog which specific
+  `techtree.py` entries those exercised. The shield-dome/missile-silo cap
   arithmetic carries the same caveat, plus a narrower one of its own: it is derived from a
   single `QueueEntry` per `PlanetSnapshot` (no backlog list — `models.py` is frozen), so a
   real queue backlog deeper than one entry would be undercounted, not overcounted.

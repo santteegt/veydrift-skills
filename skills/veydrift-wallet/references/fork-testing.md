@@ -224,9 +224,10 @@ account.
   actually be costed/timed against; use a raw `cast call` only when you specifically want to see
   whether something is still sitting unsettled in the queue.
 
-  This is the account this project is built around, played **by hand through the game UI** — not
-  a stranger's wallet, and not one this codebase drives: nothing here has ever submitted a
-  transaction (`docs/SPEC.md` §11, `README.md`'s status section). Because a human plays it,
+  This is the account this project is built around, originally played **by hand through the
+  game UI** before this codebase itself later also submitted real transactions to it, for
+  real, at tier 2/3 (`docs/SPEC.md` §11, `README.md`'s Status section). Because a human also
+  plays it,
   levels drift over real time regardless of anything in this repo, and a pending unsettled
   upgrade can exist at any moment as shown above. Re-probe before relying on a specific level as a
   test precondition, and treat the table as "known non-zero, known shape" rather than a frozen

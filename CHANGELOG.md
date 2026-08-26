@@ -87,9 +87,9 @@ reaching the decision ladder, a new wallet provider, a new guardrail) — not pe
 
 ### Known gaps at this release
 
-- **No transaction has ever been submitted to Veydrift from this codebase.** The write
-  path is built, allowlisted and fixture-tested — never executed against mainnet. See
-  `README.md`'s "What this does not verify" section.
+- ~~No transaction has ever been submitted to Veydrift from this codebase~~ — no longer
+  true. Real transactions have since been submitted through this codebase at tier 2
+  (`economy`) and tier 3 (`operator`) — see `README.md`'s Status section.
 - Guardrail evaluation, the tick loop, structured logging and state management
   (`guard.py`/`tick.py`/`log.py`/`state.py`, generated JSON schemas, `policy.example.json`,
   and the launchd plist template) were a separate, concurrently-built work package and may
