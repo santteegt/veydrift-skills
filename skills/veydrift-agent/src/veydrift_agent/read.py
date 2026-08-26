@@ -854,11 +854,17 @@ def snapshot(
     readiness_ready = (health_raw.get("readiness") or {}).get("ready") is True
     randomness_readiness = _randomness_readiness(health_raw)
 
+    # Always fetched, even in single-planet (`--planet-id`) mode: `owned_planet_count`
+    # below needs the account's *true* total, which the single-planet fast path would
+    # otherwise never learn (see models.Snapshot.owned_planet_count's docstring).
+    planets_raw = _fetch_or_exit(f"/wallet/{w}/planets", max_age=max_age)
+    all_planet_ids = [int(p["planetId"]) for p in planets_raw.get("planets", [])]
+    owned_planet_count = len(all_planet_ids)
+
     if planet_id is not None:
         planet_ids = [planet_id]
     else:
-        planets_raw = _fetch_or_exit(f"/wallet/{w}/planets", max_age=max_age)
-        planet_ids = [int(p["planetId"]) for p in planets_raw.get("planets", [])]
+        planet_ids = all_planet_ids
         if not planet_ids:
             _fail(f"wallet {w} has no settled planets.")
 
@@ -937,6 +943,7 @@ def snapshot(
         fleet_slots_active=fleet_slots_active,
         fleet_slots_limit=fleet_slots_limit,
         planets=planet_snapshots,
+        owned_planet_count=owned_planet_count,
         incoming_fleets=incoming_fleets,
     )
 

@@ -11,6 +11,22 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-26
+
+### Added
+
+- `guard.py`'s `mission_type` gate now BLOCKs a Colonize `launchFleetMission` before send
+  when the account is already at (or above) `calc.max_planets`'s colony cap (`1 +
+  astrophysicsLevel`) — previously `calc.max_planets` was computed nowhere in this
+  codebase, so an already-at-cap Colonize would only be discovered by a real, gas-spending
+  on-chain `PlanetLimitReached` revert. Fails closed (`BLOCK`) when the new
+  `Snapshot.owned_planet_count` field is unconfirmed, never assumes "not yet at the cap."
+- `models.Snapshot` gained `owned_planet_count: int | None`, sourced from the *full*
+  `/wallet/{addr}/planets` response — deliberately not `len(Snapshot.planets)`, which can
+  be a single-planet subset when `tick.py`'s `_fetch_snapshot` takes its single-planet
+  fast path. `read.py`'s `snapshot` command now always fetches `/wallet/{addr}/planets`,
+  even with `--planet-id` set, to populate this field correctly.
+
 ## [1.4.1] - 2026-08-26
 
 ### Fixed

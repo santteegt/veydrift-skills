@@ -290,7 +290,40 @@ def _colony_target_range_violation(coordinates: str | None) -> str | None:
     return None
 
 
-def _gate_mission_type(action: Action) -> GuardVerdict:
+def _astrophysics_level(snapshot: Snapshot) -> int:
+    """Absent-from-`technologies` (never researched) and present-with-`level=None` both
+    mean level 0 -- same convention `candidates.py`'s `_energy_technology_level` already
+    uses for this exact shape of data; not "unknown," since `/research` always reports
+    every technology it knows about."""
+    entity = next((t for t in snapshot.technologies if t.id == ids.Technology.ASTROPHYSICS), None)
+    return entity.level if entity is not None and entity.level is not None else 0
+
+
+def _colony_cap_violation(snapshot: Snapshot) -> str | None:
+    """`None` when a Colonize mission would not exceed
+    `VeydriftColonizationModule.sol:289-301`'s per-account colony cap (`limit = 1 +
+    astrophysicsLevel`, :func:`calc.max_planets`); otherwise a detail string.
+
+    Fails closed on `snapshot.owned_planet_count is None` rather than assuming "not yet
+    at the cap" -- AGENTS.md §5's "a guardrail must never pass vacuously on absent data."
+    Deliberately keys off `owned_planet_count`, not `len(snapshot.planets)`: the latter
+    can be a single-planet subset of the account's real holdings (see
+    `Snapshot.owned_planet_count`'s own docstring for why), which would let this check
+    silently under-count and pass an already-at-cap account.
+    """
+    if snapshot.owned_planet_count is None:
+        return "owned planet count is unknown -- cannot verify the colony cap"
+    limit = calc.max_planets(_astrophysics_level(snapshot))
+    if snapshot.owned_planet_count >= limit:
+        return (
+            f"already at the colony cap ({snapshot.owned_planet_count}/{limit} planets; "
+            "limit = 1 + astrophysicsLevel) -- VeydriftColonizationModule reverts "
+            "PlanetLimitReached rather than silently declining the mission"
+        )
+    return None
+
+
+def _gate_mission_type(action: Action, snapshot: Snapshot) -> GuardVerdict:
     """Phase 5c (docs/SPEC.md §5.5): default-deny gate for `launchFleetMission`'s
     `mission_type` argument, independent of and in addition to the `tier` gate above.
     Mirrors `allowlist.ts`'s calldata-level mission-type check -- defense in depth, not a
@@ -305,6 +338,12 @@ def _gate_mission_type(action: Action) -> GuardVerdict:
     `launchFleetMission` PASSes trivially, same as every other function-specific gate in
     this module (`address`/`abi_hash`/`gas`/`eth_floor` all take this shape toward
     `action.is_onchain()`).
+
+    Colonize additionally goes through `_colony_target_range_violation` (below) and, new
+    here, `_colony_cap_violation` -- a Colonize that would exceed `calc.max_planets`'s cap
+    is `BLOCK`ed the same way an out-of-range target is: both are cases where the contract
+    call would revert or corrupt state rather than the wallet-engine boundary catching it
+    first, so this gate catches them before send instead of after.
     """
     if action.function != "launchFleetMission":
         return _verdict("mission_type", GuardStatus.PASS, "action is not launchFleetMission")
@@ -337,6 +376,9 @@ def _gate_mission_type(action: Action) -> GuardVerdict:
                 "value would silently corrupt the packed on-chain colony target rather "
                 "than raise",
             )
+        cap_violation = _colony_cap_violation(snapshot)
+        if cap_violation is not None:
+            return _verdict("mission_type", GuardStatus.BLOCK, f"Colonize mission blocked: {cap_violation}")
     return _verdict(
         "mission_type",
         GuardStatus.PASS,
@@ -1068,7 +1110,7 @@ def evaluate_guardrails(
     verdicts = [
         _gate_killswitch(killswitch_active=killswitch_active),
         _gate_tier(action, policy),
-        _gate_mission_type(action),
+        _gate_mission_type(action, snapshot),
         _gate_prerequisites(action, snapshot),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),
         _gate_abi_hash(action, snapshot),

@@ -107,6 +107,15 @@ def deuterium_multiplier_bps(max_temperature: int) -> int:
     ``max(0, 12_800 - max_temperature * 20)``. Metal and crystal multipliers are *always*
     10_000 regardless of temperature (:32-33 of the same function) — only deuterium
     varies with temperature; there is no metal/crystal equivalent of this function.
+
+    **Not called from the live path, unlike its sibling :func:`solar_satellite_energy`
+    (which the live path falls back to this function's temperature-only equivalent for).**
+    `production_per_hour`'s `deuterium_multiplier_bps_` argument is always populated from
+    the API's own live `PlanetSnapshot.deuterium_multiplier_bps` field
+    (`candidates.py`'s `_planet_production_context`) — never recomputed from temperature
+    via this function, so there is no fallback path that reaches it either. Kept for
+    fixtures, cross-checking against the live field, and as the documented source of the
+    inverse :func:`max_temp_from_bps` uses for that same cross-check.
     """
     return max(0, 12_800 - max_temperature * 20)
 
@@ -625,7 +634,18 @@ def max_planets(astrophysics_level: int) -> int:
     """packages/contracts/src/VeydriftGame.sol:596-597 (`maxPlanets`).
 
     ``1 + astrophysics_level``. docs/NOTES.md §13.5 only said Astrophysics "raises colony
-    capacity"; this is the exact formula, read from the facade contract.
+    capacity"; this is the exact formula, read from the facade contract. Confirmed live
+    (docs/COVERAGE.md's `max_planets` row): `VeydriftColonizationModule.sol:289-301`'s
+    `PlanetLimitReached` reverted at exactly `limit = 10` for an account with Astrophysics
+    9 and 10 owned planets, matching this formula exactly.
+
+    Used by `guard.py`'s `_gate_mission_type` (the `mission_type` gate's Colonize branch)
+    to BLOCK a Colonize `launchFleetMission` before send when
+    `Snapshot.owned_planet_count` is already at or above this cap — a pre-flight check for
+    a revert `tick.py`'s wallet-engine boundary would otherwise only discover after
+    spending gas. There is still no candidate generator that *proposes* a Colonize action
+    (docs/COVERAGE.md's own note); this is guard-layer defense for whatever proposes one,
+    manually or otherwise, not the "where to colonise" planner itself.
     """
     return 1 + astrophysics_level
 

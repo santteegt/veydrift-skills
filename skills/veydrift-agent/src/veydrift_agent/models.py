@@ -260,6 +260,14 @@ class Snapshot(Base):
     fleet_slots_limit: int | None = None
 
     planets: list[PlanetSnapshot] = Field(default_factory=list)
+    #: Total planets this wallet owns, from `/wallet/{addr}/planets`'s full response --
+    #: **not** `len(planets)`. `tick.py`'s `_fetch_snapshot` narrows `read.snapshot`'s own
+    #: per-planet detail fetch to a single planet when `policy.planets` names exactly one
+    #: id (its own cost-saving fast path), so `planets` above can legitimately hold just
+    #: one `PlanetSnapshot` for an account that owns several. `None` means unconfirmed --
+    #: same fail-closed convention as every other optional field here (AGENTS.md §5): a
+    #: colony-cap check must BLOCK on `None`, never assume "not yet at the cap."
+    owned_planet_count: int | None = None
     incoming_fleets: list[IncomingFleet] = Field(default_factory=list)
 
     def planet(self, planet_id: int) -> PlanetSnapshot | None:

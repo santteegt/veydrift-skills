@@ -105,6 +105,12 @@ def make_snapshot(
         deployment_abi_hash=abi_hash,
         game_maintenance=GameMaintenance(paused=False) if game_maintenance is _UNSET else game_maintenance,
         planets=planets if planets is not None else [make_planet()],
+        # Deliberately 0, not the "real" count matching `planets` above (1) or `None`
+        # (the model's own fail-closed default): a fixture default chosen so tests that
+        # don't care about the colony cap never trip it, same reasoning as this
+        # function's own `abi_hash=guard.PINNED_ABI_HASH` default. Tests that exercise
+        # `_colony_cap_violation` itself override this explicitly.
+        owned_planet_count=0,
     )
     base.update(overrides)
     return Snapshot(**base)
@@ -380,6 +386,71 @@ def test_mission_type_allows_an_in_range_colonize_target():
         mission_type=ids.FleetMissionType.COLONIZE, target_coordinates="1:2:5", ships={ids.Ship.COLONY_SHIP: 1}
     )
     report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+    assert verdict(report, "mission_type").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# mission_type — Colonize colony-cap check (calc.max_planets, `1 + astrophysicsLevel`).
+# An account already at its cap gets `PlanetLimitReached` on-chain
+# (`VeydriftColonizationModule.sol:289-301`) rather than a graceful no-op; this is
+# guard.py's pre-flight re-derivation of that same cap, independent of whatever proposed
+# the Colonize action.
+# --------------------------------------------------------------------------------------
+
+
+def make_colonize_action(**overrides) -> Action:
+    base = dict(
+        mission_type=ids.FleetMissionType.COLONIZE,
+        target_coordinates="1:2:5",
+        ships={ids.Ship.COLONY_SHIP: 1},
+    )
+    base.update(overrides)
+    return make_fleet_action(**base)
+
+
+def test_mission_type_blocks_colonize_when_owned_planet_count_is_unknown_never_passes_vacuously():
+    action = make_colonize_action()
+    report = evaluate(action, make_snapshot(owned_planet_count=None), make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "mission_type")
+    assert v.status is GuardStatus.BLOCK
+    assert "owned planet count is unknown" in v.detail
+
+
+def test_mission_type_blocks_colonize_at_the_colony_cap():
+    # Astrophysics level 0 (no technologies reported) -> cap = 1 + 0 = 1; already owning 1.
+    action = make_colonize_action()
+    report = evaluate(action, make_snapshot(owned_planet_count=1), make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "mission_type")
+    assert v.status is GuardStatus.BLOCK
+    assert "colony cap" in v.detail
+    assert "1/1" in v.detail
+
+
+def test_mission_type_blocks_colonize_above_the_colony_cap():
+    """Defense in depth: BLOCKs even if `owned_planet_count` somehow already exceeds the
+    cap (e.g. Astrophysics was since downgraded, or the count is stale), not just when
+    exactly at it."""
+    action = make_colonize_action()
+    report = evaluate(action, make_snapshot(owned_planet_count=5), make_policy(tier=Tier.OPERATOR))
+    assert verdict(report, "mission_type").status is GuardStatus.BLOCK
+
+
+def test_mission_type_allows_colonize_under_the_colony_cap_with_higher_astrophysics():
+    # Astrophysics level 2 -> cap = 3; owning 2 is still under it.
+    action = make_colonize_action()
+    snapshot = make_snapshot(
+        owned_planet_count=2,
+        technologies=[Entity(id=ids.Technology.ASTROPHYSICS, name="Astrophysics", level=2, cost=Resources())],
+    )
+    report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR))
+    assert verdict(report, "mission_type").status is GuardStatus.PASS
+
+
+def test_mission_type_colony_cap_check_does_not_apply_to_non_colonize_missions():
+    """A Transport action at `owned_planet_count=1` (which would BLOCK a Colonize) must
+    not be affected -- the cap only ever gates Colonize."""
+    action = make_fleet_action(mission_type=ids.FleetMissionType.TRANSPORT)
+    report = evaluate(action, make_snapshot(owned_planet_count=1), make_policy(tier=Tier.OPERATOR))
     assert verdict(report, "mission_type").status is GuardStatus.PASS
 
 

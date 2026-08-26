@@ -255,6 +255,9 @@ def test_universe_unknown_planet_id_fails_with_exit_4():
 
 def _mock_snapshot_routes(overview_fixture: str = "wallet_overview.json"):
     respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json=load("health.json")))
+    respx.get(f"{BASE}/wallet/{WALLET}/planets").mock(
+        return_value=httpx.Response(200, json=load("wallet_planets.json"))
+    )
     respx.get(f"{BASE}/wallet/{WALLET}/research", params={"planetId": str(PLANET)}).mock(
         return_value=httpx.Response(200, json=load("wallet_research.json"))
     )
@@ -332,6 +335,9 @@ def test_snapshot_parses_missile_silo_level_and_crawler_production():
 @respx.mock
 def test_snapshot_exits_2_when_health_unhealthy():
     respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json=load("health_unhealthy.json")))
+    respx.get(f"{BASE}/wallet/{WALLET}/planets").mock(
+        return_value=httpx.Response(200, json=load("wallet_planets.json"))
+    )
     respx.get(f"{BASE}/wallet/{WALLET}/research", params={"planetId": str(PLANET)}).mock(
         return_value=httpx.Response(200, json=load("wallet_research.json"))
     )
@@ -361,6 +367,9 @@ def test_snapshot_parses_game_maintenance_paused():
     through -- and that a paused game still parses `health_ok=True` (reads keep working
     during a pause, confirmed live)."""
     respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json=load("health_paused.json")))
+    respx.get(f"{BASE}/wallet/{WALLET}/planets").mock(
+        return_value=httpx.Response(200, json=load("wallet_planets.json"))
+    )
     respx.get(f"{BASE}/wallet/{WALLET}/research", params={"planetId": str(PLANET)}).mock(
         return_value=httpx.Response(200, json=load("wallet_research.json"))
     )
@@ -482,6 +491,9 @@ def test_snapshot_parses_randomness_readiness_and_readiness_ready_from_a_recover
     command's own exit code) -- but the recovered 5xx body is still fully parsed onto
     the Snapshot, which is what tick.py's _fetch_snapshot actually consumes."""
     respx.get(f"{BASE}/health").mock(return_value=httpx.Response(503, json=load("health_randomness_degraded.json")))
+    respx.get(f"{BASE}/wallet/{WALLET}/planets").mock(
+        return_value=httpx.Response(200, json=load("wallet_planets.json"))
+    )
     respx.get(f"{BASE}/wallet/{WALLET}/research", params={"planetId": str(PLANET)}).mock(
         return_value=httpx.Response(200, json=load("wallet_research.json"))
     )
