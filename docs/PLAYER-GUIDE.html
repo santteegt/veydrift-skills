@@ -827,7 +827,8 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   },
   <span class="c-key">"wallet_engine"</span>: { <span class="c-key">"provider"</span>: <span class="c-str">"keystore"</span>, <span class="c-key">"require_confirmation"</span>: true },
   <span class="c-key">"strategy"</span>: {
-    <span class="c-key">"resource_weights"</span>: { <span class="c-key">"metal"</span>: 1, <span class="c-key">"crystal"</span>: 1, <span class="c-key">"deuterium"</span>: 1 }, <span class="c-key">"max_alternatives"</span>: 5,
+    <span class="c-key">"resource_weights"</span>: { <span class="c-key">"metal"</span>: 1, <span class="c-key">"crystal"</span>: 1, <span class="c-key">"deuterium"</span>: 1 },   <span class="c-comment">// used to tie-break, not to pick a family -- see below</span>
+    <span class="c-key">"max_alternatives"</span>: 5,            <span class="c-comment">// caps how many runner-up options each proposal lists</span>
     <span class="c-key">"ship_targets"</span>: [{ <span class="c-key">"name"</span>: <span class="c-str">"Small Cargo"</span>, <span class="c-key">"count"</span>: 1 }], <span class="c-key">"defense_targets"</span>: [],  <span class="c-comment">// standing-count targets; a target not yet buildable now drives its own build-up (see below)</span>
     <span class="c-key">"research_priority"</span>: [], <span class="c-key">"building_priority"</span>: []      <span class="c-comment">// ordered name lists; [] on all four = today's behaviour, unchanged</span>
   }
@@ -990,6 +991,16 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
         <tr><td><code>enable_crawler</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>false</code></td></tr>
       </tbody>
     </table>
+  </div>
+  <div class="callout caution">
+    <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    <div><strong class="callout-title"><code>resource_weights</code> is used to tie-break, not to pick a family</strong><p>It only ever changes the winning proposal in three narrow places, and only ever changes a <em>displayed</em> number everywhere else:</p>
+    <ul>
+      <li><strong>An exact tie between two mines.</strong> Mine selection is normally decided purely by value density (<code>(level+1) / (base_rate × multiplier)</code>) — <code>resource_weights</code> plays no part in that walk at all. Only when two mines score <em>identically</em> on that primary ranking does the planner fall back to each mine's weighted payback-hours score to pick between them. This is a real, recurring case, not a hypothetical edge case — it recurs any time the two mines' levels sit at the corresponding ratio (e.g. Metal level 14 and Crystal level 9 at a 1x multiplier tie exactly), not just one specific pair of levels.</li>
+      <li><strong>Multiple locked declared targets at once.</strong> If more than one <code>ship_targets</code>/<code>defense_targets</code>/<code>research_priority</code> entry is simultaneously locked, the cheapest (weighted) unlock step across all of them wins the unlock-chain rung — again a tie-break among otherwise-incomparable candidates, not a ranking against mines or research.</li>
+      <li><strong>Crawler vs. Solar Satellite, only once <code>enable_crawler</code> is on.</strong> With Crawler enabled, its weighted payback score competes directly against Solar Satellite's for the shipyard slot — the closest this field comes to a real ranking rather than a pure tie-break, and it only applies when you've opted in.</li>
+    </ul>
+    <p><strong>Everywhere else, changing <code>resource_weights</code> changes a number in <code>alternatives</code>, not what gets proposed.</strong> Research selection, <code>building_priority</code>'s infrastructure walk, defense selection, Fusion Reactor's displayed payback score, and a mine that <em>isn't</em> tied with another mine are all completely unaffected by this field — the weighted score still gets computed and shown for context, it just never wins anything. If you set <code>deuterium: 3</code> expecting the planner to start favoring deuterium-producing picks broadly, it won't — check the three bullets above for the only places it actually bites.</p></div>
   </div>
   <div class="callout caution">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>

@@ -272,7 +272,7 @@ change called out:
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },
   "strategy": {
-    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },   // weights the payback-hours comparison across resources
+    "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },   // used to tie-break, not to pick a family -- see below
     "max_alternatives": 5,            // caps how many runner-up options each proposal lists
     "ship_targets": [{"name": "Small Cargo", "count": 1}],  // a target not yet buildable now drives its own build-up (see below)
     "defense_targets": [],            // same shape, e.g. [{"name": "Small Shield Dome", "count": 1}]
@@ -480,6 +480,36 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `research_priority` | list of string | ordered Technology names; an unrecognized name is a hard error on the next tick. **Empty: falls back to an unlock-breadth-ranked default order** (most-directly-unlocking technology first; level then id only as the tiebreak — see callout below) across all technologies — research proposals still happen, just unprioritized by name. **Does not round-robin — same callout.** | `[]` |
 | `building_priority` | list of string | ordered Building names — **asymmetric with the three fields above; see callout below**. **Empty: the infrastructure family never fires** — rung 6 falls through to its ordinary value-density mine/energy walk, which payback scoring does not drive except to break an exact tie between two mines. **Does not round-robin either — same callout.** | `[]` |
 | `enable_crawler` | bool | `true`/`false` | `false` |
+
+> **`resource_weights` is used to tie-break, not to pick a family — it only ever changes
+> the winning proposal in three narrow places, and only ever changes a *displayed* number
+> everywhere else.** Concretely:
+>
+> - **An exact tie between two mines.** Mine selection is normally decided purely by
+>   value density (`(level+1) / (base_rate × multiplier)`) — `resource_weights` plays no
+>   part in that walk at all. Only when two mines score *identically* on that primary
+>   ranking does the planner fall back to each mine's weighted payback-hours score to
+>   pick between them. This is a real, recurring case, not a hypothetical edge case — it
+>   recurs any time the two mines' levels sit at the corresponding ratio (e.g. Metal
+>   level 14 and Crystal level 9 at a 1x multiplier tie exactly), not just one specific
+>   pair of levels.
+> - **Multiple locked declared targets at once.** If more than one `ship_targets`/
+>   `defense_targets`/`research_priority` entry is simultaneously locked, the cheapest
+>   (weighted) unlock step across all of them wins the unlock-chain rung — again a
+>   tie-break among otherwise-incomparable candidates, not a ranking against mines or
+>   research.
+> - **Crawler vs. Solar Satellite, only once `enable_crawler` is on.** With Crawler
+>   enabled, its weighted payback score competes directly against Solar Satellite's for
+>   the shipyard slot — the closest this field comes to a real ranking rather than a
+>   pure tie-break, and it only applies when you've opted in.
+>
+> **Everywhere else, changing `resource_weights` changes a number in `alternatives`, not
+> what gets proposed.** Research selection, `building_priority`'s infrastructure walk,
+> defense selection, Fusion Reactor's displayed payback score, and a mine that *isn't*
+> tied with another mine are all completely unaffected by this field — the weighted
+> score still gets computed and shown for context, it just never wins anything. If you
+> set `deuterium: 3` expecting the planner to start favoring deuterium-producing picks
+> broadly, it won't — check the three bullets above for the only places it actually bites.
 
 > **Footgun — a negative `count` is a silent no-op, not an error.** `ship_targets`/
 > `defense_targets` entries are compared as `entity.count >= target.count`. For any
