@@ -144,11 +144,13 @@ def test_matched_building_levels_isolate_temperature_as_the_only_variable():
     fixture. If the planner still refuses a satellite here, the earlier two tests are not
     a coincidence of different progress levels -- it really is temperature-driven.
 
-    Storage caps are bumped to match `planet_hot.json` too -- planet_664's stock 10,000
-    caps are a level-0-ish beginner's fixture and would trip the storage-cap precondition
-    (`_resolve_storage_precondition`) on the Solar Plant's 32,842-metal cost, which would
-    make this fail for a storage reason instead of a temperature one and defeat the test's
-    whole point of isolating temperature as the only variable.
+    Storage caps and current holdings are bumped to match `planet_hot.json`'s scale too --
+    planet_664's stock 10,000 caps and its real 1,000/1,000/0 holdings are a level-0-ish
+    beginner's fixture and would trip the storage-cap precondition
+    (`_resolve_storage_precondition`) or the currently-affordable precondition
+    (`_resolve_affordability_precondition`) on the Solar Plant's 32,842-metal cost, which
+    would make this fail for a storage/affordability reason instead of a temperature one
+    and defeat the test's whole point of isolating temperature as the only variable.
     """
     snapshot = load_snapshot("planet_664.json")
     policy = make_policy(planets=[664])
@@ -176,6 +178,7 @@ def test_matched_building_levels_isolate_temperature_as_the_only_variable():
             "buildings": buildings,
             "energy": planet.energy.model_copy(update={"produced": 1253, "required": 1253, "scale_bps": 10_000}),
             "storage_caps": Resources(metal=5_355_000, crystal=5_355_000, deuterium=5_355_000),
+            "resources_as_of_now": Resources(metal=5_355_000, crystal=5_355_000, deuterium=5_355_000),
         }
     )
     progressed_snapshot = snapshot.model_copy(

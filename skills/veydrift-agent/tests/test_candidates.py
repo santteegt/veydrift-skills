@@ -840,6 +840,11 @@ def test_building_priority_selects_first_unlocked_declared_building():
     snapshot = load_snapshot("planet_664.json")
     planet = snapshot.planet(664)
     assert planet is not None
+    # Real zero-state 664 only holds 1,000 metal / 1,000 crystal / 0 deuterium -- not
+    # enough to afford Robotics Factory (400/120/200) even though it's unlocked. Bumped
+    # here so this test isolates priority-order + lock-status (its actual subject),
+    # leaving the currently-unaffordable case to its own test below.
+    planet.resources_as_of_now = Resources(metal=100_000, crystal=100_000, deuterium=100_000)
     policy = make_policy(planets=[664], strategy=StrategyCfg(building_priority=["Shipyard", "Robotics Factory"]))
 
     winner, _alternatives = candidates.select_building_candidate(snapshot, policy, planet)
@@ -849,6 +854,32 @@ def test_building_priority_selects_first_unlocked_declared_building():
     # Factory itself has no prerequisite in the source, so it wins.
     assert winner.action.entity_id == ids.Building.ROBOTICS_FACTORY
     assert winner.family == "infrastructure"
+
+
+def test_building_priority_target_currently_unaffordable_falls_through_to_ordinary_picker():
+    """Dated fix: before `_resolve_affordability_precondition` existed, a declared
+    `building_priority` target that was unlocked but currently unaffordable still won
+    outright -- guard.py's `_gate_affordability` would then BLOCK it every tick forever,
+    since nothing here ever re-tried a different pick. Real zero-state planet 664 (1,000
+    metal / 1,000 crystal / 0 deuterium) is exactly this case: Robotics Factory is
+    unlocked but needs 200 deuterium it doesn't have. The fix falls through past the
+    entire (single-entry, now-exhausted) building_priority list to the ordinary
+    economic picker below it, which lands on the same energy-first opener
+    `test_planet_664_energy_first_opener_never_proposes_satellite` (test_plan.py) pins."""
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    policy = make_policy(planets=[664], strategy=StrategyCfg(building_priority=["Robotics Factory"]))
+
+    winner, alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    assert winner.family != "infrastructure"
+    assert winner.action.entity_id != ids.Building.ROBOTICS_FACTORY
+    # Demoted, not dropped -- still visible so a human reviewing the proposal can see the
+    # declared target was considered and why it lost.
+    demoted = [c for c in alternatives if c.action.entity_id == ids.Building.ROBOTICS_FACTORY]
+    assert demoted
 
 
 def test_infrastructure_fallback_order_prefers_unlock_breadth_over_level(monkeypatch):
@@ -897,7 +928,11 @@ def _capped_planet(*, with_metal_storage: bool = True) -> PlanetSnapshot:
     scoring, but its cost (200 metal) exceeds this planet's tiny metal storage cap (50)
     -- that cost can never be saved up to without raising Metal Storage first. Crystal
     Mine is energy-safe and fits comfortably under its own (large) crystal cap, so it's
-    the fallback winner when no Metal Storage candidate is available to substitute."""
+    the fallback winner when no Metal Storage candidate is available to substitute.
+    `resources_as_of_now` is set well above every building's cost here deliberately --
+    this fixture isolates the storage-*cap* precondition specifically, not the separate
+    currently-affordable precondition (see `_underfunded_planet` below for that one), so
+    current holdings must never be the thing that decides the winner in these tests."""
     buildings = [
         Entity(id=ids.Building.METAL_MINE, name="Metal Mine", level=0, cost=Resources(metal=200, crystal=50)),
         Entity(id=ids.Building.CRYSTAL_MINE, name="Crystal Mine", level=0, cost=Resources(metal=48, crystal=24)),
@@ -918,7 +953,7 @@ def _capped_planet(*, with_metal_storage: bool = True) -> PlanetSnapshot:
         metal_multiplier_bps=10_000,
         crystal_multiplier_bps=10_000,
         deuterium_multiplier_bps=10_000,
-        resources_as_of_now=Resources(metal=10, crystal=10, deuterium=10),
+        resources_as_of_now=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
         storage_caps=Resources(metal=50, crystal=100_000, deuterium=100_000),
         production_per_hour=Resources(metal=0, crystal=0, deuterium=0),
         energy=EnergyBalance(produced=1_000, required=0, scale_bps=10_000, solar_satellite_energy=4),
@@ -979,6 +1014,164 @@ def test_building_priority_winner_capped_by_storage_is_replaced_by_matching_stor
     assert winner.action.entity_id == ids.Building.METAL_STORAGE
     demoted = [c for c in alternatives if c.action.entity_id == ids.Building.ROBOTICS_FACTORY]
     assert demoted
+
+
+# --------------------------------------------------------------------------------------
+# Currently-affordable precondition on the winning pick. Distinct from the storage-cap
+# section above: here the cost fits comfortably under every storage cap it needs, but
+# current holdings (`resources_as_of_now`) don't cover it *yet* -- e.g. the top-ranked
+# mine by value density needs a resource the planet is presently short on, while a
+# lower-ranked mine is fully affordable right now. Before this fix, nothing in this
+# module checked current holdings at all: the ladder would keep re-proposing the same
+# pick every tick, and guard.py's `_gate_affordability` would BLOCK it every time, with
+# no path back here to try the next candidate -- the "one resource shortage blocks the
+# whole ladder" failure mode. `_resolve_affordability_precondition` (composed with the
+# storage-cap check by `_resolve_building_preconditions`) makes falling through to the
+# next-ranked candidate the default, exactly like the storage-cap and energy-first cases.
+# --------------------------------------------------------------------------------------
+
+
+def _underfunded_planet() -> PlanetSnapshot:
+    """Metal Mine ranks first by value density (300,000 vs Crystal's 200,000) and is
+    energy-safe and comfortably under its storage cap -- but the planet is presently
+    short on crystal, one of the two resources Metal Mine's upgrade needs (60 metal / 40
+    crystal, only 15 crystal held). Crystal Mine, ranked second, costs 20 metal / 10
+    crystal -- affordable right now, since 15 covers its 10 -- and, not incidentally, is
+    exactly the resource the planet is short on: the scenario a human operator would call
+    "a crystal-shortage bottleneck blocking the ladder", reproduced structurally rather
+    than by a bespoke bottleneck-detection heuristic (see
+    `_resolve_affordability_precondition`'s docstring)."""
+    return PlanetSnapshot(
+        planet_id=3,
+        metal_multiplier_bps=10_000,
+        crystal_multiplier_bps=10_000,
+        deuterium_multiplier_bps=10_000,
+        resources_as_of_now=Resources(metal=10_000, crystal=15, deuterium=10_000),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(metal=0, crystal=0, deuterium=0),
+        energy=EnergyBalance(produced=1_000, required=0, scale_bps=10_000, solar_satellite_energy=4),
+        buildings=[
+            Entity(id=ids.Building.METAL_MINE, name="Metal Mine", level=0, cost=Resources(metal=60, crystal=40)),
+            Entity(id=ids.Building.CRYSTAL_MINE, name="Crystal Mine", level=0, cost=Resources(metal=20, crystal=10)),
+            Entity(
+                id=ids.Building.DEUTERIUM_SYNTHESIZER,
+                name="Deuterium Synthesizer",
+                level=0,
+                cost=Resources(metal=225, crystal=75),
+            ),
+            Entity(id=ids.Building.SOLAR_PLANT, name="Solar Plant", level=0, cost=Resources(metal=75, crystal=30)),
+        ],
+        ships=[],
+        defenses=[],
+    )
+
+
+def test_mine_winner_currently_unaffordable_falls_through_to_next_affordable_mine():
+    planet = _underfunded_planet()
+    snapshot = Snapshot(taken_at="2026-08-27T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[3])
+
+    winner, alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    # Metal Mine ranks first by density but needs 40 crystal against 5 held -- falls
+    # through. Crystal Mine (20 metal / 10 crystal, both covered) wins instead.
+    assert winner.family == "mine"
+    assert winner.action.entity_id == ids.Building.CRYSTAL_MINE
+    demoted = [c for c in alternatives if c.action.entity_id == ids.Building.METAL_MINE and c.family == "mine"]
+    assert demoted
+
+
+def test_mine_winner_currently_unaffordable_with_no_affordable_mine_falls_through_to_noop():
+    """Every mine (not just the top-ranked one) is currently unaffordable -- the walk
+    must exhaust the whole priority order and return no winner at all, never silently
+    accept an unaffordable pick just because it ran out of alternatives to try."""
+    planet = _underfunded_planet()
+    planet.resources_as_of_now = Resources(metal=1, crystal=1, deuterium=1)
+
+    snapshot = Snapshot(taken_at="2026-08-27T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[3])
+
+    winner, _alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is None
+
+
+def test_building_priority_target_falls_through_when_currently_unaffordable_no_storage_issue():
+    """Same fixture family as the storage-cap `building_priority` test above, but the
+    blocker here is current holdings, not the storage cap -- proving the affordability
+    precondition applies to a declared `building_priority` winner too, not only the
+    ordinary mine walk."""
+    planet = _underfunded_planet()
+    buildings = planet.buildings + [
+        Entity(id=ids.Building.ROBOTICS_FACTORY, name="Robotics Factory", level=0, cost=Resources(metal=5_000, crystal=1))
+    ]
+    planet = planet.model_copy(update={"buildings": buildings})
+    # 25 metal covers Crystal Mine's 20 (the fallback winner) but not Robotics Factory's
+    # 5,000 -- enough to prove the fallthrough lands on a real winner, not just that the
+    # declared target gets rejected.
+    planet.resources_as_of_now = Resources(metal=25, crystal=10_000, deuterium=10_000)
+    snapshot = Snapshot(taken_at="2026-08-27T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[3], strategy=StrategyCfg(building_priority=["Robotics Factory"]))
+
+    winner, alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    assert winner.family != "infrastructure"
+    assert winner.action.entity_id != ids.Building.ROBOTICS_FACTORY
+    demoted = [c for c in alternatives if c.action.entity_id == ids.Building.ROBOTICS_FACTORY]
+    assert demoted
+
+
+def _storage_substitute_also_underfunded_planet() -> PlanetSnapshot:
+    """Metal Mine is storage-capped (200 metal cost vs a 50 metal cap), so it would
+    normally substitute to Metal Storage -- but Metal Storage is deliberately priced at
+    500 metal here, well above the 100 metal actually held, so the substitute itself
+    fails the currently-affordable check too. Crystal Mine (20 metal / 10 crystal) is
+    cheap enough to be affordable at 100 metal and wins instead."""
+    return PlanetSnapshot(
+        planet_id=4,
+        metal_multiplier_bps=10_000,
+        crystal_multiplier_bps=10_000,
+        deuterium_multiplier_bps=10_000,
+        resources_as_of_now=Resources(metal=100, crystal=10_000, deuterium=10_000),
+        storage_caps=Resources(metal=50, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(metal=0, crystal=0, deuterium=0),
+        energy=EnergyBalance(produced=1_000, required=0, scale_bps=10_000, solar_satellite_energy=4),
+        buildings=[
+            Entity(id=ids.Building.METAL_MINE, name="Metal Mine", level=0, cost=Resources(metal=200, crystal=10)),
+            Entity(id=ids.Building.CRYSTAL_MINE, name="Crystal Mine", level=0, cost=Resources(metal=20, crystal=10)),
+            Entity(
+                id=ids.Building.DEUTERIUM_SYNTHESIZER,
+                name="Deuterium Synthesizer",
+                level=0,
+                cost=Resources(metal=225, crystal=75),
+            ),
+            Entity(id=ids.Building.SOLAR_PLANT, name="Solar Plant", level=0, cost=Resources(metal=75, crystal=30)),
+            Entity(id=ids.Building.METAL_STORAGE, name="Metal Storage", level=0, cost=Resources(metal=500, crystal=0)),
+        ],
+        ships=[],
+        defenses=[],
+    )
+
+
+def test_storage_cap_substitute_that_is_itself_currently_unaffordable_falls_through_further():
+    """Composition case for `_resolve_building_preconditions`: Metal Mine is storage-
+    capped, so it substitutes to Metal Storage -- but Metal Storage's own cost (500
+    metal) is *also* more than current holdings cover here (100 metal). The combined
+    precondition must fall through past the substitute too, landing on Crystal Mine, not
+    silently accept the currently-unaffordable storage substitute."""
+    planet = _storage_substitute_also_underfunded_planet()
+    snapshot = Snapshot(taken_at="2026-08-27T00:00:00Z", wallet="0xabc", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[4])
+
+    winner, alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    assert winner.family == "mine"
+    assert winner.action.entity_id == ids.Building.CRYSTAL_MINE
+    demoted_metal_mine = [c for c in alternatives if c.action.entity_id == ids.Building.METAL_MINE and c.family == "mine"]
+    assert demoted_metal_mine
 
 
 def test_research_priority_overrides_lowest_level_first():

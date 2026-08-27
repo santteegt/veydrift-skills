@@ -315,6 +315,20 @@ where it moved.
      Before this fix `guard.py`'s `_gate_affordability` would BLOCK such a pick forever
      ("never affordable: cost exceeds storage cap") while the ladder kept re-proposing it
      every tick.
+   - **Fix, dated (see CHANGELOG):** a distinct, narrower gap in the same family —
+     a pick that fits comfortably under the storage cap can still be one current
+     holdings simply don't cover *yet* (a plain resource shortfall, not a permanent
+     ceiling). `_resolve_affordability_precondition`, composed with the storage-cap
+     check above by `_resolve_building_preconditions`, applies the same "demote and try
+     the next candidate" treatment to this case — there's no single substitute building
+     to offer here (unlike the storage-cap case), so falling through to the next-ranked
+     mine/energy/`building_priority` pick is the fix itself. For a mine walk ordered by
+     value density, that naturally tends to land on whichever mine produces the resource
+     actually in short supply (e.g. a crystal shortage blocking a metal-dense top pick
+     resolves to the crystal mine next in line), without this module ever needing to
+     identify a "bottleneck resource" as its own concept. `guard.py`'s
+     `_gate_affordability` is unchanged and remains the authoritative, independent final
+     check — this is a planning-layer improvement, not a relaxation of that gate.
    - If `policy.strategy.building_priority` is set, `select_building_candidate` checks
      `generate_infrastructure_candidates` (Robotics Factory, Nanite Factory, Shipyard,
      Research Lab, Terraformer, Missile Silo, `score=None`, in declared order) **first**,

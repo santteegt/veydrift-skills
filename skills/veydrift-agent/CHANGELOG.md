@@ -11,6 +11,29 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-08-27
+
+### Fixed
+
+- `select_building_candidate` (`candidates.py`) no longer gets stuck re-proposing a
+  top-ranked mine/energy/declared-`building_priority` pick that the planet simply can't
+  afford *yet* (as opposed to `_resolve_storage_precondition`'s existing "can never
+  afford, ever" storage-cap check). Before this fix, current holdings were never checked
+  at this layer at all -- only `guard.py`'s `_gate_affordability` checked them, and by
+  then the ladder had already committed to the pick for the tick, with no path back to
+  try the next-ranked candidate. A planet with a real resource shortfall (e.g. crystal
+  needed downstream for research/infra, but not yet accumulated) would have its
+  highest-density mine BLOCKed by guard.py every single tick, forever, even when a
+  cheaper, fully affordable mine sat right below it in priority order. New
+  `_resolve_affordability_precondition`, composed with the existing storage-cap check by
+  `_resolve_building_preconditions`, makes falling through to the next candidate the
+  default -- for a mine walk ordered by value density this naturally tends to land on
+  whichever mine produces the resource actually in short supply, without inventing a
+  "bottleneck resource" concept. No schema change; `guard.py`'s `_gate_affordability`
+  remains the unchanged, authoritative final check. `policy.strategy.resource_weights`
+  is unaffected -- it still only ever tie-breaks (docs/PLAYER-GUIDE.md, dated
+  2026-08-26), never picks a family; this fix does not widen its scope.
+
 ## [1.6.0] - 2026-08-26
 
 ### Added
