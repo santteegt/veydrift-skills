@@ -11,6 +11,28 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-27
+
+### Fixed
+
+- **Skill self-containment.** `SKILL.md`, `references/abi-pinning.md`,
+  `references/fork-testing.md`, and `references/tx-safety.md` no longer cite
+  `docs/SPEC.md`/`docs/RESEARCH-ADDENDUM.md`/`docs/COVERAGE.md`/`README.md`/`AGENTS.md` —
+  repo-root paths outside this skill's own directory, which aren't guaranteed to travel
+  with an installed skill (`npx skills add .`). Where a citation pointed at a dated fix
+  also recorded in this file, replaced it with a `CHANGELOG.md` version citation instead;
+  otherwise restated the fact inline.
+- **`references/fork-testing.md` gained a table of contents.** At 713 lines it's the
+  largest reference file across both skills and was the only one over the 300-line
+  threshold missing one.
+- **`npm run wallet:new` (`scripts/gen-keystore.mjs`) is now documented.** It was never
+  referenced from `SKILL.md` or `references/providers.md` — the keystore section documented
+  *using* an existing `VEYDRIFT_KEYSTORE` file but never how to create one, a real gap for a
+  first install on the default provider. Documented in `providers.md`'s keystore section
+  (with the caveat that it mints a *new* address, so it's for a fresh install with no
+  settled planet yet, not for migrating an existing key into keystore format) and pointed
+  to from `SKILL.md`'s Providers section.
+
 ## [0.5.0] - 2026-08-22
 
 ### Added

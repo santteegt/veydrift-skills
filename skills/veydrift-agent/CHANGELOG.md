@@ -11,6 +11,24 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-08-27
+
+### Fixed
+
+- **Skill self-containment.** `references/contract-writes.md`, `references/api-routes.md`,
+  `references/guardrails.md`, and `assets/com.veydrift.agent.plist.template` no longer
+  cite `docs/SPEC.md`/`docs/COVERAGE.md`/`AGENTS.md` — repo-root paths outside this skill's
+  own directory, which aren't guaranteed to travel with an installed skill (`npx skills add
+  .`). Two spots in `api-routes.md` were structurally built around comparing this skill's
+  own probe findings to an external doc's specific claims (a whole section titled "where
+  this probe contradicts `RESEARCH-ADDENDUM.md` §2") and needed rewriting to state the same
+  facts standalone, not just a citation swap. Where a citation pointed at a dated fix also
+  recorded in this file, replaced it with a `CHANGELOG.md` version citation instead.
+  `scripts/generate_schemas.py`'s docstring got the same treatment, extending the rule to
+  `scripts/` (grouped with `references/`/`assets/` as bundled resources, not with `src/`).
+  Caught one incidental stale-doc bug along the way: `api-routes.md` was still describing an
+  `except ImportError` fallback in `read.py` that an earlier cleanup had already removed.
+
 ## [1.6.2] - 2026-08-27
 
 ### Fixed
