@@ -69,8 +69,10 @@ interface WalletProvider {
 
 `policy.wallet_engine.provider` (a `veydrift-agent`/`policy.json` concern) picks the
 default; `WALLET_PROVIDER` overrides it. Neither provider is EIP-7702-based — both hold
-the actual private key for the actual EOA. Full detail, including the leak-detection
-refusal `envkey` runs on startup: `references/providers.md`.
+the actual private key for the actual EOA. No `VEYDRIFT_KEYSTORE` file yet? `npm run
+wallet:new` generates a fresh one — but only for a genuinely new account with no planet
+settled yet; see `references/providers.md`'s keystore section for why. Full detail,
+including the leak-detection refusal `envkey` runs on startup: `references/providers.md`.
 
 RPC endpoint is a separate, provider-independent knob: `VEYDRIFT_RPC_URL`, defaulting to
 `https://mainnet.base.org`. Point it at a dedicated endpoint (e.g. Alchemy) to avoid the

@@ -81,6 +81,15 @@ exactly the one place `ethers` earns its dependency slot in a codebase that othe
 for everything chain-side.
 
 - **Path**: `VEYDRIFT_KEYSTORE` env var, pointing at the keystore JSON file.
+- **Don't have a keystore file yet?** `npm run wallet:new` (`scripts/gen-keystore.mjs`) generates a
+  **brand-new** random EOA, prompts for a password, and writes an encrypted keystore to
+  `~/.veydrift/keystore.json` by default. This is for a genuinely fresh install with no
+  existing settled planet — it mints a new address, so it does **not** help with the
+  address-binding constraint above: it cannot recover or re-encrypt an EOA that already owns a
+  planet. Migrating an *existing* private key (e.g. one currently held in `envkey`'s
+  `VEYDRIFT_PRIVATE_KEY`) into keystore format is a different operation this script doesn't do —
+  it needs `ethers`'s `new Wallet(privateKey).encrypt(password)` run against that specific key,
+  not this script.
 - **Password**: `VEYDRIFT_KEYSTORE_PASSWORD` env var, or an interactive, non-echoing stdin prompt
   if that's unset. Never a CLI flag (so it can never land in argv, shell history, or `ps`), never
   logged.

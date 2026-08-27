@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate `schemas/policy.schema.json` and `schemas/action.schema.json` from the
-frozen pydantic models in `models.py`, via `model_json_schema()` (docs/SPEC.md §5.6:
-"schemas are generated via `model_json_schema()`", never hand-written).
+frozen pydantic models in `models.py`, via `model_json_schema()` -- schemas are always
+generated this way, never hand-written.
 
 Run after any change to `Policy` or `Action` in `models.py`:
 
@@ -11,8 +11,8 @@ or via the Makefile target:
 
     make -C skills/veydrift-agent schemas
 
-Both schema files are committed (docs/SPEC.md §2: "schemas/ -- GENERATED from pydantic,
-committed") -- this script is how they stay in sync, not a build step CI needs to run.
+Both schema files are committed -- this script is how they stay in sync, not a build
+step CI needs to run.
 """
 
 from __future__ import annotations

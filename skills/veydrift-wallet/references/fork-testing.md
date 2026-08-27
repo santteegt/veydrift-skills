@@ -1,5 +1,38 @@
 # Fork testing tier≥2 sends against a real chain
 
+## Table of contents
+
+- [Why this exists](#why-this-exists)
+- [1. Start Anvil](#1-start-anvil)
+- [2. Environment](#2-environment)
+- [3. The 7 selectors](#3-the-7-selectors)
+- [4. Two gotchas that will cost an afternoon otherwise](#4-two-gotchas-that-will-cost-an-afternoon-otherwise)
+- [5. Accounts](#5-accounts)
+- [6. Time travel for queue completion](#6-time-travel-for-queue-completion)
+- [7. The e2e test suite's own env var](#7-the-e2e-test-suites-own-env-var)
+- [8. Four verifications worth doing beyond the per-selector sweep](#8-four-verifications-worth-doing-beyond-the-per-selector-sweep)
+  - [8.1 Colony-target packing](#81-colony-target-packing)
+  - [8.2 The two fleet-tuple encoders](#82-the-two-fleet-tuple-encoders)
+  - [8.3 The fuel formula](#83-the-fuel-formula)
+  - [8.4 `simulateTx`'s `ok` verdict, capped at the gas that will actually be sent](#84-simulatetxs-ok-verdict-capped-at-the-gas-that-will-actually-be-sent)
+- [9. Round 2 (2026-08-19) — all 7 selectors, live on a pinned fork](#9-round-2-2026-08-19-all-7-selectors-live-on-a-pinned-fork)
+  - [9.1 The 5 selectors reachable from the project's own account](#91-the-5-selectors-reachable-from-the-projects-own-account)
+  - [9.2 Selectors 6/7 — a second, impersonated account](#92-selectors-67-a-second-impersonated-account)
+  - [9.3 What this closes, and what it doesn't](#93-what-this-closes-and-what-it-doesnt)
+- [10. Round 3 (2026-08-19) — Colony Ship production and the Colonize slot-claim, live](#10-round-3-2026-08-19-colony-ship-production-and-the-colonize-slot-claim-live)
+  - [10.1 The Colony Ship production prerequisite — already satisfied, no unlock chain needed](#101-the-colony-ship-production-prerequisite-already-satisfied-no-unlock-chain-needed)
+  - [10.2 `startShipProduction` for the Colony Ship — live-sent](#102-startshipproduction-for-the-colony-ship-live-sent)
+  - [10.3 Settlement via the permissionless `finishShipProduction` — not part of this repo's allowlist](#103-settlement-via-the-permissionless-finishshipproduction-not-part-of-this-repos-allowlist)
+  - [10.4 `resolveFleetMission` — live-sent for the first time ever in this codebase's history](#104-resolvefleetmission-live-sent-for-the-first-time-ever-in-this-codebases-history)
+  - [10.5 Target coordinate discovery and the Colony target encoding](#105-target-coordinate-discovery-and-the-colony-target-encoding)
+  - [10.6 First Colonize attempt reverted `PlanetLimitReached(uint256)` — a genuine game rule, not a bug](#106-first-colonize-attempt-reverted-planetlimitreacheduint256-a-genuine-game-rule-not-a-bug)
+  - [10.7 Working around the cap — a single, surgical `anvil_setStorageAt` write](#107-working-around-the-cap-a-single-surgical-anvil_setstorageat-write)
+  - [10.8 Colonize `launchFleetMission` — live-sent after the workaround](#108-colonize-launchfleetmission-live-sent-after-the-workaround)
+  - [10.9 The actual verification — before/after state, the point of this whole exercise](#109-the-actual-verification-beforeafter-state-the-point-of-this-whole-exercise)
+  - [10.10 What this closes, precisely](#1010-what-this-closes-precisely)
+
+---
+
 ## Why this exists
 
 `tick.py`'s tier≥2 send path (`_send_and_await`) and, underneath it, `veydrift-wallet`'s
