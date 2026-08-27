@@ -71,14 +71,17 @@ hardcoded** (unchanged by Phase 2 — see `candidates.py` for where the logic no
 1. **Energy-first.** `candidates.generate_mine_candidates` computes `required` at the
    *post-upgrade* mine level via `calc.energy_balance` and compares it to `produced`
    (preferring the API's live `PlanetSnapshot.energy.produced`). If the upgrade would
-   push `required > produced`, that mine is never generated as a candidate; the cheaper
-   of Solar Plant / Solar Satellite substitutes it.
+   push `required > produced`, that mine is never generated as a candidate; the cheapest
+   of Solar Plant / Solar Satellite / Fusion Reactor substitutes it (docs/SPEC.md's
+   correction 66).
 2. **Build order is derived from planet traits.** `candidates._mine_priority_order`
    ranks Metal / Crystal / Deuterium mines by `base_rate * live_multiplier_bps` ("value
    density"), so a planet's deuterium multiplier changes the opener without any
-   per-planet branch. `candidates._cheapest_energy_choice` ranks Solar Plant vs. Solar
-   Satellite by cost-per-energy-point using only *live* costs (`Entity.cost`) and the
-   live `solarSatelliteEnergy` — never a hardcoded planet id. See
+   per-planet branch. `candidates._cheapest_energy_choice` ranks Solar Plant, Solar
+   Satellite and Fusion Reactor by cost-per-energy-point using only *live* costs
+   (`Entity.cost`) and the live `solarSatelliteEnergy` — never a hardcoded planet id.
+   Fusion Reactor is the only one of the three with an ongoing operating cost (deuterium
+   upkeep), so its cost is amortized over a fixed 24h window before comparison — see
    `references/strategy-playbook.md` for the full derivation and a worked numeric
    example on both planet 664 and a hot-planet fixture.
 """

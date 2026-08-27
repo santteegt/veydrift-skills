@@ -294,9 +294,10 @@ rather than doing something unexpected.
 <summary><strong>Useful tips</strong> — declaring targets and priorities, <code>enable_crawler</code>, and letting the agent build up to a locked target (click to expand)</summary>
 
 **`ship_targets`/`defense_targets`/`research_priority`/`building_priority`.** All four
-default to `[]`. Empty on all four means: energy still comes only from Solar Plant/Solar Satellite,
-defense still means only the Rocket Launcher, research still walks its default order (see
-below — no longer purely lowest-level-first), and nothing proposes
+default to `[]`. Empty on all four means: energy still comes only from Solar
+Plant/Solar Satellite/Fusion Reactor, defense still means only the Rocket Launcher,
+research still walks its default order (see below — no longer purely
+lowest-level-first), and nothing proposes
 Robotics Factory/Nanite Factory/Shipyard/Research Lab/Terraformer/Missile Silo at all.
 Declare a target to unlock the rest of the entity list:
 
@@ -803,8 +804,9 @@ A few things worth understanding about that block before you trust it:
 - **The build order is derived from your planet's actual traits** — temperature,
   resource multipliers, current levels — not a generic build order copy-pasted for every
   planet. A cold planet gets pushed toward Deuterium Synthesizer earlier; a hot planet
-  gets offered Solar Satellites where a cold one never would. If the reasoning doesn't
-  match your planet's traits, something's wrong — say so, don't just follow it.
+  gets offered a different energy source (Fusion Reactor or a Solar Satellite) where a
+  cold one never would. If the reasoning doesn't match your planet's traits, something's
+  wrong — say so, don't just follow it.
 - **The transaction shown is real and complete**, not a mockup — `tx: to ... data ...` is
   exactly what would be submitted if you were at a tier that could submit it. That's
   deliberate: it's what makes a later promotion decision evidence-based rather than a

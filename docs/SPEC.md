@@ -495,7 +495,8 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 >   Reactor does NOT belong here** — it moves `production_per_hour`, so `generate_energy_candidates`
 >   scores it in the economic band instead, deliberately without touching the pre-Phase-3
 >   `_cheapest_energy_choice` substitution comparison (pinned by AC4/the hot-planet counterfactual to
->   Solar Plant vs. Solar Satellite only).
+>   Solar Plant vs. Solar Satellite only — see criterion 66 for its 2026-08-27 replacement, a
+>   three-way comparison that also wires Fusion Reactor into this substitution).
 > - **storage, proactively** — `generate_proactive_storage_candidates` activates `calc.storage_cap`
 >   (previously dead) as a Band-2 candidate, always `score=None`, visible in `alternatives` well
 >   before `generate_storage_candidates`' reactive overflow trigger fires. Never changes which
@@ -1471,6 +1472,66 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `::test_select_building_candidate_breaks_a_real_tie_by_computed_payback`,
     `::test_mine_tie_with_an_energy_blocked_twin_prefers_the_energy_safe_one_directly`,
     `::test_mine_tie_break_winner_still_defers_to_storage_precondition`.
+66. **Correction, 2026-08-27.** `candidates._cheapest_energy_choice` — the comparison
+    `select_building_candidate` uses to pick the energy-first *substitute* when a mine
+    upgrade would be energy-unsafe — is now a three-way comparison (Solar Plant / Solar
+    Satellite / Fusion Reactor) instead of two-way. Previously Fusion Reactor was
+    deliberately excluded from this specific comparison (`docs/COVERAGE.md`'s "Fusion
+    Reactor as an energy-first *substitute*" row, "partial (Phase 3)") even though it was
+    already an ordinary scored `energy`-family candidate elsewhere — and that other path
+    alone consistently undersold it: raising future energy capacity doesn't move current
+    `production_per_hour` unless the planet is already throttled, and Fusion Reactor's own
+    deuterium upkeep makes the delta strictly negative otherwise, so `score_payback`
+    returns `None` for a build that can still be the objectively cheaper energy source.
+    Reproduced live against `tests/fixtures/planet_hot.json`, the fixture this comparison
+    is pinned against: Fusion Reactor 0→1 costs 43.64/energy point one-time versus Solar
+    Satellite's 83.33 and Solar Plant 15→16's 211.88 — the pre-fix code already mis-picked
+    Satellite over a ~2x-cheaper Fusion Reactor on its own canonical fixture, uncaught
+    because no test asked whether Fusion Reactor existed.
+
+    **Design decision, made explicitly:** unlike Solar Plant and Solar Satellite, Fusion
+    Reactor carries an ongoing operating cost (deuterium upkeep,
+    `calc.fusion_deuterium_upkeep`, recurring every hour it exists) on top of its
+    one-time build cost.
+    A raw one-time-cost comparison would favor it unfairly. Its cost is amortized over a
+    new module-level constant, `_ENERGY_UPKEEP_AMORTIZATION_HOURS = 24`, before
+    comparison: `(one_time_cost + upkeep_delta_per_hour * 24) / energy_gained`. This
+    window is outcome-changing, not cosmetic: on `planet_hot.json` it still leaves Fusion
+    Reactor the winner (51.64/point, versus Satellite's 83.33 and Solar Plant's 211.88),
+    but a 7-day window would have flipped the winner back to Satellite (99.64/point) — a
+    deliberately chosen, documented constant, not an invented cross-family exchange rate
+    (`policy.strategy.resource_weights` plays no role here, matching this comparison's
+    pre-existing flat 1:1:1 cost-sum scope, unchanged by this fix).
+
+    Scoped narrowly: `generate_energy_candidates`'s own scoring of Fusion Reactor (the
+    `energy`-family candidate path) is unchanged — it already correctly nets upkeep
+    against production via `calc.production_per_hour` when a planet is throttled; this
+    fix only touches the substitution comparison. `_generate_satellite_ship_candidate`
+    (the shipyard-idle rung's separate Satellite path) needed no logic change — its
+    existing "only propose a Satellite when `_cheapest_energy_choice` actually picked
+    one" guard already declines correctly when Fusion Reactor wins instead. Both
+    independent enforcement layers already anticipated Fusion Reactor as an energy-fixing
+    build: `guard.py`'s `_ENERGY_FIX_BUILDINGS` already included it, and `allowlist.ts`
+    tier-gates `startBuildingUpgrade` by function signature, not entity id — neither
+    needed a change.
+
+    One deliberate, accepted test-fixture consequence: because Fusion Reactor is a
+    *building*, `policy.actions.allow_ships` (which only ever gated the Satellite
+    fallback) has no bearing on whether it wins — so on the unmodified `planet_hot.json`
+    fixture, the pre-fix pair of tests that demonstrated `allow_ships` gating Satellite
+    versus Solar Plant now both resolve to Fusion Reactor regardless of that policy field,
+    and no longer demonstrate that knob's effect at all. That coverage is preserved
+    instead against a Fusion-locked variant of the same fixture (Energy Technology
+    dropped below its unlock requirement — not a building level, since Fusion Reactor is
+    at level 0 there and `calc.fusion_energy(0, ...)` is 0 regardless of technology
+    level, so nothing else the energy-first check depends on is perturbed).
+
+    `tests/test_plan.py::test_planet_hot_prefers_fusion_reactor_when_cheaper`,
+    `::test_planet_hot_falls_back_to_solar_plant_when_ships_disallowed`,
+    `::test_empty_strategy_targets_reproduce_phase_2_hot_planet_output_exactly`,
+    `tests/test_candidates.py::test_cheapest_energy_choice_prefers_fusion_reactor_when_amortized_cost_is_lower`,
+    `::test_cheapest_energy_choice_falls_back_to_two_way_when_fusion_reactor_is_locked`,
+    `::test_select_building_candidate_names_fusion_reactor_in_the_rationale_when_it_wins`.
 
 ---
 

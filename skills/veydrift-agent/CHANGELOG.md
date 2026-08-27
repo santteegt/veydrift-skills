@@ -11,6 +11,27 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-08-27
+
+### Fixed
+
+- `candidates._cheapest_energy_choice` — the comparison `select_building_candidate` uses
+  to pick the energy-first *substitute* when a mine upgrade is energy-unsafe — is now a
+  three-way comparison (Solar Plant / Solar Satellite / Fusion Reactor) instead of
+  two-way. Fusion Reactor was previously excluded from this specific comparison even
+  though it was already an ordinary scored `energy`-family candidate elsewhere, and that
+  other path alone consistently undersold it (raising future energy capacity doesn't move
+  current `production_per_hour` unless the planet is already throttled, and Fusion
+  Reactor's own deuterium upkeep makes the delta strictly negative otherwise). Reproduced
+  live against `tests/fixtures/planet_hot.json`: the pre-fix code already mis-picked
+  Solar Satellite over a ~2x-cheaper Fusion Reactor on its own canonical fixture.
+  Fusion Reactor's cost is amortized over a new, documented constant,
+  `_ENERGY_UPKEEP_AMORTIZATION_HOURS = 24`, before comparison, since it's the only one of
+  the three with an ongoing operating cost. `docs/SPEC.md`'s correction 66 has the full
+  before/after numbers and the deliberate test-fixture consequence this uncovered
+  (`allow_ships` no longer isolates the Satellite-vs-Solar-Plant path on the unmodified
+  hot-planet fixture, since Fusion Reactor is a building and wins there regardless).
+
 ## [1.6.1] - 2026-08-27
 
 ### Fixed

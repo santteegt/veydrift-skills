@@ -14,8 +14,7 @@ select pipeline: one pure generator per family (`mine`, `energy`, `storage`, `re
 `ship`, `defense`), a `score_payback` scorer, and a `select_*` function per rung. This is
 the same reasoning, restructured — every number and every branch condition below is
 still exactly what the code computes; only the function names changed (noted inline where
-it matters). See `docs/SPEC.md` §5.4 for the architecture and `plan.py`'s own module
-docstring for the three-band precedence.
+it matters). See `plan.py`'s own module docstring for the three-band precedence.
 
 **2026-08-16 (Phase 3, the same program): every planet-local entity becomes reachable.**
 `candidates.py` gains `crawler` (scored) and a broadened `infrastructure` family (was
@@ -168,15 +167,19 @@ tied with another mine before assuming something's wrong.
 
 ## 5. Deriving the energy source: cost per energy point
 
-When the energy-first check *does* fire, `plan.py` chooses between Solar Plant and Solar
-Satellite by comparing **cost per unit of energy gained**, using only live-served costs:
+When the energy-first check *does* fire, `plan.py` chooses among Solar Plant, Solar
+Satellite, and Fusion Reactor (three-way as of this skill's `CHANGELOG.md`'s `1.6.2`
+entry) by comparing **cost per unit of energy gained**, using only live-served costs:
 
 - Solar Plant's marginal cost-per-energy for its next level: live `cost` (metal+crystal)
   for that level, divided by `scaled_level(20, L+1) - scaled_level(20, L)`.
 - Solar Satellite's cost-per-energy: its live per-unit `cost`, divided by the live
   `solar_satellite_energy_per_unit`.
+- Fusion Reactor's cost-per-energy: live `cost` (metal+crystal+deuterium) for its next
+  level, plus 24 hours of its own ongoing deuterium upkeep delta (see below), divided by
+  `calc.fusion_energy(L+1, energy_tech) - calc.fusion_energy(L, energy_tech)`.
 
-Whichever is cheaper wins. The full numeric derivation, including a generated table of
+Whichever is cheapest wins. The full numeric derivation, including a generated table of
 Solar Plant's marginal cost climbing from 4.77 at level 0->1 to 211.88 at level 15->16,
 is in `references/formulas.md` §9 — it is not repeated here because that document is
 where the numbers should live; this document is where the *reasoning* should live.
@@ -188,7 +191,21 @@ somewhere, and *where* they cross depends entirely on `solar_satellite_energy_pe
 high on a hot planet (satellites deliver more energy per unit, so a lower Solar Plant
 level is enough to make them the cheaper option), low on a cold one. Planet 664's
 satellite energy is 4; the hot fixture's is 30. That one number is the entire reason the
-same code path produces opposite answers.
+same code path produces different answers for Solar Plant vs. Solar Satellite between
+those two fixtures.
+
+**Fusion Reactor is not temperature-driven the way that inversion is.** Its cost and
+energy output depend only on its own level and `energy_technology_level` — never on a
+planet's multipliers or `solar_satellite_energy_per_unit` — so whether it wins is purely
+a question of build progress (is it unlocked: Deuterium Synthesizer >= 5, Energy
+Technology >= 3) and its own level, not planet traits. Unlike Solar Plant and Solar
+Satellite, it also carries an ongoing operating cost — deuterium upkeep,
+`calc.fusion_deuterium_upkeep`, recurring every hour it exists — so a raw one-time-cost
+comparison would favor it unfairly against two options with no such cost. It's amortized
+over a fixed, documented constant, `_ENERGY_UPKEEP_AMORTIZATION_HOURS = 24`, before
+comparison: `(one_time_cost + upkeep_delta_per_hour * 24) / energy_gained`. This window
+is a deliberate choice, not an arbitrary one that happens not to matter — on the hot
+fixture (§7 below) a 7-day window would have flipped the winner back to Solar Satellite.
 
 ## 6. Worked walkthrough: planet 664
 
@@ -216,9 +233,12 @@ Real, current, zero-state data (`tests/fixtures/planet_664.json`, captured live
 `tests/fixtures/planet_hot.json` is a synthetic fixture (planet id 900001, temperature
 40 °C, `archetype: "scorching-molten"` per the archetype values this project's research
 has observed live) built specifically to sit *past* the Solar-Plant-vs-satellite
-crossover, so the counterfactual is not trivial:
+crossover, so the counterfactual is not trivial. It also happens to have Fusion Reactor
+unlocked (Deuterium Synthesizer 11 >= 5, Energy Technology 5 >= 3), which is why this is
+the fixture §5's three-way energy-source comparison is pinned against:
 
-1. Buildings: Solar Plant level 15, Metal/Crystal/Deuterium mines all level 11.
+1. Buildings: Solar Plant level 15, Metal/Crystal/Deuterium mines all level 11, Fusion
+   Reactor level 0 (unlocked but not yet built).
 2. Currently: `produced = scaled_level(20, 15) = 1,253`; `required` at mines 11/11/11 =
    `scaled_level(10,11)*2 + scaled_level(20,11) = 1,253` — exactly balanced, energy-safe
    right now.
@@ -227,10 +247,21 @@ crossover, so the counterfactual is not trivial:
    ranking logic as 664, different numeric inputs.
 4. Energy-first check: Metal Mine 11->12 would push required to 1,316 > 1,253 produced.
    **Blocked, same as 664's very first check** — the mechanism is identical.
-5. Energy-source choice: Solar Plant 15->16 costs 45,978 for 217 energy (211.88/energy).
-   Solar Satellite costs 2,500 for 30 energy (83.33/energy). **Satellite is now
-   2.5x cheaper per energy point** — the inversion has happened.
-6. **Result:** `startShipProduction(900001, SolarSatellite, 1)`.
+5. Energy-source choice (three-way, §5): Solar Plant 15->16 costs 45,978 for 217 energy
+   (211.88/energy). Solar Satellite costs 2,500 for 30 energy (83.33/energy) — cheaper
+   than Solar Plant, the inversion §5 describes. Fusion Reactor 0->1 costs 1,440 for 33
+   energy one-time (43.64/energy); amortizing 24h of its upkeep delta (11 deuterium/hour)
+   makes it 1,440 + 11*24 = 1,704, for 51.64/energy. **Fusion Reactor is cheapest of the
+   three, by a wide margin** — 1.6x cheaper than Satellite, 4.1x cheaper than Solar Plant.
+6. **Result:** `startBuildingUpgrade(900001, FusionReactor)`, target level 1.
+
+Two counterfactuals worth naming explicitly, since they don't come up on this fixture's
+own numbers: with the amortization window widened to 7 days (168h) instead of 24h,
+Fusion Reactor's cost becomes `(1,440 + 11*168) / 33 = 99.6/energy`, which *would* lose
+to Satellite's 83.33 — confirming the 24h choice in §5 is genuinely load-bearing, not
+cosmetic. And with Fusion Reactor locked (Energy Technology < 3, the isolated variable
+`tests/test_plan.py::_fusion_locked_hot_planet` uses), the comparison degrades back to
+the original two-way Solar-Plant-vs-Satellite result this section used to describe.
 
 `tests/test_plan.py::test_matched_building_levels_isolate_temperature_as_the_only_variable`
 goes one step further than fixture comparison: it takes the *real* 664 fixture and
@@ -297,13 +328,17 @@ where it moved.
    (`candidates.generate_energy_candidates`) is what fills that gap — and each generated
    mine/energy candidate is scored (`candidates.score_payback`, payback hours) whenever
    the level change actually moves `calc.production_per_hour`'s output. Runner-ups
-   populate the proposal's `alternatives` (informational; see docs/SPEC.md §5.4). **Phase
-   3** adds three things to this rung, none changing the winner when unconfigured:
+   populate the proposal's `alternatives` — informational only, never read by `guard.py`
+   or any `Decision` logic. **Phase 3** adds three things to this rung, none changing the
+   winner when unconfigured:
    - `generate_energy_candidates` also scores **Fusion Reactor** (locked/scored the same
-     way as Solar Plant), but the energy-first *substitution* comparison
-     (`_cheapest_energy_choice`) still only compares Solar Plant vs. Solar Satellite —
-     Fusion Reactor never substitutes for a blocked mine automatically, only appears as
-     an ordinary scored candidate.
+     way as Solar Plant). Originally the energy-first *substitution* comparison
+     (`_cheapest_energy_choice`) compared only Solar Plant vs. Solar Satellite, so Fusion
+     Reactor could only ever win as an ordinary scored candidate — since this skill's
+     `CHANGELOG.md`'s `1.6.2` entry (2026-08-27), that substitution comparison is
+     three-way and Fusion Reactor can win the substitution directly too, its own cost
+     amortized over a fixed 24h window of its ongoing deuterium upkeep first (§5 has the
+     full derivation).
    - `generate_proactive_storage_candidates` adds storage as an always-`score=None`
      candidate, visible before the reactive overflow trigger (rung 5) would ever fire.
      **Fix, 2026-08-21:** it's no longer purely informational. If the mine/energy (or
@@ -345,7 +380,7 @@ where it moved.
    (case-insensitive), those are tried first, in declared order; everything not named
    becomes the *fallback*, and its `score_basis` is explicitly prefixed `"default: ..."`
    so a reader can tell "this is the fallback" from "this is what the operator asked for"
-   at a glance. **Dated correction (see docs/SPEC.md)**: the fallback used to be pure
+   at a glance. **Dated correction (see this skill's `CHANGELOG.md`'s `1.4.0` entry)**: the fallback used to be pure
    lowest-current-level-account-wide, ties broken by ascending id (Phase 2's original
    ordering) — it's now ranked by `techtree.unlock_breadth` descending instead (fully-
    unlocked-count first, partial-advance count as tiebreak, level then id only as the
@@ -423,10 +458,10 @@ where it moved.
 9. **Otherwise -> NO-OP with an explicit reason.** Always reachable; `Action.rationale`
    is never empty.
 
-**Phase 3's governing principle, stated once here** (docs/SPEC.md §5.4): *the engine
-computes what is legal (`techtree.unmet()`), affordable (`guard.py`, unchanged) and
-economically comparable (`score_payback`, where a level change genuinely moves
-`calc.production_per_hour`'s output); the policy declares intent for everything else.*
+**Phase 3's governing principle, stated once here:** *the engine computes what is legal
+(`techtree.unmet()`), affordable (`guard.py`, unchanged) and economically comparable
+(`score_payback`, where a level change genuinely moves `calc.production_per_hour`'s
+output); the policy declares intent for everything else.*
 This module is deliberately not a fleet doctrine or a threat model — `ship_targets`/
 `defense_targets` never choose *how many* of something to want, only whether the
 declared count is legal and, for ships, how it ranks against other scored options.

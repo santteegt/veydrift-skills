@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from veydrift_agent import candidates, ids, techtree
+from veydrift_agent import calc, candidates, ids, techtree
 from veydrift_agent.models import (
     ActionKind,
     ActionsCfg,
@@ -411,6 +411,109 @@ def test_select_building_candidate_matches_planet_664s_solar_plant_pick():
     # Runner-ups are ranked (scored ascending, unscored last) and capped by the caller
     # (plan.py), not by select_building_candidate itself.
     assert candidates.rank_candidates(alternatives) == alternatives
+
+
+# --------------------------------------------------------------------------------------
+# docs/SPEC.md's correction 66: _cheapest_energy_choice is a three-way comparison
+# (Solar Plant / Solar Satellite / Fusion Reactor) since it can be the energy-first
+# substitute too, not just an ordinary scored `energy`-family candidate. Fusion Reactor's
+# cost is amortized over `_ENERGY_UPKEEP_AMORTIZATION_HOURS` of its own ongoing deuterium
+# upkeep before comparison, since it's the only one of the three with a recurring cost.
+# --------------------------------------------------------------------------------------
+
+
+def test_cheapest_energy_choice_prefers_fusion_reactor_when_amortized_cost_is_lower():
+    """planet_hot.json: Fusion Reactor is unlocked (Deuterium Synthesizer 11 >= 5, Energy
+    Technology 5 >= 3) and, even after amortizing 24h of its own upkeep into its one-time
+    cost, still decisively cheaper per energy point than Solar Plant or Solar Satellite."""
+    snapshot = load_snapshot("planet_hot.json")
+    planet = snapshot.planet(900001)
+    assert planet is not None
+    building_levels = candidates._level_vector(planet.buildings)
+    technology_levels = candidates._level_vector(snapshot.technologies)
+    satellite_energy = candidates._satellite_energy_per_unit(planet)
+    energy_technology_level = candidates._energy_technology_level(snapshot)
+
+    choice = candidates._cheapest_energy_choice(
+        planet,
+        satellite_energy,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+        energy_technology_level=energy_technology_level,
+    )
+
+    assert choice is not None
+    cost_per_point, kind, entity = choice
+    assert kind == "fusion_reactor"
+    assert entity.id == ids.Building.FUSION_REACTOR
+
+    # Pinned live, not hand-derived: one-time cost divided by energy gained, plus 24h of
+    # the upkeep delta folded into the numerator first.
+    fusion = next(b for b in planet.buildings if b.id == ids.Building.FUSION_REACTOR)
+    gained = calc.fusion_energy(fusion.level + 1, energy_technology_level) - calc.fusion_energy(
+        fusion.level, energy_technology_level
+    )
+    upkeep_delta = calc.fusion_deuterium_upkeep(fusion.level + 1) - calc.fusion_deuterium_upkeep(fusion.level)
+    cost_total = fusion.cost.metal + fusion.cost.crystal + fusion.cost.deuterium
+    expected = (cost_total + upkeep_delta * candidates._ENERGY_UPKEEP_AMORTIZATION_HOURS) / gained
+    assert cost_per_point == pytest.approx(expected)
+
+    # And it's a genuine win, not a default -- cheaper than both alternatives, computed
+    # the same way _cheapest_energy_choice computes them.
+    solar = next(b for b in planet.buildings if b.id == ids.Building.SOLAR_PLANT)
+    solar_gained = calc.scaled_level(20, solar.level + 1) - calc.scaled_level(20, solar.level)
+    solar_cost = (solar.cost.metal + solar.cost.crystal + solar.cost.deuterium) / solar_gained
+    satellite = next(s for s in planet.ships if s.id == ids.Ship.SOLAR_SATELLITE)
+    satellite_cost = (satellite.cost.metal + satellite.cost.crystal + satellite.cost.deuterium) / satellite_energy
+    assert cost_per_point < satellite_cost < solar_cost
+
+
+def test_cheapest_energy_choice_falls_back_to_two_way_when_fusion_reactor_is_locked():
+    """Same fixture, Energy Technology dropped below Fusion Reactor's requirement (< 3) --
+    the three-way comparison degrades back to today's Solar Plant vs. Solar Satellite,
+    confirming the new branch doesn't fire when Fusion Reactor genuinely isn't buildable.
+    Energy Technology, not a building level, is the isolated variable here: Fusion
+    Reactor is at level 0 on this fixture, and `calc.fusion_energy(0, ...)` is 0
+    regardless of `energy_technology_level`, so lowering it perturbs nothing else this
+    comparison or the energy-first check depends on."""
+    snapshot = load_snapshot("planet_hot.json")
+    planet = snapshot.planet(900001)
+    assert planet is not None
+    energy_tech = next(t for t in snapshot.technologies if t.id == ids.Technology.ENERGY)
+    energy_tech.level = 0
+    building_levels = candidates._level_vector(planet.buildings)
+    technology_levels = candidates._level_vector(snapshot.technologies)
+    satellite_energy = candidates._satellite_energy_per_unit(planet)
+    energy_technology_level = candidates._energy_technology_level(snapshot)
+
+    choice = candidates._cheapest_energy_choice(
+        planet,
+        satellite_energy,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+        energy_technology_level=energy_technology_level,
+    )
+
+    assert choice is not None
+    _, kind, entity = choice
+    assert kind == "solar_satellite"
+    assert entity.id == ids.Ship.SOLAR_SATELLITE
+
+
+def test_select_building_candidate_names_fusion_reactor_in_the_rationale_when_it_wins():
+    """The rationale text `select_building_candidate` writes for an energy-substitution
+    winner must name whichever of the three sources actually won, not assume it's always
+    Solar Plant or Solar Satellite (`_ENERGY_KIND_LABELS`, exercised end-to-end here)."""
+    snapshot = load_snapshot("planet_hot.json")
+    planet = snapshot.planet(900001)
+    assert planet is not None
+    policy = make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=True))
+
+    winner, _alternatives = candidates.select_building_candidate(snapshot, policy, planet)
+
+    assert winner is not None
+    assert winner.action.entity_id == ids.Building.FUSION_REACTOR
+    assert "Fusion Reactor" in winner.action.rationale
 
 
 # --------------------------------------------------------------------------------------

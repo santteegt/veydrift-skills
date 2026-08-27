@@ -3,8 +3,14 @@
 The two tests that matter most are `test_planet_664_*` and `test_planet_hot_*`: they run
 the *same* `plan_next_action` code path against two fixtures that differ only in planet
 traits (temperature -> deuterium multiplier and Solar Satellite energy yield) and assert
-opposite energy-source choices. `test_matched_levels_*` goes further and proves it at
+different energy-source choices. `test_matched_levels_*` goes further and proves it at
 *identical* building levels, isolating temperature as the only variable.
+
+Since docs/SPEC.md's correction 66, `planet_hot.json`'s *unmodified* Fusion Reactor is
+unlocked and cheaper than both Solar Plant and Solar Satellite there, so it wins outright
+regardless of `allow_ships` — the `allow_ships`-gates-Satellite behavior this file also
+tests is demonstrated against a **Fusion-locked variant** of that fixture instead
+(`_fusion_locked_hot_planet`), not the unmodified one.
 """
 
 from __future__ import annotations
@@ -83,36 +89,55 @@ def test_planet_664_energy_first_opener_never_proposes_satellite():
     assert action.kind != ActionKind.SHIP
 
 
-def test_planet_hot_inverts_and_proposes_satellite():
-    """The AC4 counterfactual: identical code, opposite answer, driven only by planet traits.
+def test_planet_hot_prefers_fusion_reactor_when_cheaper():
+    """docs/SPEC.md's correction 66: `_cheapest_energy_choice` is a three-way comparison.
 
-    `allow_ships=True` is required here and is not incidental. Satellites *are* ship
-    production, so the operator must have permitted ships for this branch to be reachable
-    at all — see `test_planet_hot_falls_back_to_solar_plant_when_ships_disallowed`. Before
-    2026-08-12 this test passed with the default `allow_ships=False`, which looked like
-    proof of trait-derived reasoning but was actually masking a policy bypass.
+    On the unmodified hot-planet fixture, Fusion Reactor is unlocked (Deuterium
+    Synthesizer 11 >= 5, Energy Technology 5 >= 3) and, once its ongoing deuterium upkeep
+    is amortized over `_ENERGY_UPKEEP_AMORTIZATION_HOURS`, still decisively cheaper per
+    energy point than either Solar Plant or Solar Satellite. Because Fusion Reactor is a
+    *building*, `allow_ships` has no bearing on whether it wins — verified both ways here,
+    unlike the pre-fix behavior this replaces (`AC4`'s original counterfactual, which
+    required `allow_ships=True` to even reach the Satellite branch).
     """
     snapshot = load_snapshot("planet_hot.json")
-    policy = make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=True))
 
-    action = plan_next_action(snapshot, policy)
+    for allow_ships in (True, False):
+        policy = make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=allow_ships))
+        action = plan_next_action(snapshot, policy)
+        assert action.rule == "6:building-queue-empty"
+        assert action.kind == ActionKind.BUILD
+        assert action.function == "startBuildingUpgrade"
+        assert action.entity_id == ids.Building.FUSION_REACTOR
 
-    assert action.rule == "6:building-queue-empty"
-    assert action.kind == ActionKind.SHIP
-    assert action.function == "startShipProduction"
-    assert action.entity_id == ids.Ship.SOLAR_SATELLITE
-    assert action.quantity == 1
+
+def _fusion_locked_hot_planet() -> tuple[object, object]:
+    """`planet_hot.json`, with Energy Technology dropped below Fusion Reactor's
+    requirement (< 3) so the three-way `_cheapest_energy_choice` comparison degrades back
+    to today's Solar Plant vs. Solar Satellite -- preserving that comparison's own test
+    coverage now that the unmodified fixture no longer exercises it (Fusion Reactor wins
+    there outright, see `test_planet_hot_prefers_fusion_reactor_when_cheaper`). Energy
+    Technology, not a building level, is the isolated variable: Fusion Reactor is at level
+    0 on this fixture, and `calc.fusion_energy(0, ...)` is 0 regardless of
+    `energy_technology_level`, so this touches nothing else the energy-first check or the
+    mine walk depends on (unlike lowering Deuterium Synthesizer's *building* level, which
+    would also perturb the mines' required-energy calculation)."""
+    snapshot = load_snapshot("planet_hot.json")
+    technologies = _with_building(snapshot.technologies, ids.Technology.ENERGY, level=0)
+    locked_snapshot = snapshot.model_copy(update={"technologies": technologies})
+    return locked_snapshot, make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=True))
 
 
 def test_planet_hot_falls_back_to_solar_plant_when_ships_disallowed():
     """`allow_ships` must bind every path that can emit startShipProduction, not just rung 8.
 
-    On a hot planet a Solar Satellite is the cheaper energy source, so the energy-first
-    branch reaches for one. With ships disallowed it must build the Solar Plant instead —
-    the mine still gets its energy, just from the source the operator permitted. Returning
-    nothing would stall the economy on a perfectly legitimate configuration.
+    On a hot planet with Fusion Reactor locked, a Solar Satellite is the cheaper energy
+    source, so the energy-first branch reaches for one. With ships disallowed it must
+    build the Solar Plant instead — the mine still gets its energy, just from the source
+    the operator permitted. Returning nothing would stall the economy on a perfectly
+    legitimate configuration.
     """
-    snapshot = load_snapshot("planet_hot.json")
+    snapshot, _ = _fusion_locked_hot_planet()
     policy = make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=False))
 
     action = plan_next_action(snapshot, policy)
@@ -193,12 +218,15 @@ def test_matched_building_levels_isolate_temperature_as_the_only_variable():
     assert action.kind != ActionKind.SHIP
 
 
-def test_hot_planet_at_664_levels_would_still_choose_satellite():
+def test_hot_planet_at_664_levels_is_still_past_the_solar_satellite_crossover():
     """The mirror image of the previous test: apply 664's *cold* building levels are not
     what flips the decision -- swap only the hot planet's temperature-derived fields onto
     664-like progressed levels is covered above; this test instead confirms the hot
-    fixture's own levels are indeed past its crossover point (sanity check on the fixture
-    itself, not just the planner)."""
+    fixture's own levels are indeed past its Solar-Plant-vs-Satellite crossover point
+    (sanity check on the fixture itself, not a planner-outcome claim -- it never calls
+    `plan_next_action`, and since docs/SPEC.md's correction 66 the planner's actual
+    top-level choice on this unmodified fixture is Fusion Reactor, not Satellite; see
+    `test_planet_hot_prefers_fusion_reactor_when_cheaper`)."""
     snapshot = load_snapshot("planet_hot.json")
     planet = snapshot.planet(900001)
     assert planet is not None
@@ -744,16 +772,21 @@ def test_empty_strategy_targets_reproduce_phase_2_planner_output_exactly():
 
 
 def test_empty_strategy_targets_reproduce_phase_2_hot_planet_output_exactly():
+    """Phase 3's empty-`StrategyCfg` guarantee is about the four Phase 3 target-declaration
+    fields, not about freezing the energy-source choice itself — docs/SPEC.md's
+    correction 66 changed *what* rung 6 proposes on this fixture (Fusion Reactor, not
+    Solar Satellite; see `test_planet_hot_prefers_fusion_reactor_when_cheaper`) but not
+    *whether* Phase 3's fields being empty reproduces that current behavior, which is what
+    this test actually pins."""
     snapshot = load_snapshot("planet_hot.json")
     policy = make_policy(planets=[900001], actions=ActionsCfg(allow_building=True, allow_ships=True))
 
     action = plan_next_action(snapshot, policy)
 
     assert action.rule == "6:building-queue-empty"
-    assert action.kind == ActionKind.SHIP
-    assert action.function == "startShipProduction"
-    assert action.entity_id == ids.Ship.SOLAR_SATELLITE
-    assert action.quantity == 1
+    assert action.kind == ActionKind.BUILD
+    assert action.function == "startBuildingUpgrade"
+    assert action.entity_id == ids.Building.FUSION_REACTOR
 
 
 # --------------------------------------------------------------------------------------

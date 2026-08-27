@@ -490,17 +490,23 @@ def generate_energy_candidates(snapshot: Snapshot, policy: Policy, planet: Plane
     levels), in which case more energy supply genuinely raises current output and is
     scored.
 
-    **Fusion Reactor is deliberately NOT wired into `_cheapest_energy_choice`** (the
-    function `select_building_candidate` uses to pick the energy-first *substitute* when
-    a mine upgrade would be energy-unsafe) -- that comparison is pinned by
-    `tests/test_plan.py::test_planet_hot_inverts_and_proposes_satellite` to exactly
-    Solar Plant vs. Solar Satellite, and Fusion Reactor happens to be unlocked on that
-    exact fixture, so adding it there would risk silently changing which source wins.
-    Fusion Reactor is instead generated here as an ordinary scored/locked "energy" family
-    candidate -- visible in `alternatives`, and reachable as a *winner* wherever a caller
-    scores the full energy-candidate pool directly, without touching the pinned
-    substitution branch. See docs/SPEC.md §5.4 Phase 3 and the WP report for the full
-    reasoning."""
+    **Fusion Reactor is also wired into `_cheapest_energy_choice`** (the function
+    `select_building_candidate` uses to pick the energy-first *substitute* when a mine
+    upgrade would be energy-unsafe) as of docs/SPEC.md's correction 66 -- a three-way
+    comparison against Solar Plant and Solar Satellite, all by cost per energy point,
+    with Fusion Reactor's cost amortized over a fixed window of its own ongoing deuterium
+    upkeep first (`_ENERGY_UPKEEP_AMORTIZATION_HOURS`, since it's the only one of the
+    three with a recurring cost). Before that fix this function's own scoring below was
+    Fusion Reactor's *only* path to winning anything -- and that path alone consistently
+    undersells it: raising future energy capacity doesn't move current
+    `production_per_hour` unless the planet is already energy-throttled today, and the
+    ongoing upkeep makes the delta strictly negative otherwise, so `score_payback` returns
+    `None` ("weighted marginal production_per_hour did not increase") for a build that can
+    still be the objectively cheaper energy source. That scoring behaviour below is
+    unchanged by the fix -- it's still correct for what it measures (realized economic
+    value *now*), it just was never the whole picture for evaluating Fusion Reactor
+    specifically. See docs/SPEC.md §5.4 Phase 3 and the WP report for Fusion Reactor's
+    original addition, and correction 66 for the substitution-comparison fix."""
     if not policy.actions.allow_building:
         return []
     building_levels = _level_vector(planet.buildings)
@@ -641,18 +647,35 @@ def generate_energy_candidates(snapshot: Snapshot, policy: Policy, planet: Plane
     return out
 
 
+#: Fusion Reactor is the only energy-first option with an ongoing operating cost (deuterium
+#: upkeep, `calc.fusion_deuterium_upkeep`) on top of its one-time build cost -- Solar Plant
+#: and Solar Satellite have neither. Comparing raw one-time cost per energy point would
+#: therefore favor Fusion Reactor unfairly. This folds a fixed window of upkeep into the
+#: same one-time-cost currency the other two options use: a documented, deliberate
+#: constant (not an invented cross-family exchange rate -- `resource_weights` plays no role
+#: here, matching this comparison's existing flat 1:1:1 cost-sum scope), chosen to bound
+#: the ongoing cost without projecting indefinitely into the future. See docs/SPEC.md's
+#: correction 66 for the numeric rationale (this choice is outcome-changing, not cosmetic --
+#: a longer window can flip which source wins).
+_ENERGY_UPKEEP_AMORTIZATION_HOURS = 24
+
+
 def _cheapest_energy_choice(
     planet: PlanetSnapshot,
     satellite_energy_per_unit: int | None,
     *,
     building_levels: dict[int, int | None],
     technology_levels: dict[int, int | None],
+    energy_technology_level: int,
 ) -> tuple[float, str, Entity] | None:
-    """`(cost_per_energy_point, "solar_plant" | "solar_satellite", live_entity)` for the
-    cheaper *unlocked* option — ported verbatim from `plan.py`'s pre-Phase-2
-    `_energy_candidate` (`allow_ships` gating alone is left to the caller,
-    `select_building_candidate`, same division of labour the original function had
-    between itself and its caller)."""
+    """`(cost_per_energy_point, "solar_plant" | "solar_satellite" | "fusion_reactor",
+    live_entity)` for the cheaper *unlocked* option, three-way as of the fix documented in
+    docs/SPEC.md's correction 66 -- originally ported verbatim from `plan.py`'s pre-Phase-2
+    `_energy_candidate` for just Solar Plant vs. Solar Satellite (`allow_ships` gating
+    alone is left to the caller, `select_building_candidate`, same division of labour the
+    original function had between itself and its caller). Fusion Reactor's cost is
+    amortized over `_ENERGY_UPKEEP_AMORTIZATION_HOURS` of its own ongoing deuterium upkeep
+    before comparison -- see that constant's docstring."""
     options: list[tuple[float, str, Entity]] = []
     solar = _entity(planet.buildings, ids.Building.SOLAR_PLANT)
     if solar is not None and solar.level is not None:
@@ -668,10 +691,39 @@ def _cheapest_energy_choice(
     ):
         cost_total = satellite.cost.metal + satellite.cost.crystal + satellite.cost.deuterium
         options.append((cost_total / satellite_energy_per_unit, "solar_satellite", satellite))
+    fusion = _entity(planet.buildings, ids.Building.FUSION_REACTOR)
+    if (
+        fusion is not None
+        and fusion.level is not None
+        and _unlocked(EntityFamily.BUILDING, ids.Building.FUSION_REACTOR, building_levels=building_levels, technology_levels=technology_levels)
+    ):
+        gained = calc.fusion_energy(fusion.level + 1, energy_technology_level) - calc.fusion_energy(
+            fusion.level, energy_technology_level
+        )
+        if gained > 0:
+            cost_total = fusion.cost.metal + fusion.cost.crystal + fusion.cost.deuterium
+            upkeep_delta = calc.fusion_deuterium_upkeep(fusion.level + 1) - calc.fusion_deuterium_upkeep(fusion.level)
+            amortized_cost = cost_total + upkeep_delta * _ENERGY_UPKEEP_AMORTIZATION_HOURS
+            options.append((amortized_cost / gained, "fusion_reactor", fusion))
     if not options:
         return None
     options.sort(key=lambda option: option[0])
     return options[0]
+
+
+#: Human-readable label and `startBuildingUpgrade`/`startShipProduction` routing for each
+#: `_cheapest_energy_choice` `kind` string -- Solar Plant and Fusion Reactor are both
+#: buildings, only Solar Satellite is a ship.
+_ENERGY_KIND_LABELS: dict[str, str] = {
+    "solar_plant": "Solar Plant",
+    "fusion_reactor": "Fusion Reactor",
+    "solar_satellite": "a Solar Satellite",
+}
+_ENERGY_KIND_FUNCTION: dict[str, str] = {
+    "solar_plant": "startBuildingUpgrade",
+    "fusion_reactor": "startBuildingUpgrade",
+    "solar_satellite": "startShipProduction",
+}
 
 
 # --------------------------------------------------------------------------------------
@@ -1281,6 +1333,7 @@ def select_building_candidate(
     building_levels = _level_vector(planet.buildings)
     technology_levels = _level_vector(snapshot.technologies)
     satellite_energy = _satellite_energy_per_unit(planet)
+    energy_technology_level = _energy_technology_level(snapshot)
     produced_now = _produced_now(planet, snapshot)
 
     alternatives: list[Candidate] = list(carryover_alternatives)
@@ -1315,7 +1368,11 @@ def select_building_candidate(
             continue
 
         choice = _cheapest_energy_choice(
-            planet, satellite_energy, building_levels=building_levels, technology_levels=technology_levels
+            planet,
+            satellite_energy,
+            building_levels=building_levels,
+            technology_levels=technology_levels,
+            energy_technology_level=energy_technology_level,
         )
         if choice is None:
             continue
@@ -1326,13 +1383,16 @@ def select_building_candidate(
                 continue
             kind, entity = "solar_plant", solar_fallback
 
-        chosen_energy = next((c for c in energy_candidates if c.action.entity_id == entity.id and c.action.function == ("startBuildingUpgrade" if kind == "solar_plant" else "startShipProduction")), None)
+        chosen_energy = next(
+            (c for c in energy_candidates if c.action.entity_id == entity.id and c.action.function == _ENERGY_KIND_FUNCTION[kind]),
+            None,
+        )
         if chosen_energy is None:
             continue
         rationale = (
             f"{ids.building_name(mine_id)} {mine_entity.level}->{mine_entity.level + 1} would need "
             f"{required_post} energy against {produced_now} produced. Energy-first invariant: "
-            f"{'Solar Plant' if kind == 'solar_plant' else 'a Solar Satellite'} is currently the "
+            f"{_ENERGY_KIND_LABELS[kind]} is currently the "
             f"cheaper energy source per point on this planet (satellite energy/unit={satellite_energy})."
         )
         energy_candidate = Candidate(
@@ -1633,12 +1693,21 @@ def _generate_satellite_ship_candidate(snapshot: Snapshot, policy: Policy, plane
     that function's docstring). **This is Solar Satellite's separate energy-driven path
     -- Phase 3's `ship_targets` stock-keeping (`generate_ship_target_candidates` below)
     never touches it and never substitutes for it.** Caller (`generate_ship_candidates`)
-    already applied the `allow_ships`/ship-queue-idle guard."""
+    already applied the `allow_ships`/ship-queue-idle guard. Since docs/SPEC.md's
+    correction 66, `_cheapest_energy_choice` is a three-way comparison -- this function
+    can now come back empty not just when Solar Plant wins, but also when Fusion Reactor
+    does; either way, proposing a ship this function has no business proposing is
+    correctly declined, not just "no proposal at all"."""
     satellite_energy = _satellite_energy_per_unit(planet)
     building_levels = _level_vector(planet.buildings)
     technology_levels = _level_vector(snapshot.technologies)
+    energy_technology_level = _energy_technology_level(snapshot)
     choice = _cheapest_energy_choice(
-        planet, satellite_energy, building_levels=building_levels, technology_levels=technology_levels
+        planet,
+        satellite_energy,
+        building_levels=building_levels,
+        technology_levels=technology_levels,
+        energy_technology_level=energy_technology_level,
     )
     if choice is None or choice[1] != "solar_satellite":
         return []
