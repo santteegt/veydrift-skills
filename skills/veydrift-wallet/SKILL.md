@@ -88,8 +88,7 @@ freely; it cannot make this engine submit anything without a human (or a deliber
 scripted, explicitly flagged invocation) putting `--confirm` on that exact command line.
 
 **Real transactions have been submitted to Veydrift from this codebase**, at tier 2
-(`economy`) and tier 3 (`operator`) — see `README.md`'s Status section for the current
-tier. That only ever happens via an explicit human `--confirm` on the exact `walletctl
+(`economy`) and tier 3 (`operator`). That only ever happens via an explicit human `--confirm` on the exact `walletctl
 send` command line; no env var, policy field, or flag makes it implicit. Don't assume a
 send happened, and don't assume it didn't — check `$VEYDRIFT_HOME/policy.json`'s `tier`
 and the actual command being run.

@@ -98,8 +98,8 @@ an allowlist of known-safe reason strings, so it stays robust if
 unhealthy `readiness.ready`, a real pause, an unrelated degradation reason like
 `health_unhealthy.json`'s RPC-unfinished-requests) still `BLOCK`s exactly as before. Both
 `plan.py`'s rung 1 and this gate independently call the same `Snapshot` method — the
-`game_maintenance`/`degradation_reasons` sharing precedent, not a parsing-drift risk
-(`AGENTS.md` §5): the two-layer property is about independent *decisions* (NO-OP vs
+`game_maintenance`/`degradation_reasons` sharing precedent is not a parsing-drift risk:
+the two-layer property this project maintains is about independent *decisions* (NO-OP vs
 BLOCK), not independently re-parsing raw JSON. `read.py`'s `_fetch_or_exit` also
 defensively recovers a parseable `/health` 5xx body (narrowly scoped to `/health`
 specifically — every other route's 5xx still hard-fails unchanged), since this backend
@@ -123,7 +123,8 @@ one planet) a pause blocks every write universally.
 — `guard._ALLOWED_MISSION_TYPES` and `allowlist.ts`'s `OPERATOR_ALLOWED_MISSION_TYPES` are the
 same set, verified identical by `test_tier_map_agrees_with_the_wallet_engines_allowlist`
 (extended this phase). Combat mission types (3, 5, 6, 7, 8, 9) are never in that set — enabling
-one requires an actual source change to both files, never a policy flag (AGENTS.md §5).
+one requires an actual source change to both files, never a policy flag; this friction is
+deliberate.
 
 **`prerequisites` is new (this work package) and independently re-derives its inputs from
 `Snapshot`, never trusts `plan.py`'s own filtering** — the same posture `_gate_energy`

@@ -40,9 +40,9 @@ happened.
 - [4. Queue parsing (`QueueState`) — typed from source, not from a live sample](#4-queue-parsing-queuestate--typed-from-source-not-from-a-live-sample)
 - [5. Incoming-fleet parsing (`FleetMissionSummary`) — same caveat](#5-incoming-fleet-parsing-fleetmissionsummary--same-caveat)
 - [6. Entity ID → name tables](#6-entity-id--name-tables)
-- [7. `snapshot`'s composition, and why it isn't the spec's literal list](#7-snapshots-composition-and-why-it-isnt-the-specs-literal-list)
+- [7. `snapshot`'s composition, and why it substitutes `overview` for `fleet-visibility`](#7-snapshots-composition-and-why-it-substitutes-overview-for-fleet-visibility)
 - [8. Exit codes and the `bad planetId` gotcha](#8-exit-codes-and-the-bad-planetid-gotcha)
-- [9. Where this probe contradicts `RESEARCH-ADDENDUM.md` §2](#9-where-this-probe-contradicts-research-addendummd-2)
+- [9. Corrections a full live probe found, over earlier backend-source-derived research](#9-corrections-a-full-live-probe-found-over-earlier-backend-source-derived-research)
 - [10. The disk cache vs. the backend's own response cache](#10-the-disk-cache-vs-the-backends-own-response-cache)
 - [11. Undocumented-but-live routes not wired into `vd read`](#11-undocumented-but-live-routes-not-wired-into-vd-read)
 
@@ -125,7 +125,8 @@ explicit operator action, not a background loop. Never gate on that gap.
 
 Every command additionally accepts `--json/--summary` (default `--summary`) and
 `--max-age` — except `battle-reports`/`highscores`, which don't expose `--json`/
-`--summary` at all (SPEC.md §5.2's "refuse stdout" applies unconditionally; see §8).
+`--summary` at all: `--out` is mandatory for both and stdout is refused
+unconditionally; see §8.
 
 ---
 
@@ -226,7 +227,7 @@ No params. Confirmed live 2026-08-12:
 }
 ```
 
-Matches `RESEARCH-ADDENDUM.md` §1 exactly (same ABI hash, same deployment commit).
+This ABI hash and deployment commit match `skills/veydrift-wallet/abi/PINNED.json` exactly.
 
 ### 3.3 `/wallet/{addr}/settlement`
 
@@ -335,8 +336,9 @@ zero-fuel-range ships when a wallet has any), `shipyardLevel`, `naniteLevel`.
 
 ### 3.10 `/wallet/{addr}/defenses`
 
-Query: `planetId` (**required**). This is `RESEARCH-ADDENDUM.md` §2's "missing" route —
-confirmed live at exactly this name, no auth, no trick to it. `defenses[]` items:
+Query: `planetId` (**required**). This route was previously unconfirmed by earlier
+backend-source-derived research — confirmed live here at exactly this name, no auth, no
+trick to it. `defenses[]` items:
 `{id, count, cost, durationSeconds}`, ids 0-9 (§6's `Defense` enum). **Shape quirk**:
 this is the one wallet route in this whole set whose top level has `homePlanetId` but
 **no `planetId` field** — infrastructure/research/shipyard/moon/overview all echo both.
@@ -364,43 +366,43 @@ consumer rather than acted on now.
 Query: `planetId` (**required**). Bundles `settlement` + `planetsResponse` (= the
 `planets` route's body) + `queues` + `fleetVisibility` — confirmed live to be
 byte-identical in shape to calling those three/four routes separately and assembling
-them by hand. Does **not** include `infrastructure`/`research`/`shipyard`/`defenses`
-(`RESEARCH-ADDENDUM.md` §2 is correct on this point). This is the route `snapshot` uses
+them by hand. Does **not** include `infrastructure`/`research`/`shipyard`/`defenses`.
+This is the route `snapshot` uses
 to get planet metadata (coordinates/fields/temperature) and incoming-fleet data in one
 call — see §7 for why.
 
 ### 3.13 `/wallet/{addr}/fleet-visibility`
 
 Query: `archive` (per `apps/backend/src/server.ts:141`'s cache-param table) — `vd read
-fleet-visibility` does not expose an `--archive` flag (not in SPEC.md §5.2's flag list
-for `vd read`), so it always fetches the default. **No `--planet-id`**: confirmed both
+fleet-visibility` does not expose an `--archive` flag, so it always fetches the default.
+**No `--planet-id`**: confirmed both
 by source comment (`server.ts:139-140`: *"The endpoint is wallet-scoped; `planetId` is
 currently ignored by its handler"*) and empirically (`?archive=none` and no query at all
 returned byte-identical bodies on the probed account). Shape: `{incoming, outgoing,
 returning, joinableAttacks, completedMissions, battleReports, indexedRevision,
 indexedBlock, generatedAt}`, each a `FleetMissionSummary[]` (§5) except `battleReports`.
-`incoming` is the hostile-fleet escalation surface (`RESEARCH-ADDENDUM.md` §2) — but see
+`incoming` is the hostile-fleet escalation surface — but see
 §5's caveat that "incoming" isn't provably hostile-only from the source alone.
 
 ### 3.14 `/wallet/{addr}/missions`
 
 Query: `filter`, `missionNumber`, `missionType`, `planetId`, `status`, `page`,
 `pageSize` (default `page=1`, `pageSize=25`). `vd read missions` wires through
-`--planet-id` only, per SPEC.md §5.2's flag list. Shape: `{wallet, homePlanetId, rows,
+`--planet-id` only. Shape: `{wallet, homePlanetId, rows,
 pagination}`; `rows[]` is `FleetMissionArchiveEntry` — a tagged union of `{kind:
 "mission", mission, report?}` or `{kind: "battleReport", report}`
 (`apps/backend/src/evm.ts:559-561`). Empty (`rows: []`) at zero state.
 
 Note: there is *also* a global, non-wallet-scoped `/missions` route
-(`RESEARCH-ADDENDUM.md` §2, `apps/backend/src/server.ts:1416`) — different shape
+(`apps/backend/src/server.ts:1416`) — different shape
 (`{missions: FleetMissionSummary[]}` for `status=active`, or a
-`GlobalMissionArchiveResponse` otherwise), not wired into `vd read` since it isn't in
-SPEC.md §5.2's target list and isn't wallet/planet-scoped like the rest of this tool.
+`GlobalMissionArchiveResponse` otherwise), not wired into `vd read` since it isn't
+wallet/planet-scoped like the rest of this tool.
 
 ### 3.15 `/wallet/{addr}/activity`
 
 Query: `includeProjected`, `page`, `pageSize`, `since` — `vd read activity` uses none of
-these (not in SPEC.md §5.2's flag list), always fetching page 1 defaults. Shape:
+these, always fetching page 1 defaults. Shape:
 `{wallet, items, summary, through, pagination}`. `items[]` is a chronological event feed
 (`{transactionAt, transactionHash, category, kind, direction, title, detail,
 occurredAt, metadata: {galaxy, planetId, position, system}, ...}`) — e.g. `{"kind":
@@ -415,22 +417,22 @@ those).
 
 Also consumed internally, bypassing this CLI command entirely: `read.fetch_activity()`
 is called directly by `tick.py`'s `_maybe_check_human_activity` (the best-effort
-"did a human execute my proposal by hand" check, §4/§5.7 of `docs/SPEC.md`) with a
+"did a human execute my proposal by hand" check) with a
 `since` param this CLI command has never exercised — see that function's docstring for
 the resulting caveat about `since`'s wire format being an unverified assumption.
 
 ### 3.16 The three "universe" routes
 
-This is the biggest point of confusion in the whole surface, and `RESEARCH-ADDENDUM.md`
-§2 only lists two of the three that actually exist:
+This is the biggest point of confusion in the whole surface, and this project's earlier
+backend-source-derived research only listed two of the three that actually exist:
 
 | Route | Real indexed data? | Params | Confirmed live |
 | --- | --- | --- | --- |
 | `/universe/system` | **No — procedurally generated** (`generateSystem()`, `apps/backend/src/server.ts:1517-1519`) | `galaxyId`, `systemId`, `seed` | yes, 200 |
 | `/universe/systems` | Yes (`cachedGalaxySystemPayload`) | `galaxy`, `center`, `radius` (≤10) — scans a *range* of systems | yes, 200 |
-| `/universe/galaxies/{g}/systems/{s}` | Yes (same `cachedGalaxySystemPayload` backing as above) | `detail` (optional); galaxy/system are **path** segments, not query params | yes, 200 — **not in `RESEARCH-ADDENDUM.md`'s route table at all** |
+| `/universe/galaxies/{g}/systems/{s}` | Yes (same `cachedGalaxySystemPayload` backing as above) | `detail` (optional); galaxy/system are **path** segments, not query params | yes, 200 — **not previously documented anywhere in this project's own research** |
 
-`vd read universe` uses the **third** one. Rationale: SPEC.md §5.2 lists no
+`vd read universe` uses the **third** one. Rationale: `vd read`'s CLI surface exposes no
 galaxy/system flags for the `universe` target, only the standard
 `--wallet`/`--planet-id`/etc. set, so this command derives galaxy:system by first
 calling `/wallet/{addr}/planets` (§3.4) and matching `--planet-id` against
@@ -461,17 +463,16 @@ call this route (or `/universe/systems`), not `overview`/`planets`.
 
 Query: `page`, `pageSize` (default `page=1`, `pageSize=25`, capped at 100 —
 `apps/backend/src/server.ts:3658-3665`'s `missionArchivePagination()`). `vd read
-battle-reports` uses the defaults (no `--page`/`--pageSize` flags — not in SPEC.md
-§5.2's flag list). **Returns a bare JSON array**, not an object with a `pagination`
+battle-reports` uses the defaults (no `--page`/`--pageSize` flags exposed).
+**Returns a bare JSON array**, not an object with a `pagination`
 wrapper (unlike `/highscores`, §3.18, and unlike `/wallet/{addr}/missions`, §3.14 — an
 inconsistency across the API worth knowing before writing a generic paginator). Measured
-**61,543 bytes** for the default 25-row page on 2026-08-12 — matches
-`RESEARCH-ADDENDUM.md`'s "~60 KB" figure closely. `--out` is mandatory; see §8.
+**61,543 bytes** for the default 25-row page on 2026-08-12. `--out` is mandatory; see §8.
 
 Each row: `{missionId, attacker, targetPlanetId, outcome, rounds, randomSeed, loot,
 transactionHash, blockNumber, attackerLosses, defenderLosses, debris,
 defenderSnapshot, roundReports[]}` — `roundReports` has one entry per combat round
-(≤6, `RESEARCH-ADDENDUM.md` §5), which is most of the byte weight.
+(≤6 observed), which is most of the byte weight.
 
 ### 3.18 `/highscores`
 
@@ -498,10 +499,10 @@ count.
 
 ### 3.19 `/chain/events` — not exposed, and why
 
-`RESEARCH-ADDENDUM.md` §2 lists this as "200 but slow (>2 min uncapped) — needs paging
-params; do not call naively" and §6 open-question 2 as "the route exists but... find its
-params in `server.ts` before using it." **Correction**: there are no paging params to
-find. Reading the handler (`apps/backend/src/server.ts:650-661`):
+This project's earlier backend-source-derived research flagged this route as "200 but
+slow (>2 min uncapped) — needs paging params; do not call naively," with an open
+question to find those params in `server.ts` before using it. **Correction**: there are
+no paging params to find. Reading the handler (`apps/backend/src/server.ts:650-661`):
 
 ```ts
 if (request.method === "GET" && url.pathname === "/chain/events") {
@@ -532,8 +533,8 @@ minutes" is exactly correct behaviour for an SSE endpoint being fetched like a n
 JSON GET, not evidence of a slow paginator. `httpx.Client.get()` (what `http.py` uses)
 would block until the 30s read timeout and then raise, once per retry attempt (3×,
 compounding to ~90s+ of dead time) — which is worse than merely "not useful," so this
-route is correctly left off the `vd read` target list per SPEC.md, now for a documented
-reason rather than an open question.
+route is correctly left off the `vd read` target list, now for a documented reason
+rather than an open question.
 
 ---
 
@@ -582,9 +583,9 @@ int via a local `FLEET_MISSION_TYPE_IDS` table keyed on those exact wire strings
 differently-formatted display-name table (`"ACS Defend"` vs. `"AcsDefend"`).
 
 One more thing worth flagging for whoever builds `plan.py`'s escalation logic:
-`RESEARCH-ADDENDUM.md` §2 calls `fleet-visibility.incoming` "the hostile-fleet detection
-surface," and `models.py`'s `IncomingFleet.hostile` defaults to `True` on that basis.
-But `FleetMissionType` (`RESEARCH-ADDENDUM.md` §3) includes `AcsDefend` (5) and
+this project's earlier research calls `fleet-visibility.incoming` "the hostile-fleet
+detection surface," and `models.py`'s `IncomingFleet.hostile` defaults to `True` on that
+basis. But `FleetMissionType` includes `AcsDefend` (5) and
 `DefenseHold` (9) — both allied-reinforcement mission types, not attacks — and nothing
 in the backend source rules out an `AcsDefend` mission appearing in *your own*
 `incoming` array when an ally stations a fleet to defend your planet. This module
@@ -612,35 +613,33 @@ policy on every tick because an ally keeps a defensive fleet stationed at your p
 The live API **never sends entity display names** — confirmed across all four of
 `infrastructure`/`research`/`shipyard`/`defenses`: every entity is `{id, level|count,
 cost, durationSeconds}`, bare integer id only. `read.py` imports
-`BUILDING_NAMES`/`TECHNOLOGY_NAMES`/`SHIP_NAMES`/`DEFENSE_NAMES` from `ids.py` (WP2,
-built by reading the deployed contract source directly at commit `701bed35`) when
-importable, falling back to a local transcription of `RESEARCH-ADDENDUM.md` §3 /
-`NOTES.md` §2 otherwise — see `read.py`'s module docstring. `ids.py` is the more
-authoritative of the two: it corrects "Dreadstar" (used throughout `docs.md`'s rapidfire
-tables and prior notes) to "Deathstar," the contract's actual enum member name.
+`BUILDING_NAMES`/`TECHNOLOGY_NAMES`/`SHIP_NAMES`/`DEFENSE_NAMES` from `ids.py`, built by
+reading the deployed contract source directly at commit `701bed35` — the single
+authoritative source for these names. It corrects "Dreadstar" (used throughout
+`docs.md`'s rapidfire tables and prior notes) to "Deathstar," the contract's actual enum
+member name.
 
 Fleet-mission-type resolution is the one exception kept local regardless of `ids.py`'s
 presence — §5 explains why (wire-format string matching, not display-name matching).
 
 ---
 
-## 7. `snapshot`'s composition, and why it isn't the spec's literal list
+## 7. `snapshot`'s composition, and why it substitutes `overview` for `fleet-visibility`
 
-SPEC.md §5.2: *"`snapshot` = health + infrastructure + research + shipyard + defenses +
-fleet-visibility."* `read.py`'s `snapshot` command instead fetches **health + overview +
-infrastructure + research + shipyard + defenses** — same call count (6), `overview` in
-place of a bare `fleet-visibility` call. Two independent reasons, both load-bearing:
+`read.py`'s `snapshot` command fetches **health + overview + infrastructure + research +
+shipyard + defenses** — six calls, `overview` in place of a bare `fleet-visibility` call
+that an earlier, more literal design intent had called for. Two independent reasons,
+both load-bearing:
 
 1. **`overview` already contains `fleetVisibility`, byte-identical in shape**
-   (confirmed live, §3.12; also stated in `RESEARCH-ADDENDUM.md` §2: *"overview...
-   bundles settlement + planets + queues + fleetVisibility"*). Fetching both `overview`
+   (confirmed live, §3.12). Fetching both `overview`
    and a bare `fleet-visibility` would be a wasted seventh call for data already in
    hand.
-2. **The digest SPEC.md §5.2 itself requires "fields used/total"**, and *none* of
-   health/infrastructure/research/shipyard/defenses/fleet-visibility carries planet
+2. **The digest this command needs to produce requires "fields used/total"**, and *none*
+   of health/infrastructure/research/shipyard/defenses/fleet-visibility carries planet
    coordinates, fields, or temperature (confirmed by reading every one of those six
-   payloads directly, §3.3-§3.13). Only `settlement`/`planets`/`overview` do. Spec's
-   literal composition list cannot produce its own required summary content —
+   payloads directly, §3.3-§3.13). Only `settlement`/`planets`/`overview` do. The more
+   literal composition cannot produce its own required summary content —
    `overview` resolves that inconsistency at zero extra cost.
 
 Consequence for `models.Snapshot`: `PlanetSnapshot.archetype` is **always `None`** from
@@ -655,7 +654,7 @@ one's. Both are documented as legitimate `None`s per `models.py`'s own conventio
 
 ## 8. Exit codes and the `bad planetId` gotcha
 
-Per SPEC.md §5.2: `0` ok · `2` API unhealthy · `3` network · `4` bad args. `http.py`/
+Exit codes: `0` ok · `2` API unhealthy · `3` network · `4` bad args. `http.py`/
 `read.py` implement this as: a 4xx from the API → `VeydriftHTTPError` → exit `4`; a 5xx
 surviving all retries → `VeydriftServerError` → exit `2`; a connection/timeout failure
 surviving all retries → `VeydriftNetworkError` → exit `3`; a missing `--wallet`/
@@ -669,7 +668,7 @@ surviving all retries → `VeydriftNetworkError` → exit `3`; a missing `--wall
  "detail": "infrastructure is not available from indexed contract state yet. Refresh shortly."}
 ```
 
-Under this project's "5xx = retry" contract (SPEC.md §5.2), that means a bad planet id
+Under this project's "5xx = retry" contract, that means a bad planet id
 costs **3 retry attempts with exponential backoff** (~1.5-3.5s of added latency,
 confirmed by timing a live call) before the CLI gives up — and it then exits `2` ("API
 unhealthy"), not `4` ("bad args"), even though the actual mistake was a bad argument.
@@ -688,31 +687,31 @@ edge case warrants.
 
 ---
 
-## 9. Where this probe contradicts `RESEARCH-ADDENDUM.md` §2
+## 9. Corrections a full live probe found, over earlier backend-source-derived research
 
-The addendum itself invites this ("field-level details may differ" — it was written
-from backend source, not from probing every route). What actually differed on
-2026-08-12:
+This project's earlier research was written from backend source, not from probing every
+route — it explicitly invited this kind of correction ("field-level details may
+differ"). What actually differed on 2026-08-12:
 
-1. **`/highscores` size.** Addendum doesn't give a figure directly (that's
-   `NOTES.md`/`SPEC.md`'s "~86 KB," itself likely stale); measured **~2.2 MB** for the
+1. **`/highscores` size.** Earlier research didn't give a figure directly (a separately
+   cited "~86 KB," itself likely stale); measured **~2.2 MB** for the
    default page. See §3.18.
-2. **`/chain/events` is SSE, not "needs paging params."** The addendum (and SPEC.md)
-   both frame the 2-minute hang as a missing-parameters problem. It is a
+2. **`/chain/events` is SSE, not "needs paging params."** Earlier research framed the
+   2-minute hang as a missing-parameters problem. It is a
    `text/event-stream` response that never terminates by design; no parameter would
    change that. See §3.19.
-3. **A third real "universe" route exists**: `/universe/galaxies/{g}/systems/{s}`. The
-   addendum's route table (§2) lists only `/universe/system` and `/universe/systems`.
+3. **A third real "universe" route exists**: `/universe/galaxies/{g}/systems/{s}`. Earlier
+   research's route table lists only `/universe/system` and `/universe/systems`.
    See §3.16.
 4. **`/battle-reports` returns a bare array**, not an object with a `pagination`
-   wrapper — the addendum doesn't specify this either way; noted because it breaks the
+   wrapper — earlier research didn't specify this either way; noted because it breaks the
    pattern every other paginated route in this API follows (`/highscores`,
    `/wallet/{addr}/missions`).
-5. **Everything else matched.** The wallet route list (§2's table), the two enums (§3:
-   `Defense`, `FleetMissionType`), the ABI hash, and the health-gating rule all confirmed
-   exactly as documented — this is not a "the addendum was wrong" finding so much as "a
-   probe finds detail a source-read alone can't," which is exactly what the addendum
-   asked the next pass to do.
+5. **Everything else matched.** The wallet route list, the two enums (`Defense`,
+   `FleetMissionType`), the ABI hash, and the health-gating rule all confirmed
+   exactly as documented — this is not a "the earlier research was wrong" finding so much
+   as "a probe finds detail a source-read alone can't," which is exactly what that
+   earlier pass asked the next one to do.
 
 ---
 
@@ -722,7 +721,7 @@ Two independent caching layers exist; don't confuse them when debugging a stale 
 
 - **`vd`'s own disk cache** (`http.py`, this WP): `$VEYDRIFT_HOME/cache/`, keyed by
   route+params, 60s default / 15s for `/health`, controllable per-call via `--max-age`.
-  This is the layer §1/SPEC.md §5.2 describe.
+  This is the layer §1 describes.
 - **The backend's own in-process response cache** (`apps/backend/src/server.ts`,
   `enableResponseCache`/`sharedResponseCache`), with its own TTL table
   (`server.ts:2600-2632`) independent of anything this skill controls: `/health` 10s,
@@ -739,26 +738,26 @@ Two independent caching layers exist; don't confuse them when debugging a stale 
 
 ## 11. Undocumented-but-live routes not wired into `vd read`
 
-Confirmed live 2026-08-12, in scope of neither SPEC.md §5.2's target list nor this work
-package, listed here so the next pass doesn't have to re-discover them:
+Confirmed live 2026-08-12, in scope of neither this skill's own `vd read` target list nor
+this work package, listed here so the next pass doesn't have to re-discover them:
 
 | Route | What it is |
 | --- | --- |
-| `/wallet/{addr}/missile-attacks` | Paginated missile-attack archive, `RESEARCH-ADDENDUM.md` §2 |
-| `/wallet/{addr}/referrals/history` | Referral history; write-adjacent, out of mandate per addendum |
+| `/wallet/{addr}/missile-attacks` | Paginated missile-attack archive |
+| `/wallet/{addr}/referrals/history` | Referral history; write-adjacent, out of this skill's mandate |
 | `/wallet/{addr}/alliance`, `/alliance/{id}` | Alliance state |
-| `/wallet/{addr}/rift` | Rift Stabilizer balances (building id 15; mechanics unpublished, `NOTES.md` §10) |
+| `/wallet/{addr}/rift` | Rift Stabilizer balances (building id 15; mechanics unpublished) |
 | `/wallet/{addr}/attack-protection` | Score-based attack protection status |
 | `/wallet/{addr}/watched-planets` | Player-configured planet watchlist (GET/POST/DELETE) |
 | `/wallet/{addr}/profile`, `/profile/display-name` | Player profile (GET/POST) |
-| `/raid-finder/debris`, `/raid-finder/rifters` | Server-side target selection, `RESEARCH-ADDENDUM.md` §2 |
+| `/raid-finder/debris`, `/raid-finder/rifters` | Server-side target selection |
 | `/randomness-readiness` | Randomness-engine commit/reveal readiness |
 | `/planets/{id}` | Single-planet detail, not wallet-scoped |
 | `/missions` (global) | Non-wallet-scoped mission feed — see §3.14's note |
 | `/mission/{id}`, `/battle-report/{id}` | Single mission / single battle report by id |
 | `/cca` | Chicken-burn-auction state (unrelated subsystem) |
-| `/graphql` | Status-only — same payload as `/runtime-config` wrapped in `{data:{service:...}}`; no game schema (`NOTES.md` §9) |
+| `/graphql` | Status-only — same payload as `/runtime-config` wrapped in `{data:{service:...}}`; no game schema |
 
-None of these are in SPEC.md §5.2's explicit target list, so none are wired into
+None of these are in this skill's own `vd read` target list, so none are wired into
 `vd read`. Recorded here per this work package's "mark undocumented-but-live routes"
 mandate, not as a recommendation to add them.

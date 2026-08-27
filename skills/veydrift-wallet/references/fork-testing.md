@@ -2,16 +2,17 @@
 
 ## Why this exists
 
-AGENTS.md §10 names this repo's single biggest untested surface: `tick.py`'s tier≥2 send path
-(`_send_and_await`) and, underneath it, `veydrift-wallet`'s `sendTx()` have never executed against
-a real chain. `dac1050` closed the *tooling* half of that gap: `src/providers/fork-impersonate.ts`
-runs the exact production `sendTx` → `provider.signAndSend` path against a local Anvil fork,
-impersonating a real account instead of holding its key. This document is the execution runbook
-for actually using it — exact commands, not prose, in the style of `references/abi-pinning.md`.
+`tick.py`'s tier≥2 send path (`_send_and_await`) and, underneath it, `veydrift-wallet`'s
+`sendTx()` had, at the time this runbook was written, never executed against a real chain — this
+repo's single biggest untested surface at that point. `dac1050` closed the *tooling* half of that
+gap: `src/providers/fork-impersonate.ts` runs the exact production `sendTx` →
+`provider.signAndSend` path against a local Anvil fork, impersonating a real account instead of
+holding its key. This document is the execution runbook for actually using it — exact commands,
+not prose, in the style of `references/abi-pinning.md`.
 
 **Nothing here submits to mainnet.** Every send in this document targets a local, ephemeral Anvil
 fork. The standing rule — "no transaction has ever been submitted to Veydrift from this codebase"
-(`references/tx-safety.md`, `docs/SPEC.md` §11, `README.md`'s status section) — is about the real
+(`references/tx-safety.md`) — is about the real
 chain. See `tx-safety.md`'s qualification for why a local fork is the intended first exercise of
 `provider.signAndSend()` rather than a loophole in that rule.
 
@@ -37,8 +38,8 @@ Name it whatever you like; the value matters, the name doesn't.
   that access pattern; an Alchemy (or equivalent) app URL does not.
 - **Reproducibility**: fork `latest` for exploration. For any run whose results get written into a
   doc (this one included), pin an explicit `--fork-block-number` — the same principle as the ABI
-  pin (AGENTS.md §6): an unpinned fork means a future rebuild silently reproduces a different
-  world, not the one the doc describes.
+  pin (`references/abi-pinning.md`): an unpinned fork means a future rebuild silently reproduces a
+  different world, not the one the doc describes.
 - Anvil listens on `127.0.0.1:8545` by default. `fork-impersonate`'s loopback guard
   (`refuseIfNotLoopback`, `src/providers/fork-impersonate.ts:49-67`) depends on the RPC host being
   one of `127.0.0.1` / `localhost` / `::1` / `[::1]` — Anvil's default satisfies this with no
@@ -139,13 +140,13 @@ Confirmed by reproduction, not just by reading: building a Transport from planet
 project's own, only planet) to a real third-party-owned planet (id 23) reverted `NotPlanetOwner()`
 (selector `0xab2bcfd3`) at both `build`'s gas-estimation step and at `simulate`. Harvest and
 Colonize carry **no** such check — the `if` above is scoped to exactly Transport and Deploy. See
-`docs/RESEARCH-ADDENDUM.md` §4.3 for the full writeup and §9 below for what this means in
+§9 below for what this means in
 practice: the project's own account can never exercise Transport or Deploy, structurally, until
 it owns a second planet — `generate_transport_candidates`'s ≥2-owned-planets precondition is the
 contract's own rule, not an overcautious guess at one.
 
 Combat mission types (3, 5-9) are refused unconditionally by `OPERATOR_ALLOWED_MISSION_TYPES` and
-`guard.py`'s matching set — do not attempt to construct one; per AGENTS.md §5 that friction is
+`guard.py`'s matching set — do not attempt to construct one; that friction is
 deliberate, not something this runbook works around.
 
 For selectors 6/7 and for Colonize/Deploy on selector 6, you will need to hand-write
@@ -226,7 +227,7 @@ account.
 
   This is the account this project is built around, originally played **by hand through the
   game UI** before this codebase itself later also submitted real transactions to it, for
-  real, at tier 2/3 (`docs/SPEC.md` §11, `README.md`'s Status section). Because a human also
+  real, at tier 2/3. Because a human also
   plays it,
   levels drift over real time regardless of anything in this repo, and a pending unsettled
   upgrade can exist at any moment as shown above. Re-probe before relying on a specific level as a
@@ -276,8 +277,7 @@ the action you just sent (e.g. `GET /wallet/{addr}/research?planetId=664` report
 `"durationSeconds"` per technology alongside `"cost"`; `/infrastructure` and `/shipyard` do the
 same for buildings and ships/defense), or independently recompute it via
 `veydrift_agent.calc.build_seconds`/`ship_seconds`/`research_seconds` and confirm the two agree
-(`vd calc verify` already does exactly this cross-check for three entities against live data,
-AGENTS.md §8).
+(`vd calc verify` already does exactly this cross-check for three entities against live data).
 
 Then observe settlement through **`simulate`, never `send`**:
 
@@ -389,8 +389,10 @@ this in isolation, but never against a real contract response).
 2. **The Destroyer shift specifically**: built (not sent — no chain interaction is needed to prove
    an encoding claim, so this used `walletctl build` only) a synthetic action with `destroyer: 7`
    and every other ship 0, then decoded the raw calldata: **the value `7` landed at tuple index 9,
-   exactly.** This is the direct, conclusive confirmation of the trap `AGENTS.md` §7 (trap #1) has
-   documented and defended against since the tech-tree work.
+   exactly.** This is the direct, conclusive confirmation of the 14-slot-fleet-tuple-vs-16-entry-
+   Ship-enum trap `fleet.ts`'s `shipCountsToFleetTuple()` has documented and defended against
+   since the tech-tree work — SolarSatellite (id 9) and Crawler (id 15) can't fly and are omitted,
+   so tuple indices 9-13 map to Ship ids 10-14.
 
 ### 8.3 The fuel formula
 
@@ -478,7 +480,7 @@ deployed contract. Every number is real, not illustrative — same standard as �
 The project's own account (`0x224aba5d489675a7bd3ce07786fada466b46fa0f`, planet 664) was used for
 these:
 
-1. `startBuildingUpgrade` — already documented (round 1, §8.4 and `AGENTS.md` §10), `status:
+1. `startBuildingUpgrade` — already documented (round 1, §8.4), `status:
    success`.
 2. `startResearch` — already documented (round 1, the simulate-gas-cap finding, §8.4), `status:
    success` once the `simulateTx` gas cap fixed above was in place.
@@ -518,13 +520,14 @@ and it's harmless to the impersonated account since nothing leaves the local for
 
 All 7 allowlisted selectors (`ECONOMY_SIGNATURES` plus both `LAUNCH_FLEET_MISSION_SIGNATURES`
 overloads, §3 above) have now been either live-sent on a fork or, for `resolveFleetMission`
-specifically, confirmed correct by source where no real mission existed to exercise it live. What
-remains untouched by this system, mainnet included: **mainnet itself** — nothing here has ever
-submitted a transaction to the real chain (`docs/SPEC.md` §11, `README.md`'s status section).
+specifically, confirmed correct by source where no real mission existed to exercise it live. At
+the time this section was written, what remained untouched by this system was mainnet itself —
+nothing in this fork-testing effort had submitted a transaction to the real chain (real mainnet
+sends have since happened separately, outside this fork-testing effort).
 
 **Both caveats below this line were closed in round 3 (2026-08-19, §10) — kept here, struck
 through in spirit but not in text, for the same "reconstructed once" provenance reason
-`docs/COVERAGE.md` gives for its own struck-through rows.** At the time round 2 finished:
+this project's own coverage ledger gives for its own struck-through rows.** At the time round 2 finished:
 Colonize's slot-claiming behavior specifically (§8.1's remaining gap: the mission-type encoding is
 covered by this section's general Transport/7-arg confirmation, since Colonize shares the same two
 overloads, but no Colonize mission was actually sent this round, so whether a well-formed target
@@ -545,8 +548,8 @@ slot-claiming behavior on send, and `resolveFleetMission`'s live-send status.
 requires Shipyard ≥ 4 and Impulse Drive (Technology id 9) ≥ 3 to produce a Colony Ship (Ship id 3).
 This account's home planet (planet 23) already had Shipyard 10 and Impulse Drive 6 — confirmed via
 `GET /wallet/{addr}/research` (`technologyLevels["9"]: 6`) and `GET /wallet/{addr}/planets`
-(`keyLevels.shipyard: 10`). So the "Shipyard 1→2→3→4, Impulse Drive 0→1→2→3" grind that AGENTS.md
-§10 described as deferred/out-of-scope was **never actually necessary for this account**. This
+(`keyLevels.shipyard: 10`). So the "Shipyard 1→2→3→4, Impulse Drive 0→1→2→3" grind previously
+described as deferred/out-of-scope was **never actually necessary for this account**. This
 closes the gap by discovering it was already satisfied, not by exercising the grind — **it does
 not generalize**. A single-planet, low-tier account (the project's own
 `0x224aba5d489675a7bd3ce07786fada466b46fa0f`, planet 664, Shipyard 1) would still need the full
@@ -570,8 +573,8 @@ completion 1787181988 (duration 3928s).
 Time-traveled past completion (`anvil_increaseTime` + `anvil_mine`, §6), then called
 `finishShipProduction(23)` directly via `cast send ... --unlocked --from 0x4e15e...` — **not**
 through `walletctl`. This selector isn't in `ECONOMY_SIGNATURES`/`LAUNCH_FLEET_MISSION_SIGNATURES`
-(`docs/COVERAGE.md`'s §1.8 lists it as a "queue-completion helper," deferred, player-callable but
-untouched by any layer of this codebase) — it's a permissionless settlement call anyone can trigger,
+(this project's own coverage ledger lists it as a "queue-completion helper," deferred,
+player-callable but untouched by any layer of this codebase) — it's a permissionless settlement call anyone can trigger,
 correctly out of scope for this repo's allowlist by design, not a gap this round is trying to close.
 
 tx hash `0x1a5d1fd4e4ba47f1e45375d488ac0d932e6876a140f7461061061acec2243a1c`, `status: 1 (success)`.
@@ -627,7 +630,8 @@ if (planetCountOf[msg.sender] >= limit) revert PlanetLimitReached(limit);
 ```
 
 where `limit = 1 + _technologyLevels[msg.sender][Technology.Astrophysics]` — the exact formula
-`calc.max_planets` implements (`docs/COVERAGE.md` Part 3's `max_planets` row). This account had
+`calc.max_planets` implements (`veydrift-agent`'s own formula, verified against this contract
+source directly). This account had
 Astrophysics (Technology id 12) at level 9, giving `limit = 10`, and already owned exactly 10
 planets — genuinely at cap. Real Astrophysics research to level 10 would cost 615,700 metal /
 1,231,500 crystal / 615,700 deuterium (per `GET /wallet/{addr}/research`'s `technologies[12].cost`)
@@ -705,5 +709,5 @@ plan and is now closed.
   the test account already satisfied it. Whether the full grind (starting from Shipyard 1, Impulse
   Drive 0, as the project's own account currently sits) actually works end-to-end remains
   unverified. Don't read §10.1 as having closed that.
-- **Mainnet**: still untouched by this codebase, same as every round before this one
-  (`docs/SPEC.md` §11, `README.md`'s status section).
+- **Mainnet**: still untouched by this fork-testing effort specifically, same as every round
+  before this one (real mainnet sends have since happened separately, outside this effort).

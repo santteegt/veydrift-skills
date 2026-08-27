@@ -39,14 +39,15 @@ includes each one:
 | Building upgrade | `startBuildingUpgrade(uint256,uint8)` | 131 | economy, operator |
 | Research | `startResearch(uint256,uint8)` | 220 | economy, operator |
 | Defense production | `startDefenseProduction(uint256,uint8,uint32)` | 176 | economy, operator |
-| Permissionless resolve | `resolveFleetMission(uint256)` | 425 | economy, operator (permissionless — costs no allowlist-gated capability at all, but still goes through `walletctl` like everything else so it's still logged). Live since 2026-08-17: `tick.py`'s `_resolvable_mission_ids` now computes this rung's argument from `/wallet/{addr}/fleet-visibility` — previously implemented but unreachable, see docs/COVERAGE.md |
+| Permissionless resolve | `resolveFleetMission(uint256)` | 425 | economy, operator (permissionless — costs no allowlist-gated capability at all, but still goes through `walletctl` like everything else so it's still logged). Live since 2026-08-17 (this skill's `CHANGELOG.md`'s `1.0.0` entry): `tick.py`'s `_resolvable_mission_ids` now computes this rung's argument from `/wallet/{addr}/fleet-visibility` — previously implemented but unreachable |
 | Fleet launch (7-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` | 358 | operator only, and only for mission types Transport(0)/Deploy(1)/**Colonize(2)**/Harvest(4) — §3. Colonize added 2026-08-17 (Phase 5b) |
 | Fleet launch (6-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` | 325 | operator only, same mission-type restriction |
 | Ship production | `startShipProduction(uint256,uint8,uint32)` | 186 | `economy` — granted 2026-08-12, see §8 |
 | Fleet return | `completeFleetMissionReturn(uint256)` | 442 | **none** — not in any tier's table, and not in `allowlist.ts`'s selector sets. `plan.py` never constructs this action |
 
 **`settlePlanet(uint256)` (line 121) was removed from every tier's allowed set
-2026-08-17** (Phase 5, docs/SPEC.md §5.4/§9, breaking change — `veydrift-wallet` v0.2.0).
+2026-08-17** (breaking change — see this skill's `CHANGELOG.md`'s `1.0.0` entry and
+`veydrift-wallet`'s `CHANGELOG.md`'s `0.2.0` entry).
 Its body at the pinned commit is `_touchPlayer(msg.sender);
 _collectPlanetResources(planetId);` — byte-identical to `collectResources`, which §4
 below already documents as a disguised read `sendTx` refuses. It was allowlisted at
@@ -69,7 +70,8 @@ system, position)` = `(1 << 255) | (galaxy << 24) | (system << 8) | position`
 not a holding duration — `_launchColonizeFleetMission` reverts (`InvalidId`) unless it is
 exactly `0`.
 
-**Live in both enforcement layers since 2026-08-17 (Phase 5b, docs/SPEC.md §9)**:
+**Live in both enforcement layers since 2026-08-17 (this skill's `CHANGELOG.md`'s
+`1.0.0` entry)**:
 `guard.py`'s `mission_type` gate and `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES`
 both allow mission type 2 at `operator` tier, widened together in the same change (never
 one before the other — widening the wallet-side allowlist alone would have reopened the
@@ -78,7 +80,7 @@ proposed**: no `candidates.py` generator constructs a Colonize `Action` — that
 "where to colonise" target-selection policy this phase's brief did not ask for. The
 entrypoint is implemented, encoded (`tick.py`'s `_action_to_walletctl_json`) and gated;
 only the "which coordinates" decision is left to a human via `walletctl` directly, or to
-a future planner generator. See docs/COVERAGE.md §1.1 and this package's `CHANGELOG.md`.
+a future planner generator. See this package's `CHANGELOG.md` for the full history.
 
 The tier column is read straight from `allowlist.ts`'s `ECONOMY_SIGNATURES` and
 `LAUNCH_FLEET_MISSION_SIGNATURES` constants (`skills/veydrift-wallet/references/tx-safety.md`
@@ -286,16 +288,17 @@ energy source (`references/formulas.md` §9). But:
 
 So a `vd plan` proposal with `allow_ships: true` is fully legitimate per the decision
 ladder, gets a rendered, ready-to-submit transaction at tier 1 exactly as designed
-(`SPEC.md` §4: "Tier 1 still builds calldata"), and would pass `walletctl build` and
-`walletctl simulate` — but `walletctl send` would refuse it at **every** tier, forever,
-on the `selector` allowlist check alone, since no tier's selector set ever contains
-`startShipProduction`'s 4-byte selector. This is not a bug in either `plan.py` or
-`allowlist.ts` individually — both correctly implement what they were each told to
-implement — it's a gap in `SPEC.md` §4's tier table itself, which never allocated ship
-production to a tier. `assets/policy.example.json`'s default (`allow_ships: false`,
-per `SPEC.md` §5.6) means this rung does not fire in the shipped default configuration, so
-it is not a live-reachable problem today, but flipping `allow_ships` to `true` at any
-tier produces proposals that can never be executed through this codebase's own wallet
-engine. Worth a `SPEC.md` update (add `startShipProduction` to a tier, or have `plan.py`
-gate rung 8's ship branch on tier reachability the same way combat is gated) before
-`allow_ships` is ever turned on in a real policy file.
+("tier 1 still builds calldata, it just never sends"), and would pass `walletctl build`
+and `walletctl simulate` — but `walletctl send` would refuse it at **every** tier,
+forever, on the `selector` allowlist check alone, since no tier's selector set ever
+contains `startShipProduction`'s 4-byte selector. This is not a bug in either `plan.py`
+or `allowlist.ts` individually — both correctly implement what they were each told to
+implement — it's a gap in the project's own tier-table specification itself, which never
+allocated ship production to a tier. `assets/policy.example.json`'s default
+(`allow_ships: false`, the shipped default policy's own setting) means this rung does not
+fire in the shipped default configuration, so it is not a live-reachable problem today,
+but flipping `allow_ships` to `true` at any tier produces proposals that can never be
+executed through this codebase's own wallet engine. Worth a tier-table update (add
+`startShipProduction` to a tier, or have `plan.py` gate rung 8's ship branch on tier
+reachability the same way combat is gated) before `allow_ships` is ever turned on in a
+real policy file.

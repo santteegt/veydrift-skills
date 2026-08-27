@@ -38,8 +38,8 @@ sha256( JSON.stringify( artifact.abi ) )
 Compact JSON (`JSON.stringify`'s default, no whitespace), key order exactly as forge emits it and
 as `JSON.parse` preserves it — this is **not** a canonicalized/sorted-keys hash. It matches the
 derivation the backend itself uses
-(`scripts/veydrift-deployment-manifest.mjs:129-135` in the veydrift repo, per
-`RESEARCH-ADDENDUM.md` §1), which is why comparing against `backend.build.deploymentAbiHash` is a
+(`scripts/veydrift-deployment-manifest.mjs:129-135` in the veydrift repo), which is why
+comparing against `backend.build.deploymentAbiHash` is a
 valid check and not just an internal consistency check against our own artifact.
 
 `src/abi.ts`'s `computePinnedAbiHash()` recomputes this from the on-disk pinned ABI file every
@@ -104,7 +104,7 @@ node -e '
 Update the filename references in `src/abi.ts` (`ABI_DIR`/pinned-file basename) if the short-commit
 suffix changes.
 
-## The main-vs-deployed divergence (RESEARCH-ADDENDUM.md §1.1)
+## The main-vs-deployed divergence
 
 | Only on `main` (does **not** exist on the deployed contract) | Only on deployed (deleted on `main`) |
 | --- | --- |
@@ -115,7 +115,7 @@ suffix changes.
 | `startPlanetWithAllianceInvite(bytes32,uint64,uint8,bytes32,bytes32)` | 3 × `SafeCast*` errors |
 | event `AllianceBonusCreditedToPlanet(...)` | |
 
-**`playerScore` foremost.** Prior project docs (`NOTES.md` §13.5) list `playerScore` among "useful
+**`playerScore` foremost.** Prior project research listed `playerScore` among "useful
 read functions for an agent (all public views on the game proxy)". It is **not on the deployed
 implementation** — a call to it reverts. This is exactly the kind of mistake pinning the ABI to
 `main` would reproduce silently: the encoder would happily build a call to a function that doesn't

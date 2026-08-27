@@ -159,7 +159,7 @@ and reported (never short-circuited in the report, only in the final `ok`):
 Any failure anywhere in the five checks: `sendTx` throws `SendRefusedError`, the CLI exits non-zero,
 nothing is signed, and the rejection reason is printed (not silently swallowed).
 
-### Phase 5 (2026-08-17, docs/SPEC.md §5.4/§9): `settlePlanet` removed, Colonize added (5c/5b)
+### 2026-08-17 (this skill's `CHANGELOG.md`'s `0.2.0` entry): `settlePlanet` removed, Colonize added
 
 `ECONOMY_SIGNATURES` dropped `settlePlanet(uint256)` — a breaking change (v0.2.0). At the pinned
 commit its body is byte-identical to `collectResources`, one of the six disguised reads listed
@@ -222,7 +222,7 @@ was purely a gas shortfall, not a logic bug. `startBuildingUpgrade`, `startShipP
 `startDefenseProduction` all succeeded cleanly in the same fork session — this is not a general
 defect in every selector, just in any call whose settlement sweep is unexpectedly wide, which a
 zero-state test account would never surface. See `references/fork-testing.md` §8.4 for the full
-repro with exact numbers, and `AGENTS.md` §10 for how this was found.
+repro with exact numbers and how this was found.
 
 ## What this engine deliberately does not do
 
@@ -231,8 +231,7 @@ repro with exact numbers, and `AGENTS.md` §10 for how this was found.
 - It never submits a transaction from a test, from CI, or during development — that rule
   is unaffected by, and separate from, real usage elsewhere: real transactions have since
   been submitted to Veydrift from this codebase, at tier 2 (`economy`) and tier 3
-  (`operator`), always via an explicit human `--confirm` on `walletctl send` — see
-  `README.md`'s Status section.
+  (`operator`), always via an explicit human `--confirm` on `walletctl send`.
 
   **`fork-impersonate` specifically never touches mainnet — a separate, narrower guarantee
   about that one provider, not a claim that the project as a whole has never sent to

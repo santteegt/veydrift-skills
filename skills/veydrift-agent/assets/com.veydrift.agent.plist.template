@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  com.veydrift.agent.plist.template — bare-launchd scheduling adapter (docs/SPEC.md §5.8).
+  com.veydrift.agent.plist.template — bare-launchd scheduling adapter.
 
   This is a TEMPLATE. It is not installed by this package and nothing in this repository
   runs `launchctl load` on it — installing a launchd agent is a human decision, done once,
@@ -12,7 +12,7 @@
     __SKILL_DIR__         absolute path to this installed skill, e.g.
                            ~/.claude/skills/veydrift-agent      (NOT this repo checkout —
                            the installed copy, since `npx skills add .` copies the tree;
-                           see docs/SPEC.md §2.1 and state.py's docstring)
+                           see state.py's docstring)
     __VEYDRIFT_HOME__     absolute path to $VEYDRIFT_HOME, e.g. ~/.veydrift
     __INTERVAL_SECONDS__  StartInterval, in seconds (policy.cadence.economy_minutes * 60
                            is a reasonable default -- see references/scheduling.md)
