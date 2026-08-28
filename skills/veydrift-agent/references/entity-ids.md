@@ -162,13 +162,14 @@ for this codebase.
 
 **Since 2026-08-17 (Phase 5c/5b), `plan.py` can construct a `launchFleetMission`
 `Action`** for the non-combat types: `candidates.generate_transport_candidates`/
-`generate_harvest_candidates` (Transport/Harvest, gated on
-`policy.actions.allow_fleet_noncombat`, default `false`), and `Colonize` (2) is allowlisted
-and gated at both enforcement layers though no generator proposes it yet (see
-`references/contract-writes.md`'s colonisation note). `Deploy` (1) is allowlisted but has
-no generator either — a deliberate scope limit, not a gap in enforcement.
-`resolveFleetMission` (ladder rung 3) remains the only *permissionless* fleet-adjacent
-function.
+`generate_harvest_candidates`/`generate_foreign_harvest_candidates` (Transport/Harvest,
+gated on `policy.actions.allow_fleet_noncombat`, default `false` — Harvest against both a
+local and a foreign debris field is live as of 2026-08-28, commits 1 and 3 of the
+launch-actions plan), and `Colonize` (2) is allowlisted and gated at both enforcement
+layers though no generator proposes it yet (see `references/contract-writes.md`'s
+colonisation note). `Deploy` (1) is allowlisted but has no generator either — a
+deliberate scope limit, not a gap in enforcement. `resolveFleetMission` (ladder rung 3)
+remains the only *permissionless* fleet-adjacent function.
 
 ## 6. `Resource`
 

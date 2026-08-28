@@ -11,6 +11,47 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-28
+
+### Added
+
+- **Foreign Harvest — commit 3 of the launch-actions plan.** New
+  `candidates.generate_foreign_harvest_candidates`, the foreign-target sibling of
+  `generate_harvest_candidates`: the contract does not restrict Harvest to
+  `origin == target` — that was this codebase's own prior scope, not a contract rule.
+  `_launchFleetMission` only special-cases the *distance* for a local harvest; a foreign
+  target gets the real `calc.distance` formula, same as every other mission type.
+  Sourced from a new `tick._foreign_debris_targets`, reading `/raid-finder/debris`
+  (`read.fetch_raid_finder_debris`, new) — a discovery index, confirmed incomplete (its
+  own `indexer.indexedDebrisFields` outnumbers its `targets` array), acceptable here
+  because a missed candidate is a missed opportunity, never a wrong answer (unlike
+  `_own_planet_debris`, which deliberately avoids this same route for the wallet's own
+  planets — see commit 1's entry). Filters out any entry whose `owner` matches the
+  wallet, case-insensitively, as an extra defense-in-depth check. `select_logistics_
+  candidate` ranks foreign Harvest last among the three logistics families (Transport,
+  local Harvest, foreign Harvest) — a closer/simpler own-planet opportunity always wins
+  first.
+- **`Action.target_planet_id`** (new, optional, `None` default — schema change,
+  `schemas/action.schema.json` regenerated). Carries the real on-chain planet id for a
+  foreign target, since a foreign planet is never in `Snapshot.planets` for
+  `tick._resolve_target_planet_id`'s existing coordinate lookup to find. Set alongside
+  the existing `target_coordinates` (still needed for `guard._derive_fleet_mission_spend`'s
+  distance re-derivation and for display) — using the local-harvest fixed distance for a
+  foreign target would have understated its real fuel cost, the "silent wrong outcome"
+  class this codebase specifically guards against.
+- New API route reference: `references/api-routes.md` §3.20 `/raid-finder/debris`,
+  moved out of the "undocumented-but-live, not wired" table now that it has a live
+  caller.
+
+29 new tests (11 in `test_candidates.py` for the new generator and its ranking, 7 in
+`test_tick.py` for `_foreign_debris_targets` and its wiring — plus 11 already landed with
+commit 1's own Harvest tests, unaffected here). 580 passed (562 baseline from commit 2 +
+18 new this commit). Verified live against a scratch-home dry-run tick and `vd doctor`.
+Docs: `docs/SPEC.md` correction 68 and its §1/§5.4 updates, `docs/COVERAGE.md`'s
+"Debris fields & recycling" row, `references/strategy-playbook.md` §8c,
+`references/entity-ids.md`, `docs/PLAYER-GUIDE.md`/`.html`'s operator-tier section.
+Bumped 1.8.0 -> 1.9.0 (additive, minor) per this skill's own CHANGELOG.md convention.
+
 ## [1.8.0] - 2026-08-28
 
 ### Added

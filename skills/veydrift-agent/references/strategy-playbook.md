@@ -489,25 +489,32 @@ where it moved.
    candidate (rung 6) or a policy-declared research/ship/defense pick (rungs 7-8) — giving
    it the final rung makes that a property of the ladder's control flow, not a flag this
    function has to remember to check.
-8c. **(Phase 5c, 2026-08-17) Nothing above fired -> propose non-combat fleet logistics.**
-   New rung, `candidates.select_logistics_candidate`, checked only after rungs 5-8b above
-   have all found nothing for every target planet — same "never outrank a scored
-   economic pick or the storage-overflow deadline" precedence rule rung 8b already uses,
-   extended by one more rung. Two generators, first selectable one per planet wins:
+8c. **(Phase 5c, 2026-08-17; foreign Harvest added 2026-08-28) Nothing above fired ->
+   propose non-combat fleet logistics.** New rung, `candidates.select_logistics_candidate`,
+   checked only after rungs 5-8b above have all found nothing for every target planet —
+   same "never outrank a scored economic pick or the storage-overflow deadline"
+   precedence rule rung 8b already uses, extended by one more rung. Three generators,
+   first selectable one per planet wins, in this order:
    - **Transport** (`generate_transport_candidates`): moves whichever resource is
      furthest above `policy.reserves` on the origin planet to whichever other own planet
      currently holds the least of it, using already-built cargo-capable ships only.
      Bounded by `calc.available_cargo` (capacity minus `calc.mission_fuel`'s fuel cost),
      never by surplus alone.
-   - **Harvest** (`generate_harvest_candidates`): the contract's own local special case
-     (`originPlanetId == targetPlanetId`) — a planet's own debris field, never a foreign
-     one. Requires an already-built Recycler. Live since 2026-08-28: `tick.py`'s
-     `_own_planet_debris` reads the planet's own `debrisField` from
-     `/universe/galaxies/{g}/systems/{s}` (the frozen `Snapshot` still carries none itself
-     — this is an out-of-band read, same posture as rung 3's `resolvable_mission_ids`)
-     and passes it in as an explicit parameter. Foreign debris (a third party's field) is
-     still out of scope for this generator.
-   - Both gated, independently, on `policy.actions.allow_fleet_noncombat` (default
+   - **Local Harvest** (`generate_harvest_candidates`): the contract's own local special
+     case (`originPlanetId == targetPlanetId`) — a planet's own debris field. Requires an
+     already-built Recycler. Live since 2026-08-28: `tick.py`'s `_own_planet_debris`
+     reads the planet's own `debrisField` from `/universe/galaxies/{g}/systems/{s}` (the
+     frozen `Snapshot` still carries none itself — this is an out-of-band read, same
+     posture as rung 3's `resolvable_mission_ids`) and passes it in as an explicit
+     parameter.
+   - **Foreign Harvest** (`generate_foreign_harvest_candidates`, added 2026-08-28): a
+     third party's debris field — the contract does not restrict Harvest to
+     `origin == target`, only local Harvest's own *distance* is a special case. Sourced
+     from `tick._foreign_debris_targets` (`/raid-finder/debris`, a discovery index —
+     fine for finding candidates, never treated as authoritative). Ranks last of the
+     three: a closer/simpler opportunity on the wallet's own planets always wins first
+     when more than one is available.
+   - All three gated, independently, on `policy.actions.allow_fleet_noncombat` (default
      `false`) — with the default policy this rung never fires, same safety property
      every earlier phase's new rung shipped with.
    - Always `score=None`, same reasoning as rung 8b: this is an opportunity to use idle

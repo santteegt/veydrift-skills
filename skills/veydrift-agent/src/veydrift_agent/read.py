@@ -650,6 +650,26 @@ def _universe_archetype_for_planet(coordinates: str | None, *, max_age: float | 
     return None
 
 
+def fetch_raid_finder_debris(*, max_age: float | None = None) -> dict[str, Any]:
+    """GET /raid-finder/debris, bypassing the CLI/`_emit` layer -- the same raw-dict,
+    bypass-`Snapshot` posture `fetch_fleet_visibility`/`fetch_activity` already take. Not
+    wallet-scoped (no `wallet` path segment or query param -- confirmed live 2026-08-27).
+    Shape: `{targets: [{planetId, name, owner, coordinates: {galaxy, system, position},
+    archetype, hasMoon, debris: {metal, crystal}, ...}], pagination, indexer, ...}`.
+
+    A convenience discovery index, confirmed incomplete: `indexer.indexedDebrisFields`
+    (the indexer's own count of real debris fields) outnumbers `len(targets)` in a live
+    probe (3 vs. 2, 2026-08-27) -- its filtering criteria beyond that are undocumented.
+    Fine for `tick.py`'s `_foreign_debris_targets` (a missed candidate is a missed
+    opportunity, not a wrong answer); deliberately NOT used for the wallet's *own*
+    planets' debris (`_own_planet_debris` uses `/universe/galaxies/{g}/systems/{s}`
+    instead), where the same incompleteness would risk excluding an owned planet and
+    silently killing that rung -- see `_own_planet_debris`'s own docstring. Does NOT catch
+    `http.VeydriftAPIError` -- same contract as `fetch_fleet_visibility`; the caller
+    decides how to degrade."""
+    return http.fetch("/raid-finder/debris", max_age=max_age)
+
+
 def fetch_fleet_visibility(wallet: str, *, max_age: float | None = None) -> dict[str, Any]:
     """GET /wallet/{addr}/fleet-visibility, bypassing the CLI/`_emit` layer -- the same
     "raw dict, not a `models.py` type" posture `fetch_activity` already takes, and for the

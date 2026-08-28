@@ -37,6 +37,7 @@ happened.
   - [3.17 `/battle-reports`](#317-battle-reports)
   - [3.18 `/highscores`](#318-highscores)
   - [3.19 `/chain/events` — not exposed, and why](#319-chainevents--not-exposed-and-why)
+  - [3.20 `/raid-finder/debris`](#320-raid-finderdebris)
 - [4. Queue parsing (`QueueState`) — typed from source, not from a live sample](#4-queue-parsing-queuestate--typed-from-source-not-from-a-live-sample)
 - [5. Incoming-fleet parsing (`FleetMissionSummary`) — same caveat](#5-incoming-fleet-parsing-fleetmissionsummary--same-caveat)
 - [6. Entity ID → name tables](#6-entity-id--name-tables)
@@ -549,6 +550,37 @@ rather than an open question.
 
 ---
 
+### 3.20 `/raid-finder/debris`
+
+Not wallet-scoped (no `wallet` path segment or query param — confirmed live 2026-08-27:
+identical body regardless of caller). Query: `page`, `pageSize` (default `page=1,
+pageSize=250`, unconfirmed whether larger values are honoured). Shape: `{targets:
+[{planetId, name, owner, coordinates: {galaxy, system, position}, archetype, hasMoon,
+debris: {metal, crystal}, updatedAtBlock, transactionHash}], pagination, detail, stale,
+source, indexer}`. All numeric-looking values (`planetId`, `debris.metal/.crystal`) are
+decimal strings, same convention as every other route in this document.
+
+Moved out of §11 below 2026-08-28 (commit 3 of the launch-actions plan): `read.
+fetch_raid_finder_debris()` is a live caller now (`tick._foreign_debris_targets`), the
+same "bypass the CLI/`_emit` layer, raw dict" posture `fetch_fleet_visibility`/
+`fetch_activity` already take — not wired into `vd read`'s own CLI target list, same as
+those two.
+
+**Confirmed incomplete, not the authoritative debris source.** A live probe (2026-08-27)
+returned 2 `targets` while the same response's own `indexer.indexedDebrisFields` reported
+3 — this route's filtering criteria beyond that are undocumented. Acceptable for
+`_foreign_debris_targets`'s purpose (a missed candidate is a missed opportunity, not a
+wrong answer); explicitly **not** used for the wallet's *own* planets' debris
+(`_own_planet_debris` uses `/universe/galaxies/{g}/systems/{s}` instead, §3.16) — the same
+incompleteness there would risk excluding an owned planet and silently killing that rung.
+
+A sibling route, `/raid-finder/rifters`, exists with the same shape (confirmed live,
+empty `targets` on the probed universe) — the Rift Stabilizer building's mechanics are
+unpublished (no formula for what it produces or protects has been found anywhere in the
+pinned contract source), so this codebase has no consumer for it.
+
+---
+
 ## 4. Queue parsing (`QueueState`) — typed from source, not from a live sample
 
 The probed account (planet 664) is zero-state: every `queue`/`building`/`research`/
@@ -761,7 +793,7 @@ this work package, listed here so the next pass doesn't have to re-discover them
 | `/wallet/{addr}/attack-protection` | Score-based attack protection status |
 | `/wallet/{addr}/watched-planets` | Player-configured planet watchlist (GET/POST/DELETE) |
 | `/wallet/{addr}/profile`, `/profile/display-name` | Player profile (GET/POST) |
-| `/raid-finder/debris`, `/raid-finder/rifters` | Server-side target selection |
+| `/raid-finder/rifters` | Server-side target selection for Rift Stabilizer mechanics (unpublished, no consumer) — see §3.20's note; `/raid-finder/debris` moved to its own §3.20 entry 2026-08-28, now a live caller |
 | `/randomness-readiness` | Randomness-engine commit/reveal readiness |
 | `/planets/{id}` | Single-planet detail, not wallet-scoped |
 | `/missions` (global) | Non-wallet-scoped mission feed — see §3.14's note |

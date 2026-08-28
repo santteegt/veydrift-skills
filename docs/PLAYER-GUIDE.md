@@ -878,16 +878,19 @@ config toggle.
 
 **What operator actually does, not just allows.** With `policy.actions.allow_fleet_noncombat`
 set to `true` (it defaults to `false` — promoting to operator alone does **not** turn this
-on), the agent can propose two kinds of fleet mission on its own:
+on), the agent can propose three kinds of fleet mission on its own, in this order of
+preference per planet:
 
 - **Transport** — moving a surplus resource from a planet that has more of it than your
   configured `reserves` floor to whichever of your other planets currently holds the
   least, using ships you've already built. It never proposes building a ship to make this
   possible.
-- **Harvest** — recovering debris sitting on one of your own planets, using a Recycler
-  you've already built. This one is implemented but not live yet in practice: the agent
-  has no reliable way to learn about debris on a planet from the live API today, so this
-  path exists and is tested but won't actually fire until that's wired up.
+- **Harvest, your own planet** — recovering debris sitting on one of your own planets,
+  using a Recycler you've already built.
+- **Harvest, a third party's planet** — the same idea against someone else's debris
+  field, discovered via the game's own raid-finder data. Only fires if neither of the
+  first two has anything to propose, since it's the only one of the three whose target
+  you don't own.
 
 **Colonisation** (`launchFleetMission` mission type `Colonize`) is allowed at both
 enforcement layers — the wallet-engine allowlist and the agent's own

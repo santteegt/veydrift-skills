@@ -136,12 +136,13 @@ change is everything downstream of that:
   (unchanged from the original list above). A raid-profitability model remains out of
   scope (`protectedResources` semantics still unconfirmed). Colonisation is **no
   longer** a non-goal, per the above. Non-combat fleet logistics (Transport/Harvest) is
-  **no longer** a non-goal either, though the generators are intentionally
-  conservative: Transport only ever considers the wallet's own planets, using
-  already-built ships; Harvest only ever considers a planet's own local debris field
-  (never a foreign one). **Live since 2026-08-28** (correction 67, §9) —
-  `tick._own_planet_debris` now wires a confirmed-populated debris-field source into
-  `candidates.generate_harvest_candidates`'s `own_planet_debris` parameter.
+  **no longer** a non-goal either, and the generators are less conservative than they
+  once were: Transport only ever considers the wallet's own planets, using
+  already-built ships; Harvest considers both a planet's own local debris field
+  (**live since 2026-08-28**, correction 67, §9 — `tick._own_planet_debris` wires a
+  confirmed-populated source into `generate_harvest_candidates`'s `own_planet_debris`
+  parameter) and, as of the same date, a third party's debris field too (correction 68,
+  §9 — `generate_foreign_harvest_candidates`, sourced from `/raid-finder/debris`).
 
 ---
 
@@ -592,20 +593,27 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 >   available_cargo` (capacity minus `calc.mission_fuel`'s own fuel cost at the computed
 >   `calc.distance`/`calc.ship_movement_stats`-derived slowest speed), never by surplus
 >   alone.
-> - **`generate_harvest_candidates`** — `FleetMissionType.Harvest` (4), restricted to the
->   contract's own local special case (`originPlanetId == targetPlanetId`,
->   `LOCAL_HARVEST_DISTANCE = 5`): a planet's own debris field, never a foreign one.
->   Requires an already-built Recycler (the contract reverts on `ships.recycler == 0`).
->   The frozen `Snapshot` model carries no debris-field data on any route this codebase
->   reads, so this generator takes an explicit `own_planet_debris` parameter rather than
->   fetch-or-guess it. **Live since 2026-08-28** (correction 67, §9): `tick.py`'s
->   `_own_planet_debris` wires it from `/universe/galaxies/{g}/systems/{s}`
->   (`read.fetch_universe_system`), confirmed live-populated — closing the "never
->   observed with a populated sample" gap this row previously described.
-> - Both gated, independently, once each, on **`policy.actions.allow_fleet_noncombat`**
->   (defaults `false`) — with the default policy this band produces nothing at all,
->   identical to pre-Phase-5c behaviour, the same safety property every prior phase's
->   new capability has shipped with.
+> - **`generate_harvest_candidates`** — `FleetMissionType.Harvest` (4) against `planet`'s
+>   own local debris field (`originPlanetId == targetPlanetId`, `LOCAL_HARVEST_DISTANCE =
+>   5`). Requires an already-built Recycler (the contract reverts on
+>   `ships.recycler == 0`). The frozen `Snapshot` model carries no debris-field data on
+>   any route this codebase reads, so this generator takes an explicit
+>   `own_planet_debris` parameter rather than fetch-or-guess it. **Live since 2026-08-28**
+>   (correction 67, §9): `tick.py`'s `_own_planet_debris` wires it from
+>   `/universe/galaxies/{g}/systems/{s}` (`read.fetch_universe_system`), confirmed
+>   live-populated — closing the "never observed with a populated sample" gap this row
+>   previously described.
+> - **`generate_foreign_harvest_candidates`** — the foreign-target sibling, added
+>   2026-08-28 (correction 68, §9): the contract does not restrict Harvest to
+>   `origin == target` — that was this codebase's own prior scope. Sourced from
+>   `tick._foreign_debris_targets` (`/raid-finder/debris`), a discovery index whose
+>   confirmed incompleteness is acceptable here (a missed candidate, not a wrong answer),
+>   unlike for `_own_planet_debris`. Sets `Action.target_planet_id` (new field) alongside
+>   `target_coordinates`, since a foreign planet is never in `Snapshot.planets`.
+> - All three generators are gated, independently, once each, on
+>   **`policy.actions.allow_fleet_noncombat`** (defaults `false`) — with the default
+>   policy this band produces nothing at all, identical to pre-Phase-5c behaviour, the
+>   same safety property every prior phase's new capability has shipped with.
 > - `calc.py` gained the ship-movement-stats formula layer this band needed:
 >   `SHIP_CARGO_CAPACITY` (a fixed table), `ship_fuel_consumption`, `ship_speed`,
 >   `ship_movement_stats` — all read directly from `VeydriftCatalog.sol` at the pinned
@@ -1561,6 +1569,52 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `::test_own_planet_debris_degrades_to_empty_on_fetch_failure`,
     `::test_own_planet_debris_fetches_each_system_only_once`,
     `::test_run_tick_wires_own_planet_debris_into_the_planner`.
+
+68. **Correction, 2026-08-28 (commit 3 of the launch-actions plan).** Correction 67's
+    closing sentence — "foreign Harvest... remains unbuilt" — is now stale.
+    `candidates.generate_foreign_harvest_candidates` is a new generator, the foreign-target
+    sibling of `generate_harvest_candidates`: the contract does not restrict Harvest to
+    `origin == target` — that was this codebase's own prior scope, not a contract rule.
+    `_launchFleetMission` only special-cases the *distance* for a local harvest
+    (`LOCAL_HARVEST_DISTANCE`), applying the real `calc.distance` formula for any other
+    origin/target pair, Harvest included. Two `Action` fields carry a foreign target: the
+    existing `target_coordinates` (for `guard._derive_fleet_mission_spend`'s distance
+    re-derivation — using the local-harvest fixed distance for a foreign target would have
+    understated its real fuel cost, exactly the "silent wrong outcome" class this codebase
+    guards against) and a new field, `target_planet_id` (for `tick._resolve_target_planet_id`,
+    since a foreign planet is never in `Snapshot.planets` for a coordinate lookup to find) —
+    a genuine schema change to the frozen `Action` model, `schemas/action.schema.json`
+    regenerated accordingly.
+
+    Sourced from `/raid-finder/debris` (`tick._foreign_debris_targets`), not the universe
+    route `_own_planet_debris` uses — scanning every system near every owned planet for a
+    foreign field has no natural bound, where a discovery index does. That route's
+    confirmed incompleteness (§9's correction 67) is an acceptable trade *here*, unlike for
+    `_own_planet_debris`: a missed foreign target is a missed opportunity, never a wrong
+    answer, since nothing about the wallet's own state depends on this route reporting
+    everything. `_foreign_debris_targets` also filters out any entry whose `owner` matches
+    the wallet, case-insensitively, as an extra defense-in-depth check.
+
+    `select_logistics_candidate` ranks foreign Harvest last among the three logistics
+    families (Transport, local Harvest, foreign Harvest) — a closer/simpler opportunity on
+    the wallet's own planets always wins first when more than one is available.
+
+    `tests/test_candidates.py::test_generate_foreign_harvest_candidates_empty_by_default_policy`,
+    `::test_generate_foreign_harvest_candidates_empty_without_a_recycler`,
+    `::test_generate_foreign_harvest_candidates_empty_without_known_targets`,
+    `::test_generate_foreign_harvest_candidates_skips_a_target_with_empty_debris`,
+    `::test_generate_foreign_harvest_candidates_produces_a_foreign_harvest_action`,
+    `::test_generate_foreign_harvest_candidates_picks_the_nearest_target`,
+    `::test_generate_foreign_harvest_candidates_filters_self_owned_targets_upstream`,
+    `::test_select_logistics_candidate_prefers_local_harvest_over_foreign_harvest`,
+    `::test_select_logistics_candidate_falls_back_to_foreign_harvest`,
+    `tests/test_tick.py::test_foreign_debris_targets_finds_a_populated_target`,
+    `::test_foreign_debris_targets_filters_out_self_owned_entries`,
+    `::test_foreign_debris_targets_ignores_a_zero_debris_entry`,
+    `::test_foreign_debris_targets_skips_a_malformed_entry`,
+    `::test_foreign_debris_targets_degrades_to_empty_on_fetch_failure`,
+    `::test_foreign_debris_targets_empty_targets_returns_empty`,
+    `::test_run_tick_wires_foreign_debris_targets_into_the_planner`.
 
 ---
 

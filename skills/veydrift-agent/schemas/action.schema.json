@@ -274,6 +274,18 @@
       ],
       "default": null,
       "title": "Target Level"
+    },
+    "target_planet_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Planet Id"
     }
   },
   "required": [

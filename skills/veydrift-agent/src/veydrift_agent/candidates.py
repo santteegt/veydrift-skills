@@ -2313,11 +2313,14 @@ def generate_harvest_candidates(
     *,
     own_planet_debris: dict[int, Resources] | None = None,
 ) -> list[Candidate]:
-    """`FleetMissionType.Harvest` (4), restricted to the contract's own local special case
-    -- harvesting `planet`'s own debris field, never a foreign one (`origin_planet_id ==
-    target`, `target_coordinates` left unset; `tick.py`'s encoder resolves that straight
-    to `origin_planet_id`, no snapshot lookup needed). Requires at least one built
-    Recycler (`ships.recycler == 0` reverts on the deployed contract).
+    """`FleetMissionType.Harvest` (4) against `planet`'s own local debris field --
+    `origin_planet_id == target`, `target_coordinates` left unset; `tick.py`'s encoder
+    resolves that straight to `origin_planet_id`, no snapshot lookup needed. Requires at
+    least one built Recycler (`ships.recycler == 0` reverts on the deployed contract).
+
+    The local-only scope here was originally this codebase's own design decision, not a
+    contract rule -- see `generate_foreign_harvest_candidates` below (commit 3 of the
+    launch-actions plan) for the foreign-target sibling the contract equally supports.
 
     **Formerly a known gap, closed 2026-08-28**: the frozen `Snapshot` model (`models.py`)
     carries no debris-field data at all -- no wallet-scoped route this codebase reads ever
@@ -2379,36 +2382,152 @@ def generate_harvest_candidates(
     ]
 
 
+def generate_foreign_harvest_candidates(
+    snapshot: Snapshot,
+    policy: Policy,
+    planet: PlanetSnapshot,
+    *,
+    foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
+) -> list[Candidate]:
+    """`FleetMissionType.Harvest` (4) against a *third party's* debris field -- commit 3
+    of the launch-actions plan, the foreign-target sibling of `generate_harvest_candidates`
+    above. The contract does not restrict Harvest to `origin == target`; that was this
+    codebase's own prior scope, not a contract rule: `_launchFleetMission` only
+    special-cases the *distance* for a local harvest (`_LOCAL_HARVEST_DISTANCE`), and
+    applies the real `calc.distance` formula for any other origin/target pair, Harvest
+    included (`VeydriftGameplayModule.sol`'s `travelDistance` ternary). The only
+    preconditions Harvest itself imposes on a foreign target are the generic
+    "target planet has an owner" check every mission type shares, and a non-empty debris
+    field -- there is no attack-protection check anywhere in the contract for this
+    mission type.
+
+    `foreign_debris_targets` is caller-supplied, the same posture `own_planet_debris`
+    takes toward the frozen `Snapshot` for the identical reason -- `tick.py`'s
+    `_foreign_debris_targets` is the live source, reading `/raid-finder/debris`. Keyed by
+    planet id, each value `(coordinates, debris)` -- unlike `own_planet_debris`
+    (`dict[int, Resources]`), a foreign target isn't in `Snapshot.planets` at all, so its
+    coordinates have to travel through this parameter too, not just its debris.
+    Deliberately **not** the same route `_own_planet_debris` uses
+    (`/universe/galaxies/{g}/systems/{s}`): that would mean scanning every system near
+    every owned planet for a foreign debris field, with no bound on how far to look.
+    `/raid-finder/debris` is a convenience discovery index, confirmed incomplete (its own
+    `indexer.indexedDebrisFields` outnumbers its `targets` array) -- acceptable here
+    because incompleteness only means fewer candidates considered, a missed opportunity,
+    never a wrong answer -- unlike `own_planet_debris`, where the same incompleteness
+    would have risked a silently-dead rung had it turned out to exclude owned planets
+    (see that function's own docstring).
+
+    Sets `Action.target_coordinates` to the real foreign coordinates (needed by
+    `guard._derive_fleet_mission_spend`'s distance re-derivation, and for display) *and*
+    `Action.target_planet_id` to the real numeric id (needed by
+    `tick._resolve_target_planet_id`, since a foreign planet is never in
+    `Snapshot.planets` for a coordinate-based lookup to find).
+
+    Picks the nearest target (by `calc.distance`) with debris the planet's Recyclers can
+    reach with cargo room to spare -- first candidate with `available cargo > 0` after
+    fuel wins, never a "biggest haul" optimizer, consistent with every other logistics
+    generator's modest, deterministic scope."""
+    if not policy.actions.allow_fleet_noncombat or planet.coordinates is None or not foreign_debris_targets:
+        return []
+    recycler = _entity(planet.ships, ids.Ship.RECYCLER)
+    if recycler is None or not recycler.count:
+        return []
+
+    combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
+    capacity, fuel_consumption, speed = calc.ship_movement_stats(ids.Ship.RECYCLER, combustion, impulse, hyperspace)
+
+    targets = sorted(
+        foreign_debris_targets.items(), key=lambda item: calc.distance(planet.coordinates, item[1][0])
+    )
+    for target_planet_id, (coordinates, debris) in targets:
+        if debris.metal <= 0 and debris.crystal <= 0:
+            continue
+        distance = calc.distance(planet.coordinates, coordinates)
+        fuel = calc.mission_fuel([(fuel_consumption, recycler.count, speed)], distance, speed)
+        available = calc.available_cargo(recycler.count * capacity, fuel)
+        if available <= 0:
+            continue
+        metal = min(debris.metal, available)
+        crystal = min(debris.crystal, available - metal)
+        cargo = Resources(metal=metal, crystal=crystal)
+
+        action = Action(
+            kind=ActionKind.FLEET_MISSION,
+            function="launchFleetMission",
+            planet_id=planet.planet_id,
+            mission_type=ids.FleetMissionType.HARVEST,
+            origin_planet_id=planet.planet_id,
+            target_coordinates=coordinates,
+            target_planet_id=target_planet_id,
+            ships={ids.Ship.RECYCLER: recycler.count},
+            cargo=cargo,
+            cost=_fleet_mission_cost(cargo, fuel),
+            rationale=(
+                f"policy.actions.allow_fleet_noncombat=true; foreign debris field at planet "
+                f"{target_planet_id} ({coordinates}, distance {distance}) has "
+                f"M{debris.metal} C{debris.crystal}; harvesting with {recycler.count} "
+                f"Recycler(s) (~{fuel} fuel, {available} available cargo)."
+            ),
+            expected_effect=f"planet {planet.planet_id} gains up to M{metal} C{crystal} from a foreign debris field.",
+        )
+        return [
+            Candidate(
+                action=action,
+                family="logistics-harvest-foreign",
+                score=None,
+                score_basis=f"foreign debris opportunity at planet {target_planet_id} ({coordinates})",
+            )
+        ]
+    return []
+
+
 def select_logistics_candidate(
     snapshot: Snapshot,
     policy: Policy,
     target_planets: list[PlanetSnapshot],
     *,
     own_planet_debris: dict[int, Resources] | None = None,
+    foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
 ) -> tuple[Candidate | None, list[Candidate]]:
-    """Transport then Harvest, per target planet, first selectable candidate wins -- the
-    same "generate every family for this planet, first hit wins" shape
-    `select_shipyard_candidate` already uses. Both generators are gated (once each) on
-    `policy.actions.allow_fleet_noncombat`, so with the default policy (`False`) this
-    returns `(None, [])` on the first planet without doing any real work, matching every
-    other Phase 5c/5b safety property."""
+    """Transport, then local Harvest, then foreign Harvest (commit 3 of the launch-actions
+    plan), per target planet, first selectable candidate wins -- the same "generate every
+    family for this planet, first hit wins" shape `select_shipyard_candidate` already
+    uses. All three generators are gated (once each) on `policy.actions.
+    allow_fleet_noncombat`, so with the default policy (`False`) this returns
+    `(None, [])` on the first planet without doing any real work, matching every other
+    Phase 5c/5b safety property.
+
+    Foreign Harvest ranks last among the three, deliberately: it is the only one of the
+    three whose target the wallet does not own, so a closer/simpler opportunity on the
+    wallet's own planets (a surplus to move, a local debris field) always wins first when
+    more than one is available."""
     if not target_planets:
         return None, []
     alternatives: list[Candidate] = []
     for planet in target_planets:
         transports = generate_transport_candidates(snapshot, policy, planet, target_planets)
+        local_harvests = generate_harvest_candidates(snapshot, policy, planet, own_planet_debris=own_planet_debris)
         if transports:
-            harvests = generate_harvest_candidates(snapshot, policy, planet, own_planet_debris=own_planet_debris)
-            return transports[0], rank_candidates(alternatives + transports[1:] + harvests)
-        harvests = generate_harvest_candidates(snapshot, policy, planet, own_planet_debris=own_planet_debris)
-        if harvests:
-            return harvests[0], rank_candidates(alternatives + harvests[1:])
-        # No `alternatives.extend(transports/harvests)` here (judge finding, also-worth-
-        # fixing #3): both generators return at most one `Candidate`, and both `if
-        # transports:` / `if harvests:` branches above already return whenever either is
-        # non-empty -- so by this point both are always `[]`. Extending with them was
-        # dead code (an empty-list no-op every time this line ran), removed rather than
-        # kept as decoration.
+            foreign_harvests = generate_foreign_harvest_candidates(
+                snapshot, policy, planet, foreign_debris_targets=foreign_debris_targets
+            )
+            return transports[0], rank_candidates(alternatives + transports[1:] + local_harvests + foreign_harvests)
+        if local_harvests:
+            foreign_harvests = generate_foreign_harvest_candidates(
+                snapshot, policy, planet, foreign_debris_targets=foreign_debris_targets
+            )
+            return local_harvests[0], rank_candidates(alternatives + local_harvests[1:] + foreign_harvests)
+        foreign_harvests = generate_foreign_harvest_candidates(
+            snapshot, policy, planet, foreign_debris_targets=foreign_debris_targets
+        )
+        if foreign_harvests:
+            return foreign_harvests[0], rank_candidates(alternatives + foreign_harvests[1:])
+        # No `alternatives.extend(...)` here (judge finding, also-worth-fixing #3, extended
+        # to the third generator on the same reasoning): every generator returns at most
+        # one `Candidate`, and every `if ...:` branch above already returns whenever its
+        # generator is non-empty -- so by this point all three are always `[]`. Extending
+        # with them was dead code (an empty-list no-op every time this line ran), removed
+        # rather than kept as decoration.
     return None, []
 
 

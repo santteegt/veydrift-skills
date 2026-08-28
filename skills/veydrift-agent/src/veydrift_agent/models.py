@@ -495,8 +495,24 @@ class Action(Base):
     #: The planet the fleet departs from. Distinct from `planet_id`, which for a fleet
     #: mission names the *subject* planet of the action for logging/idempotency purposes.
     origin_planet_id: int | None = None
-    #: Destination as "G:S:P", the same shape `PlanetSnapshot.coordinates` carries.
+    #: Destination as "G:S:P", the same shape `PlanetSnapshot.coordinates` carries. For a
+    #: mission against one of the wallet's own planets, `tick.py`'s encoder resolves this
+    #: to the real on-chain `targetPlanetId` by matching it against `Snapshot.planets` —
+    #: the only planets the frozen `Snapshot` model carries. Still set (for
+    #: `guard._derive_fleet_mission_spend`'s distance re-derivation and for display) on a
+    #: foreign target too; see `target_planet_id` below for what resolves the numeric id
+    #: in that case.
     target_coordinates: str | None = None
+    #: The real on-chain planet id for a foreign target — a planet outside
+    #: `Snapshot.planets` that `target_coordinates` alone cannot resolve (added commit 3
+    #: of the launch-actions plan, for foreign Harvest). `None` for every mission against
+    #: an owned planet, where `tick.py`'s coordinate lookup already works. When set,
+    #: `tick._resolve_target_planet_id` uses it directly and skips the snapshot lookup —
+    #: the generator that set it (`candidates.generate_foreign_harvest_candidates`)
+    #: already knows the real id from its own data source and has no reason to make
+    #: `tick.py` re-derive it from coordinates it would have to search for outside the
+    #: snapshot anyway.
+    target_planet_id: int | None = None
     #: Ship id -> count. **Not a fleet tuple.** The deployed contract takes a 14-slot
     #: tuple that omits the two non-flyable ships (SolarSatellite id 9, Crawler id 15), so
     #: tuple indices 9–13 map to Ship ids 10–14 — Destroyer sits at index 9, not 10

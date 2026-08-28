@@ -1840,3 +1840,151 @@ def test_select_logistics_candidate_prefers_transport_over_harvest_on_the_same_p
     assert winner is not None
     assert winner.family == "logistics-transport"
     assert any(alt.family == "logistics-harvest" for alt in alternatives)
+
+
+# --------------------------------------------------------------------------------------
+# generate_foreign_harvest_candidates / select_logistics_candidate's foreign-harvest tier
+# (commit 3 of the launch-actions plan, 2026-08-28) -- the foreign-target sibling of
+# generate_harvest_candidates above. foreign_debris_targets is keyed by planet id, each
+# value (coordinates, debris) -- unlike own_planet_debris, a foreign target isn't in
+# Snapshot.planets, so its coordinates have to travel through this parameter too.
+# --------------------------------------------------------------------------------------
+
+_FOREIGN_TARGET_NEAR = 700  # "7:181:20" -- same system, position 20
+_FOREIGN_TARGET_FAR = 900  # "7:200:5" -- different system entirely
+
+
+def test_generate_foreign_harvest_candidates_empty_by_default_policy():
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664])  # allow_fleet_noncombat defaults False
+    result = candidates.generate_foreign_harvest_candidates(
+        snapshot, policy, planet, foreign_debris_targets={_FOREIGN_TARGET_NEAR: ("7:181:20", Resources(metal=5_000, crystal=2_000))}
+    )
+    assert result == []
+
+
+def test_generate_foreign_harvest_candidates_empty_without_a_recycler():
+    planet = _debris_planet(ships=[])
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    result = candidates.generate_foreign_harvest_candidates(
+        snapshot, policy, planet, foreign_debris_targets={_FOREIGN_TARGET_NEAR: ("7:181:20", Resources(metal=5_000, crystal=2_000))}
+    )
+    assert result == []
+
+
+def test_generate_foreign_harvest_candidates_empty_without_known_targets():
+    """`foreign_debris_targets` unset (the default) means no foreign debris is known, not
+    that there is none -- must never fabricate a harvest out of absent data."""
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    assert candidates.generate_foreign_harvest_candidates(snapshot, policy, planet) == []
+    assert candidates.generate_foreign_harvest_candidates(snapshot, policy, planet, foreign_debris_targets={}) == []
+
+
+def test_generate_foreign_harvest_candidates_skips_a_target_with_empty_debris():
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    result = candidates.generate_foreign_harvest_candidates(
+        snapshot, policy, planet, foreign_debris_targets={_FOREIGN_TARGET_NEAR: ("7:181:20", Resources())}
+    )
+    assert result == []
+
+
+def test_generate_foreign_harvest_candidates_produces_a_foreign_harvest_action():
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    result = candidates.generate_foreign_harvest_candidates(
+        snapshot, policy, planet, foreign_debris_targets={_FOREIGN_TARGET_NEAR: ("7:181:20", Resources(metal=5_000, crystal=2_000))}
+    )
+    assert len(result) == 1
+    winner = result[0]
+    assert winner.family == "logistics-harvest-foreign"
+    action = winner.action
+    assert action.kind == ActionKind.FLEET_MISSION
+    assert action.mission_type == ids.FleetMissionType.HARVEST
+    assert action.origin_planet_id == 664
+    # Unlike local harvest, a foreign target sets BOTH target_coordinates (for guard's
+    # distance re-derivation) AND target_planet_id (for tick.py's encoder, since a
+    # foreign planet is never in Snapshot.planets for a coordinate lookup to find).
+    assert action.target_coordinates == "7:181:20"
+    assert action.target_planet_id == _FOREIGN_TARGET_NEAR
+    assert action.ships == {ids.Ship.RECYCLER: 1}
+    # Real calc.distance, never the local-harvest fixed distance of 5 -- same system,
+    # position 14 -> 20: 1000 + 5*6 = 1030.
+    distance = calc.distance(planet.coordinates, "7:181:20")
+    assert distance == 1030
+    combustion, impulse, hyperspace = 0, 0, 0
+    capacity, fuel_consumption, speed = calc.ship_movement_stats(ids.Ship.RECYCLER, combustion, impulse, hyperspace)
+    expected_fuel = calc.mission_fuel([(fuel_consumption, 1, speed)], distance, speed)
+    expected_available = calc.available_cargo(capacity, expected_fuel)
+    assert action.cargo.metal == min(5_000, expected_available)
+    assert action.cost.deuterium == expected_fuel
+
+
+def test_generate_foreign_harvest_candidates_picks_the_nearest_target():
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    result = candidates.generate_foreign_harvest_candidates(
+        snapshot,
+        policy,
+        planet,
+        foreign_debris_targets={
+            _FOREIGN_TARGET_FAR: ("7:200:5", Resources(metal=5_000, crystal=2_000)),  # same galaxy, different system, far
+            _FOREIGN_TARGET_NEAR: ("7:181:20", Resources(metal=5_000, crystal=2_000)),  # same system, near
+        },
+    )
+    assert len(result) == 1
+    assert result[0].action.target_planet_id == _FOREIGN_TARGET_NEAR
+
+
+def test_generate_foreign_harvest_candidates_filters_self_owned_targets_upstream():
+    """Not this generator's own job -- `tick._foreign_debris_targets` filters out any
+    entry whose owner matches the wallet before this generator ever sees it. This test
+    only pins that the generator itself does not re-derive ownership; it trusts its
+    input, the same posture `generate_harvest_candidates` takes toward `own_planet_debris`."""
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    # A target at the SAME coordinates as the origin planet is nonsensical for a foreign
+    # target (it would be the origin itself) -- but the generator has no ownership data
+    # to detect this with, so it does not try to; that filtering lives in tick.py.
+    result = candidates.generate_foreign_harvest_candidates(
+        snapshot, policy, planet, foreign_debris_targets={999: ("7:181:20", Resources(metal=1_000))}
+    )
+    assert len(result) == 1  # the generator trusts its input; it is not the safety boundary here
+
+
+def test_select_logistics_candidate_prefers_local_harvest_over_foreign_harvest():
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    winner, alternatives = candidates.select_logistics_candidate(
+        snapshot,
+        policy,
+        snapshot.planets,
+        own_planet_debris={664: Resources(metal=1_000)},
+        foreign_debris_targets={_FOREIGN_TARGET_NEAR: ("7:181:20", Resources(metal=5_000))},
+    )
+    assert winner is not None
+    assert winner.family == "logistics-harvest"
+    assert any(alt.family == "logistics-harvest-foreign" for alt in alternatives)
+
+
+def test_select_logistics_candidate_falls_back_to_foreign_harvest():
+    planet = _debris_planet()
+    snapshot = Snapshot(taken_at="2026-08-17T12:00:00Z", wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f", health_ok=True, planets=[planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_fleet_noncombat=True))
+    winner, alternatives = candidates.select_logistics_candidate(
+        snapshot,
+        policy,
+        snapshot.planets,
+        foreign_debris_targets={_FOREIGN_TARGET_NEAR: ("7:181:20", Resources(metal=5_000))},
+    )
+    assert winner is not None
+    assert winner.family == "logistics-harvest-foreign"

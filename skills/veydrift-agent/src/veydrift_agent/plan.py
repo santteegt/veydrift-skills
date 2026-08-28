@@ -184,17 +184,19 @@ def plan_next_action(
     pending_tx_unreconciled: bool = False,
     resolvable_mission_ids: list[int] | None = None,
     own_planet_debris: dict[int, Resources] | None = None,
+    foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
 ) -> Action:
     """Decide exactly one `Action` from `snapshot` + `policy`. First matching rung wins;
     `Action.rule` records which one fired (e.g. `"5:storage-overflow-spend"`) so the log
     is auditable without re-running the planner (docs/SPEC.md §5.4).
 
-    `killswitch_active`, `pending_tx_unreconciled`, `resolvable_mission_ids` and
-    `own_planet_debris` are not on `Snapshot` (that model is frozen and owned by WP1) —
-    they are `tick.py`'s responsibility to discover (killswitch file, `agent-state.json`,
-    `/missions`, `/universe/galaxies/{g}/systems/{s}`) and pass in. Defaults are the safe
-    "nothing pending" state, so calling this with just a snapshot and policy is a
-    legitimate offline planning call.
+    `killswitch_active`, `pending_tx_unreconciled`, `resolvable_mission_ids`,
+    `own_planet_debris` and `foreign_debris_targets` are not on `Snapshot` (that model is
+    frozen and owned by WP1) — they are `tick.py`'s responsibility to discover
+    (killswitch file, `agent-state.json`, `/missions`, `/universe/galaxies/{g}/systems/
+    {s}`, `/raid-finder/debris`) and pass in. Defaults are the safe "nothing pending"
+    state, so calling this with just a snapshot and policy is a legitimate offline
+    planning call.
     """
     if killswitch_active:
         return Action(kind=ActionKind.HALT, rule="0:killswitch", rationale="KILLSWITCH file present; halting before any further action.")
@@ -307,20 +309,26 @@ def plan_next_action(
     if unlock_winner is not None:
         return _finalize(unlock_winner, unlock_alternatives, "8b:unlock-chain", policy)
 
-    # Band 5 (Phase 5c of the general-strategy-engine program, docs/SPEC.md §5.4):
-    # non-combat fleet logistics -- Transport between the player's own planets, local
-    # Harvest of a planet's own debris. Gated on `policy.actions.allow_fleet_noncombat`
-    # (defaults False, so this band produces nothing at all under the default policy,
-    # identical to pre-Phase-5c behaviour). Reached only after bands 1-4 produced nothing
-    # for any target planet, same precedence rule band 4 (`8b:unlock-chain`) already
-    # documents for itself: logistics is an "idle capacity" opportunity, never something
-    # that should outrank a scored economic pick, a policy-declared research/ship/defense
-    # target, or the storage-overflow deadline.
+    # Band 5 (Phase 5c of the general-strategy-engine program, docs/SPEC.md §5.4, foreign
+    # Harvest added in commit 3 of the launch-actions plan): non-combat fleet logistics --
+    # Transport between the player's own planets, local Harvest of a planet's own debris,
+    # foreign Harvest of a third party's debris. Gated on
+    # `policy.actions.allow_fleet_noncombat` (defaults False, so this band produces
+    # nothing at all under the default policy, identical to pre-Phase-5c behaviour).
+    # Reached only after bands 1-4 produced nothing for any target planet, same
+    # precedence rule band 4 (`8b:unlock-chain`) already documents for itself: logistics
+    # is an "idle capacity" opportunity, never something that should outrank a scored
+    # economic pick, a policy-declared research/ship/defense target, or the
+    # storage-overflow deadline.
     logistics_winner, logistics_alternatives = candidates.select_logistics_candidate(
-        snapshot, policy, target_planets, own_planet_debris=own_planet_debris
+        snapshot, policy, target_planets, own_planet_debris=own_planet_debris, foreign_debris_targets=foreign_debris_targets
     )
     if logistics_winner is not None:
-        rule = "8c:logistics-transport" if logistics_winner.family == "logistics-transport" else "8c:logistics-harvest"
+        rule = {
+            "logistics-transport": "8c:logistics-transport",
+            "logistics-harvest": "8c:logistics-harvest",
+            "logistics-harvest-foreign": "8c:logistics-harvest-foreign",
+        }[logistics_winner.family]
         return _finalize(logistics_winner, logistics_alternatives, rule, policy)
 
     return Action(

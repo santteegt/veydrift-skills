@@ -384,14 +384,25 @@ def _resolve_target_planet_id(action: Action, snapshot: Snapshot) -> int:
     """The real on-chain `targetPlanetId` a non-Colonize `launchFleetMission` needs.
     `VeydriftGameplayModule.sol`'s `_launchFleetMission` requires
     `_planets[targetPlanetId].owner != address(0)` (and, for Transport/Deploy,
-    `_requirePlanetOwner(targetPlanetId)`) -- an actual planet id, never coordinates. But
-    `Action.target_coordinates` only ever carries a `"G:S:P"` string (`models.py`, frozen
-    for this phase) -- so this resolves it against the wallet's own planets in `snapshot`,
-    the only planets this codebase's planner (`candidates.py`'s logistics generators,
-    Phase 5c) ever targets: Transport between own planets, and local Harvest where
-    target == origin. A local Harvest with `target_coordinates` left unset needs no
-    lookup: the contract's own special case (`originPlanetId == targetPlanetId &&
-    missionType == Harvest`) makes `origin_planet_id` the correct target directly."""
+    `_requirePlanetOwner(targetPlanetId)`) -- an actual planet id, never coordinates.
+
+    Three sources, in priority order:
+
+    1. `action.target_planet_id`, when set -- commit 3 of the launch-actions plan, for a
+       foreign target (`generate_foreign_harvest_candidates`). The generator that set it
+       already knows the real id from its own data source (`/raid-finder/debris`, not
+       `Snapshot`), so this is used directly with no lookup.
+    2. `action.target_coordinates`, resolved against the wallet's own planets in
+       `snapshot` -- the shape every mission against an owned planet uses
+       (`Action.target_coordinates` only ever carries a `"G:S:P"` string; `models.py`
+       frozen for this phase): Transport between own planets, Deploy (once wired), and
+       Colonize's target isn't reached here at all (its own packed-coordinate encoding,
+       see `_encode_colony_target`).
+    3. Neither set: the local-Harvest special case, where the contract's own rule
+       (`originPlanetId == targetPlanetId && missionType == Harvest`) makes
+       `origin_planet_id` the correct target directly."""
+    if action.target_planet_id is not None:
+        return action.target_planet_id
     if action.target_coordinates is None:
         if action.mission_type == ids.FleetMissionType.HARVEST and action.origin_planet_id is not None:
             return action.origin_planet_id
@@ -401,8 +412,8 @@ def _resolve_target_planet_id(action: Action, snapshot: Snapshot) -> int:
             return planet.planet_id
     raise ValueError(
         "tick.py can only resolve a launchFleetMission target among the wallet's own "
-        f"planets in the snapshot; no planet at {action.target_coordinates!r} was found "
-        "(a foreign-planet target is out of scope for this codebase's planner today)"
+        f"planets in the snapshot; no planet at {action.target_coordinates!r} was found, "
+        "and action.target_planet_id was not set for a foreign target"
     )
 
 
@@ -982,6 +993,7 @@ def _describe_override(
     pending_tx_unreconciled: bool,
     resolvable_mission_ids: list[int],
     own_planet_debris: dict[int, Resources],
+    foreign_debris_targets: dict[int, tuple[str, Resources]],
 ) -> tuple[dict[str, Any], str]:
     """`(override_record, override_line)` for a `vd tick --action`-supplied action --
     the code-enforced disagreement record `references/manual-action-override.md`
@@ -1005,6 +1017,7 @@ def _describe_override(
         pending_tx_unreconciled=pending_tx_unreconciled,
         resolvable_mission_ids=resolvable_mission_ids,
         own_planet_debris=own_planet_debris,
+        foreign_debris_targets=foreign_debris_targets,
     )
     record = {
         "operator_action": {
@@ -1160,6 +1173,51 @@ def _own_planet_debris(snapshot: Snapshot) -> dict[int, Resources]:
             if metal <= 0 and crystal <= 0:
                 continue
             out[planet.planet_id] = Resources(metal=metal, crystal=crystal)
+    return out
+
+
+def _foreign_debris_targets(wallet: str) -> dict[int, tuple[str, Resources]]:
+    """Third-party debris fields reachable for Harvest -- `generate_foreign_harvest_
+    candidates`'s `foreign_debris_targets` parameter (`candidates.py`, commit 3 of the
+    launch-actions plan). Sourced from `/raid-finder/debris`
+    (`read.fetch_raid_finder_debris`) -- deliberately not the universe route
+    `_own_planet_debris` uses above, since that would mean scanning every system near
+    every owned planet for a foreign field with no bound on how far to look; a convenience
+    discovery index confirmed incomplete is an acceptable trade for *discovery* (a missed
+    candidate is a missed opportunity, not a wrong answer) -- see that fetcher's own
+    docstring for the reasoning this doesn't extend to `_own_planet_debris`.
+
+    Filters out any entry whose `owner` matches this wallet, case-insensitively -- an
+    extra defense-in-depth check against ever treating the wallet's own planet as a
+    "foreign" target, even though `/raid-finder/debris` is not documented to ever report
+    one. Best-effort, matching every other out-of-band fetcher in this module: never
+    raises, degrades to `{}` on any fetch failure, and skips (rather than aborts on) any
+    individual entry with an unparseable id/coordinates/debris shape."""
+    try:
+        data = read.fetch_raid_finder_debris()
+    except http.VeydriftAPIError:
+        return {}
+
+    wallet_lower = wallet.lower()
+    out: dict[int, tuple[str, Resources]] = {}
+    for item in data.get("targets") or []:
+        owner = item.get("owner")
+        if isinstance(owner, str) and owner.lower() == wallet_lower:
+            continue
+        coords = item.get("coordinates") or {}
+        debris = item.get("debris") or {}
+        try:
+            planet_id = int(item.get("planetId"))
+            galaxy = int(coords["galaxy"])
+            system = int(coords["system"])
+            position = int(coords["position"])
+            metal = int(debris.get("metal", 0))
+            crystal = int(debris.get("crystal", 0))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if metal <= 0 and crystal <= 0:
+            continue
+        out[planet_id] = (f"{galaxy}:{system}:{position}", Resources(metal=metal, crystal=crystal))
     return out
 
 
@@ -1389,6 +1447,10 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # never aborts the tick.
     own_planet_debris = _own_planet_debris(snapshot)
 
+    # Commit 3 of the launch-actions plan: revives the foreign-Harvest half of band 5's
+    # Harvest coverage (own-planet debris was commit 1). Best-effort; never aborts the tick.
+    foreign_debris_targets = _foreign_debris_targets(policy_model.wallet)
+
     # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
@@ -1404,6 +1466,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             pending_tx_unreconciled=pending_unreconciled,
             resolvable_mission_ids=resolvable_mission_ids,
             own_planet_debris=own_planet_debris,
+            foreign_debris_targets=foreign_debris_targets,
         )
     else:
         action = plan_mod.plan_next_action(
@@ -1413,6 +1476,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             pending_tx_unreconciled=pending_unreconciled,
             resolvable_mission_ids=resolvable_mission_ids,
             own_planet_debris=own_planet_debris,
+            foreign_debris_targets=foreign_debris_targets,
         )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an

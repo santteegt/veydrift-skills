@@ -60,7 +60,7 @@ the steps below are what actually justifies a promotion.
 **T2 → T3 (`economy` → `operator`):** the same shape, at a higher bar — at least **7 days**
 of clean T2 operation (real submissions, not just ticks), before the same manual
 `policy.json` edit. T3 additionally unlocks `launchFleetMission` for Transport/Deploy/
-Harvest only; combat mission types remain unreachable regardless of tier.
+Colonize/Harvest only; combat mission types remain unreachable regardless of tier.
 
 **Never**: promote on tick count alone, promote without reading `strategy.md`, or promote
 while any guard is failing intermittently rather than consistently.
