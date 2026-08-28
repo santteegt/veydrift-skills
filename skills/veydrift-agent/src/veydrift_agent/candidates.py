@@ -2319,23 +2319,19 @@ def generate_harvest_candidates(
     to `origin_planet_id`, no snapshot lookup needed). Requires at least one built
     Recycler (`ships.recycler == 0` reverts on the deployed contract).
 
-    **Known gap, documented rather than guessed around**: the frozen `Snapshot` model
-    (`models.py`) carries no debris-field data at all -- no wallet-scoped route this
-    codebase reads ever reports it; the one route that does
-    (`/universe/galaxies/{g}/systems/{s}`'s `debrisField` per planet slot) is fetched only
-    for `archetype` today (`read._universe_archetype_for_planet`), and every live sample
-    observed of that field is `null` (docs/RESEARCH-ADDENDUM.md §6.4: zero combat on this
-    account/universe) -- so its populated shape has never actually been seen, and guessing
-    its keys would be exactly the "don't model an unconfirmed shape" mistake
-    `PlanetSnapshot.raidable_resources`/`protected_resources` already carry an explicit
-    warning about. This generator therefore takes `own_planet_debris` as an explicit,
+    **Formerly a known gap, closed 2026-08-28**: the frozen `Snapshot` model (`models.py`)
+    carries no debris-field data at all -- no wallet-scoped route this codebase reads ever
+    reports it. This generator therefore takes `own_planet_debris` as an explicit,
     caller-supplied parameter -- mirroring `tick.py`'s `_resolvable_mission_ids` /
     `_maybe_check_human_activity`, which bypass the frozen `Snapshot` the same way for the
-    same reason -- rather than fetching or guessing anything itself. No caller wires a
-    live source for it yet (`plan.py`/`tick.py`, this same change), so this generator is
-    logic-complete and unit-tested but not live-reachable until that shape is confirmed
-    and wired -- an honest, narrower gap than the mission-type/tuple-encoding work this
-    phase's brief calls "most important," not a substitute for it.
+    same reason -- rather than fetching or guessing anything itself.
+    `tick.py`'s `_own_planet_debris` is now the live caller: it reads
+    `/universe/galaxies/{g}/systems/{s}`'s `debrisField` per planet slot -- the same route
+    `read._universe_archetype_for_planet` already fetches for `archetype` -- confirmed
+    live populated (`{"metal": "2400", "crystal": "2400"}` at a real occupied slot,
+    2026-08-27), closing the "populated shape has never actually been seen" gap this
+    docstring previously flagged. This generator itself is unchanged; only the caller that
+    was missing now exists.
     """
     if not policy.actions.allow_fleet_noncombat or planet.coordinates is None:
         return []

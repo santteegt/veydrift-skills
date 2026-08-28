@@ -268,6 +268,11 @@ def _patch_common(monkeypatch, *, snapshot=None, action=None, live_addresses=Non
     # test that goes through `_patch_common` stays hermetic, same posture already taken
     # for `_fetch_snapshot`/`_live_addresses`/the walletctl_* functions below.
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    # Commit 1 (Harvest goes live): `_own_planet_debris` makes a live
+    # /universe/galaxies/{g}/systems/{s} call per owned system inside `_run_tick`'s
+    # normal path -- stubbed here for the same hermeticity reason as
+    # `_resolvable_mission_ids` above.
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: action or _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: live_addresses)
     monkeypatch.setattr(
@@ -341,6 +346,7 @@ def test_noop_action_produces_no_tx_and_no_extra_network_calls(isolated_home, mo
     live_addr_calls = []
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: noop)
     monkeypatch.setattr(tick, "_live_addresses", lambda: live_addr_calls.append(1) or None)
 
@@ -1072,6 +1078,94 @@ def test_resolvable_mission_ids_empty_outgoing_returns_empty(monkeypatch):
     assert tick._resolvable_mission_ids(WALLET) == []
 
 
+# --------------------------------------------------------------------------------------
+# _own_planet_debris (Phase A commit 1) — revives candidates.generate_harvest_candidates,
+# dormant since Phase 5c because nothing supplied `own_planet_debris`.
+# --------------------------------------------------------------------------------------
+
+
+def _universe_system(*slots: dict) -> dict:
+    return {"generatorVersion": "veydrift-universe-v1", "galaxy": 7, "system": 181, "planets": list(slots)}
+
+
+def _slot(position: int, **overrides) -> dict:
+    base = {
+        "position": position,
+        "key": f"7:181:{position}",
+        "fields": 173,
+        "temperature": 20,
+        "archetype": "frozen-ice",
+        "occupiedBy": None,
+        "debrisField": None,
+        "hasMoon": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_own_planet_debris_finds_a_populated_debris_field_on_an_owned_slot(monkeypatch):
+    monkeypatch.setattr(
+        tick.read,
+        "fetch_universe_system",
+        lambda galaxy, system, **kw: _universe_system(_slot(14, debrisField={"metal": "2400", "crystal": "2400"})),
+    )
+    result = tick._own_planet_debris(_healthy_snapshot())
+    assert result == {664: Resources(metal=2400, crystal=2400)}
+
+
+def test_own_planet_debris_ignores_a_null_debris_field(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_universe_system", lambda galaxy, system, **kw: _universe_system(_slot(14)))
+    assert tick._own_planet_debris(_healthy_snapshot()) == {}
+
+
+def test_own_planet_debris_ignores_a_zero_debris_field(monkeypatch):
+    monkeypatch.setattr(
+        tick.read,
+        "fetch_universe_system",
+        lambda galaxy, system, **kw: _universe_system(_slot(14, debrisField={"metal": "0", "crystal": "0"})),
+    )
+    assert tick._own_planet_debris(_healthy_snapshot()) == {}
+
+
+def test_own_planet_debris_skips_a_planet_with_no_coordinates(monkeypatch):
+    def _boom(*a, **kw):
+        raise AssertionError("must not fetch a system for a planet with no coordinates")
+
+    monkeypatch.setattr(tick.read, "fetch_universe_system", _boom)
+    planet = PlanetSnapshot(planet_id=1, coordinates=None)
+    snapshot = _healthy_snapshot(planets=[planet])
+    assert tick._own_planet_debris(snapshot) == {}
+
+
+def test_own_planet_debris_degrades_to_empty_on_fetch_failure(monkeypatch):
+    def _boom(galaxy, system, **kw):
+        raise http.VeydriftHTTPError(500, "/universe", "boom")
+
+    monkeypatch.setattr(tick.read, "fetch_universe_system", _boom)
+    assert tick._own_planet_debris(_healthy_snapshot()) == {}
+
+
+def test_own_planet_debris_fetches_each_system_only_once(monkeypatch):
+    """Two owned planets sharing a (galaxy, system) must trigger exactly one fetch."""
+    planet_a = PlanetSnapshot(planet_id=1, coordinates="7:181:3")
+    planet_b = PlanetSnapshot(planet_id=2, coordinates="7:181:14")
+    snapshot = _healthy_snapshot(planets=[planet_a, planet_b])
+
+    calls: list[tuple[int, int]] = []
+
+    def _fetch(galaxy, system, **kw):
+        calls.append((galaxy, system))
+        return _universe_system(
+            _slot(3, debrisField={"metal": "100", "crystal": "50"}),
+            _slot(14, debrisField={"metal": "2400", "crystal": "2400"}),
+        )
+
+    monkeypatch.setattr(tick.read, "fetch_universe_system", _fetch)
+    result = tick._own_planet_debris(snapshot)
+    assert calls == [(7, 181)]
+    assert result == {1: Resources(metal=100, crystal=50), 2: Resources(metal=2400, crystal=2400)}
+
+
 def test_run_tick_wires_resolvable_mission_ids_into_the_planner(isolated_home, monkeypatch):
     """End-to-end: `_run_tick` must actually pass what `_resolvable_mission_ids` finds
     into `plan_next_action`'s `resolvable_mission_ids` kwarg -- the wiring this whole
@@ -1079,6 +1173,7 @@ def test_run_tick_wires_resolvable_mission_ids_into_the_planner(isolated_home, m
     _write_policy()
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [999])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
 
     captured = {}
@@ -1092,6 +1187,30 @@ def test_run_tick_wires_resolvable_mission_ids_into_the_planner(isolated_home, m
     result = runner.invoke(tick.app, ["--dry-run"])
     assert result.exit_code == 0, result.output
     assert captured.get("resolvable_mission_ids") == [999]
+
+
+def test_run_tick_wires_own_planet_debris_into_the_planner(isolated_home, monkeypatch):
+    """End-to-end: `_run_tick` must actually pass what `_own_planet_debris` finds into
+    `plan_next_action`'s `own_planet_debris` kwarg -- the wiring commit 1 is about, not
+    just the helper function in isolation."""
+    _write_policy()
+    debris = {664: Resources(metal=2400, crystal=2400)}
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: debris)
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    captured = {}
+
+    def _capture(snapshot, policy, **kwargs):
+        captured.update(kwargs)
+        return Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x")
+
+    monkeypatch.setattr(plan_mod, "plan_next_action", _capture)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("own_planet_debris") == debris
 
 
 # --------------------------------------------------------------------------------------
@@ -1672,6 +1791,7 @@ def test_full_tick_sequence_is_build_then_simulate_then_send(isolated_home, monk
 
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: {_LIVE_ADDR})
     monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, _LIVE_ADDR))
@@ -1712,6 +1832,7 @@ def test_full_tick_simulation_failure_surfaces_in_report_and_proposal(isolated_h
 
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: {_LIVE_ADDR})
     monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, _LIVE_ADDR))

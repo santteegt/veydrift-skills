@@ -14,9 +14,10 @@ Ladder, first match wins, exactly as docs/SPEC.md §5.4 specifies:
 2. pending tx unreconciled           -> NO-OP, reconcile first
 3. mission Resolving > 60s           -> resolveFleetMission   (permissionless, free)
 4. incoming hostile fleet            -> ESCALATE, no proposal (fleet-visibility.incoming)
-5-9. a four-band candidate pipeline (see below) -- deadline-driven storage overflow,
+5-9. a five-band candidate pipeline (see below) -- deadline-driven storage overflow,
      then economically-scored building, then policy-declared research/ships/defense,
-     then a locked declared target's unlock-chain step, else an explicit NO-OP.
+     then a locked declared target's unlock-chain step, then non-combat fleet
+     logistics, else an explicit NO-OP.
 ```
 
 **Rungs 0-4 are vetoes — safety, not strategy — and are untouched by Phase 2 of the
@@ -33,12 +34,12 @@ selection (a small function per rung that replays the exact same priority order 
 pre-Phase-2 ladder used) — see that module's docstring for the full architecture. This
 module now only:
 
-1. Calls the four `select_*` functions in the four-band precedence order below.
+1. Calls the five `select_*` functions in the five-band precedence order below.
 2. Attaches the winning `Candidate`'s runner-ups to the returned `Action.alternatives`
    (`AlternativeNote`, capped at `policy.strategy.max_alternatives`) — informational
    only, never a `Decision` input, never re-derived by `guard.py`.
 
-**Four bands, in order** (docs/SPEC.md §5.4):
+**Five bands, in order** (docs/SPEC.md §5.4):
 
 1. **Deadline-driven** — storage overflow (`candidates.select_storage_candidate`). A
    loss-avoidance deadline, not an ROI question; keeps precedence over everything else
@@ -64,6 +65,13 @@ module now only:
    shallowest buildable prerequisite toward a locked `ship_targets`/`defense_targets`/
    `research_priority` entry, always `score=None` (an unlock step's value is entirely in
    what it eventually enables, not something this codebase computes an ROI for).
+5. **Non-combat fleet logistics** (Phase 5c, rung `8c`) —
+   `candidates.select_logistics_candidate`: Transport between the player's own planets,
+   then local/foreign Harvest of a debris field. Gated on
+   `policy.actions.allow_fleet_noncombat` (default `false`, so this band produces nothing
+   under the default policy) and reached only after bands 1-4 produced nothing at all for
+   any target planet — an idle-capacity opportunity, never something that should outrank
+   a scored economic pick, a policy-declared target, or the storage-overflow deadline.
 
 **The two invariants that matter most, both derived from planet traits, never
 hardcoded** (unchanged by Phase 2 — see `candidates.py` for where the logic now lives):
@@ -103,6 +111,7 @@ from veydrift_agent.models import (
     PlanetSnapshot,
     Policy,
     QueueKind,
+    Resources,
     Snapshot,
 )
 
@@ -174,16 +183,18 @@ def plan_next_action(
     killswitch_active: bool = False,
     pending_tx_unreconciled: bool = False,
     resolvable_mission_ids: list[int] | None = None,
+    own_planet_debris: dict[int, Resources] | None = None,
 ) -> Action:
     """Decide exactly one `Action` from `snapshot` + `policy`. First matching rung wins;
     `Action.rule` records which one fired (e.g. `"5:storage-overflow-spend"`) so the log
     is auditable without re-running the planner (docs/SPEC.md §5.4).
 
-    `killswitch_active`, `pending_tx_unreconciled` and `resolvable_mission_ids` are not on
-    `Snapshot` (that model is frozen and owned by WP1) — they are `tick.py`'s
-    responsibility to discover (killswitch file, `agent-state.json`, `/missions`) and pass
-    in. Defaults are the safe "nothing pending" state, so calling this with just a
-    snapshot and policy is a legitimate offline planning call.
+    `killswitch_active`, `pending_tx_unreconciled`, `resolvable_mission_ids` and
+    `own_planet_debris` are not on `Snapshot` (that model is frozen and owned by WP1) —
+    they are `tick.py`'s responsibility to discover (killswitch file, `agent-state.json`,
+    `/missions`, `/universe/galaxies/{g}/systems/{s}`) and pass in. Defaults are the safe
+    "nothing pending" state, so calling this with just a snapshot and policy is a
+    legitimate offline planning call.
     """
     if killswitch_active:
         return Action(kind=ActionKind.HALT, rule="0:killswitch", rationale="KILLSWITCH file present; halting before any further action.")
@@ -305,7 +316,9 @@ def plan_next_action(
     # documents for itself: logistics is an "idle capacity" opportunity, never something
     # that should outrank a scored economic pick, a policy-declared research/ship/defense
     # target, or the storage-overflow deadline.
-    logistics_winner, logistics_alternatives = candidates.select_logistics_candidate(snapshot, policy, target_planets)
+    logistics_winner, logistics_alternatives = candidates.select_logistics_candidate(
+        snapshot, policy, target_planets, own_planet_debris=own_planet_debris
+    )
     if logistics_winner is not None:
         rule = "8c:logistics-transport" if logistics_winner.family == "logistics-transport" else "8c:logistics-harvest"
         return _finalize(logistics_winner, logistics_alternatives, rule, policy)

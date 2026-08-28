@@ -595,6 +595,20 @@ def _maybe_int(raw: Any) -> int | None:
         return None
 
 
+def fetch_universe_system(galaxy: int, system: int, *, max_age: float | None = None) -> dict[str, Any]:
+    """GET /universe/galaxies/{g}/systems/{s}, bypassing the CLI/`_emit` layer -- the same
+    raw-dict, bypass-`Snapshot` posture `fetch_fleet_visibility`/`fetch_activity` already
+    take. `_universe_archetype_for_planet` (below) is this route's first caller, reading
+    only `archetype`; `tick.py`'s `_own_planet_debris` is the second, reading the rest of
+    the per-slot payload -- `occupiedBy`, `debrisField`, `migrationReservation` -- which
+    this same route carries and which is confirmed live populated
+    (references/api-routes.md §3.16; `debrisField` confirmed non-null,
+    `{"metal": "2400", "crystal": "2400"}` at a real occupied slot, 2026-08-27). Does NOT
+    catch `http.VeydriftAPIError` -- same contract as `fetch_fleet_visibility`; the caller
+    decides how to degrade."""
+    return http.fetch(f"/universe/galaxies/{galaxy}/systems/{system}", max_age=max_age)
+
+
 def _universe_archetype_for_planet(coordinates: str | None, *, max_age: float | None) -> str | None:
     """Best-effort: this planet's own `archetype`, sourced from
     `/universe/galaxies/{g}/systems/{s}` -- the ONLY family of routes that ever reports it
@@ -607,10 +621,10 @@ def _universe_archetype_for_planet(coordinates: str | None, *, max_age: float | 
 
     `max_age` is the caller's cadence gate, in seconds (`tick.py` passes
     `policy.cadence.universe_hours * 3600`) -- this function has no cadence opinion of its
-    own, it just forwards `max_age` to `http.fetch`'s existing disk cache. That cache,
-    not a new timer, is what keeps a 10-minute tick cadence from re-hitting this route
-    every tick: the same galaxy:system response is served from disk until it's
-    `max_age` seconds old.
+    own, it just forwards `max_age` to `http.fetch`'s existing disk cache (via
+    `fetch_universe_system`). That cache, not a new timer, is what keeps a 10-minute tick
+    cadence from re-hitting this route every tick: the same galaxy:system response is
+    served from disk until it's `max_age` seconds old.
 
     Returns `None` on anything that isn't a clean hit -- unparseable coordinates, an
     unreachable API, no matching `position` in the response. `archetype` is an
@@ -626,7 +640,7 @@ def _universe_archetype_for_planet(coordinates: str | None, *, max_age: float | 
     except ValueError:
         return None
     try:
-        data = http.fetch(f"/universe/galaxies/{galaxy}/systems/{system}", max_age=max_age)
+        data = fetch_universe_system(galaxy, system, max_age=max_age)
     except http.VeydriftAPIError:
         return None
     for slot in data.get("planets") or []:

@@ -98,8 +98,10 @@ from veydrift_agent.models import (
     GuardReport,
     GuardStatus,
     GuardVerdict,
+    PlanetSnapshot,
     Policy,
     RandomnessReadiness,
+    Resources,
     Snapshot,
     Tier,
     UnsignedTx,
@@ -979,6 +981,7 @@ def _describe_override(
     *,
     pending_tx_unreconciled: bool,
     resolvable_mission_ids: list[int],
+    own_planet_debris: dict[int, Resources],
 ) -> tuple[dict[str, Any], str]:
     """`(override_record, override_line)` for a `vd tick --action`-supplied action --
     the code-enforced disagreement record `references/manual-action-override.md`
@@ -1001,6 +1004,7 @@ def _describe_override(
         killswitch_active=False,
         pending_tx_unreconciled=pending_tx_unreconciled,
         resolvable_mission_ids=resolvable_mission_ids,
+        own_planet_debris=own_planet_debris,
     )
     record = {
         "operator_action": {
@@ -1086,6 +1090,76 @@ def _resolvable_mission_ids(wallet: str) -> list[int]:
             out.append(int(mission_id))
         except (TypeError, ValueError):
             continue
+    return out
+
+
+def _own_planet_debris(snapshot: Snapshot) -> dict[int, Resources]:
+    """Which of the wallet's own planets carry a non-empty debris field on their own slot
+    -- `generate_harvest_candidates`'s `own_planet_debris` parameter
+    (`candidates.py:2314`), dormant since Phase 5c because nothing supplied it (that
+    function's own docstring: "no caller wires a live source for it yet"). Debris on an
+    OWNED slot is real, not a contradiction -- a planet that lost ships in battle leaves
+    debris at its own coordinates like any other slot; the contract's Harvest branch only
+    ever checks the `DebrisField` mapping at the *target* planet id, regardless of who
+    currently occupies it.
+
+    Sourced from `/universe/galaxies/{g}/systems/{s}` (`read.fetch_universe_system`) --
+    confirmed to carry a genuinely populated `debrisField` per slot (references/api-
+    routes.md §3.16, 2026-08-27: `{"metal": "2400", "crystal": "2400"}` at a real,
+    occupied slot) -- grouped by (galaxy, system) so a multi-planet wallet with planets
+    sharing a system fetches that system only once. Deliberately NOT
+    `/raid-finder/debris`: that route takes no wallet parameter, is independently
+    confirmed to omit at least one indexed debris field (its own
+    `indexer.indexedDebrisFields` outnumbers `targets`), and its filtering criteria are
+    undocumented -- sourcing owned-planet debris from a route that might already exclude
+    owned planets would make this rung silently never fire, the vacuous-pass-on-absent-
+    data failure mode AGENTS.md §5 warns against.
+
+    Best-effort, matching `_resolvable_mission_ids`'s contract: never raises, a failure
+    fetching one system does not abort the others, and a planet absent from the result
+    means "unverifiable this tick", not "no debris" -- `generate_harvest_candidates`
+    already treats a missing key as "nothing to harvest" via its own `.get(planet_id)`,
+    which is the correct degrade-to-NOOP here, not a promotion to false certainty."""
+    by_system: dict[tuple[int, int], list[tuple[int, PlanetSnapshot]]] = {}
+    for planet in snapshot.planets:
+        if not planet.coordinates:
+            continue
+        parts = planet.coordinates.split(":")
+        if len(parts) != 3:
+            continue
+        try:
+            galaxy, system, position = (int(p) for p in parts)
+        except ValueError:
+            continue
+        by_system.setdefault((galaxy, system), []).append((position, planet))
+
+    out: dict[int, Resources] = {}
+    for (galaxy, system), entries in by_system.items():
+        try:
+            data = read.fetch_universe_system(galaxy, system)
+        except http.VeydriftAPIError:
+            continue
+        slots_by_position: dict[int, dict[str, Any]] = {}
+        for slot in data.get("planets") or []:
+            try:
+                slots_by_position[int(slot.get("position"))] = slot
+            except (TypeError, ValueError):
+                continue
+        for position, planet in entries:
+            slot = slots_by_position.get(position)
+            if slot is None:
+                continue
+            debris = slot.get("debrisField")
+            if not isinstance(debris, dict):
+                continue
+            try:
+                metal = int(debris.get("metal", 0))
+                crystal = int(debris.get("crystal", 0))
+            except (TypeError, ValueError):
+                continue
+            if metal <= 0 and crystal <= 0:
+                continue
+            out[planet.planet_id] = Resources(metal=metal, crystal=crystal)
     return out
 
 
@@ -1309,6 +1383,12 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # tick.
     resolvable_mission_ids = _resolvable_mission_ids(policy_model.wallet)
 
+    # Phase A commit 1 (docs/SPEC.md, strategy-playbook §8c): revives the Harvest half of
+    # band 5 (`select_logistics_candidate`), dormant since Phase 5c because nothing
+    # supplied `own_planet_debris` -- see `_own_planet_debris`'s docstring. Best-effort;
+    # never aborts the tick.
+    own_planet_debris = _own_planet_debris(snapshot)
+
     # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
@@ -1323,6 +1403,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             policy_model,
             pending_tx_unreconciled=pending_unreconciled,
             resolvable_mission_ids=resolvable_mission_ids,
+            own_planet_debris=own_planet_debris,
         )
     else:
         action = plan_mod.plan_next_action(
@@ -1331,6 +1412,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             killswitch_active=False,
             pending_tx_unreconciled=pending_unreconciled,
             resolvable_mission_ids=resolvable_mission_ids,
+            own_planet_debris=own_planet_debris,
         )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an

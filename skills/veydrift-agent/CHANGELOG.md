@@ -11,6 +11,33 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-28
+
+### Added
+
+- **Harvest goes live — commit 1 of the launch-actions plan.**
+  `candidates.generate_harvest_candidates`'s `own_planet_debris` parameter has been
+  logic-complete and unit-tested since Phase 5c but had no live caller, so band 8c's
+  Harvest half never fired. `tick.py` gains `_own_planet_debris()`, sourcing a planet's
+  own `debrisField` from `/universe/galaxies/{g}/systems/{s}` (`read.fetch_universe_system`,
+  new this change — the same route already fetched for `PlanetSnapshot.archetype`, now
+  factored out of `_universe_archetype_for_planet` into a general-purpose fetcher).
+  Confirmed live-populated (`{"metal": "2400", "crystal": "2400"}` at a real occupied
+  slot, probed 2026-08-27) — closing the "populated shape has never actually been seen"
+  gap the generator's own docstring previously flagged. Deliberately **not** sourced from
+  `/raid-finder/debris`: that route takes no wallet parameter, is independently confirmed
+  to omit at least one indexed debris field, and its filtering criteria are undocumented —
+  using it risked the exact vacuous-pass-on-absent-data failure mode this skill's own
+  guardrails are built to avoid, if it turns out to exclude the caller's own planets.
+  `_own_planet_debris` groups owned planets by `(galaxy, system)` so a multi-planet wallet
+  sharing a system fetches it once, and degrades to `{}` best-effort on any fetch failure
+  — matching `_resolvable_mission_ids`'s existing contract exactly, never aborting the
+  tick. `plan_next_action` gains a new `own_planet_debris` keyword parameter (default
+  `None`, backward compatible) threaded through to `select_logistics_candidate`. Verified
+  against the live API end-to-end via a scratch-home dry-run tick.
+  Only local Harvest (a planet's own debris field) is covered by this change — foreign
+  Harvest (a third party's field) remains a separate, not-yet-built capability.
+
 ## [1.6.5] - 2026-08-27
 
 ### Fixed

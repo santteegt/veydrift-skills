@@ -139,9 +139,9 @@ change is everything downstream of that:
   **no longer** a non-goal either, though the generators are intentionally
   conservative: Transport only ever considers the wallet's own planets, using
   already-built ships; Harvest only ever considers a planet's own local debris field
-  (never a foreign one), and is not live-reachable yet because no live source for
-  debris-field data is wired in (`candidates.generate_harvest_candidates`'s own
-  docstring explains the unconfirmed-API-shape reason why not).
+  (never a foreign one). **Live since 2026-08-28** (correction 67, §9) —
+  `tick._own_planet_debris` now wires a confirmed-populated debris-field source into
+  `candidates.generate_harvest_candidates`'s `own_planet_debris` parameter.
 
 ---
 
@@ -596,15 +596,12 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 >   contract's own local special case (`originPlanetId == targetPlanetId`,
 >   `LOCAL_HARVEST_DISTANCE = 5`): a planet's own debris field, never a foreign one.
 >   Requires an already-built Recycler (the contract reverts on `ships.recycler == 0`).
->   **Not live-reachable today**: the frozen `Snapshot` model carries no debris-field
->   data on any route this codebase reads, so this generator takes an explicit
->   `own_planet_debris` parameter rather than fetch-or-guess it — no live source is
->   wired to it yet, because the one route that does carry `debrisField`
->   (`/universe/galaxies/{g}/systems/{s}`) has never been observed with a populated
->   (non-`null`) sample, and guessing its keys would repeat the "don't model an
->   unconfirmed shape" mistake `PlanetSnapshot.raidable_resources`/`protected_resources`
->   already carry a warning about. Logic-complete and unit-tested; wiring a live source
->   is future work.
+>   The frozen `Snapshot` model carries no debris-field data on any route this codebase
+>   reads, so this generator takes an explicit `own_planet_debris` parameter rather than
+>   fetch-or-guess it. **Live since 2026-08-28** (correction 67, §9): `tick.py`'s
+>   `_own_planet_debris` wires it from `/universe/galaxies/{g}/systems/{s}`
+>   (`read.fetch_universe_system`), confirmed live-populated — closing the "never
+>   observed with a populated sample" gap this row previously described.
 > - Both gated, independently, once each, on **`policy.actions.allow_fleet_noncombat`**
 >   (defaults `false`) — with the default policy this band produces nothing at all,
 >   identical to pre-Phase-5c behaviour, the same safety property every prior phase's
@@ -1532,6 +1529,37 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `tests/test_candidates.py::test_cheapest_energy_choice_prefers_fusion_reactor_when_amortized_cost_is_lower`,
     `::test_cheapest_energy_choice_falls_back_to_two_way_when_fusion_reactor_is_locked`,
     `::test_select_building_candidate_names_fusion_reactor_in_the_rationale_when_it_wins`.
+
+67. **Correction, 2026-08-28.** §1's claim above that Harvest "is not live-reachable yet
+    because no live source for debris-field data is wired in" is now stale.
+    `candidates.generate_harvest_candidates`'s `own_planet_debris` parameter is now
+    supplied for real: `tick.py`'s new `_own_planet_debris()` reads
+    `/universe/galaxies/{g}/systems/{s}` (`read.fetch_universe_system`, new this change) —
+    the same route already fetched for `PlanetSnapshot.archetype` — and its `debrisField`
+    per slot is confirmed live-populated (`{"metal": "2400", "crystal": "2400"}` at a real
+    occupied slot, probed 2026-08-27), closing the "populated shape has never actually
+    been seen" gap `generate_harvest_candidates`'s own docstring previously flagged.
+    Deliberately **not** sourced from `/raid-finder/debris`: that route takes no wallet
+    parameter, is independently confirmed to omit at least one indexed debris field (its
+    own `indexer.indexedDebrisFields` outnumbers its `targets` array), and its filtering
+    criteria are undocumented — using it would risk the exact vacuous-pass-on-absent-data
+    failure mode AGENTS.md §5 warns against, if it turns out to exclude the caller's own
+    planets. `_own_planet_debris` groups the wallet's owned planets by `(galaxy, system)`
+    so a multi-planet wallet sharing a system fetches it once, and is best-effort
+    end-to-end: a fetch failure for one system degrades that system's planets to "no
+    debris this tick" without aborting the others or the tick itself, matching
+    `_resolvable_mission_ids`'s existing contract exactly. This closes only the local-
+    harvest half (`origin_planet_id == target`, `generate_harvest_candidates`'s only
+    supported case) — foreign Harvest (a third party's debris field) remains unbuilt; see
+    `docs/COVERAGE.md`'s Harvest row.
+
+    `tests/test_tick.py::test_own_planet_debris_finds_a_populated_debris_field_on_an_owned_slot`,
+    `::test_own_planet_debris_ignores_a_null_debris_field`,
+    `::test_own_planet_debris_ignores_a_zero_debris_field`,
+    `::test_own_planet_debris_skips_a_planet_with_no_coordinates`,
+    `::test_own_planet_debris_degrades_to_empty_on_fetch_failure`,
+    `::test_own_planet_debris_fetches_each_system_only_once`,
+    `::test_run_tick_wires_own_planet_debris_into_the_planner`.
 
 ---
 

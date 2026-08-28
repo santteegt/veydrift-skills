@@ -459,6 +459,17 @@ system=181`):
 (§3.3-§3.12). If a future planner needs archetype for a specific owned planet, it has to
 call this route (or `/universe/systems`), not `overview`/`planets`.
 
+**`debrisField` is confirmed live-populated, not always `null`.** The sample above happens
+to show `null` for that particular slot, but a probe against a different system
+(`/universe/galaxies/5/systems/200`) confirmed a real, non-null value:
+`{"metal": "2400", "crystal": "2400"}` at an occupied slot (2026-08-27). `read.py` exposes
+a general-purpose fetcher for this route, `fetch_universe_system(galaxy, system)`, used by
+two callers: `_universe_archetype_for_planet` (reads only `archetype`, cadence-gated via
+`policy.cadence.universe_hours`) and `tick.py`'s `_own_planet_debris` (reads `debrisField`
+for the wallet's own planets, uncached — no cadence knob of its own, since debris changes
+faster than archetype). `migrationReservation` is also present per slot and is not yet
+read by anything in this codebase.
+
 ### 3.17 `/battle-reports`
 
 Query: `page`, `pageSize` (default `page=1`, `pageSize=25`, capped at 100 —

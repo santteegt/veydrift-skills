@@ -501,9 +501,12 @@ where it moved.
      never by surplus alone.
    - **Harvest** (`generate_harvest_candidates`): the contract's own local special case
      (`originPlanetId == targetPlanetId`) — a planet's own debris field, never a foreign
-     one. Requires an already-built Recycler. Not live-reachable today: no caller wires a
-     live debris source into it yet (the frozen `Snapshot` carries none, and the one live
-     route that might is unconfirmed in shape — see the generator's own docstring).
+     one. Requires an already-built Recycler. Live since 2026-08-28: `tick.py`'s
+     `_own_planet_debris` reads the planet's own `debrisField` from
+     `/universe/galaxies/{g}/systems/{s}` (the frozen `Snapshot` still carries none itself
+     — this is an out-of-band read, same posture as rung 3's `resolvable_mission_ids`)
+     and passes it in as an explicit parameter. Foreign debris (a third party's field) is
+     still out of scope for this generator.
    - Both gated, independently, on `policy.actions.allow_fleet_noncombat` (default
      `false`) — with the default policy this rung never fires, same safety property
      every earlier phase's new rung shipped with.
