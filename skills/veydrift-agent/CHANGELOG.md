@@ -11,6 +11,62 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-28
+
+Launch-actions plan, commit 5: `policy.actions.allow_combat` becomes a real,
+independently-checked gate for the Attack mission type, at both enforcement layers. The
+first change to widen `docs/SPEC.md` §1's combat non-goal since this project's spec was
+written — every other combat mission type (`AcsDefend`/`Intercept`/`MissileAttack`/
+`AcsAttack`/`DefenseHold`) stays unreachable in code at every tier, regardless of policy,
+unchanged.
+
+### Added
+- **`guard._COMBAT_MISSION_TYPES = frozenset({ids.FleetMissionType.ATTACK})`** — a
+  second, separate set from `_ALLOWED_MISSION_TYPES`, deliberately not merged into it.
+  `_gate_mission_type` gains a required `policy` parameter to compute the effective
+  allowed set (`_ALLOWED_MISSION_TYPES`, plus `_COMBAT_MISSION_TYPES` when
+  `policy.actions.allow_combat` is `true`). Mirrors `veydrift-wallet`'s own
+  `allowlist.ts` two-set split (`OPERATOR_ALLOWED_MISSION_TYPES` /
+  `COMBAT_ALLOWED_MISSION_TYPES`), added in the same change, never before it — the same
+  "both layers together, never one first" sequencing discipline the Colonize widening
+  already established (2026-08-17), for the same reason: widening one layer alone would
+  reopen the single-layer-enforcement gap the other layer exists to close.
+- `Attack` still requires tier `operator` on top of `allow_combat` — the flag widens
+  *which* mission type is permitted, never the separate `tier` gate's requirement. No
+  `candidates.py` generator produces an Attack `Action` as of this commit — this makes
+  Attack launch-encodable and allowlist-permitted, not planner-reachable; that is later
+  work.
+
+### Changed
+- **`ActionsCfg.allow_combat`'s docstring** — no longer "deliberately ignored by every
+  code path." `RandomnessReadiness`'s docstring (`models.py`) similarly corrected:
+  `Snapshot.combat_only_degradation()`'s health-gate exception was reasoned about
+  assuming combat was unconditionally unreachable; that premise is now narrower, though
+  the exception's own behavior is unchanged until a later commit adds an Attack
+  generator (its practical effect stays the same in the meantime).
+
+7 new tests (3 in `test_guard.py`'s new "Attack conditionally allowed" block: allows at
+operator with `allow_combat=true`, still blocks below operator tier even with the flag
+set (confirming `mission_type` and `tier` remain independent gates), still blocks the
+other five combat types even with `allow_combat=true`), plus the two pre-existing
+combat-blocking tests' docstrings clarified as testing the default-off case, plus
+`test_tier_map_agrees_with_the_wallet_engines_allowlist` reworked to diff both
+mission-type set *pairs* independently rather than one set each. 618 passed (615
+baseline from the docs-sync commit + 3 new — most of this commit's 7 new
+assertions land inside the reworked cross-layer test and the three new functions
+above, not as separately-counted new test functions).
+
+Docs: `docs/SPEC.md` correction 70 and its tier-table/§1 updates,
+`skills/veydrift-wallet/references/tx-safety.md`'s new residual-limit subsection (the
+wallet skill's own security-relevant threat-model claims, updated in the same commit as
+the code change per this project's own discipline — see this skill's `CHANGELOG.md`),
+`references/entity-ids.md`, `references/guardrails.md`, `SKILL.md`, plus every other
+narrative doc's stale "allow_combat is ignored everywhere" / "combat unreachable at
+every tier" claim across `docs/PLAYER-GUIDE.md`/`.html`, `docs/RESEARCH-ADDENDUM.md`,
+`docs/TECHNICAL-WALKTHROUGH.md`/`.html`, `docs/COVERAGE.md`, `README.md`, and
+`AGENTS.md` §5's own invariant. Bumped 1.10.0 -> 1.11.0 (additive, minor) per this
+skill's own CHANGELOG.md convention.
+
 ## [1.10.0] - 2026-08-28
 
 ### Added

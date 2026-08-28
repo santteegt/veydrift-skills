@@ -363,14 +363,21 @@ HTTP-status layer. A direct live re-check (two `curl`s, moments apart) confirmed
 underlying condition is real and ongoing, though: `/health` returning HTTP 503 with a
 full, well-formed JSON body — `ok: false`, `readiness.ready: true`,
 `readiness.degradationReasons: []`, `configurationReady: true`,
-`gameMaintenance.paused: false`, `randomnessReadiness.ready: false`. Since `allow_combat`
-is read-and-ignored everywhere in this codebase (combat unconditionally unreachable
-regardless of policy), this degradation can never affect what this codebase would
-propose — `veydrift-agent` 1.3.0 adds `Snapshot.combat_only_degradation()` (a structural,
-fail-closed positive-confirmation check, not a reason-text allowlist) and
-`read._recover_health_body()` (narrow, `/health`-only 5xx body recovery) so `plan.py`'s
-rung 1 and `guard.py`'s `health` gate both proceed past this specific, verified-safe
-condition instead of blocking indefinitely. Verified live end-to-end: `vd tick --dry-run`
+`gameMaintenance.paused: false`, `randomnessReadiness.ready: false`. At the time this was
+written, `allow_combat` was read-and-ignored everywhere in this codebase (combat
+unconditionally unreachable regardless of policy), so this degradation could never
+affect what this codebase would propose — `veydrift-agent` 1.3.0 added
+`Snapshot.combat_only_degradation()` (a structural, fail-closed positive-confirmation
+check, not a reason-text allowlist) and `read._recover_health_body()` (narrow,
+`/health`-only 5xx body recovery) so `plan.py`'s rung 1 and `guard.py`'s `health` gate
+both proceed past this specific, verified-safe condition instead of blocking
+indefinitely. **Correction, 2026-08-28 (launch-actions plan, commit 5):** `allow_combat`
+is no longer unconditionally ignored — it now gates the Attack mission type at both
+enforcement layers. `combat_only_degradation()`'s own exception logic is unchanged by
+that commit (no generator proposes Attack yet, so its practical effect is unchanged),
+but its premise is narrower than this paragraph states; see `veydrift-agent`'s own
+`models.py` (`RandomnessReadiness`'s docstring) for the precise, current framing.
+Verified live end-to-end: `vd tick --dry-run`
 against the still-degraded real API now builds a full snapshot and reaches the ordinary
 ladder (NOOP: queues busy) instead of aborting. Full design:
 `skills/veydrift-agent/references/guardrails.md`'s `health` gate section;

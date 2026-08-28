@@ -126,14 +126,68 @@ describe("checkAllowlist", () => {
     });
 
     // Was `it.each([2, 3, 5, 6, 7, 8, 9])` until 2026-08-17 (Phase 5b): 2 (Colonize) moved to the
-    // "allows" list above. The remaining six are combat mission types and stay refused
-    // unconditionally -- AGENTS.md §5's "combat stays unreachable by code, not by config."
-    it.each([3, 5, 6, 7, 8, 9])("rejects mission type %i even though the selector is allowed", async (missionType) => {
-      const result = await checkAllowlist(launchFleetMissionTx(missionType), "operator", {
-        fetchConfig: async () => fixtureConfig(),
+    // "allows" list above. 3 (Attack) moved to its own describe block below on 2026-08-28
+    // (launch-actions plan, commit 5) -- it is no longer unconditionally rejected, only rejected
+    // when policy.actions.allow_combat resolves false. The remaining five are always refused,
+    // regardless of allow_combat -- AGENTS.md §5's "combat stays unreachable by code, not by
+    // config" still governs every mission type this flag does not name.
+    it.each([5, 6, 7, 8, 9])(
+      "rejects mission type %i even with allow_combat=true -- allow_combat widens only Attack",
+      async (missionType) => {
+        const result = await checkAllowlist(launchFleetMissionTx(missionType), "operator", {
+          fetchConfig: async () => fixtureConfig(),
+          resolveAllowCombat: () => true,
+        });
+        expect(result.ok).toBe(false);
+        expect(result.checks.find((c) => c.name === "launchFleetMission.missionType")?.ok).toBe(false);
+      },
+    );
+
+    describe("mission type 3 (Attack) -- conditional on policy.actions.allow_combat (launch-actions plan, commit 5)", () => {
+      it("rejects Attack when allow_combat resolves false", async () => {
+        const result = await checkAllowlist(launchFleetMissionTx(3), "operator", {
+          fetchConfig: async () => fixtureConfig(),
+          resolveAllowCombat: () => false,
+        });
+        expect(result.ok).toBe(false);
+        expect(result.checks.find((c) => c.name === "launchFleetMission.missionType")?.ok).toBe(false);
+        expect(result.reason).toMatch(/allow_combat=true/);
       });
-      expect(result.ok).toBe(false);
-      expect(result.checks.find((c) => c.name === "launchFleetMission.missionType")?.ok).toBe(false);
+
+      it("allows Attack when allow_combat resolves true", async () => {
+        const result = await checkAllowlist(launchFleetMissionTx(3), "operator", {
+          fetchConfig: async () => fixtureConfig(),
+          resolveAllowCombat: () => true,
+        });
+        expect(result.ok).toBe(true);
+        expect(result.checks.find((c) => c.name === "launchFleetMission.missionType")?.ok).toBe(true);
+      });
+
+      it("rejects (never passes vacuously) when resolveAllowCombat throws", async () => {
+        const boom = () => {
+          throw new Error("policy file is malformed");
+        };
+        const result = await checkAllowlist(launchFleetMissionTx(3), "operator", {
+          fetchConfig: async () => fixtureConfig(),
+          resolveAllowCombat: boom,
+        });
+        expect(result.ok).toBe(false);
+        expect(result.checks.find((c) => c.name === "launchFleetMission.missionType")?.ok).toBe(false);
+        expect(result.reason).toMatch(/could not be resolved/);
+      });
+
+      it("is not resolved at all for a non-Attack mission type -- lazy, never called unconditionally", async () => {
+        let called = false;
+        const result = await checkAllowlist(launchFleetMissionTx(0), "operator", {
+          fetchConfig: async () => fixtureConfig(),
+          resolveAllowCombat: () => {
+            called = true;
+            return true;
+          },
+        });
+        expect(result.ok).toBe(true);
+        expect(called).toBe(false);
+      });
     });
 
     it("economy tier rejects launchFleetMission entirely, regardless of mission type", async () => {

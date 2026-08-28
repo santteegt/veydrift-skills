@@ -356,6 +356,9 @@ export interface SendOptions {
   confirm: boolean;
   provider: WalletProvider;
   fetchConfig?: () => Promise<RuntimeConfig>;
+  /** Injectable for tests; forwarded to `checkAllowlist`'s own option of the same name. See
+   *  `allowlist.ts`'s doc comment for why this is resolved lazily rather than eagerly. */
+  resolveAllowCombat?: () => boolean;
 }
 
 export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${string}`> {
@@ -375,7 +378,10 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
     );
   }
 
-  const allow = await checkAllowlist(tx, opts.tier, { fetchConfig: opts.fetchConfig });
+  const allow = await checkAllowlist(tx, opts.tier, {
+    fetchConfig: opts.fetchConfig,
+    resolveAllowCombat: opts.resolveAllowCombat,
+  });
   if (!allow.ok) {
     throw new SendRefusedError(`allowlist rejected this transaction: ${allow.reason}`);
   }

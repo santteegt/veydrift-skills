@@ -104,8 +104,10 @@ _MIN_TIER_FOR_FUNCTION: dict[str, Tier] = {
 
 _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR: 3}
 
-#: `FleetMissionType` values `launchFleetMission` may submit (Phase 5c, docs/SPEC.md §5.5).
-#: Default-deny: any `mission_type` not in this set BLOCKs at the `mission_type` gate,
+#: `FleetMissionType` values `launchFleetMission` may submit unconditionally -- no
+#: policy flag affects this set (Phase 5c, docs/SPEC.md §5.5). Default-deny: any
+#: `mission_type` not in this set, and not in `_COMBAT_MISSION_TYPES` below with
+#: `policy.actions.allow_combat` true, BLOCKs at the `mission_type` gate,
 #: independently of the `tier` gate above. Mirrors `allowlist.ts`'s
 #: `OPERATOR_ALLOWED_MISSION_TYPES` constant exactly --
 #: `test_tier_map_agrees_with_the_wallet_engines_allowlist` parses both and fails naming
@@ -115,16 +117,9 @@ _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR:
 #: `launchFleetMission` (docs/COVERAGE.md); Phase 5c's planner rungs change that, so a
 #: second, independent enforcement point is no longer optional.
 #:
-#: Combat types (3 Attack, 5 AcsDefend, 6 Intercept, 7 MissileAttack, 8 AcsAttack,
-#: 9 DefenseHold) are never added here -- AGENTS.md §5's "combat stays unreachable by
-#: code, not by config" rule; enabling any of them requires an actual source change here
-#: AND in `allowlist.ts`, never a policy flag.
-#:
-#: Colonize (2) added 2026-08-17 (Phase 5b, docs/SPEC.md §9) -- the only widening in this
-#: program, added in the same change as this gate itself (never before it -- widening
-#: `allowlist.ts` first would have reintroduced the single-layer gap this gate closes).
-#: `VeydriftGame.sol`'s `launchFleetMission` facade dispatches `missionType == Colonize`
-#: to `VeydriftColonizationModule`; `_launchColonizeFleetMission` ->
+#: Colonize (2) added 2026-08-17 (Phase 5b, docs/SPEC.md §9). `VeydriftGame.sol`'s
+#: `launchFleetMission` facade dispatches `missionType == Colonize` to
+#: `VeydriftColonizationModule`; `_launchColonizeFleetMission` ->
 #: `_validateColonyCreation` -> `_requireShips(originPlanetId, Ship.ColonyShip, 1)`
 #: confirms it as a real colonisation entrypoint, not combat-adjacent (docs/
 #: RESEARCH-ADDENDUM.md §4, `references/contract-writes.md` §1).
@@ -136,6 +131,22 @@ _ALLOWED_MISSION_TYPES: frozenset[int] = frozenset(
         ids.FleetMissionType.HARVEST,
     }
 )
+
+#: `FleetMissionType` values permitted only when `policy.actions.allow_combat` is
+#: `true` (launch-actions plan, commit 5, 2026-08-28). Deliberately a separate set from
+#: `_ALLOWED_MISSION_TYPES` above, not merged into it -- mirrors `allowlist.ts`'s
+#: `COMBAT_ALLOWED_MISSION_TYPES` constant exactly, and keeps the
+#: unconditional-vs-conditional distinction visible at a glance for both the reader and
+#: the cross-layer test, which diffs both halves independently.
+#:
+#: Only **3 Attack**. `5 AcsDefend`, `6 Intercept`, `8 AcsAttack`, `9 DefenseHold` stay
+#: out of both sets, at every tier, regardless of `allow_combat` -- AGENTS.md §5:
+#: "combat stays unreachable by code, not by config" still governs every combat type
+#: this flag does *not* name. All four are alliance-coordination mission types this
+#: codebase has no other write path for either (no `joinAttackMission`/
+#: `launchDefenseHold` allowlisting exists); enabling any of them requires an actual
+#: source change here AND in `allowlist.ts`, never a policy flag alone.
+_COMBAT_MISSION_TYPES: frozenset[int] = frozenset({ids.FleetMissionType.ATTACK})
 
 _MINE_ENTITY_IDS = {ids.Building.METAL_MINE, ids.Building.CRYSTAL_MINE, ids.Building.DEUTERIUM_SYNTHESIZER}
 _ENERGY_FIX_BUILDINGS = {ids.Building.SOLAR_PLANT, ids.Building.FUSION_REACTOR}
@@ -369,7 +380,9 @@ def _colony_cap_violation(snapshot: Snapshot, *, outgoing_colonize_count: int | 
     return None
 
 
-def _gate_mission_type(action: Action, snapshot: Snapshot, *, outgoing_colonize_count: int | None = None) -> GuardVerdict:
+def _gate_mission_type(
+    action: Action, snapshot: Snapshot, policy: Policy, *, outgoing_colonize_count: int | None = None
+) -> GuardVerdict:
     """Phase 5c (docs/SPEC.md §5.5): default-deny gate for `launchFleetMission`'s
     `mission_type` argument, independent of and in addition to the `tier` gate above.
     Mirrors `allowlist.ts`'s calldata-level mission-type check -- defense in depth, not a
@@ -384,6 +397,12 @@ def _gate_mission_type(action: Action, snapshot: Snapshot, *, outgoing_colonize_
     `launchFleetMission` PASSes trivially, same as every other function-specific gate in
     this module (`address`/`abi_hash`/`gas`/`eth_floor` all take this shape toward
     `action.is_onchain()`).
+
+    **`policy` parameter, launch-actions plan commit 5**: the allowed set is
+    `_ALLOWED_MISSION_TYPES`, plus `_COMBAT_MISSION_TYPES` (Attack only) when
+    `policy.actions.allow_combat` is `true`. Combat requires tier `operator` on top of
+    this, exactly like every other `launchFleetMission` mission type -- `allow_combat`
+    widens *which* mission type is permitted, never the tier requirement itself.
 
     Colonize additionally goes through `_colony_target_range_violation` (below) and, new
     here, `_colony_cap_violation` -- a Colonize that would exceed `calc.max_planets`'s cap
@@ -400,14 +419,15 @@ def _gate_mission_type(action: Action, snapshot: Snapshot, *, outgoing_colonize_
             "launchFleetMission action has no mission_type set -- cannot verify it against "
             "the allowed set; a malformed action, not nothing to check",
         )
-    if action.mission_type not in _ALLOWED_MISSION_TYPES:
+    allowed = _ALLOWED_MISSION_TYPES | (_COMBAT_MISSION_TYPES if policy.actions.allow_combat else frozenset())
+    if action.mission_type not in allowed:
         name = ids.mission_type_name(action.mission_type)
-        allowed = sorted(_ALLOWED_MISSION_TYPES)
         return _verdict(
             "mission_type",
             GuardStatus.BLOCK,
-            f"mission_type {action.mission_type} ({name}) is not in the allowed set {allowed} "
-            "(Transport/Deploy/Colonize/Harvest only -- combat is refused unconditionally)",
+            f"mission_type {action.mission_type} ({name}) is not in the allowed set {sorted(allowed)} "
+            "(Transport/Deploy/Colonize/Harvest always; Attack only with "
+            f"policy.actions.allow_combat=true, currently {policy.actions.allow_combat})",
         )
     if action.mission_type == ids.FleetMissionType.COLONIZE:
         # Judge finding 2: independently re-check tick.py's own colony-target bounds --
@@ -1198,7 +1218,7 @@ def evaluate_guardrails(
     verdicts = [
         _gate_killswitch(killswitch_active=killswitch_active),
         _gate_tier(action, policy),
-        _gate_mission_type(action, snapshot, outgoing_colonize_count=outgoing_colonize_count),
+        _gate_mission_type(action, snapshot, policy, outgoing_colonize_count=outgoing_colonize_count),
         _gate_prerequisites(action, snapshot),
         _gate_fleet_slots(action, snapshot),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),

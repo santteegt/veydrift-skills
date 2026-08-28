@@ -131,9 +131,15 @@ change is everything downstream of that:
   for a future colonisation-target generator, the same "capacity exists, planner
   doesn't reach for it yet" shape `resolveFleetMission` had before the prior pass of
   this phase revived it.
-- **Revised non-goals, restated**: combat, alliances, ACS, migration, referrals, NFT
+- **Revised non-goals, restated**: alliances, ACS, migration, referrals, NFT
   burns, and the ERC-20 market bridge remain fully out of scope, unconditionally
-  (unchanged from the original list above). A raid-profitability model remains out of
+  (unchanged from the original list above). Combat is **almost** entirely out of scope,
+  unconditionally, still — `AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/
+  `DefenseHold` remain unreachable in code at every tier, regardless of policy. The one
+  exception, since correction 70 (§9, launch-actions plan commit 5, 2026-08-28): Attack
+  is now conditionally in scope, gated on `policy.actions.allow_combat` at `operator`
+  tier — not planner-proposed by any rung, but launch-encodable and allowlist-permitted
+  when a human opts in. A raid-profitability model remains out of
   scope (`protectedResources` semantics still unconfirmed). Colonisation is **no
   longer** a non-goal, per the above. Non-combat fleet logistics (Transport/Harvest) is
   **no longer** a non-goal either, and the generators are less conservative than they
@@ -273,7 +279,7 @@ Tier is one field in `policy.json`. **No code path advances it** — only a huma
 | --- | --- | --- | --- | --- |
 | 1 | `advisor` | everything in scope | **nothing** | default |
 | 2 | `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24 h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
-| 3 | `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0) / Deploy(1) / Colonize(2) / Harvest(4) only | ≥7 days clean T2, human edit |
+| 3 | `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0) / Deploy(1) / Colonize(2) / Harvest(4) unconditionally, plus Attack(3) when `policy.actions.allow_combat=true` (§9 correction 70) | ≥7 days clean T2, human edit |
 
 > **Correction, 2026-08-17 (judge review of the general-strategy-engine program).** The T2 row
 > above previously still listed `settlePlanet` — removed from both enforcement layers in Phase 5
@@ -281,10 +287,14 @@ Tier is one field in `policy.json`. **No code path advances it** — only a huma
 > both enforcement layers in Phase 5b (§6.4). Both are fixed here to match the code and
 > `docs/COVERAGE.md` §1.6/§1.2.
 
-Combat (`Attack`, `AcsAttack`, `MissileAttack`, `Intercept`) is **unreachable in code at every tier**.
-`policy.json` carries an `allow_combat` key that is deliberately ignored; enabling attacks requires a
-code change. With two debris fields across ~195 planets the expected return does not justify the
-downside, and the friction is cheap.
+Combat (`AcsDefend`, `Intercept`, `MissileAttack`, `AcsAttack`, `DefenseHold`) is **unreachable in
+code at every tier, regardless of policy** — enabling any of them requires a source change, never a
+config edit. `Attack` is the one exception: as of the launch-actions plan's commit 5 (2026-08-28,
+§9 correction 70), `policy.json`'s `allow_combat` key is a real, independently-checked gate for it
+at both enforcement layers, at `operator` tier. With two debris fields across ~195 planets the
+expected return does not justify the downside of the *other five* combat mission types, and the
+friction excluding them stays cheap; Attack's own economics are a separate, later question this
+correction does not attempt to settle.
 
 > **Fix, 2026-08-12 (spec defect found by WP5).** `startShipProduction` was missing from the tier
 > table in v2.0, while §5.4's ladder rung 8 proposes ships when `actions.allow_ships` is enabled.
@@ -356,9 +366,11 @@ battle-reports · highscores · snapshot`.
 > **Correction, 2026-08-22.** `_health_ok()`'s raw `ok`/`readiness.ready` definition above is
 > unchanged — this adds a narrowly-scoped exception layered on top, not a redefinition.
 > `Snapshot.combat_only_degradation()` positively confirms `ok === false` is caused *solely* by
-> `randomnessReadiness` (a combat-only subsystem this codebase can never touch, since
-> `allow_combat` is read-and-ignored everywhere) while everything else — `readiness.ready`, no
-> other `degradationReasons`, `gameMaintenance.paused` — is confirmed fine; only then does
+> `randomnessReadiness` (a combat-only subsystem this codebase could not touch at the time this
+> was written, since `allow_combat` was read-and-ignored everywhere — **no longer true as of
+> correction 70 below**, though this exception's own behavior is unchanged: no generator proposes
+> an Attack action yet, so the practical effect is the same) while everything else —
+> `readiness.ready`, no other `degradationReasons`, `gameMaintenance.paused` — is confirmed fine; only then does
 > `plan.py`'s rung 1 / `guard.py`'s `health` gate proceed instead of blocking. Confirmed live,
 > persistent (not one-off): `/health` currently returns this via HTTP 503, not only a
 > 200-with-`ok:false` body — `read._fetch_or_exit()` defensively recovers a parseable `/health`
@@ -1709,6 +1721,57 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     unknown_never_passes_vacuously`, `::test_mission_type_blocks_colonize_when_in_flight_
     missions_would_reach_the_cap`, `::test_mission_type_allows_colonize_when_in_flight_
     missions_stay_under_the_cap`, and the pre-existing colony-cap tests).
+
+70. **New, 2026-08-28 (launch-actions plan, commit 5).** `policy.actions.allow_combat`
+    is now a real, independently-checked gate for the Attack mission type at both
+    enforcement layers — the first change to widen §1's combat non-goal since this spec
+    was written. Every other combat mission type (`AcsDefend`, `Intercept`,
+    `MissileAttack`, `AcsAttack`, `DefenseHold`) stays unreachable in code at every tier,
+    regardless of policy, unchanged.
+
+    `guard.py`'s `_ALLOWED_MISSION_TYPES` (unconditional: Transport/Deploy/Colonize/
+    Harvest) gains a sibling, `_COMBAT_MISSION_TYPES = {Attack}`, checked only when
+    `policy.actions.allow_combat` is `true`. `_gate_mission_type` gains a `policy`
+    parameter to compute the effective allowed set; `allowlist.ts` mirrors this exactly
+    with its own `OPERATOR_ALLOWED_MISSION_TYPES` / new `COMBAT_ALLOWED_MISSION_TYPES`
+    pair, and a new `resolveAllowCombat` (`policy.ts`, alongside the existing
+    `resolveTier`) resolves `actions.allow_combat` from `$VEYDRIFT_HOME/policy.json` —
+    called *lazily*, only once a decoded `launchFleetMission` mission type is actually
+    Attack, so a malformed or absent `allow_combat` field never blocks an unrelated,
+    non-combat transaction.
+
+    **Deliberately stricter than `resolveTier`'s own precedent, per an explicit design
+    decision:** `resolveAllowCombat` has no CLI flag and no environment variable, ever.
+    `resolveTier` falls back to a caller-supplied `--tier`/`VEYDRIFT_TIER` when no policy
+    file exists — legitimately needed for standalone use — but copying that shape here
+    would let a caller that controls its own environment simply assert combat is
+    allowed, widening the already-documented `--tier` footgun (`skills/veydrift-wallet/
+    references/tx-safety.md`'s residual-limit section) from "assert operator" to "assert
+    operator *and* combat." When no policy file exists at all, `resolveAllowCombat`
+    returns `false` — never a caller-asserted value, because none exists. A policy file
+    that exists but is unreadable, unparseable, or has a missing/non-boolean
+    `actions.allow_combat` refuses outright (throws), the same "a malformed security
+    policy must never fall through to a permissive default" rule `resolveTier` already
+    applies to `tier`.
+
+    `Attack` still requires tier `operator` on top of `allow_combat` — the flag widens
+    *which* mission type is permitted, never the tier requirement itself; a Colonize/
+    Deploy/Harvest-style two-gate independence (`mission_type` PASSing, `tier` BLOCKing
+    below operator) is confirmed by test. No generator produces an Attack `Action` as of
+    this commit — `allow_combat` makes Attack launch-encodable and allowlist-permitted,
+    not planner-reachable; that is a later commit's work. `references/tx-safety.md`'s
+    threat-model claims about combat are updated in the same commit, not left stale
+    alongside a security-relevant code change — the one document whose stated boundary
+    this correction actually moves.
+
+    `tests/test_guard.py::test_mission_type_allows_attack_when_allow_combat_is_true_at_
+    operator_tier`, `::test_tier_still_blocks_attack_below_operator_even_with_
+    allow_combat`, `::test_mission_type_still_blocks_non_attack_combat_types_even_with_
+    allow_combat`, plus `test_tier_map_agrees_with_the_wallet_engines_allowlist`'s
+    reworked cross-layer comparison (now diffs both mission-type set *pairs*
+    independently — unconditional and combat-gated — rather than one set each) and
+    `skills/veydrift-wallet/tests/policy.test.ts`'s new `resolveAllowCombat` suite plus
+    `tests/allowlist.test.ts`'s new "mission type 3 (Attack)" block.
 
 ---
 

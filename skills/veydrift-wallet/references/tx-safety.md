@@ -129,6 +129,32 @@ against any caller: Veydrift-address-only from a live `/runtime-config` fetch, c
 and refusal to `send` a nonpayable-read function. Those are properties of the transaction, not
 claims by the caller, which is why they survive a compromise that the tier check does not.
 
+### The same residual limit applies to `allow_combat` (launch-actions plan, commit 5)
+
+`src/policy.ts`'s `resolveAllowCombat` (added alongside `resolveTier`, same file) resolves
+whether the Attack mission type is permitted, the same "read from `$VEYDRIFT_HOME/policy.json`,
+never trust a caller-asserted value" shape `resolveTier` already uses -- but **deliberately without
+`resolveTier`'s no-policy-file fallback**. There is no `--allow-combat` flag and no
+`VEYDRIFT_ALLOW_COMBAT` environment variable anywhere in this engine's surface, on purpose: adding
+one would reopen the exact gap described above (§"A second, cheaper bypass of the tier check
+specifically"), just widened from "assert operator" to "assert operator *and* combat." When no
+policy file exists at all, `resolveAllowCombat` returns `false` -- never a caller-supplied value,
+because none exists to fall back to.
+
+This closes the specific gap a second security decision would otherwise reopen -- a compromised
+agent cannot talk its way into combat permission by lying about a flag that does not exist. It does
+**not** change the residual limit already described above for `resolveTier`: `VEYDRIFT_HOME` itself
+is still caller-controlled environment state. A compromised process can point `VEYDRIFT_HOME` at a
+directory containing a policy file it wrote itself, with `tier: "operator"` and
+`actions: { allow_combat: true }` both set -- `resolveTier`/`resolveAllowCombat` would both read
+that file as authoritative, because from this engine's perspective a policy file that exists and
+parses cleanly *is* the security policy, regardless of who wrote it or when. **`resolveAllowCombat`
+defends against a misconfigured caller asserting a value that contradicts the real policy, exactly
+like `resolveTier` -- it does not, and cannot, defend against a caller that controls its own
+`$VEYDRIFT_HOME` and simply writes the policy it wants read.** What still holds unconditionally
+regardless of which policy file is in play: the fixed set of five checks below, `--confirm`
+mandatory, and refusal to send a nonpayable-read function.
+
 ## Defense in depth: the allowlist doesn't trust the agent skill
 
 `src/allowlist.ts`'s `checkAllowlist` is re-run unconditionally inside `sendTx` regardless of what
@@ -150,11 +176,14 @@ and reported (never short-circuited in the report, only in the final `ok`):
    check at all: the mission type is an ordinary calldata *argument*, not part of the selector, so
    `checkAllowlist` decodes the calldata (`decodeFunctionData`) and rejects anything other than
    Transport(0)/Deploy(1)/**Colonize(2)**/Harvest(4) (`OPERATOR_ALLOWED_MISSION_TYPES`, widened to
-   add Colonize 2026-08-17, Phase 5b — see below) even though the selector itself is allowed. This
-   is the one place the allowlist has to understand *what a transaction does*, not just *where it
-   goes and what function it calls* — combat mission types (Attack, AcsDefend, Intercept,
-   MissileAttack, AcsAttack, DefenseHold) are unreachable through this engine no matter what tier
-   is configured.
+   add Colonize 2026-08-17, Phase 5b — see below) **unconditionally**, plus **Attack(3)** when
+   `resolveAllowCombat` resolves `policy.actions.allow_combat` as `true`
+   (`COMBAT_ALLOWED_MISSION_TYPES`, launch-actions plan commit 5, 2026-08-28 — see below), even
+   though the selector itself is allowed either way. This is the one place the allowlist has to
+   understand *what a transaction does*, not just *where it goes and what function it calls* —
+   AcsDefend/Intercept/MissileAttack/AcsAttack/DefenseHold remain unreachable through this engine
+   no matter what tier or policy is configured; only Attack has a path to `true`, and only via a
+   genuine `policy.json` read, never a flag.
 
 Any failure anywhere in the five checks: `sendTx` throws `SendRefusedError`, the CLI exits non-zero,
 nothing is signed, and the rejection reason is printed (not silently swallowed).
@@ -182,6 +211,24 @@ remain unaffected — this is still the only widening either allowlist has had.
 Python-side gate existed, would have made this engine the sole check on which mission types can
 launch — precisely the single-point-of-failure this allowlist's whole design avoids elsewhere.
 That's why the widening was withheld in an earlier pass; it's why this pass did both together.)*
+
+### 2026-08-28 (launch-actions plan, commit 5): Attack conditionally allowed via `allow_combat`
+
+`COMBAT_ALLOWED_MISSION_TYPES = new Set([3])` — a second, separate mission-type set from
+`OPERATOR_ALLOWED_MISSION_TYPES`, deliberately not merged into it. `checkAllowlist` checks it only
+when a decoded mission type is Attack specifically, and only then calls `resolveAllowCombat`
+(`src/policy.ts`) to resolve `policy.actions.allow_combat` — **lazily**, so a malformed or absent
+`allow_combat` field in `policy.json` never blocks an unrelated, non-combat transaction. This
+mirrors `guard.py`'s own two-set split (`_ALLOWED_MISSION_TYPES` / `_COMBAT_MISSION_TYPES`),
+added in the same change, never before it — same "both layers together, never one first" sequencing
+discipline the Colonize widening above already established, for the same reason. `test_tier_map_
+agrees_with_the_wallet_engines_allowlist` (agent-side) now diffs both mission-type set *pairs*
+independently. The remaining five combat types (AcsDefend, Intercept, MissileAttack, AcsAttack,
+DefenseHold) are unaffected — still absent from both sets, on both sides, unconditionally.
+`policy.json`'s `actions.allow_combat` was previously read-and-ignored everywhere in the sibling
+`veydrift-agent` skill's own source; it is now a real, independently-checked gate at both
+enforcement layers. See `resolveAllowCombat`'s own doc comment (`src/policy.ts`) and the residual-
+limit section above for exactly what this does and does not defend against.
 
 ## The two other traps `send` refuses outright, independent of the allowlist
 

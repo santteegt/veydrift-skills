@@ -12,12 +12,16 @@
  *
  * Plus one extra, spec-mandated restriction that lives at the calldata level rather than the
  * selector level: at `operator` tier, `launchFleetMission` is only allowed for mission types
- * Transport(0) / Deploy(1) / Harvest(4). That can't be expressed as a selector check (the mission
- * type is a regular argument, not part of the selector) so it's decoded from calldata here.
+ * Transport(0) / Deploy(1) / Colonize(2) / Harvest(4) unconditionally, plus Attack(3) when
+ * `policy.actions.allow_combat` resolves true (launch-actions plan, commit 5 -- see
+ * `COMBAT_ALLOWED_MISSION_TYPES` below). That restriction can't be expressed as a selector check
+ * (the mission type is a regular argument, not part of the selector) so it's decoded from
+ * calldata here.
  */
 
 import { decodeFunctionData, getAddress } from "viem";
 import { fetchLiveRuntimeConfig, getSelector, resolveFunctionAbi, type RuntimeConfig } from "./abi.js";
+import { resolveAllowCombat as resolveAllowCombatFromPolicy } from "./policy.js";
 import type { UnsignedTx } from "./providers/types.js";
 
 /** Injectable so tests can supply a fixture instead of hitting the real network. Defaults to the
@@ -68,7 +72,8 @@ const LAUNCH_FLEET_MISSION_SIGNATURES = [
 ] as const;
 
 /**
- * FleetMissionType values `launchFleetMission` may submit at `operator` tier.
+ * FleetMissionType values `launchFleetMission` may submit at `operator` tier,
+ * unconditionally -- no policy flag affects this set.
  * VeydriftGameStorage.sol:166-177 declares the full enum (10 members); this set is a
  * deliberate default-deny allowlist of it, not "everything the enum has," mirrored
  * exactly by `veydrift-agent`'s `guard.py` `_ALLOWED_MISSION_TYPES` (Phase 5c,
@@ -77,23 +82,44 @@ const LAUNCH_FLEET_MISSION_SIGNATURES = [
  *
  * - **0 Transport, 1 Deploy, 4 Harvest** — non-combat logistics between/around the
  *   player's own planets. Present since this constant was introduced.
- * - **2 Colonize** — added 2026-08-17 (Phase 5b, docs/SPEC.md §9). The only widening
- *   this allowlist has ever had. Confirmed as a genuine colonisation entrypoint, not
- *   combat-adjacent: `VeydriftGame.sol`'s `launchFleetMission` facade dispatches
- *   `missionType == Colonize` to `VeydriftColonizationModule`;
- *   `_launchColonizeFleetMission` -> `_validateColonyCreation` ->
- *   `_requireShips(originPlanetId, Ship.ColonyShip, 1)` (docs/RESEARCH-ADDENDUM.md §4,
- *   `veydrift-agent/references/contract-writes.md` §1). Widened here only in the same
- *   change that adds `guard.py`'s `mission_type` gate -- widening this set first, before
- *   that Python-side gate existed, would have reopened the single-layer-enforcement gap
- *   this allowlist alone used to cover (AGENTS.md §5).
- * - **3 Attack, 5 AcsDefend, 6 Intercept, 7 MissileAttack, 8 AcsAttack, 9 DefenseHold**
- *   — combat, and stay refused unconditionally. `AGENTS.md` §5: "combat stays
- *   unreachable by code, not by config" -- `policy.json`'s `allow_combat` is read and
- *   ignored everywhere; enabling any of these requires an actual source change to both
- *   this set and `guard.py`'s, never a policy flag.
+ * - **2 Colonize** — added 2026-08-17 (Phase 5b, docs/SPEC.md §9). Confirmed as a
+ *   genuine colonisation entrypoint, not combat-adjacent: `VeydriftGame.sol`'s
+ *   `launchFleetMission` facade dispatches `missionType == Colonize` to
+ *   `VeydriftColonizationModule`; `_launchColonizeFleetMission` ->
+ *   `_validateColonyCreation` -> `_requireShips(originPlanetId, Ship.ColonyShip, 1)`
+ *   (docs/RESEARCH-ADDENDUM.md §4, `veydrift-agent/references/contract-writes.md` §1).
+ *   Widened here only in the same change that added `guard.py`'s `mission_type` gate --
+ *   widening this set first, before that Python-side gate existed, would have reopened
+ *   the single-layer-enforcement gap this allowlist alone used to cover (AGENTS.md §5).
+ *
+ * See `COMBAT_ALLOWED_MISSION_TYPES` below for Attack (3) -- gated on
+ * `policy.actions.allow_combat`, checked separately, never merged into this set. The
+ * remaining combat types (5 AcsDefend, 6 Intercept, 7 MissileAttack, 8 AcsAttack,
+ * 9 DefenseHold) appear in neither set and stay refused unconditionally at every tier,
+ * regardless of policy -- all five are alliance-coordination or Attack-adjacent
+ * mission types this codebase has no other write path for (no
+ * `joinAttackMission`/`launchInterplanetaryMissileAttack`/`launchDefenseHold`
+ * allowlisting exists either); enabling any of them requires an actual source change to
+ * both this file and `guard.py`'s, never a policy flag alone.
  */
 export const OPERATOR_ALLOWED_MISSION_TYPES: ReadonlySet<number> = new Set([0, 1, 2, 4]);
+
+/**
+ * FleetMissionType values that are permitted at `operator` tier only when
+ * `policy.actions.allow_combat` resolves `true` (`resolveAllowCombat`, `policy.ts`) --
+ * launch-actions plan, commit 5. Deliberately its own set, not merged into
+ * `OPERATOR_ALLOWED_MISSION_TYPES`, so the unconditional-vs-conditional distinction stays
+ * visible at a glance and the cross-layer test (agent-side
+ * `test_tier_map_agrees_with_the_wallet_engines_allowlist`) can diff both halves against
+ * `guard.py`'s matching two sets independently.
+ *
+ * Only **3 Attack**. The other combat mission types (5, 6, 7, 8, 9) are not added here --
+ * they are alliance-coordination (AcsDefend, AcsAttack, DefenseHold) or otherwise require
+ * their own separate contract entrypoints/preconditions this codebase does not implement;
+ * `allow_combat` widens exactly the one mission type this codebase's own `launchFleetMission`
+ * generator (once built) can actually produce, not "combat" as an undifferentiated whole.
+ */
+export const COMBAT_ALLOWED_MISSION_TYPES: ReadonlySet<number> = new Set([3]);
 
 /** Tier -> allowed 4-byte selectors, computed from the pinned ABI (never a hardcoded hex list).
  *  `advisor` is deliberately empty: it may build and simulate, but the empty set means the
@@ -143,13 +169,22 @@ export interface AllowlistResult {
  * Run every check and report all of them (never short-circuit the report -- the full verdict
  * list is the audit artifact, matching the agent skill's `vd guard` convention). `ok` is the AND
  * of every check.
+ *
+ * `opts.resolveAllowCombat` (launch-actions plan, commit 5) defaults to the real
+ * `resolveAllowCombat` from `policy.ts` -- injectable purely so tests never touch the real
+ * filesystem, the same pattern `opts.fetchConfig` already uses toward the live network. It is
+ * called **lazily**, only once a decoded `launchFleetMission` mission type is actually Attack
+ * (see below) -- a malformed or absent `actions.allow_combat` field must never block an
+ * unrelated, non-combat transaction, which is exactly what calling it unconditionally for every
+ * `send` would do.
  */
 export async function checkAllowlist(
   tx: UnsignedTx,
   tier: Tier,
-  opts: { fetchConfig?: RuntimeConfigFetcher } = {},
+  opts: { fetchConfig?: RuntimeConfigFetcher; resolveAllowCombat?: () => boolean } = {},
 ): Promise<AllowlistResult> {
   const fetchConfig = opts.fetchConfig ?? fetchLiveRuntimeConfig;
+  const resolveAllowCombat = opts.resolveAllowCombat ?? resolveAllowCombatFromPolicy;
   const checks: AllowlistCheck[] = [];
   const fail = (name: string, detail: string) => checks.push({ name, ok: false, detail });
   const pass = (name: string, detail?: string) => checks.push({ name, ok: true, detail });
@@ -213,9 +248,10 @@ export async function checkAllowlist(
   }
 
   // Extra: operator's launchFleetMission is restricted to mission types 0 Transport / 1 Deploy /
-  // 2 Colonize / 4 Harvest (OPERATOR_ALLOWED_MISSION_TYPES). This is a calldata-level check -- the
-  // mission type is an ordinary argument, not part of the selector -- so it only runs once we know
-  // the selector is one of the two launchFleetMission overloads.
+  // 2 Colonize / 4 Harvest unconditionally, plus 3 Attack when policy.actions.allow_combat
+  // resolves true (launch-actions plan, commit 5). This is a calldata-level check -- the mission
+  // type is an ordinary argument, not part of the selector -- so it only runs once we know the
+  // selector is one of the two launchFleetMission overloads.
   const launchFleetSelectors = launchFleetMissionSelectorSet();
   if (launchFleetSelectors.has(selector)) {
     if (tier !== "operator") {
@@ -226,13 +262,32 @@ export async function checkAllowlist(
         const fn = resolveFunctionAbi(sig);
         const decoded = decodeFunctionData({ abi: [fn], data: tx.data });
         const missionType = Number(decoded.args?.[2]);
-        if (!OPERATOR_ALLOWED_MISSION_TYPES.has(missionType)) {
+        if (OPERATOR_ALLOWED_MISSION_TYPES.has(missionType)) {
+          pass("launchFleetMission.missionType", String(missionType));
+        } else if (COMBAT_ALLOWED_MISSION_TYPES.has(missionType)) {
+          // Lazy on purpose -- see checkAllowlist's own doc comment above.
+          try {
+            if (resolveAllowCombat()) {
+              pass("launchFleetMission.missionType", `${missionType} (combat, policy.actions.allow_combat=true)`);
+            } else {
+              fail(
+                "launchFleetMission.missionType",
+                `missionType=${missionType} (Attack) requires policy.actions.allow_combat=true; it is not`,
+              );
+            }
+          } catch (err) {
+            fail(
+              "launchFleetMission.missionType",
+              `missionType=${missionType} (Attack) requires policy.actions.allow_combat, but it could not ` +
+                `be resolved: ${(err as Error).message}`,
+            );
+          }
+        } else {
           fail(
             "launchFleetMission.missionType",
-            `missionType=${missionType} is not in the operator-allowed set {0 Transport, 1 Deploy, 2 Colonize, 4 Harvest}`,
+            `missionType=${missionType} is not in the allowed set {0 Transport, 1 Deploy, 2 Colonize, ` +
+              `4 Harvest, 3 Attack (only with policy.actions.allow_combat=true)}`,
           );
-        } else {
-          pass("launchFleetMission.missionType", String(missionType));
         }
       } catch (err) {
         fail("launchFleetMission.missionType", `could not decode calldata: ${(err as Error).message}`);

@@ -35,11 +35,14 @@ different things at each tier.
 | --- | --- | --- | --- |
 | 1 `advisor` (default) | everything in scope | **nothing, ever** | — |
 | 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
-| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) only | ≥7 days clean T2, human edit |
+| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) unconditionally, plus Attack(3) with `policy.actions.allow_combat=true` | ≥7 days clean T2, human edit |
 
-**Combat is unreachable at every tier by code, not by config.** `policy.json` has an
-`allow_combat` key that every code path deliberately ignores — enabling `Attack`,
-`AcsAttack`, `MissileAttack` or `Intercept` requires editing source, not flipping a flag.
+**Most of combat is unreachable at every tier by code, not by config.** `AcsDefend`,
+`Intercept`, `MissileAttack`, `AcsAttack` and `DefenseHold` require editing source, not
+flipping a flag, regardless of `policy.json`. `Attack` is the one exception since
+2026-08-28: `policy.json`'s `allow_combat` key is a real gate for it at `operator` tier —
+though no ladder rung proposes an Attack action, so this widens what can be sent by hand,
+not what the agent does on its own.
 
 Even at tier 1, `vd plan run` produces a complete, ready-to-submit transaction description
 — that's what makes a T1→T2 promotion decision evidence-based instead of a guess.

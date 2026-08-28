@@ -66,7 +66,7 @@ facts.
 | - | --- | --- | --- | --- |
 | 1 | `killswitch` | `$VEYDRIFT_HOME/KILLSWITCH` absent | `killswitch_active` (bool, never missing) | n/a |
 | 2 | `tier` | `action.function` ∈ the policy tier's allowed-to-*submit* set | `Action.function`, `Policy.tier` | function absent (off-chain action) → PASS trivially; function present but unknown to any tier → BLOCK |
-| 3 | `mission_type` | **(Phase 5c, 2026-08-17)** for `launchFleetMission` only: `Action.mission_type` ∈ the allowed set {Transport(0), Deploy(1), Colonize(2), Harvest(4)} — default-deny, independent of `tier` | `Action.mission_type` (only checked when `Action.function == "launchFleetMission"`) | not `launchFleetMission` → PASS trivially; `mission_type is None` → BLOCK (never "nothing to check" — a malformed action) |
+| 3 | `mission_type` | **(Phase 5c, 2026-08-17; Attack added commit 5 of the launch-actions plan, 2026-08-28)** for `launchFleetMission` only: `Action.mission_type` ∈ {Transport(0), Deploy(1), Colonize(2), Harvest(4)} unconditionally, plus Attack(3) when `policy.actions.allow_combat` is `true` — default-deny, independent of `tier` | `Action.mission_type`, `Policy.actions.allow_combat` (only checked when `Action.function == "launchFleetMission"`) | not `launchFleetMission` → PASS trivially; `mission_type is None` → BLOCK (never "nothing to check" — a malformed action) |
 | 4 | `prerequisites` | the proposed entity's on-chain requirements (`techtree.py`, transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`) are met on the target planet, plus shield-dome/missile-slot caps; for a `launchFleetMission` action, dispatches instead to a check that the origin planet actually owns every ship committed | target planet's building levels, account technology levels (or, for a fleet mission, the origin planet's ship counts) | any unmet requirement, or any level the snapshot didn't report → BLOCK; a shield-dome/missile-slot count the snapshot didn't report → BLOCK; a fleet mission's ship count the snapshot didn't report → BLOCK |
 | 5 | `fleet_slots` | **(commit 2 of the launch-actions plan, 2026-08-28)** for `launchFleetMission` only: `fleet_slots_active < fleet_slots_limit` — the contract reverts `FleetSlotLimitReached(1 + ComputerTechnology)` otherwise | `Snapshot.fleet_slots_active`/`.fleet_slots_limit` (only checked for `ActionKind.FLEET_MISSION`) | not a fleet mission → PASS trivially; either field `None` → BLOCK (never "assume a slot is free") |
 | 6 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
@@ -89,10 +89,16 @@ facts.
 fix's own planning: `/health` returned HTTP 503 (persistently, not a one-off), with a
 body reporting `ok: false` while `readiness.ready: true`, `readiness.degradationReasons:
 []`, `gameMaintenance.paused: false`, and `randomnessReadiness.ready: false` — a
-combat-only subsystem ("New attacks are temporarily paused"). `allow_combat` is
-read-and-ignored everywhere in this codebase (`ActionsCfg.allow_combat`'s own docstring),
-so combat is unconditionally unreachable regardless of policy, and this signal can never
-affect a proposal this codebase would make. `Snapshot.combat_only_degradation()` is a
+combat-only subsystem ("New attacks are temporarily paused"). At the time this exception
+was written, `allow_combat` was read-and-ignored everywhere in this codebase, so combat
+was unconditionally unreachable regardless of policy and this signal could never affect a
+proposal this codebase would make. **That premise is narrower since the launch-actions
+plan's commit 5 (2026-08-28)** — `allow_combat` is now a real gate for the Attack
+mission type — though this exception's own behavior is unchanged: no generator proposes
+an Attack action yet, so the practical effect is the same; see `ActionsCfg.allow_combat`'s
+own docstring (`models.py`) for the current, precise framing, and correcting this
+exception's logic itself (withdrawing it for a combat action specifically) is deferred to
+whichever later commit adds an Attack generator. `Snapshot.combat_only_degradation()` is a
 structural, fail-closed positive-confirmation check — `readiness_ready` True, no other
 `degradation_reasons`, `game_maintenance` positively confirmed not paused, and
 `randomness_readiness` positively confirmed not-ready (never `None`/unconfirmed) — never

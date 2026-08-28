@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { policyPath, resolveTier, resolveVeydriftHome, TierResolutionError } from "../src/policy.js";
+import {
+  AllowCombatResolutionError,
+  policyPath,
+  resolveAllowCombat,
+  resolveTier,
+  resolveVeydriftHome,
+  TierResolutionError,
+} from "../src/policy.js";
 
 function enoent(path: string): NodeJS.ErrnoException {
   const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as NodeJS.ErrnoException;
@@ -115,5 +122,84 @@ describe("resolveTier -- FIX 3: tier is read from policy.json, never asserted by
     expect(() => resolveTier({ cliFlag: "superadmin", env: { VEYDRIFT_HOME: "/fake" }, readFile })).toThrow(
       /Invalid tier/,
     );
+  });
+});
+
+describe("resolveAllowCombat -- launch-actions plan commit 5: no CLI flag, no env var, ever", () => {
+  it("returns true when the policy file's actions.allow_combat is true", () => {
+    const allowed = resolveAllowCombat({
+      env: { VEYDRIFT_HOME: "/fake" },
+      readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_combat: true } }),
+    });
+    expect(allowed).toBe(true);
+  });
+
+  it("returns false when the policy file's actions.allow_combat is false", () => {
+    const allowed = resolveAllowCombat({
+      env: { VEYDRIFT_HOME: "/fake" },
+      readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_combat: false } }),
+    });
+    expect(allowed).toBe(false);
+  });
+
+  it("returns false (never refuses) when no policy file exists at all -- there is no flag to fall back to", () => {
+    const readFile = (p: string) => {
+      throw enoent(p);
+    };
+    expect(resolveAllowCombat({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
+  });
+
+  it("refuses (never falls back to a permissive default) when the policy file is unparseable JSON", () => {
+    expect(() =>
+      resolveAllowCombat({ env: { VEYDRIFT_HOME: "/fake" }, readFile: () => "{ not valid json" }),
+    ).toThrow(AllowCombatResolutionError);
+  });
+
+  it("refuses when actions.allow_combat is missing", () => {
+    expect(() =>
+      resolveAllowCombat({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: {} }),
+      }),
+    ).toThrow(/no valid "actions.allow_combat" field/);
+  });
+
+  it("refuses when the actions object itself is missing", () => {
+    expect(() =>
+      resolveAllowCombat({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "operator" }),
+      }),
+    ).toThrow(/no valid "actions.allow_combat" field/);
+  });
+
+  it("refuses when actions.allow_combat is not a boolean", () => {
+    expect(() =>
+      resolveAllowCombat({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_combat: "true" } }),
+      }),
+    ).toThrow(/no valid "actions.allow_combat" field/);
+  });
+
+  it("refuses when the policy file exists but errors on read for a reason other than ENOENT", () => {
+    const readFile = () => {
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    };
+    expect(() => resolveAllowCombat({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toThrow(AllowCombatResolutionError);
+  });
+
+  it("has no --allow-combat CLI flag or VEYDRIFT_ALLOW_COMBAT env var -- ResolveAllowCombatOptions has no such fields", () => {
+    // Type-level guarantee, exercised at compile time: ResolveAllowCombatOptions only
+    // accepts { env, readFile }. This test documents the guarantee for a reader who
+    // isn't checking the type definition directly; there is deliberately no runtime
+    // assertion possible for "a parameter does not exist."
+    const allowed = resolveAllowCombat({
+      env: { VEYDRIFT_HOME: "/fake", VEYDRIFT_ALLOW_COMBAT: "true" } as NodeJS.ProcessEnv,
+      readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_combat: false } }),
+    });
+    expect(allowed).toBe(false); // the policy file's actual value wins; the bogus env var is never read
   });
 });

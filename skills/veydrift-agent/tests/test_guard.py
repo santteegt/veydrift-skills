@@ -326,6 +326,9 @@ def test_mission_type_allows_transport_deploy_colonize_harvest():
 
 
 def test_mission_type_blocks_every_combat_type():
+    """With the default policy (`allow_combat=False`), every combat type BLOCKs --
+    including Attack, which becomes conditionally allowed once `allow_combat=True` (see
+    the dedicated block below); the other five never do, regardless of policy."""
     for mt in (
         ids.FleetMissionType.ATTACK,
         ids.FleetMissionType.ACS_DEFEND,
@@ -345,12 +348,58 @@ def test_mission_type_blocks_every_combat_type():
 
 
 def test_mission_type_blocks_independently_of_tier_at_every_tier():
-    """A combat mission_type BLOCKs at every tier, including operator -- this gate never
-    relies on the tier gate to do its job."""
+    """A combat mission_type BLOCKs at every tier, including operator, with the default
+    policy (`allow_combat=False`) -- this gate never relies on the tier gate to do its
+    job."""
     action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
     for tier in (Tier.ADVISOR, Tier.ECONOMY, Tier.OPERATOR):
         report = evaluate(action, make_snapshot(), make_policy(tier=tier))
         assert verdict(report, "mission_type").status is GuardStatus.BLOCK
+
+
+# --------------------------------------------------------------------------------------
+# mission_type — Attack conditionally allowed via policy.actions.allow_combat (launch-
+# actions plan, commit 5, 2026-08-28). Only Attack (3); the other five combat types
+# (AcsDefend/Intercept/MissileAttack/AcsAttack/DefenseHold) stay refused unconditionally
+# regardless of allow_combat -- confirmed below, not just asserted in a docstring.
+# --------------------------------------------------------------------------------------
+
+
+def test_mission_type_allows_attack_when_allow_combat_is_true_at_operator_tier():
+    action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_snapshot(), policy)
+    assert verdict(report, "mission_type").status is GuardStatus.PASS
+
+
+def test_tier_still_blocks_attack_below_operator_even_with_allow_combat():
+    """allow_combat widens `mission_type`'s allowed set, never the separate `tier` gate's
+    requirement -- Attack still needs operator tier on top of the flag, exactly like every
+    other launchFleetMission mission type, so the overall decision stays BLOCK below
+    operator even though `mission_type` itself now PASSes."""
+    action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
+    for tier in (Tier.ADVISOR, Tier.ECONOMY):
+        policy = make_policy(tier=tier, actions=ActionsCfg(allow_combat=True))
+        report = evaluate(action, make_snapshot(), policy)
+        assert verdict(report, "mission_type").status is GuardStatus.PASS, tier
+        assert verdict(report, "tier").status is GuardStatus.BLOCK, tier
+        assert report.decision is Decision.BLOCK, tier
+
+
+def test_mission_type_still_blocks_non_attack_combat_types_even_with_allow_combat():
+    """allow_combat widens exactly Attack (3) -- AcsDefend/Intercept/MissileAttack/
+    AcsAttack/DefenseHold stay refused unconditionally regardless of the flag."""
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    for mt in (
+        ids.FleetMissionType.ACS_DEFEND,
+        ids.FleetMissionType.INTERCEPT,
+        ids.FleetMissionType.MISSILE_ATTACK,
+        ids.FleetMissionType.ACS_ATTACK,
+        ids.FleetMissionType.DEFENSE_HOLD,
+    ):
+        action = make_fleet_action(mission_type=mt)
+        report = evaluate(action, make_snapshot(), policy)
+        assert verdict(report, "mission_type").status is GuardStatus.BLOCK, mt
 
 
 # --------------------------------------------------------------------------------------
@@ -1705,14 +1754,43 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
         f"  only in guard.py:    {sorted(py_mission_types - ts_mission_types)}\n"
         f"  only in allowlist.ts:{sorted(ts_mission_types - py_mission_types)}"
     )
-    # And neither side has smuggled a combat type in.
-    combat_types = {
-        ids.FleetMissionType.ATTACK,
+
+    # Launch-actions plan, commit 5 (2026-08-28): a second, independent pair of static
+    # sets for the mission type gated on policy.actions.allow_combat -- Attack only. Kept
+    # separate from the unconditional pair above (both sides), on purpose, so a
+    # runtime-conditional set never has to be diffed by this test's static TS parse; two
+    # static sets per side, compared independently, is the shape that stays parseable.
+    ts_combat_mission_types = numbers_in_readonly_set("COMBAT_ALLOWED_MISSION_TYPES")
+    py_combat_mission_types = set(guard._COMBAT_MISSION_TYPES)
+
+    assert py_combat_mission_types == ts_combat_mission_types, (
+        "combat-gated launchFleetMission mission types disagree between guard.py's "
+        "_COMBAT_MISSION_TYPES and allowlist.ts's COMBAT_ALLOWED_MISSION_TYPES.\n"
+        f"  only in guard.py:    {sorted(py_combat_mission_types - ts_combat_mission_types)}\n"
+        f"  only in allowlist.ts:{sorted(ts_combat_mission_types - py_combat_mission_types)}"
+    )
+    assert py_combat_mission_types == {ids.FleetMissionType.ATTACK}, (
+        f"guard.py's _COMBAT_MISSION_TYPES is not exactly {{Attack}}: {sorted(py_combat_mission_types)} -- "
+        "allow_combat is meant to widen exactly one mission type, not combat as an undifferentiated whole"
+    )
+
+    # And neither side's UNCONDITIONAL set has smuggled a combat type in -- Attack is
+    # correctly absent from these two (it lives only in the combat-gated pair above), and
+    # the remaining five combat types must be absent from all four sets, always, at every
+    # tier and regardless of allow_combat.
+    assert ids.FleetMissionType.ATTACK not in py_mission_types, "guard.py's unconditional set allows Attack outright"
+    assert ids.FleetMissionType.ATTACK not in ts_mission_types, "allowlist.ts's unconditional set allows Attack outright"
+    never_allowed_combat_types = {
         ids.FleetMissionType.ACS_DEFEND,
         ids.FleetMissionType.INTERCEPT,
         ids.FleetMissionType.MISSILE_ATTACK,
         ids.FleetMissionType.ACS_ATTACK,
         ids.FleetMissionType.DEFENSE_HOLD,
     }
-    assert not (py_mission_types & combat_types), f"guard.py allows a combat mission type: {py_mission_types & combat_types}"
-    assert not (ts_mission_types & combat_types), f"allowlist.ts allows a combat mission type: {ts_mission_types & combat_types}"
+    for label, s in (
+        ("guard.py's unconditional set", py_mission_types),
+        ("allowlist.ts's unconditional set", ts_mission_types),
+        ("guard.py's combat-gated set", py_combat_mission_types),
+        ("allowlist.ts's combat-gated set", ts_combat_mission_types),
+    ):
+        assert not (s & never_allowed_combat_types), f"{label} allows an always-excluded combat type: {s & never_allowed_combat_types}"

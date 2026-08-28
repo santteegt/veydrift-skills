@@ -140,11 +140,19 @@ touching related code, re-run the check named alongside each one.
 - **`send` never becomes implicit.** No env var, policy field, or flag makes `--confirm`
   optional. `policy.wallet_engine.require_confirmation` gates whether `tick` sends
   automatically at all — it does not weaken the CLI-level `--confirm` requirement, ever.
-- **Combat stays unreachable by code, not by config.** `policy.json`'s `allow_combat` key
-  is read and then ignored everywhere. Enabling `Attack`/`AcsAttack`/`MissileAttack`/
-  `Intercept` requires an actual source change to `_MIN_TIER_FOR_FUNCTION` and
-  `allowlist.ts` — that friction is deliberate; don't lower it in passing while fixing
-  something else.
+- **Most of combat stays unreachable by code, not by config.** `AcsDefend`/`Intercept`/
+  `MissileAttack`/`AcsAttack`/`DefenseHold` require an actual source change to both
+  `guard.py`'s `_ALLOWED_MISSION_TYPES`/`_COMBAT_MISSION_TYPES` and `allowlist.ts`'s
+  matching pair — that friction is deliberate; don't lower it in passing while fixing
+  something else. **`Attack` is the one exception, since the launch-actions plan's
+  commit 5 (2026-08-28):** `policy.json`'s `allow_combat` key is now a real,
+  independently-checked gate for it at `operator` tier, resolved by `guard.py`'s
+  `_gate_mission_type` (agent side) and `veydrift-wallet`'s `resolveAllowCombat`
+  (`policy.ts`, wallet side) — never trusting a CLI flag or environment variable for
+  this value, on purpose (see `skills/veydrift-wallet/references/tx-safety.md`'s
+  residual-limit section for exactly why). No candidate generator proposes an Attack
+  action as of that commit — this makes Attack launch-encodable and
+  allowlist-permitted, not planner-reachable; a future generator is separate work.
 - **Secrets never reach a log or a tracked file.** `log.py` scrubs any
   `0x[0-9a-fA-F]{64}` that isn't a known tx hash, and refuses to write a value matching a
   configured secret env var. Before committing, `git diff --cached` anything touching

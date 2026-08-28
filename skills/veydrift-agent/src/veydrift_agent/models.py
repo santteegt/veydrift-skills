@@ -159,11 +159,22 @@ class GameMaintenance(Base):
 
 class RandomnessReadiness(Base):
     """From /health's randomnessReadiness block -- combat-only (gates new attacks via a
-    randomness safety check). `allow_combat` is read-and-ignored everywhere in this
-    codebase (see `ActionsCfg.allow_combat`'s own docstring) -- combat is unconditionally
-    unreachable regardless of policy, so this signal can never affect a proposal this
-    codebase would make. `None` on Snapshot means unconfirmed -- same fail-closed
-    convention as `GameMaintenance`, never read as "combat readiness is fine."""
+    randomness safety check).
+
+    `Snapshot.combat_only_degradation()`'s health-gate exception (`plan.py` rung 1,
+    `guard.py`'s `health` gate) still lets a tick proceed through a `/health` failure
+    caused *solely* by this signal, reasoning that combat can never be what a proposal
+    this codebase makes touches. **That reasoning was written when `allow_combat` was
+    read-and-ignored everywhere; it no longer holds unconditionally** now that the
+    launch-actions plan's commit 5 makes `allow_combat` a real, checked gate for the
+    Attack mission type at both enforcement layers (see `ActionsCfg.allow_combat`'s own
+    docstring). Correcting `combat_only_degradation()`'s behavior itself -- withdrawing
+    the exception specifically for a combat action, once one can actually be proposed --
+    is deliberately deferred to the commit that adds an Attack generator, not attempted
+    here; until then no generator produces an Attack `Action`, so the exception's
+    practical effect is unchanged even though its stated justification is now narrower
+    than it reads. `None` on Snapshot means unconfirmed -- same fail-closed convention
+    as `GameMaintenance`, never read as "combat readiness is fine."""
 
     ready: bool
     reasons: list[str] = Field(default_factory=list)
@@ -325,7 +336,19 @@ class ActionsCfg(Base):
     allow_defense: bool = False
     allow_ships: bool = False
     allow_fleet_noncombat: bool = False
-    #: Deliberately ignored by every code path. Combat requires a code change, not config.
+    #: Live since the launch-actions plan's commit 5 (2026-08-28) -- was previously
+    #: deliberately ignored by every code path ("combat requires a code change, not
+    #: config"); that source-level friction still applies to *which* mission type this
+    #: gates (only Attack, `guard._ALLOWED_MISSION_TYPES`'s `_COMBAT_MISSION_TYPES`
+    #: half) -- widening it to another combat type is still a code change, never a
+    #: config edit. But for Attack specifically, this flag is now the actual gate, at
+    #: both enforcement layers independently (`guard.py`'s `mission_type` gate and
+    #: `veydrift-wallet`'s `checkAllowlist`, each resolving it from `policy.json`
+    #: separately -- never one trusting the other's read of it). Still requires tier
+    #: `operator` on top of this; still has no generator proposing an Attack action
+    #: until a later commit -- this flag alone does not make combat planner-reachable,
+    #: only launch-encodable and allowlist-permitted for a hand-constructed or future
+    #: generator-produced Attack `Action`.
     allow_combat: bool = False
 
 

@@ -11,6 +11,68 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-28
+
+The allowlist-widening change below is the same kind of change 0.3.0's Colonize widening
+was — a real widening of the transaction allowlist's security surface, flagged with its
+own "breaking" section header for visibility, but still a minor bump per this file's own
+convention, since it is additive and backward compatible (no existing caller's behavior
+changes unless they now set `policy.actions.allow_combat: true` themselves).
+
+### Added
+- **`resolveAllowCombat` and `AllowCombatResolutionError`** (`src/policy.ts`), alongside
+  the existing `resolveTier`. Resolves `policy.json`'s `actions.allow_combat` from
+  `$VEYDRIFT_HOME/policy.json`, same "policy file is authoritative, never a caller-
+  supplied value" shape `resolveTier` already uses — but **deliberately without
+  `resolveTier`'s no-policy-file fallback to a CLI flag/env var**: there is no
+  `--allow-combat` flag and no `VEYDRIFT_ALLOW_COMBAT` env var anywhere in this engine's
+  surface, on purpose, since adding one would let a caller that controls its own
+  environment simply assert combat is allowed — widening the already-documented `--tier`
+  footgun (`references/tx-safety.md`'s residual-limit section) from "assert operator" to
+  "assert operator *and* combat." No policy file -> `false`. Malformed/unparseable file,
+  or a missing/non-boolean `actions.allow_combat` -> refuses outright (throws), the same
+  "a malformed security policy must never fall through to a permissive default" rule
+  `resolveTier` already applies to `tier`.
+- **`checkAllowlist`'s new `opts.resolveAllowCombat` parameter** (injectable, defaults to
+  the real `resolveAllowCombat`), and `sendTx`'s matching `SendOptions.resolveAllowCombat`
+  forwarding it through — same injectable-dependency pattern `opts.fetchConfig` already
+  uses toward the live `/runtime-config` fetch. Called **lazily**: only once a decoded
+  `launchFleetMission` mission type is actually Attack, so a malformed or absent
+  `allow_combat` field never blocks an unrelated, non-combat transaction.
+
+### Changed (breaking — allowlist widening)
+- **`COMBAT_ALLOWED_MISSION_TYPES = new Set([3])`** — a second, separate mission-type set
+  from `OPERATOR_ALLOWED_MISSION_TYPES`, deliberately not merged into it. `checkAllowlist`
+  checks it only for a decoded Attack mission type, and only then calls
+  `resolveAllowCombat` to decide. Mirrors `veydrift-agent`'s own two-set split
+  (`_ALLOWED_MISSION_TYPES` / `_COMBAT_MISSION_TYPES`, `guard.py`), added in the same
+  change, never before it — the same "both layers together, never one first" sequencing
+  discipline 0.3.0's Colonize widening already established, for the same reason (widening
+  one layer alone would reopen the single-layer-enforcement gap the other layer exists to
+  close). `OPERATOR_ALLOWED_MISSION_TYPES` itself is unchanged — Attack was never in it
+  and still isn't. The remaining five combat mission types (`AcsDefend`/`Intercept`/
+  `MissileAttack`/`AcsAttack`/`DefenseHold`) are unaffected — absent from both sets, on
+  both sides, unconditionally, regardless of `allow_combat`.
+  - `tests/policy.test.ts`: new `resolveAllowCombat` suite (8 tests) mirroring
+    `resolveTier`'s own test shape.
+  - `tests/allowlist.test.ts`: the `it.each([3, 5, 6, 7, 8, 9])("rejects mission
+    type...")` case split — `3` moved into its own "mission type 3 (Attack)" describe
+    block (4 new tests: rejects when `allow_combat` resolves false, allows when it
+    resolves true, rejects when `resolveAllowCombat` throws, and confirms it is never
+    called at all for a non-Attack mission type), `[5, 6, 7, 8, 9]` kept as an
+    unconditional-rejection case, now explicitly exercised with `allow_combat=true` to
+    prove it doesn't affect them.
+- Agent-side `test_tier_map_agrees_with_the_wallet_engines_allowlist` reworked to diff
+  both mission-type set *pairs* independently (unconditional and combat-gated) rather
+  than one set each — see `veydrift-agent`'s own `CHANGELOG.md` for that half.
+
+### Docs
+- `references/tx-safety.md`: new "The same residual limit applies to `allow_combat`"
+  subsection (mirroring the existing `resolveTier` one), the "Five checks" list's
+  mission-type item updated, and a new dated section entry alongside 0.3.0's Colonize
+  one. `SKILL.md`'s mission-type bullet updated to mention Attack's conditional
+  reachability.
+
 ## [0.5.1] - 2026-08-27
 
 ### Fixed

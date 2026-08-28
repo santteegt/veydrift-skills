@@ -154,11 +154,15 @@ counterplay mechanics ([VeydriftGameplayModule.sol](https://github.com/Borodutch
 `AcsAttack`, `AcsDefend` and `Intercept` together) and their detailed mechanics are
 undocumented anywhere.
 
-**Every combat mission type is unreachable from this codebase at every tier** —
-`Attack` (3), `AcsAttack` (8), `MissileAttack` (7) and `Intercept` (6) require a code
-change to reach, not a `policy.json` edit (`allow_combat` is deliberately ignored by every
-code path). `DefenseHold` (9) is stationing, not an attack, but is likewise out of scope
-for this codebase.
+**`AcsAttack` (8), `MissileAttack` (7), `Intercept` (6), `AcsDefend` (5) and
+`DefenseHold` (9) are unreachable from this codebase at every tier, regardless of
+policy** — each requires an actual code change to reach, not a `policy.json` edit.
+`Attack` (3) is the one exception, since the launch-actions plan's commit 5
+(2026-08-28): `policy.actions.allow_combat` is a real, independently-checked gate for it
+at `operator` tier, at both enforcement layers (`guard.py`'s `mission_type` gate,
+`allowlist.ts`'s calldata-level check). No `candidates.py` generator constructs an
+Attack `Action` as of this commit, though — this makes Attack launch-encodable and
+allowlist-permitted, not planner-reachable.
 
 **Since 2026-08-17 (Phase 5c/5b), `plan.py` can construct a `launchFleetMission`
 `Action`** for every one of the four non-combat mission types — all gated on
