@@ -548,57 +548,39 @@ Astrophysics-driven colonization later) dominates any short-term optimization.
 
 ## 10. What is unobserved, and which planner paths that leaves untested
 
-**Correction — this section originally described the account as zero-state; that is no
-longer true and hasn't been for a while.** It used to open with "the account has taken
-zero on-chain actions... every level 0... unchanged since settlement," matching this
-project's very first observation of it. On-chain levels read directly from the deployed
-contract since then: Metal Mine 10, Crystal Mine 9, Deuterium Synthesizer 5, Solar Plant
-11, Robotics Factory 2, Shipyard 1, Research Lab 1, Energy Technology 2, Computer 0 — the
-account has been played by hand through the game UI. Separately, and more directly
-relevant to this document's own claims: this codebase has since submitted real
-transactions to mainnet itself, through its own `build → simulate → send` path, at tier 2
-(`economy`) and tier 3 (`operator`) — not fixtures, not a fork. What that changes,
-narrower than the original three items below claimed:
+Three things about live, progressed-level behavior remain sparsely verified:
 
-1. **Cost scaling above level 0 — still genuinely unverified.** `vd calc verify`
-   cross-checks three duration formulas (Energy Technology research, Small Cargo ship
-   production, Metal Mine building) against live API data at the account's current,
-   non-zero level, and passes — but that verifies *duration*, not *cost*. No
+1. **Cost scaling above level 0.** `vd calc verify` cross-checks three duration formulas
+   (Energy Technology research, Small Cargo ship production, Metal Mine building)
+   against live API data and passes — but that verifies *duration*, not *cost*. No
    per-building cost-scaling *factor* has been independently observed or reconstructed
    by this codebase at any level; live cost is always read as an opaque number from the
-   API, by design (the hard constraint in `references/formulas.md`). This remains
+   API, by design (the hard constraint in `references/formulas.md`). This is
    intentional, not a gap: the point of never recomputing cost is that it is impossible
    for this assumption to go stale.
-2. **Queue behavior under load — observed at least once, not generally.** A local Anvil
-   fork run of this codebase's own send path populated and later lazily settled a real
-   queue above level 0 (`startBuildingUpgrade`, Metal Mine 10 → 11), with
-   `calc.build_seconds` matching the chain's own resolved duration exactly (1556s) — the
-   first time this system, not a human through the UI, watched a queue actually behave
-   this way. That is one selector, observed once, on a fork seeded from real chain
+2. **Queue behavior under load.** Confirmed real for one selector via a local Anvil fork
+   run of this codebase's own send path: a queue populated and later lazily settled
+   correctly, with `calc.build_seconds` matching the chain's own resolved duration
+   exactly. That is one selector, observed once, on a fork seeded from real chain
    state — not confirmation that every queue kind (research/ship/defense) and every
    settlement path behaves identically at every level.
-3. **Lazy settlement — same caveat as above, not "never observed."** Confirmed real for
-   `startBuildingUpgrade` specifically, via that same fork run: no separate
-   `finishBuildingUpgrade` call was needed. Whether `resources_as_of_now` vs. `resources`
-   (both present on `PlanetSnapshot`) ever meaningfully diverges in practice hasn't been
-   independently re-confirmed since; `plan.py` uses `resources_as_of_now` throughout per
-   the model's own guidance ("prefer this for affordability checks") regardless.
+3. **Lazy settlement.** Confirmed real for `startBuildingUpgrade` specifically, via that
+   same fork run: no separate `finishBuildingUpgrade` call was needed. Whether
+   `resources_as_of_now` vs. `resources` (both present on `PlanetSnapshot`) ever
+   meaningfully diverges in practice hasn't been broadly confirmed; `plan.py` uses
+   `resources_as_of_now` throughout per the model's own guidance ("prefer this for
+   affordability checks") regardless.
 
-**Concretely, which `plan.py` code paths this leaves untested against live state:** the
-table below predates the correction above and reflects what was independently confirmed
-at the time each row was last verified — real tier 2/3 mainnet sends mean `plan_next_action`
-has since run against real, progressed live state on at least some ticks, but nothing
-here catalogs which specific rungs fired on which one, so treat every "untested against"
-cell as "not independently reconfirmed by this document since," not as "definitely never
-happened at all."
+**Concretely, which `plan.py` code paths this leaves untested against live, progressed
+state:**
 
-| Code path | Tested against | Untested against (by this document, specifically) |
+| Code path | Tested against | Untested against |
 | --- | --- | --- |
-| Energy-first invariant (rungs 5-6, §3-§5) | Real planet 664 (level-0 case, §6) + fixtures (progressed levels, §7) | This account's current progressed levels — the level-0 case was the only live data point this document itself worked from |
-| Mine priority ranking (§4) | Fixtures only (multiple temperatures) | Whether a real account's multi-resource holdings ever make "spend it" (rung 5) diverge from "build the matching storage" in a way only observable at higher levels |
-| Storage overflow (rung 5) | Synthetic fixtures with hand-set `resources_as_of_now`/`production_per_hour` | A real planet ever approaching a storage cap — this account's production was 0/hr for the entire period this document was written against; whether that's still true at its current progressed levels is unconfirmed here |
-| Research selection (rung 7) | Fixture with all-zero tech levels (tie-break only) | Any scenario with mixed tech levels — this account's own tech levels are no longer all-zero (see above), but rung 7's behavior against them hasn't been independently reconfirmed by this document |
-| Shipyard rung (rung 8) | Fixture only, `allow_ships`/`allow_defense` forced `true` for the test | Real economy-on-track detection, still unconfirmed by this document |
+| Energy-first invariant (rungs 5-6, §3-§5) | Real fixture data (level-0 case, §6) + synthetic fixtures (progressed levels, §7) | A live account at genuinely progressed levels — the level-0 case is this document's only live-observed data point |
+| Mine priority ranking (§4) | Fixtures only (multiple temperatures) | Whether a live account's multi-resource holdings ever make "spend it" (rung 5) diverge from "build the matching storage" in a way only observable at higher levels |
+| Storage overflow (rung 5) | Synthetic fixtures with hand-set `resources_as_of_now`/`production_per_hour` | A live account genuinely approaching a storage cap |
+| Research selection (rung 7) | Fixture with all-zero tech levels (tie-break only) | Any live scenario with mixed tech levels |
+| Shipyard rung (rung 8) | Fixture only, `allow_ships`/`allow_defense` forced `true` for the test | Real economy-on-track detection against live, non-idle queues |
 | Mission-resolving rung (rung 3) | Not tested against real data at all — see below | Everything; the rung cannot fire without data `Snapshot` does not carry |
 
 **Rung 3 (`resolveFleetMission`) is a documented gap, not a silent omission.** The frozen

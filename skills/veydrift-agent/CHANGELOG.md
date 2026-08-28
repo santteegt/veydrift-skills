@@ -11,6 +11,24 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-08-27
+
+### Fixed
+
+- **`references/strategy-playbook.md` §10, further generalized per feedback on `1.6.4`'s
+  own fix.** Dropped the "Correction — this section originally described..." narrative
+  paragraph entirely rather than explaining what used to be wrong; and stripped every
+  reference to one specific account's on-chain history (exact building/technology
+  levels, "Metal Mine 10 → 11", the specific settlement duration) from both the prose
+  and the "what's tested against live state" table. This playbook is meant to
+  generalize to any planet — anchoring its own verification-status section to one
+  account's particular play history worked against that, even where the underlying
+  facts were accurate. The table's cells now describe untested categories ("a live
+  account at genuinely progressed levels," "a live account genuinely approaching a
+  storage cap") instead of one account's specific circumstances. `§6`/`§7`'s own worked
+  examples are unaffected — those are explicitly framed as worked examples using a real
+  fixture, not claims about this document's own verification scope.
+
 ## [1.6.4] - 2026-08-27
 
 ### Fixed
