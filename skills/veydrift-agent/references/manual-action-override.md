@@ -74,9 +74,9 @@ Once your `Action` is loaded, it flows through the **exact same** `_run_tick` pi
 planner-chosen action does. Nothing below is skipped, softened, or specific to an
 override:
 
-- Every one of `guard.py`'s ~19 gates (`references/guardrails.md`) — killswitch, tier,
+- Every one of `guard.py`'s 20 gates (`references/guardrails.md`) — killswitch, tier,
   affordability, energy, fields, reserve, gas, eth_floor, value_ceiling, idempotency,
-  revert_streak, colony cap, ship-availability, and the rest.
+  revert_streak, colony cap, ship-availability, fleet slots, and the rest.
 - `wallet_engine.require_confirmation` — a human still has to run the printed
   `walletctl send --confirm` command themselves if that's `true`.
 - The tier ceiling — an override still can't send anything above what `policy.tier`

@@ -1358,7 +1358,7 @@ mine target), fall back to the cadence default.</pre></div>
         <tr><td><code>/health</code> reports <code>ok: false</code>, tick still runs</td><td>Expected: a combat-only backend readiness issue no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy</td></tr>
         <tr><td><code>walletctl status</code> refuses to run</td><td>Expected with no provider configured — not a bug</td></tr>
         <tr><td><code>verify-abi</code> shows a mismatch</td><td>The deployed contract's ABI changed. Every write is blocked until resolved — deliberate</td></tr>
-        <tr><td>Guards read 16/19 at tier 1</td><td>Correct and expected — see §10</td></tr>
+        <tr><td>Guards read 17/20 at tier 1</td><td>Correct and expected — see §10</td></tr>
         <tr><td><code>policy.json</code> edits rejected</td><td>Schema validated strictly — the error names the exact field</td></tr>
       </tbody>
     </table>

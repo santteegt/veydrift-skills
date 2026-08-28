@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from veydrift_agent import guard, ids
 from veydrift_agent.models import (
     Action,
@@ -153,17 +155,20 @@ def verdict(report, gate: str):
 
 
 # --------------------------------------------------------------------------------------
-# All 19 gates are always present, never short-circuited.
+# All 20 gates are always present, never short-circuited.
 #
-# Was 17, then 18 (this test's own name is now two gates stale, kept for git-blame
-# continuity) until this change added the `game_paused` gate (`_gate_game_paused`) as the
+# Was 17, then 18, then 19 (this test's own name is now three gates stale, kept for
+# git-blame continuity). Most recently, commit 2 of the launch-actions plan added
+# `fleet_slots` (`_gate_fleet_slots`) -- a re-derivation of the contract's
+# `FleetSlotLimitReached` check, independent of whatever the planner already verified.
+# Before it, this change added the `game_paused` gate (`_gate_game_paused`) as the
 # second, independent line of defense behind `plan.py`'s rung `1b` for a chain-side
-# maintenance pause -- see that function's docstring. Before it, Phase 5c (docs/SPEC.md
+# maintenance pause -- see that function's docstring. Before that, Phase 5c (docs/SPEC.md
 # §5.5) added `mission_type` for `launchFleetMission` -- see guard.py's
 # `_gate_mission_type` and `_ALLOWED_MISSION_TYPES`. Each of these is the same situation
 # this test's own comment already described: a new *mandatory* gate necessarily changes
 # the fixed-length enumeration this test pins, and there is no way to add a gate without
-# that. Both gates are additive and PASS trivially for the routine build action used
+# that. All three are additive and PASS trivially for the routine build action used
 # here (see below), so this is the only place their addition is visible in a
 # pre-existing test.
 # --------------------------------------------------------------------------------------
@@ -172,11 +177,11 @@ def verdict(report, gate: str):
 def test_all_nineteen_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 19
+    assert report.total == 20
     gates = {v.gate for v in report.verdicts}
     assert gates == {
-        "killswitch", "tier", "mission_type", "prerequisites", "address", "abi_hash", "health", "game_paused",
-        "index_lag", "affordability", "energy", "storage_overflow", "fields", "reserve",
+        "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "address", "abi_hash", "health",
+        "game_paused", "index_lag", "affordability", "energy", "storage_overflow", "fields", "reserve",
         "gas", "eth_floor", "value_ceiling", "idempotency", "revert_streak",
     }
     assert report.decision is Decision.BLOCK
@@ -185,6 +190,8 @@ def test_all_nineteen_gates_always_present_even_when_blocked():
     # mission_type PASSes trivially for a non-launchFleetMission action -- it never adds
     # noise to a routine build/research/ship/defense proposal.
     assert verdict(report, "mission_type").status is GuardStatus.PASS
+    # fleet_slots PASSes trivially for the same reason -- scoped to FLEET_MISSION only.
+    assert verdict(report, "fleet_slots").status is GuardStatus.PASS
     # game_paused PASSes given make_snapshot's default not-paused game_maintenance.
     assert verdict(report, "game_paused").status is GuardStatus.PASS
 
@@ -452,6 +459,64 @@ def test_mission_type_colony_cap_check_does_not_apply_to_non_colonize_missions()
     action = make_fleet_action(mission_type=ids.FleetMissionType.TRANSPORT)
     report = evaluate(action, make_snapshot(owned_planet_count=1), make_policy(tier=Tier.OPERATOR))
     assert verdict(report, "mission_type").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# fleet_slots (commit 2 of the launch-actions plan, 2026-08-28) -- an independent
+# re-derivation of the contract's FleetSlotLimitReached(1 + ComputerTechnology) check,
+# scoped to FLEET_MISSION actions only.
+# --------------------------------------------------------------------------------------
+
+
+def test_fleet_slots_passes_trivially_for_a_non_fleet_action():
+    report = evaluate(make_build_action(), make_snapshot(), make_policy())
+    assert verdict(report, "fleet_slots").status is GuardStatus.PASS
+
+
+def test_fleet_slots_blocks_when_active_equals_limit():
+    action = make_fleet_action()
+    snapshot = make_snapshot(fleet_slots_active=1, fleet_slots_limit=1)
+    report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "fleet_slots")
+    assert v.status is GuardStatus.BLOCK
+    assert "no free fleet slot" in v.detail
+    assert "1/1" in v.detail
+
+
+def test_fleet_slots_blocks_when_active_exceeds_limit():
+    """Defense in depth: BLOCKs even if `fleet_slots_active` somehow already exceeds the
+    limit (e.g. Computer Technology was since downgraded, or the count is stale), not
+    just when exactly at it -- same posture as the colony-cap check above it."""
+    action = make_fleet_action()
+    snapshot = make_snapshot(fleet_slots_active=3, fleet_slots_limit=1)
+    report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR))
+    assert verdict(report, "fleet_slots").status is GuardStatus.BLOCK
+
+
+def test_fleet_slots_passes_when_a_slot_is_free():
+    action = make_fleet_action()
+    snapshot = make_snapshot(fleet_slots_active=0, fleet_slots_limit=1)
+    report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "fleet_slots")
+    assert v.status is GuardStatus.PASS
+    assert "1 fleet slot(s) free" in v.detail
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"fleet_slots_active": None, "fleet_slots_limit": 1},
+        {"fleet_slots_active": 0, "fleet_slots_limit": None},
+        {"fleet_slots_active": None, "fleet_slots_limit": None},
+    ],
+)
+def test_fleet_slots_blocks_on_missing_data_never_passes_vacuously(overrides):
+    action = make_fleet_action()
+    snapshot = make_snapshot(**overrides)
+    report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR))
+    v = verdict(report, "fleet_slots")
+    assert v.status is GuardStatus.BLOCK
+    assert "unknown" in v.detail
 
 
 # --------------------------------------------------------------------------------------
@@ -1423,6 +1488,41 @@ def test_idempotency_passes_once_the_pending_entry_is_indexed():
     agent_state = AgentState(pending=PendingTx(key=key, tx_hash="0x" + "aa" * 32, indexed_at=NOW))
     report = evaluate(action, make_snapshot(), make_policy(), agent_state)
     assert verdict(report, "idempotency").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# idempotency_key -- FLEET_MISSION/RESOLVE_MISSION no longer collide (commit 2 of the
+# launch-actions plan): entity_id is always None for both kinds, so the base
+# f"{planet_id}:{function}:{entity_id}" triple alone collapsed every fleet mission from
+# one planet, and every resolve action across all planets, onto one key.
+# --------------------------------------------------------------------------------------
+
+
+def test_idempotency_key_distinguishes_fleet_missions_by_mission_type():
+    transport = make_fleet_action(mission_type=ids.FleetMissionType.TRANSPORT)
+    harvest = make_fleet_action(mission_type=ids.FleetMissionType.HARVEST)
+    assert guard.idempotency_key(transport) != guard.idempotency_key(harvest)
+
+
+def test_idempotency_key_distinguishes_fleet_missions_by_target():
+    to_a = make_fleet_action(target_coordinates="7:181:15")
+    to_b = make_fleet_action(target_coordinates="7:181:16")
+    assert guard.idempotency_key(to_a) != guard.idempotency_key(to_b)
+
+
+def test_idempotency_key_distinguishes_resolve_actions_by_mission_id():
+    from veydrift_agent.models import ActionKind as _ActionKind
+
+    resolve_a = Action(kind=_ActionKind.RESOLVE_MISSION, function="resolveFleetMission", mission_id=1, rule="3:mission-resolving", rationale="x")
+    resolve_b = Action(kind=_ActionKind.RESOLVE_MISSION, function="resolveFleetMission", mission_id=2, rule="3:mission-resolving", rationale="x")
+    assert guard.idempotency_key(resolve_a) != guard.idempotency_key(resolve_b)
+
+
+def test_idempotency_key_unaffected_for_non_fleet_non_resolve_actions():
+    """The base f"{planet_id}:{function}:{entity_id}" formula is unchanged for every
+    other action kind -- this fix is scoped to FLEET_MISSION/RESOLVE_MISSION only."""
+    action = make_build_action()
+    assert guard.idempotency_key(action) == f"{action.planet_id}:{action.function}:{action.entity_id}"
 
 
 # --------------------------------------------------------------------------------------

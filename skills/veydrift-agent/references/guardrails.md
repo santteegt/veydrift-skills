@@ -1,4 +1,4 @@
-# Guardrails — `vd guard`, the 19 gates
+# Guardrails — `vd guard`, the 20 gates
 
 Source of truth for *what* each gate checks, *why*, what data it needs, what it does when
 that data is missing, and how to configure it. `guard.py` is the frozen contract this
@@ -28,9 +28,10 @@ rest of this codebase is shaped:
   below).
 
 Every gate is evaluated on every tick, regardless of what earlier gates decided —
-`GuardReport.verdicts` is a fixed-length list of exactly 19 entries every time (17
-through Phase 4; Phase 5c, 2026-08-17, added `mission_type`; this change, 2026-08-20,
-added `game_paused` — see its own row below). A blocked
+`GuardReport.verdicts` is a fixed-length list of exactly 20 entries every time (17
+through Phase 4; Phase 5c, 2026-08-17, added `mission_type`; a later change, 2026-08-20,
+added `game_paused`; commit 2 of the launch-actions plan, 2026-08-28, added
+`fleet_slots` — see its own row below). A blocked
 proposal is exactly as informative as an allowed one, which is the entire point of never
 short-circuiting: `logs/proposals.jsonl` is the audit trail, not just the last mile. (A
 content-identical repeat of the immediately-previous proposal is not re-persisted to
@@ -58,29 +59,30 @@ This mirrors the same posture `plan.py` takes with `killswitch_active` /
 the one module that's allowed to touch the network/subprocess (`tick.py`) gather the
 facts.
 
-## The 19 gates
+## The 20 gates
 
 | # | Gate | What it checks | Data it needs | On missing data |
 | - | --- | --- | --- | --- |
 | 1 | `killswitch` | `$VEYDRIFT_HOME/KILLSWITCH` absent | `killswitch_active` (bool, never missing) | n/a |
 | 2 | `tier` | `action.function` ∈ the policy tier's allowed-to-*submit* set | `Action.function`, `Policy.tier` | function absent (off-chain action) → PASS trivially; function present but unknown to any tier → BLOCK |
 | 3 | `mission_type` | **(Phase 5c, 2026-08-17)** for `launchFleetMission` only: `Action.mission_type` ∈ the allowed set {Transport(0), Deploy(1), Colonize(2), Harvest(4)} — default-deny, independent of `tier` | `Action.mission_type` (only checked when `Action.function == "launchFleetMission"`) | not `launchFleetMission` → PASS trivially; `mission_type is None` → BLOCK (never "nothing to check" — a malformed action) |
-| 4 | `prerequisites` | the proposed entity's on-chain requirements (`techtree.py`, transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`) are met on the target planet, plus shield-dome/missile-slot caps | target planet's building levels, account technology levels | any unmet requirement, or any level the snapshot didn't report → BLOCK; a shield-dome/missile-slot count the snapshot didn't report → BLOCK |
-| 5 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
-| 6 | `abi_hash` | live `deploymentAbiHash` == pinned | `Snapshot.deployment_abi_hash` | missing or mismatched → BLOCK **all** writes |
-| 7 | `health` | `/health` reported `ok && readiness.ready`, **or** (2026-08-22) a positively confirmed combat-only degradation — `Snapshot.combat_only_degradation()` | `Snapshot.health_ok`, `.readiness_ready`, `.degradation_reasons`, `.game_maintenance`, `.randomness_readiness` | n/a — `combat_only_degradation()` is itself fail-closed (see below) |
-| 8 | `game_paused` | **(this change, 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
-| 9 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
-| 10 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
-| 11 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
-| 12 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
-| 13 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
-| 14 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
-| 15 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
-| 16 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
-| 17 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
-| 18 | `idempotency` | no pending tx for the same `(planet, function, entity)` key | `AgentState.pending` | n/a — presence/absence is always knowable |
-| 19 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
+| 4 | `prerequisites` | the proposed entity's on-chain requirements (`techtree.py`, transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`) are met on the target planet, plus shield-dome/missile-slot caps; for a `launchFleetMission` action, dispatches instead to a check that the origin planet actually owns every ship committed | target planet's building levels, account technology levels (or, for a fleet mission, the origin planet's ship counts) | any unmet requirement, or any level the snapshot didn't report → BLOCK; a shield-dome/missile-slot count the snapshot didn't report → BLOCK; a fleet mission's ship count the snapshot didn't report → BLOCK |
+| 5 | `fleet_slots` | **(commit 2 of the launch-actions plan, 2026-08-28)** for `launchFleetMission` only: `fleet_slots_active < fleet_slots_limit` — the contract reverts `FleetSlotLimitReached(1 + ComputerTechnology)` otherwise | `Snapshot.fleet_slots_active`/`.fleet_slots_limit` (only checked for `ActionKind.FLEET_MISSION`) | not a fleet mission → PASS trivially; either field `None` → BLOCK (never "assume a slot is free") |
+| 6 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
+| 7 | `abi_hash` | live `deploymentAbiHash` == pinned | `Snapshot.deployment_abi_hash` | missing or mismatched → BLOCK **all** writes |
+| 8 | `health` | `/health` reported `ok && readiness.ready`, **or** (2026-08-22) a positively confirmed combat-only degradation — `Snapshot.combat_only_degradation()` | `Snapshot.health_ok`, `.readiness_ready`, `.degradation_reasons`, `.game_maintenance`, `.randomness_readiness` | n/a — `combat_only_degradation()` is itself fail-closed (see below) |
+| 9 | `game_paused` | **(added 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
+| 10 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
+| 11 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
+| 12 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
+| 13 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
+| 14 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
+| 15 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
+| 16 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
+| 17 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
+| 18 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
+| 19 | `idempotency` | no pending tx for the same idempotency key (`(planet, function, entity)`, extended with `mission_type`/target for a fleet mission, or `mission_id` for a resolve action — see `guard.idempotency_key`'s own docstring) | `AgentState.pending` | n/a — presence/absence is always knowable |
+| 20 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
 
 **`health`'s exception for a combat-only degradation (2026-08-22).** Live, during this
 fix's own planning: `/health` returned HTTP 503 (persistently, not a one-off), with a

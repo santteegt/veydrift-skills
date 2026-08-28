@@ -11,6 +11,44 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-28
+
+### Added
+
+- **`fleet_slots` guard gate — commit 2 of the launch-actions plan.** Every
+  `launchFleetMission` path on the deployed contract reverts `FleetSlotLimitReached(1 +
+  ComputerTechnology)` when no fleet slot is free; `guard.py` gains an independent
+  re-derivation of that check (`Snapshot.fleet_slots_active`/`.fleet_slots_limit`, already
+  sourced from `/wallet/{addr}/shipyard` — no new fetch), scoped to `FLEET_MISSION`
+  actions only and PASSing trivially for everything else. Fails closed on missing data.
+  Now 20 gates total (was 19).
+
+### Fixed
+
+- **`guard.idempotency_key` no longer collapses distinct fleet/resolve actions onto one
+  key.** `entity_id` is always `None` for both `FLEET_MISSION` and `RESOLVE_MISSION`
+  actions, so the base `(planet, function, entity)` triple alone collapsed every fleet
+  mission launched from one planet — Transport, Deploy, Colonize, Harvest, and (once later
+  commits add them) Attack and Missile — onto a single key and a single
+  `AgentState.revert_counts` streak; separately, *every* `resolveFleetMission` action
+  collapsed onto one global key regardless of which mission was being resolved, since
+  `plan.py`'s rung 3 never sets `planet_id`. Both were live before any mission type beyond
+  Transport/Harvest could actually be proposed. Fixed by folding `mission_type` + target
+  into the key for fleet missions, and `mission_id` for resolve actions. No migration
+  needed for the format change: confirmed directly against this project's own
+  `agent-state.json` that no account has ever accumulated fleet-mission or resolve-mission
+  state under the old key (`revert_counts: {}`, `executions_count: 0` at the time of this
+  change).
+
+7 new tests pin the gate's boundary and missing-data cases (mirroring every other gate's
+own convention — happy path, at-the-limit, past-the-limit, and three separate missing-data
+parametrizations); 4 more pin the idempotency-key fix directly. 562 passed (551 baseline
+from commit 1 + 11 new). Docs:
+`references/guardrails.md`'s gate table/count, `references/manual-action-override.md`,
+`README.md`/`docs/PLAYER-GUIDE.md`/`docs/SPEC.md`/`docs/TECHNICAL-WALKTHROUGH.md`'s
+worked examples (`16/19` → `17/20`), and their `.html` mirrors. Bumped 1.7.0 -> 1.8.0
+(additive, minor) per this skill's own CHANGELOG.md convention.
+
 ## [1.7.0] - 2026-08-28
 
 ### Added

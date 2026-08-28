@@ -165,10 +165,38 @@ def _format_eta_hm(hours: float) -> str:
 
 
 def idempotency_key(action: Action) -> str:
-    """`(planet, action, entity)` per docs/SPEC.md §5.5's `idempotency` row. Shared with
-    `state.PendingTx.key` / `AgentState.revert_counts` so `idempotency` and
-    `revert_streak` key off the exact same identity."""
-    return f"{action.planet_id}:{action.function}:{action.entity_id}"
+    """`(planet, action, entity)` per docs/SPEC.md §5.5's `idempotency` row -- except for
+    two action kinds where that base triple collapses distinct actions onto one key and
+    one `AgentState.revert_counts` streak, both fixed together here 2026-08-28 (commit 2
+    of the launch-actions plan):
+
+    - **`FLEET_MISSION`** (`launchFleetMission`): `entity_id` is always `None` (a fleet
+      mission carries a `ships` map, not a single entity), so every fleet mission
+      launched from one planet -- Transport, Deploy, Colonize, Harvest, and (once later
+      commits add them) Attack and Missile -- would otherwise share one key. Fixed by
+      folding in `mission_type` and the target (`action.target_coordinates`).
+    - **`RESOLVE_MISSION`** (`resolveFleetMission`): `plan.py`'s rung 3 never sets
+      `planet_id` (only `mission_id`), so *every* resolve action collapsed onto the
+      single global key `"None:resolveFleetMission:None"` regardless of which mission was
+      being resolved -- a second real bug in the same base formula, found while fixing
+      the first. Fixed by folding in `mission_id` instead.
+
+    Both were live before any mission type beyond Transport/Harvest could actually be
+    proposed, so this closes the gap before the wider mission-type surface this plan adds
+    could turn a latent collision into a routine one.
+
+    Shared with `state.PendingTx.key` / `AgentState.revert_counts` so `idempotency` and
+    `revert_streak` key off the exact same identity. No migration needed for the format
+    change: confirmed directly against this project's own `agent-state.json` that no
+    account has ever accumulated fleet-mission or resolve-mission state under the old key
+    (`revert_counts: {}`, `executions_count: 0` at the time of this change) -- see this
+    package's `CHANGELOG.md`'s `1.8.0` entry."""
+    key = f"{action.planet_id}:{action.function}:{action.entity_id}"
+    if action.kind is ActionKind.FLEET_MISSION:
+        key = f"{key}:{action.mission_type}:{action.target_coordinates}"
+    elif action.kind is ActionKind.RESOLVE_MISSION:
+        key = f"{key}:{action.mission_id}"
+    return key
 
 
 #: `gas`/`eth_floor` ESCALATE (never BLOCK) whenever their live data simply isn't
@@ -500,6 +528,43 @@ def _gate_fleet_ship_availability(action: Action, snapshot: Snapshot) -> GuardVe
             "prerequisites", GuardStatus.BLOCK, "fleet mission ship availability unverified/insufficient: " + "; ".join(shortfalls)
         )
     return _verdict("prerequisites", GuardStatus.PASS, f"origin planet {planet.planet_id} has every ship this mission commits")
+
+
+def _gate_fleet_slots(action: Action, snapshot: Snapshot) -> GuardVerdict:
+    """New gate, commit 2 of the launch-actions plan. Every `_launchFleetMission` path on
+    the deployed contract reverts `FleetSlotLimitReached(1 + ComputerTechnology)` when
+    `activeFleetMissionCount[msg.sender] >= fleetSlotLimit` -- confirmed at four separate
+    call sites in `VeydriftGameplayModule.sol`/`VeydriftColonizationModule.sol`/
+    `VeydriftDefenseHoldModule.sol`, all the same formula. `Snapshot` already carries both
+    halves (`fleet_slots_active`/`fleet_slots_limit`, sourced from `/wallet/{addr}/
+    shipyard`'s live `fleetSlots` block -- no new fetch needed), so this is a pure
+    re-derivation, the same defense-in-depth posture every other gate here takes.
+
+    Scoped to `FLEET_MISSION` only (`launchFleetMission`) -- `resolveFleetMission`
+    *frees* a slot rather than consuming one, and `launchInterplanetaryMissileAttack`
+    (a later commit) is fully synchronous and consumes no fleet slot at all, confirmed
+    directly against its contract implementation.
+
+    Fails closed on missing data, never PASSes vacuously: either field being `None` means
+    "unverifiable this tick," not "assume a slot is free" -- the same posture every other
+    gate here takes toward absent data (AGENTS.md §5)."""
+    if action.kind is not ActionKind.FLEET_MISSION:
+        return _verdict("fleet_slots", GuardStatus.PASS, "action is not launchFleetMission")
+    if snapshot.fleet_slots_active is None or snapshot.fleet_slots_limit is None:
+        return _verdict(
+            "fleet_slots", GuardStatus.BLOCK, "fleet slot usage/limit is unknown -- cannot verify a slot is free"
+        )
+    if snapshot.fleet_slots_active >= snapshot.fleet_slots_limit:
+        return _verdict(
+            "fleet_slots",
+            GuardStatus.BLOCK,
+            f"no free fleet slot ({snapshot.fleet_slots_active}/{snapshot.fleet_slots_limit} active; "
+            "limit = 1 + ComputerTechnology) -- the contract reverts FleetSlotLimitReached",
+        )
+    free = snapshot.fleet_slots_limit - snapshot.fleet_slots_active
+    return _verdict(
+        "fleet_slots", GuardStatus.PASS, f"{free} fleet slot(s) free ({snapshot.fleet_slots_active}/{snapshot.fleet_slots_limit})"
+    )
 
 
 def _gate_prerequisites(action: Action, snapshot: Snapshot) -> GuardVerdict:
@@ -1095,7 +1160,7 @@ def evaluate_guardrails(
     eth_balance_wei: int | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 19 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 20 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -1112,6 +1177,7 @@ def evaluate_guardrails(
         _gate_tier(action, policy),
         _gate_mission_type(action, snapshot),
         _gate_prerequisites(action, snapshot),
+        _gate_fleet_slots(action, snapshot),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),
         _gate_abi_hash(action, snapshot),
         _gate_health(snapshot),

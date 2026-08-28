@@ -736,7 +736,7 @@ it off at this tier. Real output, captured against this repo's reference planet:
 │     alts:   1 considered and not selected --                                │
 │              [energy] Solar Satellite (unscored) -- locked: needs Shipyard   │
 │ 1 (have 0)                                                                   │
-│     guards: 16/19 pass (block)                                               │
+│     guards: 17/20 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -791,13 +791,14 @@ The short version:
 
 A few things worth understanding about that block before you trust it:
 
-- **`guards: 16/19 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
+- **`guards: 17/20 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
   itself blocks — every onchain proposal is blocked at tier 1 by design, since advisor
   mode may never submit. That's what makes tier 1 safe *by construction*, not by
   discipline: the decision genuinely is `BLOCK`, so nothing past that point ever runs.
-  (One of the 19 is `mission_type`, which only ever has anything to check on a fleet-mission
-  proposal — see §13's note on operator tier below. It passes trivially for everything else,
-  so a routine building or research tick simply shows it among the passes.)
+  (Two of the 20 are `mission_type` and `fleet_slots`, which only ever have anything to
+  check on a fleet-mission proposal — see §13's note on operator tier below. Both pass
+  trivially for everything else, so a routine building or research tick simply shows them
+  among the passes.)
 - **`why:`** states the actual numbers behind the decision, not a canned explanation. If
   it says a mine upgrade needs 11 energy against 0 produced, that's a live comparison
   against your planet's current state, computed fresh every tick — not a rule of thumb.
@@ -896,9 +897,10 @@ transaction through `walletctl` directly rather than waiting for a tick to sugge
 picking a target is a judgement call this codebase leaves to you for now.
 
 Both of these only ever fire at `operator` tier, behind the same guardrail evaluation as
-everything else — including a new gate, `mission_type`, that independently re-checks the
-mission type against the same allowed set the wallet engine enforces (§10 covers what
-`guards: N/19` means).
+everything else — including `mission_type`, which independently re-checks the mission
+type against the same allowed set the wallet engine enforces, and `fleet_slots`, which
+independently re-checks that a fleet slot is actually free (§10 covers what
+`guards: N/20` means).
 
 **Before you promote from `advisor` to `economy`:**
 
@@ -1030,7 +1032,7 @@ asks it to invent numbers it doesn't have.
 | `/health` reports `ok: false`, but the tick still runs normally | Expected: `ok:false` caused *solely* by a combat-related backend readiness issue (a "New attacks are temporarily paused"-style condition) no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy, so that specific condition can't affect what it would propose. Any other cause of `ok:false` still blocks/escalates as before. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
-| Guards read `16/19 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
+| Guards read `17/20 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 

@@ -214,7 +214,7 @@ Anvil fork with an impersonated account; `AGENTS.md` §10's fork-round history).
                                     an operator-supplied Action here — every step after this
                                     one, including guard, runs identically either way; see
                                     references/manual-action-override.md)
-6. guard                        →  guard.py: all 19 gates, full verdict list, one Decision
+6. guard                        →  guard.py: all 20 gates, full verdict list, one Decision
 7. if ALLOW and tier>=2         →  walletctl build -> simulate -> send, await receipt,
    and not --dry-run               THEN await INDEXED (a confirmed receipt is not the
                                     same as indexed state -- no dependent action follows

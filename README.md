@@ -128,13 +128,13 @@ $ uv run --directory skills/veydrift-agent vd tick --dry-run
 │     why:    Metal Mine 0->1 would need 11 energy against 0 produced.         │
 │ Energy-first invariant: Solar Plant's marginal cost per energy point is      │
 │ cheaper here than one more Solar Satellite (satellite energy/unit=4).        │
-│     guards: 16/19 pass (block)                                               │
+│     guards: 17/20 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-`guards: 16/19 pass (block)` is expected and correct at tier 1: the `tier` gate itself
+`guards: 17/20 pass (block)` is expected and correct at tier 1: the `tier` gate itself
 blocks, which is exactly the mechanism that makes tier 1 safe by construction rather than
 by discipline. Nothing downstream of the guard ever runs. `$VEYDRIFT_HOME` defaults to
 `~/.veydrift` for every invocation on a given machine regardless of which harness runs it —

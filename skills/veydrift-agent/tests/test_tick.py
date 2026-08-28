@@ -1876,7 +1876,7 @@ def _allow_guard(monkeypatch):
     """Force guard.evaluate_guardrails to ALLOW, the same trick
     test_dry_run_at_tier1_never_sends_even_when_guard_would_allow already uses -- lets
     these tests isolate the require_confirmation branch without needing every one of the
-    19 gates to genuinely pass."""
+    20 gates to genuinely pass."""
     import veydrift_agent.guard as guard_module
 
     monkeypatch.setattr(
@@ -2123,10 +2123,11 @@ def test_load_policy_is_silent_when_allow_fleet_noncombat_is_false(isolated_home
 def test_structural_tier_block_alone_does_not_append_to_strategy_md(isolated_home, monkeypatch):
     """At tier 1 with no wallet configured, a routine onchain proposal's only non-passing
     gates are `tier` (BLOCK) + `gas`/`eth_floor` (ESCALATE, missing data) -- exactly the
-    `16/19 pass (block)` cluster README.md's worked example shows (`15/18` before this
-    change added the `game_paused` gate, `14/17` before Phase 5c added `mission_type`).
-    That is expected noise, not new information, so it must not accrue a strategy.md
-    entry every single tick."""
+    `17/20 pass (block)` cluster README.md's worked example shows (`16/19` before commit 2
+    of the launch-actions plan added the `fleet_slots` gate, `15/18` before the change
+    that added `game_paused`, `14/17` before Phase 5c added `mission_type`). That is
+    expected noise, not new information, so it must not accrue a strategy.md entry every
+    single tick."""
     _write_policy()  # tier advisor
     tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
     _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx)  # gas=None -> gas gate ESCALATEs too

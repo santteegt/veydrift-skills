@@ -160,7 +160,8 @@ class PendingTx(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    key: str  # f"{planet_id}:{function}:{entity_id}" -- see guard.py's `idempotency_key`
+    key: str  # base f"{planet_id}:{function}:{entity_id}", extended for fleet/resolve
+    # actions -- see guard.py's `idempotency_key` for the exact format and why
     tx_hash: str | None = None
     planet_id: int | None = None
     function: str | None = None

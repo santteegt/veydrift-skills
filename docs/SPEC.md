@@ -841,7 +841,7 @@ Rendered with `rich`:
   PROPOSE   startBuildingUpgrade(664, 3 SolarPlant)  ->  level 3 → 4
     cost:   M 225  C 75  D 0        (affordable, 12% of holdings)
     why:    mines at 3 require 157 energy; solar 3 produces 79. Energy-first invariant.
-    guards: 16/19 pass (block)
+    guards: 17/20 pass (block)
     tx:     to 0xf397…755d  data 0x…  (NOT SUBMITTED — tier advisor)
   next:     Metal Mine 3→4, blocked on energy until Solar 5
 ```
@@ -1298,8 +1298,9 @@ missions and colonisation (§5.4/§5.5/§6.4):**
 49. Transport (0), Deploy (1), Colonize (2), Harvest (4) all **PASS** the `mission_type` gate; every
     non-`launchFleetMission` action PASSes it trivially, adding no noise to a routine proposal
     (at the time of that change, 18 gates total, `mission_type` PASSing as the 15th of 15 passing
-    in the routine tier-1 case, `15/18` not `14/17`; the `game_paused` gate added later makes the
-    same routine case `16/19` — see criteria 58-60) —
+    in the routine tier-1 case, `15/18` not `14/17`; the `game_paused` gate added later made the
+    same routine case `16/19`, and commit 2 of the launch-actions plan's `fleet_slots` gate makes
+    it `17/20` as of 2026-08-28 — see criteria 58-60, 67) —
     `tests/test_guard.py::test_mission_type_allows_transport_deploy_colonize_harvest`,
     `::test_mission_type_passes_trivially_for_a_non_fleet_action`,
     `::test_all_nineteen_gates_always_present_even_when_blocked`.
