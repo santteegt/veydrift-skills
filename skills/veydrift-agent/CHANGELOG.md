@@ -11,6 +11,39 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-08-27
+
+### Fixed
+
+- **`references/strategy-playbook.md` brought up to date with `PLAYER-GUIDE.md` and the
+  current codebase.** Six real gameplay-decision behaviors documented for human players
+  but absent from the agent-facing playbook, each verified directly against
+  `candidates.py`/`techtree.py` before being added: (1) `resource_weights` was never
+  named anywhere in the file — added a consolidated note listing the exact three places
+  it picks a winner (the existing mine tie-break, a new explanation of the
+  multiple-simultaneously-locked-targets tie-break in the unlock-chain rung, and
+  Crawler-vs-Satellite once `enable_crawler` is on); (2) `enable_crawler`'s gating was
+  undocumented — the Crawler bullet read as though that family were always live; (3) the
+  "does not round-robin" behavior of `research_priority`/`building_priority` (first
+  reachable declared name wins forever, never advances) wasn't stated anywhere; (4)
+  `building_priority`'s asymmetric footgun — a correctly-spelled non-infrastructure name
+  silently produces nothing, unlike the other three declared-name fields, which hard-error
+  on any unrecognized name; (5) the negative-`count` silent-no-op footgun on
+  `ship_targets`/`defense_targets`; (6) a minor `max_alternatives` mention in the
+  sanity-check checklist.
+- **§10 ("What is unobserved") corrected — it was describing a zero-state account that
+  hasn't been zero-state for a while.** The account has since been played by hand through
+  the game UI (non-zero on-chain levels), and this codebase has since submitted real
+  transactions to it via its own tier 2/3 send path — both already established elsewhere
+  in this project's own records, just never propagated into this file. Rewrote the
+  opening premise and the three "never observed" items to reflect what's actually still
+  unverified (cost-scaling factor, still genuinely unverified) versus what's now been
+  observed at least once but not generally (queue behavior under load, lazy settlement —
+  both confirmed for one selector via a fork run, not a blanket claim). Reframed the
+  per-rung table's "untested against" column as "not independently reconfirmed by this
+  document" rather than implying nothing has happened since, and corrected one now-false
+  specific claim within it (this account's production is no longer necessarily 0/hr).
+
 ## [1.6.3] - 2026-08-27
 
 ### Fixed

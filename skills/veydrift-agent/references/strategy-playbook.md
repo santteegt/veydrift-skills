@@ -152,18 +152,38 @@ score `5.00e-4` (`(15)/30 == (10)/20`), and this recurs any time the two mines' 
 happen to sit at the corresponding ratio, not just that one pair. Rather than let that
 default to Python's dict-declaration order (which always favored Metal Mine, an
 incidental artifact never a deliberate rule), the walk breaks an exact tie by each
-tied mine's own already-computed payback score (`score_payback`, the same number
-`Action.alternatives` already displays) — ascending, so the cheaper-to-recoup mine
-wins. This is a genuinely narrow exception, not a backdoor into letting payback drive
-the whole ranking: it only ever fires on an exact tie, using a number already computed
-for the same family, never an invented cross-family judgement. One side effect worth
-knowing: if the *other* tied mine is currently energy-blocked, this now lets the safe
-one win directly as a mine, instead of the blocked one winning by dict-order luck and
-forcing an energy-substitute proposal (Solar Plant/Satellite) that a live tie-break
-would have avoided. One accepted gap: the winning mine's rationale text doesn't
-currently say a tie was broken this way — if you're explaining a proposal to a user and
-it names a mine that doesn't obviously have the lowest raw density, check whether it
-tied with another mine before assuming something's wrong.
+tied mine's own already-computed payback score (`score_payback`, weighted by
+`policy.strategy.resource_weights` — the same number `Action.alternatives` already
+displays) — ascending, so the cheaper-to-recoup mine wins. This is a genuinely narrow
+exception, not a backdoor into letting payback drive the whole ranking: it only ever
+fires on an exact tie, using a number already computed for the same family, never an
+invented cross-family judgement. One side effect worth knowing: if the *other* tied
+mine is currently energy-blocked, this now lets the safe one win directly as a mine,
+instead of the blocked one winning by dict-order luck and forcing an energy-substitute
+proposal (Solar Plant/Satellite) that a live tie-break would have avoided. One accepted
+gap: the winning mine's rationale text doesn't currently say a tie was broken this way —
+if you're explaining a proposal to a user and it names a mine that doesn't obviously
+have the lowest raw density, check whether it tied with another mine before assuming
+something's wrong.
+
+**Where `resource_weights` actually decides something, in full.** This mine tie-break is
+one of exactly three places `policy.strategy.resource_weights` ever changes *which*
+candidate wins, rather than just a displayed number in `alternatives`:
+
+1. **This exact mine tie**, above.
+2. **Multiple simultaneously-locked declared targets** — when more than one
+   `ship_targets`/`defense_targets`/`research_priority` entry is locked at once, the
+   cheapest weighted unlock step across all of them wins the unlock-chain rung; §12 has
+   the mechanism.
+3. **Crawler vs. Solar Satellite, only once `policy.strategy.enable_crawler` is on** — §8's
+   rung 8 covers this.
+
+Everywhere else — research selection, `building_priority`'s infrastructure walk, defense
+selection, Fusion Reactor's displayed payback score in the ordinary economic band, and a
+mine that *isn't* tied with another — `resource_weights` still gets computed and shown in
+`alternatives` for context, but never changes the winner. Setting `deuterium: 3` expecting
+the planner to broadly favor deuterium-producing picks won't do that; it only ever bites
+in the three places above.
 
 ## 5. Deriving the energy source: cost per energy point
 
@@ -369,7 +389,13 @@ where it moved.
      Research Lab, Terraformer, Missile Silo, `score=None`, in declared order) **first**,
      ahead of the mine walk — an explicit `building_priority` is a declared human intent
      and wins outright, per this phase's governing principle (below). Left unset, this
-     never fires.
+     never fires. **Footgun, asymmetric with every other declared-name field in this
+     policy:** a genuinely unrecognized name still hard-errors the next tick, same as
+     `ship_targets`/`defense_targets`/`research_priority` — but name resolution here
+     isn't restricted to the six infrastructure buildings, so a *correctly spelled*
+     building name outside that set (e.g. `"Metal Mine"`) resolves fine and then gets
+     silently filtered out of `_infrastructure_priority_order` — no error, no candidate,
+     nothing logged. Only the six infrastructure names above do anything in this field.
 7. **Research queue empty -> next research.** Deliberately the least-derived rung in this
    module: filtered through `techtree.unmet()` (a locked candidate is skipped in favour
    of the next unlocked one). This is *not* as rich as the energy invariant on purpose —
@@ -390,6 +416,20 @@ where it moved.
    never an invented value judgement. `generate_infrastructure_candidates`'s own
    undeclared-tail ordering (point above, "in declared order") got the identical
    treatment at the same time.
+
+   **Neither `research_priority` nor `building_priority` round-robins through a
+   multi-name list.** Both always propose the first declared name that's currently
+   reachable, and keep re-proposing further levels of that *same* entry indefinitely —
+   there's no "build it once, then move to the next name" logic, because neither field
+   carries a target level or count to complete against (unlike `ship_targets`/
+   `defense_targets`'s `count`, which genuinely does advance). A level-up never
+   un-satisfies its own prerequisites, so the planner has no structural reason to cede
+   the slot to the next declared name — it only moves on if the first entry itself
+   becomes locked. Declaring `research_priority: ["Energy Technology", "Espionage
+   Technology"]` locks research onto Energy Technology permanently, never touching
+   Espionage Technology, until the list is edited by hand. Treat both fields as "my #1
+   priority, with the rest as fallback names for if #1 ever becomes locked," not as a
+   build order the planner works through.
 8. **Shipyard idle AND economy on track -> ships/defense per policy.** Fires only if
    `policy.actions.allow_ships` or `allow_defense` is true (both default `false` in
    `assets/policy.example.json`, so this rung rarely fires in practice) and something
@@ -400,12 +440,19 @@ where it moved.
    Launcher, `candidates.generate_defense_candidates`, always `score=None`) as a
    policy-driven default in the absence of any threat model. **Phase 3** adds two ship
    candidates and a defense-target mechanism, all reachable only via explicit policy:
-   - **Crawler** (`candidates.generate_crawler_candidates`) — the one *scored* addition
-     here, via `calc.crawler_boost_bps`'s marginal effect on `calc.production_per_hour`.
-     The formula's own caps (8 per combined mine level, 5,000 bps total) mean a
-     saturated crawler count scores `None` automatically; the live
-     `PlanetSnapshot.crawler_production.capped` flag short-circuits the same conclusion
-     without recomputing, when the API reports it.
+   - **Crawler** (`candidates.generate_crawler_candidates`) — **gated on
+     `policy.strategy.enable_crawler` (default `false`); ungated, this generator returns
+     `[]` entirely**, not just an unscored candidate — reachability, not preference. This
+     is a separate switch from naming `"Crawler"` in `ship_targets` below: that path
+     always stock-keeps a declared count regardless of this flag. Once enabled, this is
+     the one *scored* addition here, via `calc.crawler_boost_bps`'s marginal effect on
+     `calc.production_per_hour`; its weighted payback then competes directly against
+     Solar Satellite's for the shipyard slot (`resource_weights` genuinely picking a
+     winner here, not just tie-breaking — see §4's consolidated note). The formula's own
+     caps (8 per combined mine level, 5,000 bps total) mean a saturated crawler count
+     scores `None` automatically; the live `PlanetSnapshot.crawler_production.capped`
+     flag short-circuits the same conclusion without recomputing, when the API reports
+     it.
    - **`policy.strategy.ship_targets`** (`candidates.generate_ship_target_candidates`) —
      stock-keeping toward a declared standing count for *any* of the 16 ships, filtered
      through `techtree.unmet()`. This never touches Solar Satellite's separate
@@ -414,14 +461,22 @@ where it moved.
      everything `generate_ship_candidates` yields for a planet, the best-*scored*
      selectable candidate wins (falls back to generation order — satellite first — when
      nothing is scored, preserving pre-Phase-3 priority when nothing new is configured).
+     An unrecognized `name` in `ship_targets` is a hard error the next tick (`ValueError`
+     from name resolution) — the same "a typo must never mean silence" posture the rest
+     of `policy.json` takes. **Footgun:** a target is only ever compared as `entity.count
+     >= target.count` — a negative `count` makes that trivially true, so the entry is
+     silently treated as already met and never proposed toward, forever, with nothing
+     logged to say so.
    - **`policy.strategy.defense_targets`** (`candidates.generate_defense_target_candidates`)
-     — the same shape for *any* of the 10 defenses, plus `techtree`'s hard caps: shield
-     domes at 1 built+queued per planet, missiles against `missile_silo_level * 10`
-     slots (ABM 1 slot, Interplanetary Missile 2). **Declaring `defense_targets`
-     entirely replaces the old hardcoded Rocket Launcher default** — a human who states
-     explicit defense intent has superseded the "reasonable policy-driven default in the
-     absence of a threat model" the pre-Phase-3 comment describes. Left unset, the old
-     default fires exactly as before.
+     — the same shape, same name-resolution/negative-count rules, for *any* of the 10
+     defenses, plus `techtree`'s hard caps: shield domes at 1 built+queued per planet,
+     missiles against `missile_silo_level * 10` slots (ABM 1 slot, Interplanetary Missile
+     2). **Declaring `defense_targets` entirely replaces the old hardcoded Rocket
+     Launcher default** — a human who states explicit defense intent has superseded the
+     "reasonable policy-driven default in the absence of a threat model" the pre-Phase-3
+     comment describes. Left unset, the old default fires exactly as before — an
+     asymmetry from `ship_targets`, which is simply off when empty, worth knowing before
+     assuming "empty list" means the same thing on both fields.
 8b. **(Phase 4, 2026-08-16) Nothing above fired -> propose the unlock chain.** New rung,
    `candidates.select_unlock_chain_candidate`, checked only after rungs 5-8 above have all
    found nothing at all for every target planet. For every *locked* declared
@@ -493,45 +548,57 @@ Astrophysics-driven colonization later) dominates any short-term optimization.
 
 ## 10. What is unobserved, and which planner paths that leaves untested
 
-**The account has taken zero on-chain actions.** All queues are `null`, all building/tech
-levels are 0, resources are the untouched starting grant (1,000 metal / 1,000 crystal /
-0 deuterium) — unchanged since settlement at block 49,666,196. Concretely, that leaves
-three things this codebase has never observed:
+**Correction — this section originally described the account as zero-state; that is no
+longer true and hasn't been for a while.** It used to open with "the account has taken
+zero on-chain actions... every level 0... unchanged since settlement," matching this
+project's very first observation of it. On-chain levels read directly from the deployed
+contract since then: Metal Mine 10, Crystal Mine 9, Deuterium Synthesizer 5, Solar Plant
+11, Robotics Factory 2, Shipyard 1, Research Lab 1, Energy Technology 2, Computer 0 — the
+account has been played by hand through the game UI. Separately, and more directly
+relevant to this document's own claims: this codebase has since submitted real
+transactions to mainnet itself, through its own `build → simulate → send` path, at tier 2
+(`economy`) and tier 3 (`operator`) — not fixtures, not a fork. What that changes,
+narrower than the original three items below claimed:
 
-1. **Cost scaling above level 0.** The cost-fingerprinting method this project's research
-   first used only works at level 0, where live cost equals base cost — the moment any building goes
-   to level 1, that method stops working, and nothing in this codebase has since watched
-   a live cost respond to a level-up. `calc.py`'s duration formulas (§5, verified live at
-   level 0 by `vd calc verify`) are the only contract-derived formulas checked against
-   live data; the cost values themselves, at any level, have only ever been read as
-   opaque numbers from the API, never independently reconstructed and compared — by
-   design, per the hard constraint in `references/formulas.md`. This is intentional, not
-   a gap: the point of never recomputing cost is that it is impossible for this
-   assumption to go stale.
-2. **Queue behavior under load.** No building, research, ship or defense queue has ever
-   been observed non-`null`. `plan.py`'s queue-empty checks
-   (`planet.queues.get(QueueKind.BUILDING) is None`, etc.) have only ever been exercised
-   against synthetic `QueueEntry` objects in tests, never a real one returned by the API.
-   If the live `queue` field's shape differs even slightly from what `models.QueueEntry`
-   expects, `read.py`'s parsing (not this module) would be where that surfaces —
-   untested here because it cannot be tested here.
-3. **Lazy settlement.** `startBuildingUpgrade` is confirmed to settle
-   resources first (no separate `finishBuildingUpgrade` call is needed), but this account
-   has never triggered that path — `lastSettledAt` has not moved since the settlement
-   block. `resources_as_of_now` vs. `resources` (both present on `PlanetSnapshot`) has
-   never been observed to differ in practice; `plan.py` uses `resources_as_of_now`
-   throughout per the model's own guidance ("Prefer this for affordability checks"), but
-   that preference has only been exercised where the two fields happen to be equal.
+1. **Cost scaling above level 0 — still genuinely unverified.** `vd calc verify`
+   cross-checks three duration formulas (Energy Technology research, Small Cargo ship
+   production, Metal Mine building) against live API data at the account's current,
+   non-zero level, and passes — but that verifies *duration*, not *cost*. No
+   per-building cost-scaling *factor* has been independently observed or reconstructed
+   by this codebase at any level; live cost is always read as an opaque number from the
+   API, by design (the hard constraint in `references/formulas.md`). This remains
+   intentional, not a gap: the point of never recomputing cost is that it is impossible
+   for this assumption to go stale.
+2. **Queue behavior under load — observed at least once, not generally.** A local Anvil
+   fork run of this codebase's own send path populated and later lazily settled a real
+   queue above level 0 (`startBuildingUpgrade`, Metal Mine 10 → 11), with
+   `calc.build_seconds` matching the chain's own resolved duration exactly (1556s) — the
+   first time this system, not a human through the UI, watched a queue actually behave
+   this way. That is one selector, observed once, on a fork seeded from real chain
+   state — not confirmation that every queue kind (research/ship/defense) and every
+   settlement path behaves identically at every level.
+3. **Lazy settlement — same caveat as above, not "never observed."** Confirmed real for
+   `startBuildingUpgrade` specifically, via that same fork run: no separate
+   `finishBuildingUpgrade` call was needed. Whether `resources_as_of_now` vs. `resources`
+   (both present on `PlanetSnapshot`) ever meaningfully diverges in practice hasn't been
+   independently re-confirmed since; `plan.py` uses `resources_as_of_now` throughout per
+   the model's own guidance ("prefer this for affordability checks") regardless.
 
-**Concretely, which `plan.py` code paths this leaves untested against live state:**
+**Concretely, which `plan.py` code paths this leaves untested against live state:** the
+table below predates the correction above and reflects what was independently confirmed
+at the time each row was last verified — real tier 2/3 mainnet sends mean `plan_next_action`
+has since run against real, progressed live state on at least some ticks, but nothing
+here catalogs which specific rungs fired on which one, so treat every "untested against"
+cell as "not independently reconfirmed by this document since," not as "definitely never
+happened at all."
 
-| Code path | Tested against | Untested against |
+| Code path | Tested against | Untested against (by this document, specifically) |
 | --- | --- | --- |
-| Energy-first invariant (rungs 5-6, §3-§5) | Real planet 664 (level-0 case, §6) + fixtures (progressed levels, §7) | A real account with progressed levels — the level-0 case is the *only* live-observed data point |
+| Energy-first invariant (rungs 5-6, §3-§5) | Real planet 664 (level-0 case, §6) + fixtures (progressed levels, §7) | This account's current progressed levels — the level-0 case was the only live data point this document itself worked from |
 | Mine priority ranking (§4) | Fixtures only (multiple temperatures) | Whether a real account's multi-resource holdings ever make "spend it" (rung 5) diverge from "build the matching storage" in a way only observable at higher levels |
-| Storage overflow (rung 5) | Synthetic fixtures with hand-set `resources_as_of_now`/`production_per_hour` | A real planet ever approaching a storage cap — this account's production has been 0/hr for its entire observed history |
-| Research selection (rung 7) | Fixture with all-zero tech levels (tie-break only) | Any scenario with mixed tech levels, since none has ever existed on this account |
-| Shipyard rung (rung 8) | Fixture only, `allow_ships`/`allow_defense` forced `true` for the test | Real economy-on-track detection, since building/research queues have never been non-idle live |
+| Storage overflow (rung 5) | Synthetic fixtures with hand-set `resources_as_of_now`/`production_per_hour` | A real planet ever approaching a storage cap — this account's production was 0/hr for the entire period this document was written against; whether that's still true at its current progressed levels is unconfirmed here |
+| Research selection (rung 7) | Fixture with all-zero tech levels (tie-break only) | Any scenario with mixed tech levels — this account's own tech levels are no longer all-zero (see above), but rung 7's behavior against them hasn't been independently reconfirmed by this document |
+| Shipyard rung (rung 8) | Fixture only, `allow_ships`/`allow_defense` forced `true` for the test | Real economy-on-track detection, still unconfirmed by this document |
 | Mission-resolving rung (rung 3) | Not tested against real data at all — see below | Everything; the rung cannot fire without data `Snapshot` does not carry |
 
 **Rung 3 (`resolveFleetMission`) is a documented gap, not a silent omission.** The frozen
@@ -569,7 +636,10 @@ Given a `vd plan run` proposal, in order:
    either a payback-hours comparison against the winner, or a `techtree.describe()` lock
    reason. This is informational only: it should never look like an ROI verdict
    overriding the actual proposal, and a locked alternative's reason should match what
-   `techtree.unmet()` would report for that entity's current levels.
+   `techtree.unmet()` would report for that entity's current levels. The list itself is
+   capped by `policy.strategy.max_alternatives` (default 5) — a short list here can mean
+   "few real alternatives existed" or just "the cap trimmed the rest," not necessarily
+   the former.
 7. **If the rule is `"8b:unlock-chain"`:** see §12 — the proposed entity should be
    *unlocked* right now (`techtree.unmet()` on it directly returns `()`), and it should be
    the shallowest such entity on the path toward whichever declared target the rationale
@@ -599,6 +669,21 @@ as a dead end rather than guessing). The first depth at which anything qualifies
 generate_unlock_chain_candidates` then turns that `UnlockStep` into an ordinary
 `Candidate` (`score=None` — see below), gated on the matching `policy.actions.allow_*`
 flag and queue idleness like any other family that can emit that action kind.
+
+**When more than one declared target is locked at once.** This isn't a one-target-only
+mechanism — `generate_unlock_chain_candidates` runs the walk above for *every* currently
+locked `ship_targets`/`defense_targets`/`research_priority` entry, not just the first
+declared one, deduplicating by the resulting step's own `(family, entity_id)` when two
+targets happen to share an unmet prerequisite (e.g. two ships both gated on the same
+Shipyard level — proposed once, not twice). The resulting candidates are then sorted by
+weighted cost ascending (`policy.strategy.resource_weights`, the same weights
+`score_payback` uses), and `select_unlock_chain_candidate` picks the cheapest across all
+of them, across every target planet, as its winner. This is the second of the three
+places `resource_weights` genuinely picks a winner rather than just tie-breaking or
+annotating `alternatives` — §4 has the consolidated list. Same framing as
+`generate_unlock_chain_candidates`'s own docstring: not an ROI comparison (every
+candidate here is still `score=None`), just a tie-break among otherwise-incomparable
+proposals, using the one number this codebase is willing to compare them by.
 
 **Worked example, planet 664 at its zero-state baseline** (every building and technology
 level 0 and known — see `tests/fixtures/planet_664.json`, and
