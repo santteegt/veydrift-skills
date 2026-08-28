@@ -160,9 +160,12 @@ policy** — each requires an actual code change to reach, not a `policy.json` e
 `Attack` (3) is the one exception, since the launch-actions plan's commit 5
 (2026-08-28): `policy.actions.allow_combat` is a real, independently-checked gate for it
 at `operator` tier, at both enforcement layers (`guard.py`'s `mission_type` gate,
-`allowlist.ts`'s calldata-level check). No `candidates.py` generator constructs an
-Attack `Action` as of this commit, though — this makes Attack launch-encodable and
-allowlist-permitted, not planner-reachable.
+`allowlist.ts`'s calldata-level check). **Since commit 6 (same date),
+`candidates.generate_attack_candidates` does construct an Attack `Action`** — the
+ladder's most conservative rung (`8e:attack`), reached only once every other rung has
+found nothing at all for any target planet. A separate, new `attack_protection` guard
+gate re-checks the specific target's live attack-protection status fresh at
+guard-evaluation time, never trusting the generator's own, earlier read.
 
 **Since 2026-08-17 (Phase 5c/5b), `plan.py` can construct a `launchFleetMission`
 `Action`** for every one of the four non-combat mission types — all gated on

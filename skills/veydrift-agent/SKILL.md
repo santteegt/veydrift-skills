@@ -39,10 +39,11 @@ different things at each tier.
 
 **Most of combat is unreachable at every tier by code, not by config.** `AcsDefend`,
 `Intercept`, `MissileAttack`, `AcsAttack` and `DefenseHold` require editing source, not
-flipping a flag, regardless of `policy.json`. `Attack` is the one exception since
-2026-08-28: `policy.json`'s `allow_combat` key is a real gate for it at `operator` tier —
-though no ladder rung proposes an Attack action, so this widens what can be sent by hand,
-not what the agent does on its own.
+flipping a flag, regardless of `policy.json`. `Attack` is the one exception:
+`policy.json`'s `allow_combat` key is a real gate for it at `operator` tier, **and**, the
+ladder's most conservative rung (`8e:attack`) does propose an Attack action once that
+flag is set, reached only once every other rung finds nothing at all — this is a real
+decision to let the agent attack other players on its own, not an inert flag.
 
 Even at tier 1, `vd plan run` produces a complete, ready-to-submit transaction description
 — that's what makes a T1→T2 promotion decision evidence-based instead of a guess.
@@ -96,8 +97,8 @@ which is `veydrift-wallet`'s decision, not this skill's.
 
 `vd plan run` evaluates these in order; the **first match wins**, and the pipeline always
 falls back to an explicit NO-OP if nothing matched (`Action.rationale` is never empty).
-Rungs 0-4 are vetoes; rungs 5-9 are a four-band candidate pipeline (`candidates.py`,
-2026-08-16 — see `references/strategy-playbook.md` for the full derivation):
+Rungs 0-4 are vetoes; rungs 5-11 are a seven-band candidate pipeline (`candidates.py` —
+see `references/strategy-playbook.md` for the full derivation):
 
 0. KILLSWITCH present → HALT
 1. `/health` not ok → NO-OP, reason recorded
@@ -107,13 +108,23 @@ Rungs 0-4 are vetoes; rungs 5-9 are a four-band candidate pipeline (`candidates.
 2. pending tx unreconciled → NO-OP, reconcile first
 3. a mission has been Resolving > 60s → `resolveFleetMission` (permissionless, free)
 4. incoming hostile fleet → ESCALATE, no proposal
-5-9. generate → filter → score → select, four bands in order:
+5-11. generate → filter → score → select, seven bands in order:
      1. deadline-driven — storage overflow: spend it, or build the matching storage
      2. economically scored — building upgrade, ascending payback hours
      3. policy-declared — research, then ships/defense, gated on economy-on-track
      4. unlock-chain (rung 8b) — the shallowest buildable prerequisite toward a locked
         `ship_targets`/`defense_targets`/`research_priority` entry, only when nothing
         above found anything at all — see `references/strategy-playbook.md` §12
+     5. fleet logistics (rung 8c) — Transport/Deploy between own planets, local/foreign
+        Harvest, gated on `policy.actions.allow_fleet_noncombat`; reached only when
+        nothing above found anything at all
+     6. Colonize (rung 8d) — consumes a built Colony Ship toward a free coordinate slot,
+        gated on `policy.strategy.colonize`; reached only when nothing above found
+        anything at all
+     7. Attack (rung 8e) — attacks the highest-raidable reachable target, gated on
+        `policy.actions.allow_combat` and `randomness_readiness.ready`; the most
+        conservative rung in the whole ladder, reached only when every other band,
+        Colonize included, found nothing at all
      else → NO-OP with an explicit reason
 
 The economic band's actual choices — which mine, which energy source — are **derived from

@@ -35,9 +35,11 @@ path in this codebase advances the tier on its own; only a human editing
 `AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold` remain unreachable **in
 code**, at every tier, regardless of policy — enabling any of them requires a source
 change, not a config edit. `Attack` is the exception: `policy.json`'s `allow_combat` key
-is now a real, independently-checked gate for it at `operator` tier — but no rung in the
-decision ladder proposes an Attack action, so setting it `true` alone does not make the
-agent attack anyone on its own.
+is a real, independently-checked gate for it at `operator` tier, **and** the decision
+ladder's most conservative rung (`8e:attack`) does propose an Attack action once that
+flag is set — reached only once every other rung, Colonize included, finds nothing at
+all for any target planet. Setting `allow_combat: true` at `operator` tier is a real
+decision to let the agent attack other players on its own; it is not an inert flag.
 
 ### Promoting a tier
 
@@ -63,8 +65,10 @@ the steps below are what actually justifies a promotion.
 **T2 → T3 (`economy` → `operator`):** the same shape, at a higher bar — at least **7 days**
 of clean T2 operation (real submissions, not just ticks), before the same manual
 `policy.json` edit. T3 additionally unlocks `launchFleetMission` for Transport/Deploy/
-Colonize/Harvest unconditionally, plus Attack with `allow_combat=true`; the remaining
-five combat mission types stay unreachable regardless of tier or policy.
+Colonize/Harvest unconditionally, plus Attack with `allow_combat=true` — and at T3 with
+`allow_combat=true`, the agent can and will propose an Attack on its own once every
+other ladder rung has nothing to propose; the remaining five combat mission types stay
+unreachable regardless of tier or policy.
 
 **Never**: promote on tick count alone, promote without reading `strategy.md`, or promote
 while any guard is failing intermittently rather than consistently.
@@ -175,12 +179,14 @@ Completed in ~2s, 466 bytes — well inside the design target of <10s / ≤2KB.
 
 - Submit a transaction without an explicit human `--confirm` on the exact `walletctl send`
   command line. No env var, no policy field, no flag makes this implicit.
-- Propose combat, at any tier or policy setting — no rung in the decision ladder
-  constructs an Attack action or any other combat mission type. Execute `AcsDefend`/
-  `Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`, at any tier — `policy.json`'s
-  `allow_combat` never affects these five. `Attack` specifically is the one exception:
-  `allow_combat=true` at `operator` tier permits a hand-constructed Attack `Action` to be
-  built and sent — the agent still never proposes one on its own.
+- Propose or execute `AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`, at
+  any tier or policy setting — `policy.json`'s `allow_combat` never affects these five;
+  enabling any of them needs an actual source change, not a config edit. `Attack`
+  specifically is the one exception, and it is not a "never," it is a deliberate opt-in:
+  with `allow_combat=true` at `operator` tier, the decision ladder's most conservative
+  rung (`8e:attack`) *does* propose an Attack on its own, reached only once every other
+  rung finds nothing at all — see the tier table above and `docs/PLAYER-GUIDE.md` §16
+  before setting this flag.
 - Sign or submit anything outside the live Veydrift contract address, or outside the
   current tier's allowed selector set — enforced twice, independently, by `vd guard`
   (agent-side) and `checkAllowlist` (wallet-side, always re-run regardless of what the
@@ -269,12 +275,14 @@ Read before trusting a claim about this project — it's the single easiest thin
   each proposal, and a human edits `policy.json` to promote.
 - **Most of what Veydrift lets a player do, this agent now touches, but not all of it.**
   Building, research, ships, defenses, mission-resolution, Transport/Deploy/Harvest
-  (own-planet and foreign debris), and Colonize are all covered as of the launch-actions
-  plan (2026-08-28). Attack is launch-encodable and allowlist-permitted (`policy.actions.
-  allow_combat`) but not planner-proposed — no rung constructs one. Moons, alliances,
-  expeditions, and referrals/migration remain untouched — some by deliberate policy (the
-  five non-Attack combat mission types stay unreachable in code, by design), some
-  because nobody has built that planner path yet. `docs/COVERAGE.md` is the full,
+  (own-planet and foreign debris), Colonize, and — since commit 6 of the launch-actions
+  plan (2026-08-28) — Attack are all covered. Attack sits at the ladder's most
+  conservative rung (`8e:attack`, gated on `policy.actions.allow_combat`, reached only
+  once every other rung finds nothing at all) and is defended by its own live,
+  guard-time attack-protection re-check, not just a generation-time filter. Moons,
+  alliances, expeditions, and referrals/migration remain untouched — some by deliberate
+  policy (the five non-Attack combat mission types stay unreachable in code, by design),
+  some because nobody has built that planner path yet. `docs/COVERAGE.md` is the full,
   function-by-function ledger of what's covered, planned, or out of scope, and why.
 
 ## Contributing / development

@@ -132,6 +132,13 @@ _NPM_INSTALL_TIMEOUT_S = 300
 #: docstring ("mission Resolving > 60s"), a small grace window so the ladder doesn't race
 #: a transaction that would revert because it lands the same second as arrival.
 _RESOLVE_GRACE_S = 60
+#: Commit 6 of the launch-actions plan: `read.fetch_highscores`'s `page_size` for
+#: `_attack_targets`. Deliberately small -- `references/api-routes.md` §3.18's ~2.2 MB
+#: warning is for the default `pageSize=50` across all 8 categories; this codebase only
+#: ever reads one category's rows (`rankings["economy"]`), but the response still carries
+#: all 8 regardless of the `category` query param, so a small page size keeps the
+#: response bounded rather than relying on the unused categories being cheap to ignore.
+_ATTACK_TARGET_PAGE_SIZE = 25
 
 
 # --------------------------------------------------------------------------------------
@@ -995,6 +1002,7 @@ def _describe_override(
     own_planet_debris: dict[int, Resources],
     foreign_debris_targets: dict[int, tuple[str, Resources]],
     colonize_targets: list[tuple[str, int]],
+    attack_targets: dict[int, tuple[str, Resources, bool | None]],
 ) -> tuple[dict[str, Any], str]:
     """`(override_record, override_line)` for a `vd tick --action`-supplied action --
     the code-enforced disagreement record `references/manual-action-override.md`
@@ -1020,6 +1028,7 @@ def _describe_override(
         own_planet_debris=own_planet_debris,
         foreign_debris_targets=foreign_debris_targets,
         colonize_targets=colonize_targets,
+        attack_targets=attack_targets,
     )
     record = {
         "operator_action": {
@@ -1316,6 +1325,122 @@ def _foreign_debris_targets(wallet: str) -> dict[int, tuple[str, Resources]]:
     return out
 
 
+def _attack_targets(wallet: str) -> dict[int, tuple[str, Resources, bool | None]]:
+    """Candidate Attack targets -- `generate_attack_candidates`'s `attack_targets`
+    parameter (commit 6 of the launch-actions plan). Sourced from `/highscores`
+    (`read.fetch_highscores`), `category="economy"` (resource-rich accounts are the
+    raiding-relevant ranking; the API also offers total/research/researchLevels/
+    military/fleet/fleetCount/defense -- see references/api-routes.md §3.18 -- economy is
+    the one this codebase picks, a documented choice, not the only defensible one),
+    `includeAttackProtection=true` + `currentWallet=<this wallet>` (mandatory for the
+    per-row `attackProtection` block to populate at all -- confirmed live 2026-08-28:
+    omitting `currentWallet` returns `null` on every row).
+
+    Each row's `attackProtection.allowed` is an ACCOUNT-level pre-check (score protection
+    + same-alliance, computed without a specific `targetPlanetId`) -- unlike
+    `/wallet/{addr}/attack-protection`'s own per-planet bashing-limit dimension, which
+    this coarser highscores-embedded version cannot see. Used here as a generation-time
+    courtesy filter only, never a substitute for `guard._gate_attack_protection`'s fresh,
+    target-specific, guard-evaluation-time re-check (`_attack_protection_allowed`,
+    below) -- see that gate's own docstring for why a target that clears this coarse
+    check can still legitimately be blocked at launch time (bashing-limit) or bounce at
+    impact (protection is re-evaluated then, not at launch).
+
+    A row whose `attackProtection` is missing/malformed, or whose `allowed` key isn't a
+    bool, is recorded here with `allowed=None` -- *unknown*, not permitted --
+    `generate_attack_candidates` excludes any target whose third tuple element isn't
+    exactly `True`, so this is fail-closed all the way from the fetch to the generator,
+    not just at the guard gate.
+
+    Keyed by the row's `homePlanetId` -- a row's *other* planets, if any, are not
+    considered (a documented scope limit, not an oversight: this codebase treats one
+    highscores row as one candidate target, the same "one row -> one target" simplicity
+    every other generator in this family takes). Best-effort, matching every other
+    out-of-band fetcher in this module: never raises, degrades to `{}` on any fetch/parse
+    failure, and skips (rather than aborts on) any individual row with an unparseable
+    id/coordinates/resources shape. Excludes the wallet's own row."""
+    try:
+        data = read.fetch_highscores(category="economy", current_wallet=wallet, page_size=_ATTACK_TARGET_PAGE_SIZE)
+    except http.VeydriftAPIError:
+        return {}
+    rankings = data.get("rankings")
+    rows = rankings.get("economy") if isinstance(rankings, dict) else None
+    if not isinstance(rows, list):
+        return {}
+
+    wallet_lower = wallet.lower()
+    out: dict[int, tuple[str, Resources, bool | None]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_wallet = row.get("wallet")
+        if isinstance(row_wallet, str) and row_wallet.lower() == wallet_lower:
+            continue
+        home_planet = row.get("homePlanet")
+        if not isinstance(home_planet, dict):
+            continue
+        coords = home_planet.get("coordinates") or {}
+        tactical = home_planet.get("tactical") or {}
+        raidable_raw = tactical.get("raidableResources") or {}
+        try:
+            planet_id = int(row.get("homePlanetId"))
+            galaxy = int(coords["galaxy"])
+            system = int(coords["system"])
+            position = int(coords["position"])
+            metal = int(raidable_raw.get("metal", 0))
+            crystal = int(raidable_raw.get("crystal", 0))
+            deuterium = int(raidable_raw.get("deuterium", 0))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if metal <= 0 and crystal <= 0 and deuterium <= 0:
+            continue
+        protection = row.get("attackProtection")
+        allowed = protection.get("allowed") if isinstance(protection, dict) else None
+        allowed = allowed if isinstance(allowed, bool) else None
+        out[planet_id] = (
+            f"{galaxy}:{system}:{position}",
+            Resources(metal=metal, crystal=crystal, deuterium=deuterium),
+            allowed,
+        )
+    return out
+
+
+def _attack_protection_allowed(wallet: str, action: Action, snapshot: Snapshot) -> bool | None:
+    """Live, target-specific re-check for the chosen Attack `action` --
+    `guard._gate_attack_protection`'s `attack_protection_allowed` parameter (commit 6 of
+    the launch-actions plan). Fetched fresh at guard-evaluation time, for the SPECIFIC
+    target this action encodes, never trusted from whatever `candidates.
+    generate_attack_candidates` read at generation time -- that earlier read is a
+    courtesy filter only; `VeydriftAntiRaidPrimitives.sol` re-evaluates protection at
+    IMPACT, not at launch, so even this fresh read is a best-effort pre-flight check, not
+    a guarantee, but it is materially fresher than a generation-time read from a
+    potentially-stale `/highscores` fetch.
+
+    Prefers `action.target_planet_id` directly when set (the normal case for an
+    Attack -- `generate_attack_candidates` always sets it, the same foreign-target
+    posture `generate_foreign_harvest_candidates` established in commit 3), falling back
+    to `_resolve_target_planet_id` only for a hand-constructed override action that set
+    `target_coordinates` instead.
+
+    Returns `None` (never a default of `True`/`False`) on any fetch/parse failure, an
+    unresolvable target, or a response missing a boolean `allowed` key --
+    `guard._gate_attack_protection` fails closed on `None` exactly like every other
+    live-data gate in this codebase (AGENTS.md §5)."""
+    if action.target_planet_id is not None:
+        target_planet_id = action.target_planet_id
+    else:
+        try:
+            target_planet_id = _resolve_target_planet_id(action, snapshot)
+        except ValueError:
+            return None
+    try:
+        data = read.fetch_attack_protection(wallet, target_planet_id)
+    except http.VeydriftAPIError:
+        return None
+    allowed = data.get("allowed")
+    return allowed if isinstance(allowed, bool) else None
+
+
 def _await_indexed(*, wallet: str, policy_planets: list[int], target_block: int, max_wait_s: int) -> bool:
     """The mandatory post-receipt wait (docs/SPEC.md §5.7): polls a fresh snapshot's
     `latest_indexed_block` until it covers `target_block`, or `max_wait_s` elapses.
@@ -1551,6 +1676,11 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # never pays for this network call, matching every other opt-in band's posture.
     colonize_targets = _colonize_targets(snapshot) if policy_model.strategy.colonize else []
 
+    # Commit 6 of the launch-actions plan: only fetched when combat is actually enabled
+    # -- an idle wallet with policy.actions.allow_combat=false (the default) never pays
+    # for this network call, matching commit 4's colonize_targets posture exactly.
+    attack_targets = _attack_targets(policy_model.wallet) if policy_model.actions.allow_combat else {}
+
     # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
@@ -1568,6 +1698,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             own_planet_debris=own_planet_debris,
             foreign_debris_targets=foreign_debris_targets,
             colonize_targets=colonize_targets,
+            attack_targets=attack_targets,
         )
     else:
         action = plan_mod.plan_next_action(
@@ -1579,6 +1710,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             own_planet_debris=own_planet_debris,
             foreign_debris_targets=foreign_debris_targets,
             colonize_targets=colonize_targets,
+            attack_targets=attack_targets,
         )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an
@@ -1593,6 +1725,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     built_tx_path: Path | None = None
     gas_cost_wei: int | None = None
     outgoing_colonize_count: int | None = None
+    attack_protection_allowed: bool | None = None
     if action.is_onchain():
         unsigned_tx, gas_cost_wei, build_error, built_tx_path = _walletctl_build(
             action, provider=policy_model.wallet_engine.provider, snapshot=snapshot
@@ -1610,6 +1743,11 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         # network call on every single tick.
         if action.function == "launchFleetMission" and action.mission_type == ids.FleetMissionType.COLONIZE:
             outgoing_colonize_count = _outgoing_colonize_count(policy_model.wallet)
+        # Commit 6 of the launch-actions plan: only fetched for an actual Attack
+        # proposal -- a live, target-specific re-check at guard-evaluation time, never
+        # trusted from generation time (see guard._gate_attack_protection's docstring).
+        if action.function == "launchFleetMission" and action.mission_type == ids.FleetMissionType.ATTACK:
+            attack_protection_allowed = _attack_protection_allowed(policy_model.wallet, action, snapshot)
 
     guard_report = guard_mod.evaluate_guardrails(
         action,
@@ -1622,6 +1760,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         gas_cost_wei=gas_cost_wei,
         eth_balance_wei=eth_balance_wei,
         outgoing_colonize_count=outgoing_colonize_count,
+        attack_protection_allowed=attack_protection_allowed,
         now=now,
     )
     if build_error:

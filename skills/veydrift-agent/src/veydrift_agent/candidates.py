@@ -2745,6 +2745,178 @@ def select_logistics_candidate(
     return None, []
 
 
+#: Ships this codebase will actually commit to an Attack mission (commit 6 of the
+#: launch-actions plan) -- the mirror image of `_HAULER_SHIP_IDS`'s reasoning: combat
+#: ships only. Small/Large Cargo (pure haulers, no combat stats), Recycler (Harvest's own
+#: dependency -- committing it here would starve that rung), Colony Ship (a one-shot,
+#: hard-to-replace colonisation asset) and Pathfinder (exploration-class, not a dedicated
+#: combatant) are all deliberately excluded -- each ship type in this codebase commits to
+#: the ONE mission role it's suited for, never "send the whole fleet" by default, the same
+#: discipline `_HAULER_SHIP_IDS` already established for Transport.
+_ATTACK_SHIP_IDS: tuple[int, ...] = (
+    ids.Ship.LIGHT_FIGHTER,
+    ids.Ship.HEAVY_FIGHTER,
+    ids.Ship.CRUISER,
+    ids.Ship.BATTLESHIP,
+    ids.Ship.BOMBER,
+    ids.Ship.DESTROYER,
+    ids.Ship.DEATHSTAR,
+    ids.Ship.BATTLECRUISER,
+    ids.Ship.REAPER,
+)
+
+
+def _attack_ships(planet: PlanetSnapshot) -> list[tuple[int, int]]:
+    """`(ship_id, count)` for every `_ATTACK_SHIP_IDS` type already built on `planet` with
+    a nonzero count -- the same shape `_cargo_ships` takes toward `_HAULER_SHIP_IDS`."""
+    counts = {entity.id: entity.count for entity in planet.ships if entity.count}
+    return [(ship_id, counts[ship_id]) for ship_id in _ATTACK_SHIP_IDS if counts.get(ship_id)]
+
+
+def generate_attack_candidates(
+    snapshot: Snapshot,
+    policy: Policy,
+    planet: PlanetSnapshot,
+    *,
+    attack_targets: dict[int, tuple[str, Resources, bool | None]] | None = None,
+) -> list[Candidate]:
+    """`FleetMissionType.Attack` (3) -- commit 6 of the launch-actions plan, the first
+    generator this codebase has ever produced for a combat mission type. Gated on
+    `policy.actions.allow_combat` (default `False`) -- deliberately NOT
+    `policy.actions.allow_fleet_noncombat`, a different flag for a different mission
+    family; Attack is never non-combat.
+
+    Uses `launchFleetMission(..., mission_type=Attack, ...)` directly, not the
+    `launchAttackMission` wrapper -- both dispatch through the identical
+    `_launchFleetMission` path on the deployed contract (AGENTS.md §8, `references/
+    contract-writes.md`), so going through the plain form reuses this codebase's existing
+    encoder/fleet-tuple/mission-type-gate machinery entirely unchanged, at the cost of
+    only ever using the contract's default greedy metal->crystal->deuterium loot order
+    (`launchAttackMission`'s own `LootRatio` argument is out of scope here -- see the
+    plan's "deliberately out of scope" section).
+
+    `attack_targets` is caller-supplied, the same posture `foreign_debris_targets` takes
+    toward the frozen `Snapshot` -- `tick.py`'s `_attack_targets` is the live source,
+    reading `/highscores?...&currentWallet=<own wallet>&includeAttackProtection=true`.
+    Keyed by target planet id, each value `(coordinates, raidable_resources,
+    attack_protection_allowed)`. A `None` third element means the highscores row's own
+    `attackProtection` came back missing/unparseable -- *unknown*, not allowed -- and is
+    excluded here entirely, the same fail-closed posture `guard._gate_attack_protection`
+    takes at launch time. This is a generation-time courtesy filter only, never a
+    substitute for that gate, which independently re-fetches attack-protection fresh for
+    the actual chosen target at guard-evaluation time rather than trusting this
+    potentially-stale, generation-time, account-level read.
+
+    Also requires `snapshot.randomness_readiness` positively confirmed `ready` -- combat
+    missions request VRF at launch and cannot resolve while randomness is degraded (see
+    `Snapshot.combat_only_degradation`'s and `RandomnessReadiness`'s docstrings, and
+    `guard._gate_health`'s commit-6 correction, which independently enforces this same
+    rule at guard time should this generator-level check ever be bypassed). `None`/
+    unconfirmed fails closed here exactly like everywhere else in this codebase.
+
+    Sends every combat ship built on `planet` (`_ATTACK_SHIP_IDS`) -- an all-or-nothing
+    commitment, not a partial-force calculation, the same posture `generate_deploy_
+    candidates` takes toward `_flyable_ships`, restricted to the combat subset. Carries
+    no cargo (`Resources()`) -- an Attack's cargo argument is unused for the outbound leg
+    (loot is determined server-side, at impact, by the default greedy order); nothing
+    here reserves loot capacity in advance.
+
+    Ranks targets by descending raidable-resource total (metal+crystal+deuterium) -- the
+    one concrete, quantifiable trait knowable about a target before attacking it -- and
+    picks the highest-ranked target the fleet can actually reach with its own fuel, the
+    same "first reachable target wins" shape `generate_colonize_candidates` already
+    uses."""
+    if not policy.actions.allow_combat or planet.coordinates is None or not attack_targets:
+        return []
+    if snapshot.randomness_readiness is None or not snapshot.randomness_readiness.ready:
+        return []
+    fleet = _attack_ships(planet)
+    if not fleet:
+        return []
+
+    combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
+    total_capacity = 0
+    ship_stats: list[tuple[int, int, int]] = []
+    ships: dict[int, int] = {}
+    for ship_id, count in fleet:
+        capacity, fuel_consumption, speed = calc.ship_movement_stats(ship_id, combustion, impulse, hyperspace)
+        total_capacity += capacity * count
+        ship_stats.append((fuel_consumption, count, speed))
+        ships[ship_id] = count
+    slowest_speed = min(speed for _, _, speed in ship_stats)
+
+    ranked = sorted(
+        (
+            (target_planet_id, coordinates, raidable)
+            for target_planet_id, (coordinates, raidable, allowed) in attack_targets.items()
+            if allowed is True  # None or False both excluded -- fail closed on unknown
+        ),
+        key=lambda t: t[2].metal + t[2].crystal + t[2].deuterium,
+        reverse=True,
+    )
+    for target_planet_id, coordinates, raidable in ranked:
+        distance = calc.distance(planet.coordinates, coordinates)
+        fuel = calc.mission_fuel(ship_stats, distance, slowest_speed)
+        if fuel > total_capacity:
+            continue  # fleet can't carry its own fuel this far -- try the next target
+
+        action = Action(
+            kind=ActionKind.FLEET_MISSION,
+            function="launchFleetMission",
+            planet_id=planet.planet_id,
+            mission_type=ids.FleetMissionType.ATTACK,
+            origin_planet_id=planet.planet_id,
+            target_coordinates=coordinates,
+            target_planet_id=target_planet_id,
+            ships=ships,
+            cargo=Resources(),
+            cost=_fleet_mission_cost(Resources(), fuel),
+            rationale=(
+                f"policy.actions.allow_combat=true; attacking planet {target_planet_id} "
+                f"({coordinates}, distance {distance}, raidable M{raidable.metal} "
+                f"C{raidable.crystal} D{raidable.deuterium}) with {ships} (ship id -> "
+                f"count, combat ships only, ~{fuel} fuel) -- attack-protection confirmed "
+                f"allowed as of generation time (re-checked fresh at guard time, not "
+                f"trusted from here)."
+            ),
+            expected_effect=(
+                f"a battle resolves at planet {target_planet_id} on mission arrival; the "
+                "default greedy metal->crystal->deuterium loot order applies."
+            ),
+        )
+        return [
+            Candidate(
+                action=action,
+                family="attack",
+                score=None,
+                score_basis=f"highest-raidable reachable target by declared attack-protection (planet {target_planet_id})",
+            )
+        ]
+    return []
+
+
+def select_attack_candidate(
+    snapshot: Snapshot,
+    policy: Policy,
+    target_planets: list[PlanetSnapshot],
+    *,
+    attack_targets: dict[int, tuple[str, Resources, bool | None]] | None = None,
+) -> tuple[Candidate | None, list[Candidate]]:
+    """First target planet with a selectable Attack candidate wins -- the same "generate
+    every family for this planet, first hit wins" shape every other `select_*` function
+    here uses. Mirrors `select_colonize_candidate`'s shape exactly: `attack_targets` is
+    shared across every target planet (it is leaderboard data, not planet-scoped), unlike
+    `own_planet_debris`/`foreign_debris_targets` which key by the planet they belong to."""
+    if not target_planets:
+        return None, []
+    alternatives: list[Candidate] = []
+    for planet in target_planets:
+        candidates_ = generate_attack_candidates(snapshot, policy, planet, attack_targets=attack_targets)
+        if candidates_:
+            return candidates_[0], rank_candidates(alternatives)
+    return None, []
+
+
 # --------------------------------------------------------------------------------------
 # Ranking — shared by every `select_*` function's alternatives list. Scored candidates
 # sort ascending by payback hours (cheapest first); unscored candidates are always

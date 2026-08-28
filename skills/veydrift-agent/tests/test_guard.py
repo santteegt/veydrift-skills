@@ -1,4 +1,4 @@
-"""Tests for veydrift_agent.guard — the 19-gate guardrail evaluator.
+"""Tests for veydrift_agent.guard — the 21-gate guardrail evaluator.
 
 The most important tests here are the "missing data must not vacuously pass" ones (one
 per gate where that risk is real: `address`, `abi_hash`, `affordability`, `energy`,
@@ -155,10 +155,13 @@ def verdict(report, gate: str):
 
 
 # --------------------------------------------------------------------------------------
-# All 20 gates are always present, never short-circuited.
+# All 21 gates are always present, never short-circuited.
 #
-# Was 17, then 18, then 19 (this test's own name is now three gates stale, kept for
-# git-blame continuity). Most recently, commit 2 of the launch-actions plan added
+# Was 17, then 18, then 19, then 20 (this test's own name is now four gates stale, kept
+# for git-blame continuity). Most recently, commit 6 of the launch-actions plan added
+# `attack_protection` (`_gate_attack_protection`) -- a live, target-specific re-check of
+# `/wallet/{addr}/attack-protection`, independent of whatever `candidates.
+# generate_attack_candidates` already read at generation time. Before it, commit 2 added
 # `fleet_slots` (`_gate_fleet_slots`) -- a re-derivation of the contract's
 # `FleetSlotLimitReached` check, independent of whatever the planner already verified.
 # Before it, this change added the `game_paused` gate (`_gate_game_paused`) as the
@@ -168,19 +171,20 @@ def verdict(report, gate: str):
 # `_gate_mission_type` and `_ALLOWED_MISSION_TYPES`. Each of these is the same situation
 # this test's own comment already described: a new *mandatory* gate necessarily changes
 # the fixed-length enumeration this test pins, and there is no way to add a gate without
-# that. All three are additive and PASS trivially for the routine build action used
-# here (see below), so this is the only place their addition is visible in a
-# pre-existing test.
+# that. All four are additive and PASS trivially for the routine build action used here
+# (see below), so this is the only place their addition is visible in a pre-existing
+# test.
 # --------------------------------------------------------------------------------------
 
 
 def test_all_nineteen_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 20
+    assert report.total == 21
     gates = {v.gate for v in report.verdicts}
     assert gates == {
-        "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "address", "abi_hash", "health",
+        "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "attack_protection", "address",
+        "abi_hash", "health",
         "game_paused", "index_lag", "affordability", "energy", "storage_overflow", "fields", "reserve",
         "gas", "eth_floor", "value_ceiling", "idempotency", "revert_streak",
     }
@@ -400,6 +404,45 @@ def test_mission_type_still_blocks_non_attack_combat_types_even_with_allow_comba
         action = make_fleet_action(mission_type=mt)
         report = evaluate(action, make_snapshot(), policy)
         assert verdict(report, "mission_type").status is GuardStatus.BLOCK, mt
+
+
+# --------------------------------------------------------------------------------------
+# attack_protection — new gate, commit 6 of the launch-actions plan. Live,
+# target-specific re-check of /wallet/{addr}/attack-protection, independent of whatever
+# candidates.generate_attack_candidates already read at generation time. Only relevant to
+# an Attack launchFleetMission action; every other action PASSes trivially.
+# --------------------------------------------------------------------------------------
+
+
+def test_attack_protection_passes_trivially_for_a_non_attack_action():
+    for action in (make_build_action(), make_fleet_action(mission_type=ids.FleetMissionType.TRANSPORT)):
+        report = evaluate(action, make_snapshot(), make_policy(), attack_protection_allowed=None)
+        assert verdict(report, "attack_protection").status is GuardStatus.PASS
+
+
+def test_attack_protection_blocks_when_unknown_never_passes_vacuously():
+    """`attack_protection_allowed=None` -- a fetch failure, an unresolvable target, or an
+    unparseable response -- must BLOCK, never be treated as allowed (AGENTS.md §5)."""
+    action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_snapshot(), policy, attack_protection_allowed=None)
+    v = verdict(report, "attack_protection")
+    assert v.status is GuardStatus.BLOCK
+    assert "unverifiable" in v.detail.lower() or "could not" in v.detail.lower()
+
+
+def test_attack_protection_blocks_when_the_live_check_says_not_allowed():
+    action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_snapshot(), policy, attack_protection_allowed=False)
+    assert verdict(report, "attack_protection").status is GuardStatus.BLOCK
+
+
+def test_attack_protection_passes_when_the_live_check_says_allowed():
+    action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_snapshot(), policy, attack_protection_allowed=True)
+    assert verdict(report, "attack_protection").status is GuardStatus.PASS
 
 
 # --------------------------------------------------------------------------------------
@@ -1135,6 +1178,47 @@ def test_health_passes_on_confirmed_combat_only_degradation():
     )
     report = evaluate(make_build_action(), snapshot, make_policy())
     assert verdict(report, "health").status is GuardStatus.PASS
+
+
+def test_health_withdraws_the_combat_only_exception_specifically_for_an_attack_action():
+    """Commit 6 of the launch-actions plan: the exact same confirmed combat-only
+    degradation `test_health_passes_on_confirmed_combat_only_degradation` shows PASSing
+    for a non-combat action must BLOCK for an Attack action -- randomness readiness is
+    the one subsystem an Attack actually depends on (VRF at launch), so the exception
+    that's correctly irrelevant to a build action is exactly the wrong thing to apply
+    here."""
+    snapshot = make_snapshot(
+        health_ok=False,
+        readiness_ready=True,
+        degradation_reasons=[],
+        randomness_readiness=RandomnessReadiness(ready=False, reasons=["randomness safety check unavailable"]),
+    )
+    attack_action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
+    report = evaluate(attack_action, snapshot, make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True)))
+    v = verdict(report, "health")
+    assert v.status is GuardStatus.BLOCK
+    assert "combat" in v.detail.lower()
+
+
+def test_health_still_passes_the_exception_for_every_non_combat_fleet_mission():
+    """The commit-6 correction is scoped to Attack specifically -- a non-combat
+    launchFleetMission action (Transport/Deploy/Colonize/Harvest) still gets the
+    exception, unchanged."""
+    snapshot = make_snapshot(
+        health_ok=False,
+        readiness_ready=True,
+        degradation_reasons=[],
+        randomness_readiness=RandomnessReadiness(ready=False, reasons=["randomness safety check unavailable"]),
+    )
+    for mt in (
+        ids.FleetMissionType.TRANSPORT,
+        ids.FleetMissionType.DEPLOY,
+        ids.FleetMissionType.COLONIZE,
+        ids.FleetMissionType.HARVEST,
+    ):
+        action = make_fleet_action(mission_type=mt)
+        report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR))
+        assert verdict(report, "health").status is GuardStatus.PASS, mt
 
 
 def test_health_still_blocks_when_readiness_itself_is_not_ready():

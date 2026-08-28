@@ -138,8 +138,9 @@ change is everything downstream of that:
   `DefenseHold` remain unreachable in code at every tier, regardless of policy. The one
   exception, since correction 70 (§9, launch-actions plan commit 5, 2026-08-28): Attack
   is now conditionally in scope, gated on `policy.actions.allow_combat` at `operator`
-  tier — not planner-proposed by any rung, but launch-encodable and allowlist-permitted
-  when a human opts in. A raid-profitability model remains out of
+  tier — and, since correction 71 (commit 6, same date), planner-proposed as well, at
+  the ladder's most conservative rung (`8e:attack`), when a human opts in. A
+  raid-profitability model remains out of
   scope (`protectedResources` semantics still unconfirmed). Colonisation is **no
   longer** a non-goal, per the above. Non-combat fleet logistics (Transport/Harvest) is
   **no longer** a non-goal either, and the generators are less conservative than they
@@ -641,6 +642,31 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 >   `walletctl` — see those sections for the enforcement and encoding side of this
 >   capability.
 
+> **Correction, 2026-08-28 (launch-actions plan): the pipeline is now seven bands, not
+> five — this section's own band list above was never updated past Phase 5c's five, and
+> drifted silently through two more commits before this correction closed it.** In order:
+>
+> - **Deploy** (commit 4, correction 69 §9) folded into band 5's own logistics rung
+>   (`8c:logistics-deploy`, ranked second of four — after Transport, before local/foreign
+>   Harvest — since a declared `policy.strategy.fleet_home_planet_id` is an explicit
+>   intent signal, the same "declared beats opportunistic" precedence
+>   `building_priority` already uses elsewhere).
+> - **Band 6, Colonize** (commit 4, correction 69 §9) — `plan.py` rung `8d:colonize`
+>   (`candidates.select_colonize_candidate`), gated on `policy.strategy.colonize`.
+>   Reached only when bands 1-5 found nothing at all for any target planet — colonizing
+>   consumes a hard-to-replace Colony Ship for a permanent commitment.
+> - **Band 7, Attack** (commit 6, correction 71 §9) — `plan.py` rung `8e:attack`
+>   (`candidates.select_attack_candidate`), gated on `policy.actions.allow_combat` and,
+>   inside the generator, on `snapshot.randomness_readiness.ready`. Reached only when
+>   bands 1-6 found nothing at all — the most conservative placement in the entire
+>   ladder, more conservative even than Colonize, since committing a fleet to combat
+>   risks losing it. See correction 71 for the full detail: target selection, the new
+>   `attack_protection` guard gate, and the `combat_only_degradation` health-gate
+>   correction it applies.
+>
+> Both new corrections are summarised here rather than re-explained in full; §9's own
+> entries are the source of truth for exactly what each commit changed and why.
+
 ### 5.5 `vd guard` — guardrail evaluation
 
 Returns `ALLOW` / `BLOCK` / `ESCALATE` with a per-gate verdict list. **Every gate is evaluated and
@@ -650,7 +676,8 @@ reported**, never short-circuited — the full verdict list is the audit artifac
 | --- | --- |
 | `killswitch` | `$VEYDRIFT_HOME/KILLSWITCH` absent |
 | `tier` | action's function ∈ tier's allowed set |
-| `mission_type` | (Phase 5c, 2026-08-17) for `launchFleetMission` only: `Action.mission_type` ∈ the allowed set {Transport, Deploy, Colonize, Harvest} — default-deny, `mission_type is None` **BLOCK**s (never "nothing to check"); mirrors `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES` exactly, independent of and in addition to `tier` |
+| `mission_type` | (Phase 5c, 2026-08-17) for `launchFleetMission` only: `Action.mission_type` ∈ the allowed set {Transport, Deploy, Colonize, Harvest} unconditionally, **plus Attack when `policy.actions.allow_combat=true`** (commit 5, correction 70) — default-deny, `mission_type is None` **BLOCK**s (never "nothing to check"); mirrors `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES`/`COMBAT_ALLOWED_MISSION_TYPES` exactly, independent of and in addition to `tier` |
+| `attack_protection` | (commit 6, correction 71) for an Attack `launchFleetMission` only: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — `None`/unknown or `false` **BLOCK**s, only `true` **PASS**es |
 | `prerequisites` | proposed entity's on-chain requirements (`techtree.py`) are met on the target planet — a level the snapshot didn't report is treated as unmet, never assumed high enough; also enforces shield-dome/missile-slot caps |
 | `address` | destination ∈ **live** `/runtime-config` address set |
 | `abi_hash` | live `deploymentAbiHash` == pinned → else **BLOCK all writes** |
@@ -1772,6 +1799,78 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     independently — unconditional and combat-gated — rather than one set each) and
     `skills/veydrift-wallet/tests/policy.test.ts`'s new `resolveAllowCombat` suite plus
     `tests/allowlist.test.ts`'s new "mission type 3 (Attack)" block.
+
+71. **New, 2026-08-28 (launch-actions plan, commit 6).** Attack becomes
+    planner-reachable — `candidates.generate_attack_candidates`/`select_attack_candidate`,
+    gated on `policy.actions.allow_combat` (the same flag correction 70 made a real,
+    checked gate) and, inside the generator itself, on
+    `snapshot.randomness_readiness.ready` (combat missions request VRF at launch and
+    cannot resolve while randomness is degraded). New ladder rung `8e:attack` — the most
+    conservative placement in the entire ladder, deliberately more conservative even than
+    Colonize's `8d`: reached only when every other band, Colonize included, found nothing
+    at all for any target planet, since committing a fleet to combat risks losing it
+    (Colonize's Colony Ship has a single deterministic outcome by comparison).
+
+    Uses `launchFleetMission(..., mission_type=Attack, ...)` directly, not the
+    `launchAttackMission` wrapper — both dispatch through the identical
+    `_launchFleetMission` path on the deployed contract, so this reuses every existing
+    encoder/fleet-tuple/mission-type-gate untouched, at the cost of only ever using the
+    contract's default greedy metal→crystal→deuterium loot order
+    (`launchAttackMission`'s own `LootRatio` argument is out of scope, a documented,
+    deliberate simplification, not an oversight). Sends every combat-capable ship built
+    on the origin planet (`_ATTACK_SHIP_IDS` — Light/Heavy Fighter, Cruiser, Battleship,
+    Bomber, Destroyer, Deathstar, Battlecruiser, Reaper; deliberately excludes haulers,
+    Recycler, Colony Ship, Pathfinder, the same "one ship type, one role" discipline
+    `_HAULER_SHIP_IDS` already established for Transport) — an all-or-nothing
+    commitment, not a partial-force calculation.
+
+    **Target selection is two layers, not one.** `tick._attack_targets` reads
+    `/highscores?category=economy&includeAttackProtection=true&currentWallet=<own
+    wallet>` for candidate rows — `currentWallet` is what makes each row's
+    `attackProtection` block populate at all (confirmed live 2026-08-28: omitted, that
+    field is `null` on every row). That row-level `attackProtection.allowed` is an
+    ACCOUNT-level pre-check (score protection + same-alliance, computed without a
+    specific `targetPlanetId`) — used by `generate_attack_candidates` only as a
+    generation-time courtesy filter (a `None`/unknown or `false` value excludes the
+    target entirely, never treated as permitted). The real enforcement is a **new,
+    21st guard gate, `attack_protection`** (`guard._gate_attack_protection`):
+    `tick._attack_protection_allowed` re-fetches `/wallet/{addr}/attack-protection?
+    targetPlanetId=N` fresh, for the SPECIFIC resolved target, at guard-evaluation time
+    — never trusting the earlier, coarser, potentially-stale highscores read. Fails
+    closed exactly like every other live-data gate in this codebase: `None` (fetch
+    failure, unresolvable target, non-boolean response) BLOCKs, `false` BLOCKs, only
+    `true` PASSes. `VeydriftAntiRaidPrimitives.sol` re-evaluates protection again at
+    IMPACT, not at launch, so even this fresh guard-time read is a best-effort
+    pre-flight check, not a guarantee — a target that becomes protected mid-flight still
+    bounces the fleet home with no battle, a wasted round trip rather than a wasted gas
+    or corrupted state.
+
+    **`guard._gate_health`'s commit-5-deferred correction is applied here.**
+    `Snapshot.combat_only_degradation()`'s exception (a `/health` `ok:false` caused
+    solely by degraded randomness readiness PASSes rather than BLOCKs) is now withdrawn
+    specifically for a combat (Attack) action — `_gate_health` takes `action` as a
+    parameter and BLOCKs an Attack under that exact degradation, while every non-combat
+    action still gets the exception unchanged. Belt and suspenders with the
+    generator-level `randomness_readiness.ready` precondition above: the generator check
+    keeps a degraded-randomness tick from proposing Attack in the first place, the
+    guard-time check is what actually enforces it should that generator check ever be
+    bypassed (e.g. a manual `vd tick --action` override).
+
+    No changes to `skills/veydrift-wallet` were needed for this commit — Attack was
+    already allowlist-permitted and mission-type-gated as of commit 5;
+    attack-protection is a game-rule legality concern the Python side owns end to end,
+    not a contract-selector/tier/mission-type concern the wallet engine's independent
+    re-check exists for.
+
+    New tests: `tests/test_guard.py`'s `attack_protection` block (4 tests: passes
+    trivially for a non-Attack action, BLOCKs on `None`/unknown, BLOCKs on `false`,
+    PASSes on `true`) and its `health` block's 2 new tests (withdraws the exception for
+    an Attack action, still applies it to every non-combat fleet mission type);
+    `tests/test_candidates.py`'s ~14-test `generate_attack_candidates`/
+    `select_attack_candidate` block; `tests/test_tick.py`'s `_attack_targets`/
+    `_attack_protection_allowed` unit tests plus `_run_tick` wiring tests (fetches
+    `attack_targets` only when `allow_combat` is true, fetches
+    `attack_protection_allowed` only for an actual Attack proposal).
 
 ---
 

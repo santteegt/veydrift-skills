@@ -373,9 +373,13 @@ check, not a reason-text allowlist) and `read._recover_health_body()` (narrow,
 both proceed past this specific, verified-safe condition instead of blocking
 indefinitely. **Correction, 2026-08-28 (launch-actions plan, commit 5):** `allow_combat`
 is no longer unconditionally ignored — it now gates the Attack mission type at both
-enforcement layers. `combat_only_degradation()`'s own exception logic is unchanged by
-that commit (no generator proposes Attack yet, so its practical effect is unchanged),
-but its premise is narrower than this paragraph states; see `veydrift-agent`'s own
+enforcement layers. **Further correction, 2026-08-28 (commit 6, same plan):**
+`combat_only_degradation()`'s own exception logic is no longer unchanged either —
+`guard._gate_health` now takes the action as a parameter and withdraws the exception
+specifically for a combat (Attack) action (which requests VRF at launch and cannot
+resolve while randomness is degraded), while every non-combat action still gets the
+exception unchanged; a `generate_attack_candidates` generator now exists too, gated on
+this same flag plus `snapshot.randomness_readiness.ready`. See `veydrift-agent`'s own
 `models.py` (`RandomnessReadiness`'s docstring) for the precise, current framing.
 Verified live end-to-end: `vd tick --dry-run`
 against the still-degraded real API now builds a full snapshot and reaches the ordinary

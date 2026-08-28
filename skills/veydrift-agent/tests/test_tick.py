@@ -395,6 +395,20 @@ def _write_policy_with_colonize(**overrides):
     return policy_path()
 
 
+def _write_policy_with_combat(**overrides):
+    """`_write_policy`, but with `actions.allow_combat` forced true (commit 6 of the
+    launch-actions plan) -- same reasoning as `_write_policy_with_colonize`: the field is
+    nested under `actions`, so `_write_policy`'s flat `policy.update` can't set it alone."""
+    policy = json.loads((Path(__file__).parent.parent / "assets" / "policy.example.json").read_text())
+    policy["actions"]["allow_combat"] = True
+    policy.update(overrides)
+    init_policy()
+    from veydrift_agent.state import policy_path
+
+    policy_path().write_text(json.dumps(policy))
+    return policy_path()
+
+
 def _write_override_action_file(tmp_path, **overrides) -> Path:
     action = dict(
         kind="build",
@@ -1562,6 +1576,240 @@ def test_run_tick_never_fetches_outgoing_colonize_count_for_a_non_colonize_actio
 
 
 # --------------------------------------------------------------------------------------
+# _attack_targets / _attack_protection_allowed (commit 6 of the launch-actions plan) --
+# revives candidates.generate_attack_candidates and supplies
+# guard._gate_attack_protection's live, target-specific re-check, respectively.
+# --------------------------------------------------------------------------------------
+
+
+def _highscores_response(*rows: dict) -> dict:
+    return {"rankings": {"economy": list(rows), "total": [], "military": []}}
+
+
+def _highscores_row(**overrides) -> dict:
+    base = {
+        "wallet": "0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1",
+        "homePlanetId": "23",
+        "homePlanet": {
+            "coordinates": {"galaxy": 2, "system": 477, "position": 7},
+            "tactical": {"raidableResources": {"metal": "5908", "crystal": "2589", "deuterium": "3429"}},
+        },
+        "attackProtection": {"allowed": True, "blockedReason": None},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_attack_targets_parses_a_row(monkeypatch):
+    data = _highscores_response(_highscores_row())
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._attack_targets(WALLET)
+    assert result == {23: ("2:477:7", Resources(metal=5908, crystal=2589, deuterium=3429), True)}
+
+
+def test_attack_targets_excludes_the_wallets_own_row(monkeypatch):
+    data = _highscores_response(_highscores_row(wallet=WALLET.upper()))
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._attack_targets(WALLET)
+    assert result == {}
+
+
+def test_attack_targets_records_none_for_missing_or_non_bool_attack_protection(monkeypatch):
+    """*Unknown*, not permitted -- `generate_attack_candidates` must never treat a
+    missing/malformed attackProtection as allowed."""
+    row_missing = _highscores_row(homePlanetId="1", attackProtection=None)
+    row_non_bool = _highscores_row(homePlanetId="2", attackProtection={"allowed": "yes"})
+    data = _highscores_response(row_missing, row_non_bool)
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._attack_targets(WALLET)
+    assert result[1][2] is None
+    assert result[2][2] is None
+
+
+def test_attack_targets_records_false_when_the_live_check_denies(monkeypatch):
+    data = _highscores_response(_highscores_row(attackProtection={"allowed": False, "blockedReason": "score_protection"}))
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._attack_targets(WALLET)
+    assert result[23][2] is False
+
+
+def test_attack_targets_skips_a_row_with_no_raidable_resources(monkeypatch):
+    data = _highscores_response(
+        _highscores_row(homePlanet={"coordinates": {"galaxy": 2, "system": 477, "position": 7}, "tactical": {"raidableResources": {}}})
+    )
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._attack_targets(WALLET)
+    assert result == {}
+
+
+def test_attack_targets_degrades_to_empty_on_fetch_failure(monkeypatch):
+    def _boom(**kw):
+        raise http.VeydriftHTTPError(500, "/highscores", "boom")
+
+    monkeypatch.setattr(tick.read, "fetch_highscores", _boom)
+    assert tick._attack_targets(WALLET) == {}
+
+
+def test_attack_targets_degrades_to_empty_on_malformed_rankings(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: {"rankings": "not-a-dict"})
+    assert tick._attack_targets(WALLET) == {}
+
+
+def _attack_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=664,
+        mission_type=tick.ids.FleetMissionType.ATTACK,
+        origin_planet_id=664,
+        target_coordinates="2:477:7",
+        target_planet_id=23,
+        ships={tick.ids.Ship.LIGHT_FIGHTER: 10},
+        rule="8e:attack",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def test_attack_protection_allowed_uses_target_planet_id_directly(monkeypatch):
+    action = _attack_action()
+    calls = []
+
+    def _fetch(wallet, target_planet_id, **kw):
+        calls.append((wallet, target_planet_id))
+        return {"allowed": True}
+
+    monkeypatch.setattr(tick.read, "fetch_attack_protection", _fetch)
+    result = tick._attack_protection_allowed(WALLET, action, _healthy_snapshot())
+    assert result is True
+    assert calls == [(WALLET, 23)]
+
+
+def test_attack_protection_allowed_falls_back_to_resolving_target_coordinates(monkeypatch):
+    action = _attack_action(target_planet_id=None, target_coordinates="7:181:14")  # matches _healthy_snapshot's own planet
+    monkeypatch.setattr(tick.read, "fetch_attack_protection", lambda wallet, target_planet_id, **kw: {"allowed": False})
+    result = tick._attack_protection_allowed(WALLET, action, _healthy_snapshot())
+    assert result is False
+
+
+def test_attack_protection_allowed_none_when_target_is_unresolvable():
+    action = _attack_action(target_planet_id=None, target_coordinates=None)
+    result = tick._attack_protection_allowed(WALLET, action, _healthy_snapshot())
+    assert result is None
+
+
+def test_attack_protection_allowed_none_on_fetch_failure(monkeypatch):
+    def _boom(wallet, target_planet_id, **kw):
+        raise http.VeydriftHTTPError(500, "/attack-protection", "boom")
+
+    monkeypatch.setattr(tick.read, "fetch_attack_protection", _boom)
+    result = tick._attack_protection_allowed(WALLET, _attack_action(), _healthy_snapshot())
+    assert result is None
+
+
+def test_attack_protection_allowed_none_when_response_lacks_a_bool_allowed(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_attack_protection", lambda wallet, target_planet_id, **kw: {"blockedReason": "score_protection"})
+    result = tick._attack_protection_allowed(WALLET, _attack_action(), _healthy_snapshot())
+    assert result is None
+
+
+def test_run_tick_wires_attack_targets_into_the_planner(isolated_home, monkeypatch):
+    """End-to-end: `_run_tick` must actually pass what `_attack_targets` finds into
+    `plan_next_action`'s `attack_targets` kwarg -- and only fetch it at all when
+    `policy.actions.allow_combat` is true."""
+    _write_policy_with_combat()
+    targets = {23: ("2:477:7", Resources(metal=5908), True)}
+    fetch_calls = []
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_targets", lambda wallet: fetch_calls.append(1) or targets)
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    captured = {}
+
+    def _capture(snapshot, policy, **kwargs):
+        captured.update(kwargs)
+        return Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x")
+
+    monkeypatch.setattr(plan_mod, "plan_next_action", _capture)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("attack_targets") == targets
+    assert fetch_calls == [1]
+
+
+def test_run_tick_never_fetches_attack_targets_when_combat_is_disabled(isolated_home, monkeypatch):
+    _write_policy()  # actions.allow_combat defaults False
+
+    def _boom(wallet):
+        raise AssertionError("must not fetch attack targets when policy.actions.allow_combat is false")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_targets", _boom)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x"))
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+
+def test_run_tick_wires_attack_protection_allowed_into_the_guard(isolated_home, monkeypatch):
+    """End-to-end: for an actual Attack proposal, `_run_tick` must fetch
+    `_attack_protection_allowed` and pass it into `evaluate_guardrails`'s
+    `attack_protection_allowed` kwarg -- and never fetch it at all for a non-Attack
+    action."""
+    _write_policy_with_combat(tier="operator")
+    attack_action = _attack_action()
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_protection_allowed", lambda wallet, action, snapshot: True)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: attack_action)
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    captured = {}
+
+    def _capture_guard(action, snapshot, policy, agent_state, **kwargs):
+        captured.update(kwargs)
+        return guard_mod.GuardReport(decision=guard_mod.Decision.BLOCK, verdicts=[])
+
+    monkeypatch.setattr(guard_mod, "evaluate_guardrails", _capture_guard)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("attack_protection_allowed") is True
+
+
+def test_run_tick_never_fetches_attack_protection_allowed_for_a_non_attack_action(isolated_home, monkeypatch):
+    _write_policy()
+
+    def _boom(wallet, action, snapshot):
+        raise AssertionError("must not fetch attack_protection_allowed for a non-Attack action")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_protection_allowed", _boom)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+
+# --------------------------------------------------------------------------------------
 # FIX 1 — walletctl build's cost must cross the unit boundary correctly: `gas` is gas
 # *units* (~1.5e5 on Base), `estimatedCostWei` is the wei-scale figure (gas * price).
 # `_walletctl_build` must parse `gas_cost_wei` from `estimatedCostWei`, never from `gas`
@@ -2226,7 +2474,7 @@ def _allow_guard(monkeypatch):
     """Force guard.evaluate_guardrails to ALLOW, the same trick
     test_dry_run_at_tier1_never_sends_even_when_guard_would_allow already uses -- lets
     these tests isolate the require_confirmation branch without needing every one of the
-    20 gates to genuinely pass."""
+    21 gates to genuinely pass."""
     import veydrift_agent.guard as guard_module
 
     monkeypatch.setattr(

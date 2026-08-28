@@ -11,6 +11,84 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-08-28
+
+Launch-actions plan, commit 6: Attack becomes planner-reachable — the first combat
+mission type this codebase has ever proposed on its own. `guard.py` gains a new, 21st
+gate (`attack_protection`), and the `health` gate's commit-5-deferred correction is
+applied.
+
+### Added
+- **`candidates.generate_attack_candidates`/`select_attack_candidate`** — `FleetMissionType.
+  Attack` (3) via `launchFleetMission(..., mission_type=Attack, ...)` directly (not the
+  `launchAttackMission` wrapper — both dispatch through the identical
+  `_launchFleetMission` path, so this reuses every existing encoder/fleet-tuple/
+  mission-type-gate untouched, at the cost of only ever using the contract's default
+  greedy metal->crystal->deuterium loot order). Gated on `policy.actions.allow_combat`
+  and, inside the generator, `snapshot.randomness_readiness.ready` (combat missions
+  request VRF at launch and cannot resolve while randomness is degraded). Sends every
+  combat-capable ship built on the origin planet (`_ATTACK_SHIP_IDS` — the nine combat
+  ships; deliberately excludes haulers, Recycler, Colony Ship, Pathfinder, the same
+  "one ship type, one role" discipline `_HAULER_SHIP_IDS` already established for
+  Transport). Ranks candidate targets by descending raidable-resource total, picking the
+  highest-ranked one the fleet can reach with its own fuel.
+- **New ladder rung `8e:attack`** (`plan.py`, band 7) — the most conservative placement
+  in the entire ladder, more conservative even than Colonize's `8d`: reached only when
+  every other band, Colonize included, found nothing at all for any target planet, since
+  committing a fleet to combat risks losing it.
+- **`tick._attack_targets`** — reads `/highscores?category=economy&includeAttackProtection=
+  true&currentWallet=<own wallet>` (`read.fetch_highscores`, new). Each row's embedded
+  `attackProtection.allowed` (an ACCOUNT-level pre-check, no `targetPlanetId`) is used as
+  a generation-time courtesy filter only — `None`/unknown or `false` excludes the target
+  entirely, fail-closed from the fetch through the generator. Only fetched at all when
+  `policy.actions.allow_combat` is true.
+- **`tick._attack_protection_allowed`** — the real enforcement: re-fetches
+  `/wallet/{addr}/attack-protection?targetPlanetId=N` (`read.fetch_attack_protection`,
+  new) fresh, for the SPECIFIC resolved target, at guard-evaluation time — never trusting
+  the earlier, coarser `_attack_targets` read. Feeds the new guard gate below. Only
+  fetched for an actual Attack proposal.
+- **`guard._gate_attack_protection`** — new, 21st gate. `None` (fetch failure,
+  unresolvable target, non-boolean response) BLOCKs; `False` BLOCKs; only `True` PASSes.
+  PASSes trivially for every non-Attack action.
+
+### Changed
+- **`guard._gate_health`** now takes `action` as a parameter and withdraws the
+  `combat_only_degradation()` exception specifically for a combat (Attack) action —
+  applying the correction commit 5 deferred (`RandomnessReadiness`'s docstring said so
+  explicitly). Every non-combat action still gets the exception, unchanged. Belt and
+  suspenders with `generate_attack_candidates`'s own generator-level precondition: the
+  generator check keeps a degraded-randomness tick from proposing Attack at all, this
+  gate is what actually enforces it should that generator check ever be bypassed (e.g. a
+  manual `vd tick --action` override).
+- `ActionsCfg.allow_combat`, `RandomnessReadiness`, `Action.mission_type`/
+  `.target_planet_id`/`.randomness_request_id` docstrings corrected (`models.py`) — no
+  longer describe Attack as un-planner-reachable.
+
+No changes to `veydrift-wallet` were needed for this commit — Attack was already
+allowlist-permitted and mission-type-gated as of `veydrift-wallet` 0.6.0 (this package's
+1.11.0); attack-protection is a game-rule legality concern this package owns end to end,
+not a contract-selector/tier/mission-type concern the wallet engine's independent
+re-check exists for.
+
+New tests: `tests/test_guard.py`'s `attack_protection` block (4 tests) plus 2 new
+`health` tests (withdraws the exception for Attack, still applies it to every non-combat
+fleet mission type); `tests/test_candidates.py`'s 14-test `generate_attack_candidates`/
+`select_attack_candidate` block; `tests/test_tick.py`'s `_attack_targets`/
+`_attack_protection_allowed` unit tests (14) plus 4 `_run_tick` wiring tests. 652 passed
+(618 baseline + 34 new).
+
+Docs: `docs/SPEC.md` correction 71 and its §5.4/§5.5/§1 updates, `docs/COVERAGE.md`,
+`docs/RESEARCH-ADDENDUM.md`, `docs/PLAYER-GUIDE.md`/`.html`,
+`docs/TECHNICAL-WALKTHROUGH.md`/`.html`, `README.md`, `AGENTS.md`, `references/
+entity-ids.md`, `references/guardrails.md` (new gate row + explanatory section, gate
+count 20 -> 21), `references/api-routes.md` (new §3.21 for `/wallet/{addr}/
+attack-protection`, `/highscores`'s `category` non-filtering behavior documented),
+`references/manual-action-override.md`, `SKILL.md` (ladder section was stale since
+before this commit — corrected to the full current seven-band pipeline), plus every
+other narrative doc's stale "no generator proposes Attack" / "not planner-reachable"
+claim. Bumped 1.11.0 -> 1.12.0 (additive, minor) per this skill's own CHANGELOG.md
+convention.
+
 ## [1.11.0] - 2026-08-28
 
 Launch-actions plan, commit 5: `policy.actions.allow_combat` becomes a real,

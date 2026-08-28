@@ -28,6 +28,7 @@ from veydrift_agent.models import (
     Policy,
     QueueEntry,
     QueueKind,
+    RandomnessReadiness,
     Resources,
     Snapshot,
     StorageCfg,
@@ -2248,4 +2249,181 @@ def test_select_colonize_candidate_returns_none_with_default_policy():
         snapshot, policy, snapshot.planets, colonize_targets=[("7:181:20", 12_640)]
     )
     assert winner is None
+    assert alternatives == []
+
+
+# --------------------------------------------------------------------------------------
+# generate_attack_candidates / select_attack_candidate (commit 6 of the launch-actions
+# plan, 2026-08-28): the first generator this codebase has ever produced for a combat
+# mission type. Gated on policy.actions.allow_combat + snapshot.randomness_readiness.ready.
+# --------------------------------------------------------------------------------------
+
+
+def _attack_fleet_planet(**overrides) -> PlanetSnapshot:
+    base = dict(
+        planet_id=664,
+        coordinates="7:181:14",
+        resources_as_of_now=Resources(),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        buildings=[],
+        ships=[Entity(id=ids.Ship.LIGHT_FIGHTER, name="Light Fighter", count=10, cost=Resources(metal=3_000, crystal=1_000))],
+        defenses=[],
+    )
+    base.update(overrides)
+    return PlanetSnapshot(**base)
+
+
+def _attack_snapshot(*, planet=None, randomness_ready=True) -> Snapshot:
+    return Snapshot(
+        taken_at="2026-08-28T12:00:00Z",
+        wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        health_ok=True,
+        randomness_readiness=RandomnessReadiness(ready=randomness_ready),
+        planets=[planet or _attack_fleet_planet()],
+    )
+
+
+#: (coordinates, raidable, allowed) -- the exact tuple shape tick._attack_targets builds.
+_A_TARGET = {23: ("7:181:20", Resources(metal=5_000, crystal=2_000, deuterium=1_000), True)}
+
+
+def test_generate_attack_candidates_empty_by_default_policy():
+    snapshot = _attack_snapshot()
+    policy = make_policy(planets=[664])  # actions.allow_combat defaults False
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=_A_TARGET)
+    assert result == []
+
+
+def test_generate_attack_candidates_empty_without_combat_ships():
+    snapshot = _attack_snapshot(planet=_attack_fleet_planet(ships=[]))
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=_A_TARGET)
+    assert result == []
+
+
+def test_generate_attack_candidates_empty_without_known_targets():
+    """`attack_targets` unset (the default) means no target is known, not that there is
+    none -- must never fabricate an attack target out of absent data."""
+    snapshot = _attack_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    assert candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0]) == []
+    assert candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets={}) == []
+
+
+def test_generate_attack_candidates_empty_when_randomness_readiness_is_not_ready():
+    """Combat missions request VRF at launch; a degraded randomness subsystem must never
+    let this generator propose an Attack."""
+    snapshot = _attack_snapshot(randomness_ready=False)
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=_A_TARGET)
+    assert result == []
+
+
+def test_generate_attack_candidates_empty_when_randomness_readiness_is_unconfirmed():
+    snapshot = _attack_snapshot()
+    snapshot = snapshot.model_copy(update={"randomness_readiness": None})
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=_A_TARGET)
+    assert result == []
+
+
+def test_generate_attack_candidates_excludes_a_target_whose_protection_is_unknown_or_denied():
+    """A `None`/unknown or `False` attackProtection is excluded entirely -- fail-closed
+    from the fetch all the way through the generator, not just at the guard gate."""
+    snapshot = _attack_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {
+        1: ("7:181:20", Resources(metal=5_000), None),
+        2: ("7:181:21", Resources(metal=5_000), False),
+    }
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=targets)
+    assert result == []
+
+
+def test_generate_attack_candidates_produces_an_attack_action():
+    snapshot = _attack_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=_A_TARGET)
+    assert len(result) == 1
+    winner = result[0]
+    assert winner.family == "attack"
+    action = winner.action
+    assert action.kind == ActionKind.FLEET_MISSION
+    assert action.function == "launchFleetMission"
+    assert action.mission_type == ids.FleetMissionType.ATTACK
+    assert action.origin_planet_id == 664
+    assert action.target_coordinates == "7:181:20"
+    assert action.target_planet_id == 23
+    assert action.ships == {ids.Ship.LIGHT_FIGHTER: 10}
+    assert action.cargo == Resources()
+    assert action.cost.metal == 0 and action.cost.crystal == 0  # fuel-only spend
+    assert action.cost.deuterium > 0
+    assert action.randomness_request_id is None  # tick.py's encoder coerces this to 0
+
+
+def test_generate_attack_candidates_never_sends_haulers_or_recyclers_or_colony_ships():
+    """Only `_ATTACK_SHIP_IDS` (combat ships) are ever committed -- a planet with cargo/
+    utility ships alongside combat ships must not send the whole fleet."""
+    planet = _attack_fleet_planet(
+        ships=[
+            Entity(id=ids.Ship.LIGHT_FIGHTER, name="Light Fighter", count=5, cost=Resources(metal=3_000)),
+            Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=3, cost=Resources(metal=2_000)),
+            Entity(id=ids.Ship.RECYCLER, name="Recycler", count=2, cost=Resources(metal=10_000)),
+            Entity(id=ids.Ship.COLONY_SHIP, name="Colony Ship", count=1, cost=Resources(metal=10_000)),
+        ]
+    )
+    snapshot = _attack_snapshot(planet=planet)
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=_A_TARGET)
+    assert len(result) == 1
+    assert result[0].action.ships == {ids.Ship.LIGHT_FIGHTER: 5}
+
+
+def test_generate_attack_candidates_falls_back_to_a_reachable_target():
+    """The highest-raidable target is unreachable (fuel exceeds the fleet's own cargo
+    capacity) -- must fall back to the next-best reachable one, not fail entirely."""
+    planet = _attack_fleet_planet(coordinates="1:1:1")
+    snapshot = _attack_snapshot(planet=planet)
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {
+        1: ("9:999:255", Resources(metal=50_000), True),  # far, huge loot, unreachable
+        2: ("1:1:20", Resources(metal=1_000), True),  # near, modest loot, reachable
+    }
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=targets)
+    assert len(result) == 1
+    assert result[0].action.target_coordinates == "1:1:20"
+
+
+def test_generate_attack_candidates_picks_the_highest_raidable_reachable_target():
+    snapshot = _attack_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {
+        1: ("7:181:20", Resources(metal=1_000), True),
+        2: ("7:181:21", Resources(metal=9_000), True),
+        3: ("7:181:22", Resources(metal=5_000), True),
+    }
+    result = candidates.generate_attack_candidates(snapshot, policy, snapshot.planets[0], attack_targets=targets)
+    assert len(result) == 1
+    assert result[0].action.target_planet_id == 2
+
+
+def test_select_attack_candidate_returns_none_with_default_policy():
+    snapshot = _attack_snapshot()
+    policy = make_policy(planets=[664])
+    winner, alternatives = candidates.select_attack_candidate(
+        snapshot, policy, snapshot.planets, attack_targets=_A_TARGET
+    )
+    assert winner is None
+    assert alternatives == []
+
+
+def test_select_attack_candidate_returns_the_winner_when_enabled():
+    snapshot = _attack_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    winner, alternatives = candidates.select_attack_candidate(
+        snapshot, policy, snapshot.planets, attack_targets=_A_TARGET
+    )
+    assert winner is not None
+    assert winner.family == "attack"
     assert alternatives == []

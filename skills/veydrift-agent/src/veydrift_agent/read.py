@@ -670,6 +670,66 @@ def fetch_raid_finder_debris(*, max_age: float | None = None) -> dict[str, Any]:
     return http.fetch("/raid-finder/debris", max_age=max_age)
 
 
+def fetch_attack_protection(wallet: str, target_planet_id: int, *, max_age: float | None = None) -> dict[str, Any]:
+    """GET /wallet/{addr}/attack-protection?targetPlanetId=N, bypassing the CLI/`_emit`
+    layer -- the same raw-dict, bypass-`Snapshot` posture `fetch_raid_finder_debris`/
+    `fetch_fleet_visibility` already take. Commit 6 of the launch-actions plan. The
+    authoritative live legality oracle for `VeydriftAntiRaidPrimitives.sol`'s
+    score-protection / bashing-limit / same-alliance / defender-inactivity rules for one
+    specific (wallet, targetPlanetId) pair -- shape confirmed live: `allowed` (bool),
+    `blockedReason` (`"score_protection"` | `"bashing"` | `"not_allied"`, present only
+    when `allowed` is false), `plunderBps`, `defenderInactive`, `transportAllowed`, both
+    attacker/defender scores.
+
+    `guard._gate_attack_protection`'s caller (`tick._attack_protection_allowed`)
+    re-fetches this fresh for the actual chosen target at guard-evaluation time, never
+    trusting a generation-time read from `/highscores`'s coarser, account-level
+    `attackProtection` block (`fetch_highscores`, below) -- see that gate's own docstring
+    for why the contract's own at-impact re-evaluation makes even this fresh read a
+    best-effort pre-flight check, not a guarantee. Does NOT catch `http.VeydriftAPIError`
+    -- same contract as `fetch_raid_finder_debris`; the caller decides how to degrade.
+    Previously listed in `references/api-routes.md` §11 as undocumented-but-live and not
+    wired into `vd read` -- moved out of that section in this same commit, mirroring how
+    `/raid-finder/debris` moved out of §11 in commit 3."""
+    return http.fetch(f"/wallet/{wallet}/attack-protection", {"targetPlanetId": target_planet_id}, max_age=max_age)
+
+
+def fetch_highscores(
+    *,
+    category: str,
+    current_wallet: str,
+    include_attack_protection: bool = True,
+    page_size: int = 25,
+    page: int = 1,
+    max_age: float | None = None,
+) -> dict[str, Any]:
+    """GET /highscores?category=&currentWallet=&includeAttackProtection=&pageSize=&page=,
+    bypassing the CLI/`_emit` layer and its mandatory `--out` -- commit 6 of the
+    launch-actions plan. §3.18's ~2.2 MB warning is for the *default* `pageSize=50`
+    fetched across all 8 categories at once; every caller of this bypass function should
+    pass a deliberately small `page_size` (`tick._attack_targets` passes 25) -- the
+    response carries all 8 categories' `rankings` regardless of the `category` query
+    param, confirmed live: passing `category=economy` did not shrink `rankings` down to a
+    single key, only `pageSize` bounds the per-category row count, so this function's
+    caller must read `rankings[category]` itself rather than expecting a pre-filtered
+    response.
+
+    `currentWallet` is what makes each row's `attackProtection` block populate at all --
+    confirmed live 2026-08-28: omitted, that field is `null` on every row.
+    `includeAttackProtection=true` is what adds the block in the first place; both must
+    be set together for `tick._attack_targets` to see anything usable. Does NOT catch
+    `http.VeydriftAPIError` -- same contract as `fetch_raid_finder_debris`; the caller
+    decides how to degrade."""
+    params: dict[str, Any] = {
+        "category": category,
+        "currentWallet": current_wallet,
+        "includeAttackProtection": include_attack_protection,
+        "pageSize": page_size,
+        "page": page,
+    }
+    return http.fetch("/highscores", params, max_age=max_age)
+
+
 def fetch_fleet_visibility(wallet: str, *, max_age: float | None = None) -> dict[str, Any]:
     """GET /wallet/{addr}/fleet-visibility, bypassing the CLI/`_emit` layer -- the same
     "raw dict, not a `models.py` type" posture `fetch_activity` already takes, and for the

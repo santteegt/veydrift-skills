@@ -1,10 +1,10 @@
-"""`vd guard` — the 19-gate guardrail evaluator (docs/SPEC.md §5.5).
+"""`vd guard` — the 21-gate guardrail evaluator (docs/SPEC.md §5.5).
 
 `evaluate_guardrails()` is the pure core: given an `Action`, the `Snapshot` it was
 planned from, the `Policy`, the persisted `AgentState`, and a handful of caller-supplied
 facts that don't live on any of those frozen/local models (live contract addresses, the
 live ABI hash, a built `UnsignedTx` + gas estimate, the wallet's ETH balance), it returns
-a `GuardReport` with **all 19 gates evaluated, never short-circuited** — the full
+a `GuardReport` with **all 21 gates evaluated, never short-circuited** — the full
 `GuardReport.verdicts` list is the audit artifact (docs/SPEC.md §5.5), so a passing tick
 is exactly as informative as a blocked one.
 
@@ -605,6 +605,52 @@ def _gate_fleet_slots(action: Action, snapshot: Snapshot) -> GuardVerdict:
     )
 
 
+def _gate_attack_protection(action: Action, *, attack_protection_allowed: bool | None) -> GuardVerdict:
+    """New gate, commit 6 of the launch-actions plan. Only relevant to an Attack
+    (`mission_type == ATTACK`) `launchFleetMission` action -- every other action PASSes
+    trivially, the same posture every other function/mission-type-scoped gate in this
+    module takes (`address`/`abi_hash`/`gas`/`eth_floor` toward `action.is_onchain()`,
+    `mission_type`'s own Colonize-only sub-checks toward `mission_type == COLONIZE`).
+
+    `/wallet/{addr}/attack-protection?targetPlanetId=N` is the authoritative live legality
+    oracle for `VeydriftAntiRaidPrimitives.sol`'s score-protection / bashing-limit /
+    same-alliance / defender-inactivity rules -- but the contract re-evaluates protection
+    at IMPACT, not at launch, so this is a best-effort pre-flight check, not a guarantee: a
+    target that becomes protected mid-flight still bounces the fleet home with no battle
+    (a wasted round trip, not a wasted gas or corrupted state). This gate's job is to catch
+    the common, already-known-blocked case cheaply before spending gas on it, not to
+    guarantee every launched Attack lands a battle.
+
+    `tick.py` fetches this live for `action`'s actual resolved target at
+    guard-evaluation time (`_attack_protection_allowed`, never at generation time --
+    `candidates.generate_attack_candidates`'s own read of the highscores-embedded,
+    coarser, ACCOUNT-level `attackProtection` is a courtesy filter only, not trusted here)
+    and passes the boolean result in, mirroring every other live-data parameter this
+    module already takes (`live_addresses`, `gas_cost_wei`, `eth_balance_wei`,
+    `outgoing_colonize_count`).
+
+    Fails closed: `attack_protection_allowed is None` (fetch failed, target
+    unresolvable, or the response didn't parse a boolean `allowed`) BLOCKs -- "couldn't
+    check" is never "allowed" (AGENTS.md §5). `False` BLOCKs. Only `True` PASSes."""
+    if action.function != "launchFleetMission" or action.mission_type != ids.FleetMissionType.ATTACK:
+        return _verdict("attack_protection", GuardStatus.PASS, "action is not an Attack fleet mission")
+    if attack_protection_allowed is None:
+        return _verdict(
+            "attack_protection",
+            GuardStatus.BLOCK,
+            "could not fetch/verify /wallet/{addr}/attack-protection for this target -- "
+            "an unverifiable check is never treated as allowed",
+        )
+    if not attack_protection_allowed:
+        return _verdict(
+            "attack_protection",
+            GuardStatus.BLOCK,
+            "attack-protection reports this target is not currently attackable (score "
+            "protection, bashing limit, same-alliance, or defender-inactivity rule)",
+        )
+    return _verdict("attack_protection", GuardStatus.PASS, "attack-protection reports this target is currently attackable")
+
+
 def _gate_prerequisites(action: Action, snapshot: Snapshot) -> GuardVerdict:
     """New gate (docs/SPEC.md §5.5), slotted immediately after `tier` and before
     `address`. Independently re-derives the planet's building/technology level vectors
@@ -692,20 +738,40 @@ def _gate_abi_hash(action: Action, snapshot: Snapshot) -> GuardVerdict:
     return _verdict("abi_hash", GuardStatus.PASS, "live deploymentAbiHash matches the pinned commit")
 
 
-def _gate_health(snapshot: Snapshot) -> GuardVerdict:
+def _gate_health(action: Action, snapshot: Snapshot) -> GuardVerdict:
     """`plan.py`'s rung 1 is the first line of defense for the same distinction below --
     this is the second, independent one (same two-layer shape as `_gate_game_paused`):
-    a proposal reaching `guard.py` must still be re-checked, not trusted from upstream."""
+    a proposal reaching `guard.py` must still be re-checked, not trusted from upstream.
+
+    **`action` parameter, commit 6 of the launch-actions plan**: `combat_only_degradation`'s
+    exception used to be unconditional -- reasoned about when combat was unconditionally
+    unreachable regardless of policy (`RandomnessReadiness`'s old docstring). That premise
+    stopped holding in commit 5 (`allow_combat` became a real gate for Attack), and this is
+    the commit that withdraws the exception specifically for a combat action: a
+    randomness-degraded `/health` is exactly the state that would make an Attack request
+    VRF it cannot get, so an Attack action must BLOCK here even when every other subsystem
+    is confirmed healthy. Every non-combat action keeps the exception unchanged -- the
+    degradation genuinely is irrelevant to a `startBuildingUpgrade`/Transport/Colonize/etc,
+    which never touches randomness at all."""
     if snapshot.health_ok:
         return _verdict("health", GuardStatus.PASS, "/health ok and ready")
-    if snapshot.combat_only_degradation():
+    is_combat_action = action.function == "launchFleetMission" and action.mission_type in _COMBAT_MISSION_TYPES
+    if not is_combat_action and snapshot.combat_only_degradation():
         return _verdict(
             "health",
             GuardStatus.PASS,
             "/health reported ok=false, but positively confirmed as a randomness/combat-"
             "readiness-only degradation (readiness.ready=true, no other degradation "
-            "reasons, game not paused) -- irrelevant to this codebase, which never "
-            "proposes combat regardless of policy",
+            "reasons, game not paused) -- irrelevant to this non-combat action",
+        )
+    if is_combat_action and snapshot.combat_only_degradation():
+        return _verdict(
+            "health",
+            GuardStatus.BLOCK,
+            "/health reported ok=false, positively confirmed as a randomness/combat-"
+            "readiness-only degradation -- irrelevant to a non-combat action, but this IS "
+            "a combat (Attack) action, which requests randomness at launch and cannot "
+            "resolve while randomness readiness is degraded; the exception does not apply here",
         )
     return _verdict("health", GuardStatus.BLOCK, "/health reported not ok / not ready")
 
@@ -1181,7 +1247,7 @@ def _gate_revert_streak(action: Action, agent_state: AgentState, policy: Policy)
 
 
 # --------------------------------------------------------------------------------------
-# The full 20-gate evaluation.
+# The full 21-gate evaluation.
 # --------------------------------------------------------------------------------------
 
 
@@ -1197,9 +1263,10 @@ def evaluate_guardrails(
     gas_cost_wei: int | None = None,
     eth_balance_wei: int | None = None,
     outgoing_colonize_count: int | None = None,
+    attack_protection_allowed: bool | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 20 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 21 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -1209,6 +1276,9 @@ def evaluate_guardrails(
     missions, only meaningful for a Colonize action -- see `_colony_cap_violation`'s
     docstring for why this closes an in-flight-mission blind spot the cap check
     otherwise has, and why `None` fails closed rather than assuming zero.
+    `attack_protection_allowed` (commit 6) is `tick.py`'s live, target-specific
+    `/wallet/{addr}/attack-protection` re-check, only meaningful for an Attack action --
+    see `_gate_attack_protection`'s docstring for why `None` fails closed the same way.
     """
     from datetime import UTC
     from datetime import datetime as _datetime
@@ -1221,9 +1291,10 @@ def evaluate_guardrails(
         _gate_mission_type(action, snapshot, policy, outgoing_colonize_count=outgoing_colonize_count),
         _gate_prerequisites(action, snapshot),
         _gate_fleet_slots(action, snapshot),
+        _gate_attack_protection(action, attack_protection_allowed=attack_protection_allowed),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),
         _gate_abi_hash(action, snapshot),
-        _gate_health(snapshot),
+        _gate_health(action, snapshot),
         _gate_game_paused(snapshot),
         _gate_index_lag(policy, agent_state, now=now),
         _gate_affordability(action, snapshot),

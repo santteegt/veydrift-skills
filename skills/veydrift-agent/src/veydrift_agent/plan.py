@@ -14,10 +14,10 @@ Ladder, first match wins, exactly as docs/SPEC.md §5.4 specifies:
 2. pending tx unreconciled           -> NO-OP, reconcile first
 3. mission Resolving > 60s           -> resolveFleetMission   (permissionless, free)
 4. incoming hostile fleet            -> ESCALATE, no proposal (fleet-visibility.incoming)
-5-9. a six-band candidate pipeline (see below) -- deadline-driven storage overflow,
+5-9. a seven-band candidate pipeline (see below) -- deadline-driven storage overflow,
      then economically-scored building, then policy-declared research/ships/defense,
      then a locked declared target's unlock-chain step, then non-combat fleet
-     logistics, then Colonize, else an explicit NO-OP.
+     logistics, then Colonize, then Attack, else an explicit NO-OP.
 ```
 
 **Rungs 0-4 are vetoes — safety, not strategy — and are untouched by Phase 2 of the
@@ -39,7 +39,7 @@ module now only:
    (`AlternativeNote`, capped at `policy.strategy.max_alternatives`) — informational
    only, never a `Decision` input, never re-derived by `guard.py`.
 
-**Six bands, in order** (docs/SPEC.md §5.4):
+**Seven bands, in order** (docs/SPEC.md §5.4):
 
 1. **Deadline-driven** — storage overflow (`candidates.select_storage_candidate`). A
    loss-avoidance deadline, not an ROI question; keeps precedence over everything else
@@ -76,11 +76,17 @@ module now only:
    policy-declared target, or the storage-overflow deadline.
 6. **Colonize** (commit 4 of the launch-actions plan, rung `8d`) —
    `candidates.select_colonize_candidate`, gated on `policy.strategy.colonize` (default
-   `false`). The most conservative placement in the ladder, deliberately: colonizing
-   consumes an already-built Colony Ship for a permanent, high-stakes commitment, so it
-   is reached only after every other band has found nothing at all for any target
-   planet — it can never preempt routine economic activity, a policy-declared target, the
-   unlock-chain rung, or ordinary fleet logistics.
+   `false`). Consumes an already-built Colony Ship for a permanent, high-stakes
+   commitment, so it is reached only after every other prior band has found nothing at
+   all for any target planet — it can never preempt routine economic activity, a
+   policy-declared target, the unlock-chain rung, or ordinary fleet logistics.
+7. **Attack** (commit 6 of the launch-actions plan, rung `8e`) —
+   `candidates.select_attack_candidate`, gated on `policy.actions.allow_combat` (default
+   `false`) and, inside the generator itself, on `snapshot.randomness_readiness.ready`.
+   The most conservative placement in the entire ladder, deliberately more conservative
+   even than Colonize: committing a fleet to combat risks losing it, unlike Colonize's
+   single deterministic-outcome Colony Ship, so this is reached only after every other
+   band — including Colonize — has found nothing at all for any target planet.
 
 **The two invariants that matter most, both derived from planet traits, never
 hardcoded** (unchanged by Phase 2 — see `candidates.py` for where the logic now lives):
@@ -195,18 +201,19 @@ def plan_next_action(
     own_planet_debris: dict[int, Resources] | None = None,
     foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
     colonize_targets: list[tuple[str, int]] | None = None,
+    attack_targets: dict[int, tuple[str, Resources, bool | None]] | None = None,
 ) -> Action:
     """Decide exactly one `Action` from `snapshot` + `policy`. First matching rung wins;
     `Action.rule` records which one fired (e.g. `"5:storage-overflow-spend"`) so the log
     is auditable without re-running the planner (docs/SPEC.md §5.4).
 
     `killswitch_active`, `pending_tx_unreconciled`, `resolvable_mission_ids`,
-    `own_planet_debris`, `foreign_debris_targets` and `colonize_targets` are not on
-    `Snapshot` (that model is frozen and owned by WP1) — they are `tick.py`'s
-    responsibility to discover (killswitch file, `agent-state.json`, `/missions`,
-    `/universe/galaxies/{g}/systems/{s}`, `/raid-finder/debris`) and pass in. Defaults
-    are the safe "nothing pending" state, so calling this with just a snapshot and
-    policy is a legitimate offline planning call.
+    `own_planet_debris`, `foreign_debris_targets`, `colonize_targets` and
+    `attack_targets` are not on `Snapshot` (that model is frozen and owned by WP1) — they
+    are `tick.py`'s responsibility to discover (killswitch file, `agent-state.json`,
+    `/missions`, `/universe/galaxies/{g}/systems/{s}`, `/raid-finder/debris`,
+    `/highscores`) and pass in. Defaults are the safe "nothing pending" state, so calling
+    this with just a snapshot and policy is a legitimate offline planning call.
     """
     if killswitch_active:
         return Action(kind=ActionKind.HALT, rule="0:killswitch", rationale="KILLSWITCH file present; halting before any further action.")
@@ -222,9 +229,16 @@ def plan_next_action(
             ),
         )
     # Either health_ok, or a positively confirmed randomness/combat-only degradation
-    # (Snapshot.combat_only_degradation) -- everything this codebase can act on is
-    # healthy, and combat is unconditionally unreachable here regardless of policy, so
-    # fall through to the rest of the ladder instead of NO-OPing on an irrelevant signal.
+    # (Snapshot.combat_only_degradation) -- fall through to the rest of the ladder
+    # instead of NO-OPing on a signal that's irrelevant to every non-combat rung below.
+    # This exception is NOT withdrawn here even though Attack (band 7, commit 6 of the
+    # launch-actions plan) can now conditionally reach this ladder: withdrawing it here
+    # would NO-OP the entire tick over a signal that's still irrelevant to bands 1-6, on
+    # the mere possibility that band 7 might otherwise have fired. Instead,
+    # `candidates.generate_attack_candidates` independently requires
+    # `snapshot.randomness_readiness.ready` itself before ever proposing an Attack, and
+    # `guard._gate_health` independently re-checks and BLOCKs a combat action under this
+    # exact degradation as a second, defense-in-depth layer -- see both docstrings.
 
     if snapshot.game_paused:
         detail = ""
@@ -355,6 +369,22 @@ def plan_next_action(
     )
     if colonize_winner is not None:
         return _finalize(colonize_winner, colonize_alternatives, "8d:colonize", policy)
+
+    # Band 7 (commit 6 of the launch-actions plan, rung `8e`): Attack, the first combat
+    # mission type this codebase can ever propose. Gated on `policy.actions.allow_combat`
+    # (default `False`, so this band produces nothing under the default policy, identical
+    # to every other opt-in band's posture) and on `snapshot.randomness_readiness.ready`
+    # inside the generator itself. Reached only after bands 1-6 produced nothing at all
+    # for any target planet -- the most conservative placement in the entire ladder,
+    # deliberately more conservative even than Colonize: an Attack risks the committed
+    # fleet in combat (Colonize risks a single Colony Ship on a deterministic outcome),
+    # so it must never preempt routine economic activity, a policy-declared target, the
+    # unlock-chain rung, ordinary fleet logistics, or colonisation.
+    attack_winner, attack_alternatives = candidates.select_attack_candidate(
+        snapshot, policy, target_planets, attack_targets=attack_targets
+    )
+    if attack_winner is not None:
+        return _finalize(attack_winner, attack_alternatives, "8e:attack", policy)
 
     return Action(
         kind=ActionKind.NOOP,

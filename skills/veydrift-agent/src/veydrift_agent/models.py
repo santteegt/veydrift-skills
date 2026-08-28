@@ -163,18 +163,22 @@ class RandomnessReadiness(Base):
 
     `Snapshot.combat_only_degradation()`'s health-gate exception (`plan.py` rung 1,
     `guard.py`'s `health` gate) still lets a tick proceed through a `/health` failure
-    caused *solely* by this signal, reasoning that combat can never be what a proposal
-    this codebase makes touches. **That reasoning was written when `allow_combat` was
-    read-and-ignored everywhere; it no longer holds unconditionally** now that the
-    launch-actions plan's commit 5 makes `allow_combat` a real, checked gate for the
-    Attack mission type at both enforcement layers (see `ActionsCfg.allow_combat`'s own
-    docstring). Correcting `combat_only_degradation()`'s behavior itself -- withdrawing
-    the exception specifically for a combat action, once one can actually be proposed --
-    is deliberately deferred to the commit that adds an Attack generator, not attempted
-    here; until then no generator produces an Attack `Action`, so the exception's
-    practical effect is unchanged even though its stated justification is now narrower
-    than it reads. `None` on Snapshot means unconfirmed -- same fail-closed convention
-    as `GameMaintenance`, never read as "combat readiness is fine."""
+    caused *solely* by this signal -- but that no longer means "irrelevant to every
+    proposal this codebase could make." The launch-actions plan's commit 5 made
+    `allow_combat` a real, checked gate for the Attack mission type at both enforcement
+    layers (see `ActionsCfg.allow_combat`'s own docstring), and **commit 6 corrected
+    `combat_only_degradation()`'s consumer accordingly**: `guard.py`'s `health` gate now
+    takes the action itself as a parameter and withdraws the exception specifically for a
+    combat (Attack) action -- a randomness-degraded state must BLOCK an Attack, which
+    requests VRF at launch and cannot resolve while degraded, even while every non-combat
+    action still passes through the same exception unchanged. `generate_attack_candidates`
+    (`candidates.py`) also independently requires `randomness_readiness.ready` before ever
+    proposing an Attack in the first place -- belt and suspenders, not redundant: the
+    generator-time check keeps a degraded-randomness tick from proposing Attack at all,
+    the guard-time check is what actually enforces it if that generator check were ever
+    bypassed (a manual `vd tick --action` override, for instance). `None` on Snapshot
+    means unconfirmed -- same fail-closed convention as `GameMaintenance`, never read as
+    "combat readiness is fine."""
 
     ready: bool
     reasons: list[str] = Field(default_factory=list)
@@ -345,10 +349,11 @@ class ActionsCfg(Base):
     #: both enforcement layers independently (`guard.py`'s `mission_type` gate and
     #: `veydrift-wallet`'s `checkAllowlist`, each resolving it from `policy.json`
     #: separately -- never one trusting the other's read of it). Still requires tier
-    #: `operator` on top of this; still has no generator proposing an Attack action
-    #: until a later commit -- this flag alone does not make combat planner-reachable,
-    #: only launch-encodable and allowlist-permitted for a hand-constructed or future
-    #: generator-produced Attack `Action`.
+    #: `operator` on top of this. **Commit 6** adds the first generator that can actually
+    #: produce an Attack `Action` (`candidates.generate_attack_candidates`, gated on this
+    #: same flag) -- this flag alone was never a planner gate; it is now the same
+    #: "empty/off == old behaviour" opt-in every other `policy.actions`/`policy.strategy`
+    #: flag in this codebase already is.
     allow_combat: bool = False
 
 
@@ -521,11 +526,16 @@ class Action(Base):
     # Fleet-mission fields (Phase 5c). All `None`/empty for every other `ActionKind` —
     # only `FLEET_MISSION` populates them.
     # ----------------------------------------------------------------------------------
-    #: `ids.FleetMissionType`. Non-combat only in practice: `guard.py`'s mission-type gate
-    #: and `allowlist.ts`'s OPERATOR_ALLOWED_MISSION_TYPES each refuse combat types
-    #: independently. Deliberately typed as a plain int, not the enum — the enum is
-    #: complete and auditable (it *lists* combat types), and narrowing the type here would
-    #: imply an enforcement this field does not provide. Both gates default-deny.
+    #: `ids.FleetMissionType`. Non-combat by default: `guard.py`'s mission-type gate and
+    #: `allowlist.ts`'s OPERATOR_ALLOWED_MISSION_TYPES each refuse every combat type
+    #: independently EXCEPT Attack (3), which both permit only when
+    #: `policy.actions.allow_combat` is true (launch-actions plan commit 5) — see
+    #: `ActionsCfg.allow_combat`'s docstring. Every other combat type (AcsDefend/
+    #: Intercept/MissileAttack/AcsAttack/DefenseHold) stays refused unconditionally at
+    #: both layers, regardless of policy. Deliberately typed as a plain int, not the enum
+    #: — the enum is complete and auditable (it *lists* every combat type), and narrowing
+    #: the type here would imply an enforcement this field does not provide. Both gates
+    #: default-deny.
     mission_type: int | None = None
     #: The planet the fleet departs from. Distinct from `planet_id`, which for a fleet
     #: mission names the *subject* planet of the action for logging/idempotency purposes.
@@ -540,13 +550,17 @@ class Action(Base):
     target_coordinates: str | None = None
     #: The real on-chain planet id for a foreign target — a planet outside
     #: `Snapshot.planets` that `target_coordinates` alone cannot resolve (added commit 3
-    #: of the launch-actions plan, for foreign Harvest). `None` for every mission against
-    #: an owned planet, where `tick.py`'s coordinate lookup already works. When set,
-    #: `tick._resolve_target_planet_id` uses it directly and skips the snapshot lookup —
-    #: the generator that set it (`candidates.generate_foreign_harvest_candidates`)
-    #: already knows the real id from its own data source and has no reason to make
-    #: `tick.py` re-derive it from coordinates it would have to search for outside the
-    #: snapshot anyway.
+    #: of the launch-actions plan, for foreign Harvest; commit 6 reuses it identically for
+    #: Attack, whose target is by definition always a foreign planet). `None` for every
+    #: mission against an owned planet, where `tick.py`'s coordinate lookup already works.
+    #: When set, `tick._resolve_target_planet_id` uses it directly and skips the snapshot
+    #: lookup — the generator that set it (`candidates.generate_foreign_harvest_
+    #: candidates` / `generate_attack_candidates`) already knows the real id from its own
+    #: data source and has no reason to make `tick.py` re-derive it from coordinates it
+    #: would have to search for outside the snapshot anyway. Also what
+    #: `tick._attack_protection_allowed` reads directly (falling back to
+    #: `_resolve_target_planet_id` only if unset) to know which target to re-check
+    #: `/wallet/{addr}/attack-protection` against.
     target_planet_id: int | None = None
     #: Ship id -> count. **Not a fleet tuple.** The deployed contract takes a 14-slot
     #: tuple that omits the two non-flyable ships (SolarSatellite id 9, Crawler id 15), so
@@ -564,13 +578,18 @@ class Action(Base):
     #: The trailing `uint256` both `launchFleetMission` overloads share. It is
     #: `randomnessRequestId` in the deployed source, **not** a holding duration — an
     #: earlier draft of this field guessed the latter and was wrong. The contract sets it
-    #: itself for `Attack` and the two counterplay types (none reachable here); for every
-    #: mission type this codebase can produce it is either ignored
-    #: (Transport/Deploy/Harvest) or **required to be exactly 0** — Colonize reverts with
-    #: `InvalidId` on anything else (`VeydriftColonizationModule._launchColonizeFleetMission`).
-    #: So it is encoded as-is, defaulting to 0, and is expected to stay unset. Naming it
-    #: after the guessed meaning would invite someone to set a duration here and hit a
-    #: silent Colonize revert.
+    #: itself for `Attack` (`_requestAttackBattleRandomness`, `guard.py`'s `attack_
+    #: protection`/`mission_type` gates are what actually govern whether an Attack may be
+    #: submitted at all, not this field) and the two counterplay types (neither reachable
+    #: from this codebase); for every mission type this codebase can produce it is either
+    #: ignored by the contract (Transport/Deploy/Harvest/Attack) or **required to be
+    #: exactly 0** — Colonize reverts with `InvalidId` on anything else
+    #: (`VeydriftColonizationModule._launchColonizeFleetMission`). So it is encoded as-is,
+    #: defaulting to 0, and is expected to stay unset for every mission type this codebase
+    #: generates, Attack included — `generate_attack_candidates` never sets it, the same
+    #: posture `generate_colonize_candidates` already takes. Naming it after the guessed
+    #: meaning would invite someone to set a duration here and hit a silent Colonize
+    #: revert.
     randomness_request_id: int | None = None
 
     def is_onchain(self) -> bool:

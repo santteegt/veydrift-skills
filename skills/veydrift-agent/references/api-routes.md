@@ -38,6 +38,7 @@ happened.
   - [3.18 `/highscores`](#318-highscores)
   - [3.19 `/chain/events` — not exposed, and why](#319-chainevents--not-exposed-and-why)
   - [3.20 `/raid-finder/debris`](#320-raid-finderdebris)
+  - [3.21 `/wallet/{addr}/attack-protection`](#321-walletaddrattack-protection)
 - [4. Queue parsing (`QueueState`) — typed from source, not from a live sample](#4-queue-parsing-queuestate--typed-from-source-not-from-a-live-sample)
 - [5. Incoming-fleet parsing (`FleetMissionSummary`) — same caveat](#5-incoming-fleet-parsing-fleetmissionsummary--same-caveat)
 - [6. Entity ID → name tables](#6-entity-id--name-tables)
@@ -509,6 +510,26 @@ Shape: `{generatedAt, durationMs, formula, pagination, currentPlayer, rankings, 
 a flat array. `pagination` describes the *page* (rows per category), not a global row
 count.
 
+**`category` does NOT filter `rankings` down to one key** — confirmed live 2026-08-28:
+passing `?category=economy` still returned all 8 category keys in `rankings`, unchanged;
+only `pageSize` bounds the per-category row count. A caller wanting one category's rows
+must still index `rankings["economy"]` (or whichever) itself.
+
+`includeAttackProtection=true` (combined with a `currentWallet` set to the caller's own
+address — omitted, that field is `null` on every row) adds a per-row `attackProtection`
+block: `{allowed, blockedReason, blockedReasonLabel, defenderInactive,
+scoreComparison: {scoreType, attackerScore, defenderScore, attackerVisibleScore,
+defenderVisibleScore, protected}, targetAlliance}`. This is an ACCOUNT-level check
+(score protection + same-alliance only — no `targetPlanetId` is given, so it cannot see
+the bashing-limit dimension `/wallet/{addr}/attack-protection`, §11, can). Each row also
+carries `homePlanet.tactical.raidableResources`/`.coordinates` and a `homePlanetId`.
+
+Moved out of §11 below 2026-08-28 (commit 6 of the launch-actions plan): `read.
+fetch_highscores()` is a live caller now (`tick._attack_targets`), the same "bypass the
+CLI/`_emit` layer, raw dict" posture `fetch_raid_finder_debris`/`fetch_fleet_visibility`
+already take — not wired into `vd read`'s own CLI target list (that command stays the
+mandatory-`--out` one described above), same as those two.
+
 ### 3.19 `/chain/events` — not exposed, and why
 
 This project's earlier backend-source-derived research flagged this route as "200 but
@@ -578,6 +599,25 @@ A sibling route, `/raid-finder/rifters`, exists with the same shape (confirmed l
 empty `targets` on the probed universe) — the Rift Stabilizer building's mechanics are
 unpublished (no formula for what it produces or protects has been found anywhere in the
 pinned contract source), so this codebase has no consumer for it.
+
+### 3.21 `/wallet/{addr}/attack-protection`
+
+Wallet-scoped, one specific target per call. Query: `targetPlanetId` (required). Shape,
+confirmed live: `{allowed, blockedReason, plunderBps, defenderInactive,
+transportAllowed, attackerScore, defenderScore, ...}` — `blockedReason` is present only
+when `allowed` is `false`, one of `"score_protection"` / `"bashing"` / `"not_allied"`.
+This is the PER-PLANET, PER-(attacker,defender) form — richer than `/highscores`'s
+embedded `attackProtection` block (§3.18), which has no `targetPlanetId` to key off and
+so cannot see the bashing-limit dimension at all. The contract itself
+(`VeydriftAntiRaidPrimitives.sol`) re-evaluates all of this again at mission IMPACT, not
+at launch — so even a fresh call to this route is a best-effort pre-flight check, not a
+guarantee that a launched Attack will actually land a battle.
+
+Moved out of §11 below 2026-08-28 (commit 6 of the launch-actions plan): `read.
+fetch_attack_protection()` is a live caller now (`tick._attack_protection_allowed`,
+feeding `guard._gate_attack_protection`), the same "bypass the CLI/`_emit` layer, raw
+dict" posture `fetch_raid_finder_debris`/`fetch_highscores` already take — not wired
+into `vd read`'s own CLI target list, same as those two.
 
 ---
 
@@ -790,11 +830,10 @@ this work package, listed here so the next pass doesn't have to re-discover them
 | `/wallet/{addr}/referrals/history` | Referral history; write-adjacent, out of this skill's mandate |
 | `/wallet/{addr}/alliance`, `/alliance/{id}` | Alliance state |
 | `/wallet/{addr}/rift` | Rift Stabilizer balances (building id 15; mechanics unpublished) |
-| `/wallet/{addr}/attack-protection` | Score-based attack protection status |
 | `/wallet/{addr}/watched-planets` | Player-configured planet watchlist (GET/POST/DELETE) |
 | `/wallet/{addr}/profile`, `/profile/display-name` | Player profile (GET/POST) |
 | `/raid-finder/rifters` | Server-side target selection for Rift Stabilizer mechanics (unpublished, no consumer) — see §3.20's note; `/raid-finder/debris` moved to its own §3.20 entry 2026-08-28, now a live caller |
-| `/randomness-readiness` | Randomness-engine commit/reveal readiness |
+| `/randomness-readiness` | Randomness-engine commit/reveal readiness — still not a live caller as of this row (`generate_attack_candidates`/`_gate_health` consult `Snapshot.randomness_readiness`, sourced from `/health`'s own `randomnessReadiness` block, not this separate route) |
 | `/planets/{id}` | Single-planet detail, not wallet-scoped |
 | `/missions` (global) | Non-wallet-scoped mission feed — see §3.14's note |
 | `/mission/{id}`, `/battle-report/{id}` | Single mission / single battle report by id |

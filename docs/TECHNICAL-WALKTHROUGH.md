@@ -80,10 +80,12 @@ matters for understanding the *shape* of the result.
 **What the spec explicitly does not attempt (§1's non-goals):** alliances, ACS,
 migration, referrals, NFT burns, the ERC-20 market bridge, and any raid-profitability
 model — `protectedResources`' actual semantics are unconfirmed, so nothing here builds
-loot logic on it. Combat is almost entirely a non-goal too, with one narrow exception
-since the launch-actions plan's commit 5 (2026-08-28): `policy.actions.allow_combat`
-gates the Attack mission type specifically, at `operator` tier — see §5's `guard.py` row
-and §8. Read `docs/RESEARCH-ADDENDUM.md` §6 before assuming otherwise.
+loot logic on it. Combat is almost entirely a non-goal too, with one narrow exception:
+`policy.actions.allow_combat` gates the Attack mission type specifically, at `operator`
+tier (launch-actions plan commit 5, 2026-08-28) and, since commit 6 (same date),
+`plan.py`'s own most conservative ladder rung (`8e:attack`) can actually propose one —
+see §5's `guard.py` row and §8. Read `docs/RESEARCH-ADDENDUM.md` §6 before assuming
+otherwise.
 
 ## 4. Repository architecture
 
@@ -96,7 +98,7 @@ skills/
 │   ├── schemas/                policy.schema.json, action.schema.json — GENERATED, don't hand-edit
 │   ├── references/             7 files, ~3,050 lines, loaded on demand — see §11
 │   ├── assets/                 policy.example.json, launchd plist template
-│   └── tests/                  615 tests
+│   └── tests/                  652 tests
 └── veydrift-wallet/            TypeScript (npm). Signs. Nothing else does.
     ├── SKILL.md
     ├── package.json, tsconfig.json
@@ -104,7 +106,7 @@ skills/
     ├── scripts/                 gen-keystore.mjs — interactive keystore creation (npm run wallet:new)
     ├── src/                     11 modules, ~1,970 lines — see §6
     ├── references/              4 files, ~1,300 lines
-    └── tests/                   123 tests (121 passed + 2 fork-only, skipped outside a live Anvil fork)
+    └── tests/                   135 tests (133 passed + 2 fork-only, skipped outside a live Anvil fork)
 ```
 
 Both trees are self-contained on purpose: `npx skills add` copies only `skills/<name>/`
@@ -158,10 +160,10 @@ under Claude Code, Hermes, or bare `launchd`).
 | `read.py` | 993 | One `vd read` subcommand per API route (18 targets), plus two general-purpose fetchers new in the launch-actions plan that bypass the CLI layer entirely (`fetch_universe_system`, `fetch_raid_finder_debris` — the same "raw dict, no `vd read` target" posture `fetch_fleet_visibility`/`fetch_activity` already used). `--summary` mode is the default and is capped near 2KB; `battle-reports`/`highscores` refuse to print to stdout at all — `--out` is mandatory, since they run 60KB–2.2MB uncompressed. |
 | `fmt.py` | 242 | Rich-based summary rendering behind `read.py`'s `--summary` output — the module that actually enforces `snapshot`'s <=2KB budget, self-truncating if a render ever overruns it. Every other target gets a best-effort compact rendering with no byte budget. |
 | `calc.py` | 917 | Pure formulas, no network calls, one docstring citation per function. Contains **no cost-scaling function** by design — live cost always comes from the API's own `cost` field, since the per-building factors are unpublished rationals and recomputing them is exactly how affordability checks go wrong silently. |
-| `plan.py` | 419 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's now **six**-band precedence calling into `candidates.py`. As of Phase 2 (the general-strategy-engine program) it no longer decides *which entity*; that moved out. Phase 4 added rung `8b`; Phase 5c added rung `8c` (logistics); the launch-actions plan (2026-08-28) extended `8c` with two more families (Deploy, foreign Harvest) and added a sixth band, rung `8d` (Colonize) — see §7 for the full current ladder. A separate addition adds veto rung `1b` — `gameMaintenance.paused` from `/health`, ESCALATE (or NO-OP, `escalation.on_game_paused`) before any candidate pipeline runs. |
+| `plan.py` | ~440 | Rungs 0-4 of the decision ladder (§7 below) — vetoes, not strategy — plus the ladder's now **seven**-band precedence calling into `candidates.py`. As of Phase 2 (the general-strategy-engine program) it no longer decides *which entity*; that moved out. Phase 4 added rung `8b`; Phase 5c added rung `8c` (logistics); the launch-actions plan (2026-08-28) extended `8c` with two more families (Deploy, foreign Harvest), added a sixth band, rung `8d` (Colonize, commit 4), and a seventh, rung `8e` (Attack, commit 6) — see §7 for the full current ladder. A separate addition adds veto rung `1b` — `gameMaintenance.paused` from `/health`, ESCALATE (or NO-OP, `escalation.on_game_paused`) before any candidate pipeline runs. |
 | `candidates.py` | 2761 | New in Phase 2, roughly doubled in Phase 3, gained a fifth family in Phase 4 and a sixth in Phase 5c (all general-strategy-engine program); the launch-actions plan (2026-08-28) added three more generators inside that sixth family plus a seventh family outright. The generate/filter/score/select pipeline behind rungs 5-9: one pure generator per family (`mine`, `energy`, `storage`, `research`, `ship`, `defense`, Phase 3's `infrastructure` and `crawler`, Phase 4's `unlock`, Phase 5c's `logistics`, the launch-actions plan's `colonize`), `score_payback` (payback-hours scoring, scored iff a level change moves `calc.production_per_hour`'s output), and a `select_*` function per rung that replays the pre-Phase-2 ladder's exact priority order when nothing new is configured. The energy-first invariant lives here: before generating a mine candidate, it computes post-upgrade energy `required` vs. current `produced` fresh, every tick — never a fixed level-offset heuristic, because the true gap between mine level and required Solar Plant level widens as levels climb. Phase 3 adds declared-target stock-keeping for ships/defenses (`ship_targets`/`defense_targets`), priority ordering for research/infrastructure (`research_priority`/`building_priority`), and two new scored/unscored families (Crawler, proactive storage) — every one of the four new `StrategyCfg` fields defaults empty and reproduces Phase 2's output exactly when left unset. **Correction (judge finding 4):** that "reproduces exactly" claim was false for Crawler specifically — `generate_crawler_candidates` was gated only on `allow_ships`, so an unlocked, scoreable Crawler could still outrank Solar Satellite with every `StrategyCfg` field at its default. Fixed with a fifth field, `enable_crawler` (default `false`): the scored Crawler family now returns `[]` unless explicitly opted into. **Fix:** a scored winner's cost could exceed the planet's storage cap for a resource it needed — "not affordable ever" until storage is raised, which `generate_proactive_storage_candidates` existed for but, by design, could never outrank a scored winner. New `_exceeds_storage_cap`/`_resolve_storage_precondition` helpers made this a hard precondition, mirroring the energy-first filter. **Fix:** `_mine_priority_order`'s exact-tie case now breaks by ascending payback hours instead of dict-declaration order, which previously always favored Metal Mine. Phase 4 adds `generate_unlock_chain_candidates`/`select_unlock_chain_candidate`, `score=None` always, driven by `techtree.next_step_toward` rather than any new policy field. Phase 5c adds `generate_transport_candidates`/`generate_harvest_candidates`/`select_logistics_candidate` — non-combat `launchFleetMission` proposals, gated on `policy.actions.allow_fleet_noncombat` (default `false`), using a new `calc.py` ship-movement-stats layer (`SHIP_CARGO_CAPACITY`, `ship_fuel_consumption`, `ship_speed`). **The launch-actions plan (2026-08-28, four commits)** closed every gap that history left: `generate_harvest_candidates` finally got a live `own_planet_debris` caller (`tick._own_planet_debris`, reading `/universe/galaxies/{g}/systems/{s}`'s `debrisField`); `generate_foreign_harvest_candidates` extended Harvest to a third party's debris field (`/raid-finder/debris`, a discovery index — deliberately *not* the route used for the wallet's own planets, since that route's confirmed incompleteness would risk silently excluding an owned planet, an acceptable trade only for discovery); `generate_deploy_candidates` moves an entire flyable fleet (not just haulers) to a declared `policy.strategy.fleet_home_planet_id`; `generate_colonize_candidates`/`select_colonize_candidate` (the new seventh family, ladder rung `8d`) picks a free coordinate slot by live `deuteriumMultiplierBps`, gated on new `policy.strategy.colonize`. `select_logistics_candidate` now ranks four families per planet (Transport, Deploy, local Harvest, foreign Harvest) instead of two. |
 | `techtree.py` | 716 | On-chain prerequisite table for all four entity families, transcribed from the deployed contract (Phase 1). `unmet()` is the fail-closed core every other module's legality checks build on (`plan.py`/`candidates.py` never propose a locked entity; `guard.py`'s `prerequisites` gate independently re-checks). Phase 4 adds `next_step_toward` — a breadth-first walk of `unmet()`'s own output, backwards, to find the shallowest currently-buildable prerequisite toward a locked target; no cost math, same "compare levels only" discipline as `unmet()`. Also adds `unlock_breadth` — the forward mirror of that walk, one hop only: how many other entities would have a requirement drop out of their own `unmet()` if this one's level were +1, re-derived by re-calling `unmet()` rather than a hand-built reverse index. Feeds `candidates.py`'s `_infrastructure_priority_order`/`_research_priority_order` fallback ranking; a structural fact, never a value judgement, so it stays clear of `calc.py`'s cost-scaling ban and `candidates.py`'s "no ROI verdict" refusal. |
-| `guard.py` | 1300 | **20** guardrail gates (17 through Phase 4; Phase 5c added `mission_type`; a later addition added `game_paused`; the launch-actions plan added `fleet_slots`, 2026-08-28), every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. **Fix:** `health` gains a narrow exception, `Snapshot.combat_only_degradation()` — `/health`'s `ok:false` caused *solely* by a combat-only `randomnessReadiness` degradation (positively confirmed, everything else on the snapshot fine) now PASSes instead of BLOCKing, since combat was unconditionally unreachable in this codebase regardless of policy at the time this exception was written -- no longer true as of the launch-actions plan's commit 5 (Attack is now conditionally reachable), though this exception's own logic is unchanged (no generator proposes Attack yet, so the practical effect is the same). Confirmed live and persistent, served via HTTP 503 — `read._fetch_or_exit()` now defensively recovers a parseable `/health` 5xx body (narrowly scoped to that one route) instead of hard-aborting before this check could ever run. **The launch-actions plan** also fixed two idempotency-key collisions in `idempotency_key` (every fleet mission from one planet, and every resolve action across all planets, each shared a single key and revert-streak counter — found while adding `fleet_slots`, not the reason for it) and closed an in-flight-Colonize blind spot in `_colony_cap_violation` (`Snapshot.owned_planet_count` alone only reflects already-resolved planets; a new `outgoing_colonize_count` parameter, fed by `tick._outgoing_colonize_count`, folds in still-`Outbound` Colonize missions before the cap check, failing closed on `None` exactly like the field it complements). |
+| `guard.py` | ~1370 | **21** guardrail gates (17 through Phase 4; Phase 5c added `mission_type`; a later addition added `game_paused`; the launch-actions plan added `fleet_slots` (commit 2) and `attack_protection` (commit 6), 2026-08-28), every one evaluated and reported on every call — never short-circuited, so a passing tick's verdict list is as informative as a blocked one. The rule every gate follows: missing data resolves toward `BLOCK`/`ESCALATE`, never `PASS`. **Fix, then completed:** `health` gained a narrow exception, `Snapshot.combat_only_degradation()` — `/health`'s `ok:false` caused *solely* by a combat-only `randomnessReadiness` degradation (positively confirmed, everything else on the snapshot fine) PASSes instead of BLOCKing for a non-combat action. Commit 5 made this exception's premise narrower (Attack became conditionally reachable via `policy.actions.allow_combat`) without yet changing its behavior; **commit 6 completed the correction**: `_gate_health` now takes `action` as a parameter and withdraws the exception specifically for a combat (Attack) action, which requests VRF at launch and cannot resolve while randomness is degraded — every non-combat action still gets the exception, unchanged. Confirmed live and persistent, served via HTTP 503 — `read._fetch_or_exit()` now defensively recovers a parseable `/health` 5xx body (narrowly scoped to that one route) instead of hard-aborting before this check could ever run. **The launch-actions plan** also fixed two idempotency-key collisions in `idempotency_key` (every fleet mission from one planet, and every resolve action across all planets, each shared a single key and revert-streak counter — found while adding `fleet_slots`, not the reason for it), closed an in-flight-Colonize blind spot in `_colony_cap_violation` (`Snapshot.owned_planet_count` alone only reflects already-resolved planets; a new `outgoing_colonize_count` parameter, fed by `tick._outgoing_colonize_count`, folds in still-`Outbound` Colonize missions before the cap check, failing closed on `None` exactly like the field it complements), and added `attack_protection` (commit 6): a live, target-specific `/wallet/{addr}/attack-protection` re-check for an Attack action, independent of whatever `candidates.generate_attack_candidates` already read at generation time — `None`/unknown or `false` **BLOCK**s, only `true` **PASS**es. |
 | `state.py` | 350 | `$VEYDRIFT_HOME` resolution, `AgentState` (pending txs, cumulative gas, revert counts), the tick lockfile, `KILLSWITCH` detection. |
 | `tick.py` | 2116 | The orchestrator — the nine-step loop (§7), the `walletctl` subprocess bridge, `--readiness`, `--action`'s manual-override substitution point. The largest module in the package, and where the criticals a first-pass judge review found actually lived (`AGENTS.md` §5's unit-mismatch and revert-recording invariants). The launch-actions plan added four out-of-band fetchers here, each following the same established pattern (`_resolvable_mission_ids`'s "bypass the frozen `Snapshot`, best-effort, never raise" contract): `_own_planet_debris`, `_foreign_debris_targets`, `_colonize_targets`, `_outgoing_colonize_count`. |
 | `log.py` | 392 | Four log sinks, secret scrubbing (`0x[0-9a-fA-F]{64}` patterns that aren't a known tx hash never get written), the pretty-report renderer, `--digest`. |
@@ -192,7 +194,7 @@ Anvil fork with an impersonated account; `AGENTS.md` §10's fork-round history).
 | Module | Lines | Role |
 | --- | --: | --- |
 | `abi.ts` | 225 | Loads the pinned ABI, resolves a function by **full canonical signature** (never a bare name — `launchFleetMission` is overloaded on the deployed contract), computes selectors. |
-| `allowlist.ts` | ~245 | `checkAllowlist` — five checks, always all five evaluated and reported: destination against a **live** `/runtime-config` fetch, selector against the tier's set (computed from the pinned ABI, never a hand-typed hex constant), `value == 0`, `chainId == 8453`, and at `operator` tier, the `launchFleetMission` mission-type argument decoded from calldata and restricted to `OPERATOR_ALLOWED_MISSION_TYPES` — Transport/Deploy/Harvest, **plus Colonize (2) as of Phase 5b** (the one allowlist widening this project has had, added in the same change as `guard.py`'s matching `mission_type` gate). |
+| `allowlist.ts` | ~280 | `checkAllowlist` — five checks, always all five evaluated and reported: destination against a **live** `/runtime-config` fetch, selector against the tier's set (computed from the pinned ABI, never a hand-typed hex constant), `value == 0`, `chainId == 8453`, and at `operator` tier, the `launchFleetMission` mission-type argument decoded from calldata and restricted to `OPERATOR_ALLOWED_MISSION_TYPES` (Transport/Deploy/Harvest, plus Colonize (2) as of Phase 5b) **unconditionally, or `COMBAT_ALLOWED_MISSION_TYPES` (Attack (3) only) when `resolveAllowCombat` resolves `policy.json`'s `actions.allow_combat` to `true`** (launch-actions plan commit 5, 2026-08-28 — no CLI flag or env var can assert this, unlike `resolveTier`'s own fallback). `guard.py`'s matching `mission_type` gate mirrors this exact two-set split. |
 | `tx.ts` | 400 | `build`/`simulate`/`send`/`receipt`. `build` emits `estimatedCostWei` (gas units × live `maxFeePerGas`), not a bare gas-unit number — see `AGENTS.md` §5's unit-mismatch invariant for why that distinction is load-bearing. `receipt` reports real `status: "success" \| "reverted"` from the actual receipt, never synthesized. RPC target is `VEYDRIFT_RPC_URL` (default `https://mainnet.base.org`), the one chokepoint every read and write resolve through — swap in a dedicated endpoint (Alchemy etc.) to avoid the public endpoint's rate limits. |
 | `fleet.ts` | 147 | `shipCountsToFleetTuple()` — the one function permitted to build the 14-slot fleet-mission tuple; see `AGENTS.md` §7. |
 | `policy.ts` | 116 | Reads `tier` from `$VEYDRIFT_HOME/policy.json` rather than trusting a caller-supplied flag; refuses (exit 4) on disagreement or a malformed file rather than falling back to a permissive default. |
@@ -217,7 +219,7 @@ Anvil fork with an impersonated account; `AGENTS.md` §10's fork-round history).
                                     an operator-supplied Action here — every step after this
                                     one, including guard, runs identically either way; see
                                     references/manual-action-override.md)
-6. guard                        →  guard.py: all 20 gates, full verdict list, one Decision
+6. guard                        →  guard.py: all 21 gates, full verdict list, one Decision
 7. if ALLOW and tier>=2         →  walletctl build -> simulate -> send, await receipt,
    and not --dry-run               THEN await INDEXED (a confirmed receipt is not the
                                     same as indexed state -- no dependent action follows
@@ -238,14 +240,16 @@ added, cited for traceability, not something the running code has any notion of.
 don't map one-to-one: Phase 3 changed rungs 5-9's entity-generation logic without adding a
 new rung; Phase 4 added rung `8b` specifically; Phase 5c added rung `8c`; the
 launch-actions plan (2026-08-28, outside the Phase-numbered history — see below) extended
-`8c` with two more families and added rung `8d`. If you're reading the running code, only
-rung numbers matter — Phase labels are documentation-only history.
+`8c` with two more families and added rungs `8d` (commit 4) and `8e` (commit 6). If you're
+reading the running code, only rung numbers matter — Phase labels are documentation-only
+history.
 
-The decision ladder inside step 5, first match wins. Rungs 0-4 are vetoes; rungs 5-10 are
-a **six**-band candidate pipeline (`candidates.py`, added in Phase 2 of the
+The decision ladder inside step 5, first match wins. Rungs 0-4 are vetoes; rungs 5-11 are
+a **seven**-band candidate pipeline (`candidates.py`, added in Phase 2 of the
 general-strategy-engine program, extended to a fourth band by Phase 4, a fifth (logistics,
-rung `8c`) by Phase 5c, and a sixth (Colonize, rung `8d`) by the launch-actions plan
-— see §5's module table):
+rung `8c`) by Phase 5c, a sixth (Colonize, rung `8d`) by commit 4 of the launch-actions
+plan, and a seventh (Attack, rung `8e`) by commit 6 of the same plan — see §5's module
+table):
 
 ```
 0. KILLSWITCH present               -> HALT
@@ -258,7 +262,7 @@ rung `8c`) by Phase 5c, and a sixth (Colonize, rung `8d`) by the launch-actions 
 2. pending tx unreconciled          -> NO-OP, reconcile first
 3. mission Resolving > 60s          -> resolveFleetMission (permissionless, free)
 4. incoming hostile fleet           -> ESCALATE, no proposal at all
-5-10. generate -> filter -> score -> select, six bands in order:
+5-11. generate -> filter -> score -> select, seven bands in order:
      1. deadline-driven      -- storage overflow: spend it, or build the matching storage
                                  (plus, Phase 3: proactive storage as an always-visible
                                  Band-2 alternative, never a Band-1 winner -- but see
@@ -288,14 +292,21 @@ rung `8c`) by Phase 5c, and a sixth (Colonize, rung `8d`) by the launch-actions 
                                  `policy.actions.allow_fleet_noncombat` (Deploy also needs
                                  `fleet_home_planet_id` declared); reached only when bands
                                  1-4 found nothing for any target planet
-     6. Colonize (8d)        -- launch-actions plan: consumes a built Colony Ship toward
-                                 a free coordinate slot (ranked by live
+     6. Colonize (8d)        -- launch-actions plan commit 4: consumes a built Colony Ship
+                                 toward a free coordinate slot (ranked by live
                                  `deuteriumMultiplierBps`), gated on new
-                                 `policy.strategy.colonize`. The most conservative
-                                 placement in the whole ladder -- reached only once every
-                                 other band, including fleet logistics, found nothing at
-                                 all, since it spends a hard-to-replace ship on a
-                                 permanent commitment
+                                 `policy.strategy.colonize`. Reached only once bands 1-5
+                                 found nothing at all, since it spends a hard-to-replace
+                                 ship on a permanent commitment
+     7. Attack (8e)          -- launch-actions plan commit 6: attacks the highest-raidable
+                                 reachable target from `/highscores` (economy category),
+                                 sending every combat-capable ship built on the origin
+                                 planet, gated on `policy.actions.allow_combat` and, inside
+                                 the generator, `snapshot.randomness_readiness.ready`. The
+                                 MOST conservative placement in the whole ladder, more so
+                                 even than Colonize -- reached only once every other band,
+                                 Colonize included, found nothing at all, since committing
+                                 a fleet to combat risks losing it
      else                    -> NO-OP, explicit reason
 ```
 
@@ -409,7 +420,7 @@ covers the first one.
 
 Precision matters here more than a clean "it's tested" claim would suggest.
 
-- **615 Python + 123 TypeScript = 738 tests, all currently passing** (the TypeScript
+- **652 Python + 135 TypeScript = 787 tests, all currently passing** (the TypeScript
   figure includes 2 fork-only tests, skipped outside a live Anvil fork). Run both before
   calling any change done (`AGENTS.md` §3); they cover a system with two enforcement
   layers that must agree (§8), and neither suite alone would catch a drift between them.

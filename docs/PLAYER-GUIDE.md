@@ -453,7 +453,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `allow_defense` | bool | `true`/`false` | `false` |
 | `allow_ships` | bool | `true`/`false` | `false` |
 | `allow_fleet_noncombat` | bool | `true`/`false` | `false` |
-| `allow_combat` | bool | `true`/`false` — gates the Attack mission type specifically, at `operator` tier (also requires `allow_fleet_noncombat` to be irrelevant here — Attack is checked independently of it). Every other combat mission type (`AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`) is still **read and unconditionally ignored by every code path**; enabling any of those requires an actual source change, not a config edit. No standing rung proposes an Attack action yet — this flag makes it launch-encodable and allowlist-permitted, not something the agent will do on its own. See §16. | `false` |
+| `allow_combat` | bool | `true`/`false` — gates the Attack mission type specifically, at `operator` tier (`allow_fleet_noncombat` is irrelevant here — Attack is checked independently of it). Every other combat mission type (`AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`) is still **read and unconditionally ignored by every code path**; enabling any of those requires an actual source change, not a config edit. Setting this true both makes Attack launch-encodable/allowlist-permitted AND lets the ladder's most conservative rung (`8e:attack`) propose one — it attacks the highest-raidable reachable target it can find via `/highscores`, using every combat-capable ship built on the origin planet, only once every other rung (including Colonize) has found nothing at all. See §16. | `false` |
 
 **`escalation`**
 
@@ -1056,14 +1056,18 @@ asks it to invent numbers it doesn't have.
   lost keystore password or lost key. A Veydrift planet cannot be transferred to a
   different address by any contract mechanism — see `README.md`'s key-custody section
   before you decide how seriously to treat key storage.
-- **`allow_combat` in `policy.json` now gates the Attack mission type specifically, at
-  `operator` tier.** Every other combat mission type
+- **`allow_combat` in `policy.json` gates the Attack mission type specifically, at
+  `operator` tier, AND is what makes the ladder's Attack rung (`8e:attack`) live.** Every
+  other combat mission type
   (`AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`) is still ignored by
   every code path regardless of this flag — enabling any of those requires an actual
-  source code change, not a config edit. Setting `allow_combat: true` does not by itself
-  make the agent attack anyone: no rung in the ladder proposes an Attack action, so this
-  flag only widens what a hand-constructed or future action could do, not what a tick
-  will do on its own.
+  source code change, not a config edit. Setting `allow_combat: true` at `operator` tier
+  **does** let the agent attack on its own, at the ladder's most conservative rung
+  (reached only once every other rung, including Colonize, finds nothing at all): it
+  picks the highest-raidable reachable target from the `/highscores` economy ranking
+  whose attack-protection is confirmed allowed, and sends every combat-capable ship
+  already built on the origin planet against it, with the contract's default loot order.
+  Do not set this flag unless you actually want that.
 - **Real transactions have already been submitted to Veydrift on mainnet from this
   codebase** — at tier 2 (`economy`) and tier 3 (`operator`), through the real
   `build → simulate → send` path, not a fixture or a fork. See `README.md`'s Status

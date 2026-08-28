@@ -150,9 +150,13 @@ touching related code, re-run the check named alongside each one.
   `_gate_mission_type` (agent side) and `veydrift-wallet`'s `resolveAllowCombat`
   (`policy.ts`, wallet side) — never trusting a CLI flag or environment variable for
   this value, on purpose (see `skills/veydrift-wallet/references/tx-safety.md`'s
-  residual-limit section for exactly why). No candidate generator proposes an Attack
-  action as of that commit — this makes Attack launch-encodable and
-  allowlist-permitted, not planner-reachable; a future generator is separate work.
+  residual-limit section for exactly why). **Since commit 6 (same date), a candidate
+  generator does propose Attack** — `candidates.generate_attack_candidates`, the
+  ladder's most conservative rung (`8e:attack`), reached only once every other rung has
+  found nothing at all, attacking the highest-raidable reachable `/highscores` target
+  whose attack-protection is confirmed allowed by a fresh, guard-time re-check
+  (`guard._gate_attack_protection`, a new 21st gate — never trusting the earlier,
+  generation-time read).
 - **Secrets never reach a log or a tracked file.** `log.py` scrubs any
   `0x[0-9a-fA-F]{64}` that isn't a known tx hash, and refuses to write a value matching a
   configured secret env var. Before committing, `git diff --cached` anything touching
