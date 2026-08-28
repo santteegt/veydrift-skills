@@ -40,6 +40,12 @@ function launchFleetMissionTx(missionType: number): UnsignedTx {
   return { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 };
 }
 
+function missileTx(): UnsignedTx {
+  const fn = resolveFunctionAbi("launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)");
+  const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, 665n, 0, 5] });
+  return { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 };
+}
+
 describe("checkAllowlist", () => {
   it("allows an economy-tier action against the live game address", async () => {
     const result = await checkAllowlist(startBuildingUpgradeTx(), "economy", {
@@ -196,6 +202,80 @@ describe("checkAllowlist", () => {
       });
       expect(result.ok).toBe(false);
       expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+    });
+  });
+
+  describe("launchInterplanetaryMissileAttack -- its own selector, conditional on policy.actions.allow_combat (launch-actions plan, commit 7)", () => {
+    it("rejects at economy tier regardless of allow_combat -- operator only", async () => {
+      const result = await checkAllowlist(missileTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowCombat: () => true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+    });
+
+    it("rejects at advisor tier regardless of allow_combat", async () => {
+      const result = await checkAllowlist(missileTx(), "advisor", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowCombat: () => true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+    });
+
+    it("rejects at operator tier when allow_combat resolves false", async () => {
+      const result = await checkAllowlist(missileTx(), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowCombat: () => false,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+      expect(result.reason).toMatch(/allow_combat=true/);
+    });
+
+    it("allows at operator tier when allow_combat resolves true", async () => {
+      const result = await checkAllowlist(missileTx(), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowCombat: () => true,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(true);
+    });
+
+    it("rejects (never passes vacuously) when resolveAllowCombat throws", async () => {
+      const boom = () => {
+        throw new Error("policy file is malformed");
+      };
+      const result = await checkAllowlist(missileTx(), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowCombat: boom,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+      expect(result.reason).toMatch(/could not be resolved/);
+    });
+
+    it("is not resolved at all outside operator tier -- lazy, never called unconditionally", async () => {
+      let called = false;
+      const result = await checkAllowlist(missileTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowCombat: () => {
+          called = true;
+          return true;
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(called).toBe(false);
+    });
+
+    it("is absent from tierSelectors('operator') -- never in the unconditional set", () => {
+      const fn = resolveFunctionAbi("launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)");
+      const selector = (encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, 665n, 0, 5] }).slice(
+        0,
+        10,
+      ) as `0x${string}`);
+      expect(tierSelectors("operator").has(selector)).toBe(false);
     });
   });
 

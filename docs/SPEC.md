@@ -134,13 +134,18 @@ change is everything downstream of that:
 - **Revised non-goals, restated**: alliances, ACS, migration, referrals, NFT
   burns, and the ERC-20 market bridge remain fully out of scope, unconditionally
   (unchanged from the original list above). Combat is **almost** entirely out of scope,
-  unconditionally, still — `AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/
-  `DefenseHold` remain unreachable in code at every tier, regardless of policy. The one
-  exception, since correction 70 (§9, launch-actions plan commit 5, 2026-08-28): Attack
-  is now conditionally in scope, gated on `policy.actions.allow_combat` at `operator`
-  tier — and, since correction 71 (commit 6, same date), planner-proposed as well, at
-  the ladder's most conservative rung (`8e:attack`), when a human opts in. A
-  raid-profitability model remains out of
+  unconditionally, still — the `FleetMissionType` enum's `AcsDefend`/`Intercept`/
+  `MissileAttack`/`AcsAttack`/`DefenseHold` values (as `launchFleetMission` mission
+  types — a distinct thing from the separate `launchInterplanetaryMissileAttack`
+  contract function below, despite the similar name) remain unreachable in code at every
+  tier, regardless of policy. Two exceptions now exist, both gated on
+  `policy.actions.allow_combat` at `operator` tier and both planner-reachable: **Attack**
+  (`launchFleetMission` mission type 3, since correction 70/71, §9, launch-actions plan
+  commits 5-6, 2026-08-28), at the ladder's `8e:attack` rung, and **Missile**
+  (`launchInterplanetaryMissileAttack`, a wholly separate contract entrypoint sharing
+  nothing with `launchFleetMission`, since correction 72, commit 7, same date), at the
+  even-more-conservative `8f:missile` rung. Both require a human to opt in; neither is on
+  by default. A raid-profitability model remains out of
   scope (`protectedResources` semantics still unconfirmed). Colonisation is **no
   longer** a non-goal, per the above. Non-combat fleet logistics (Transport/Harvest) is
   **no longer** a non-goal either, and the generators are less conservative than they
@@ -280,7 +285,7 @@ Tier is one field in `policy.json`. **No code path advances it** — only a huma
 | --- | --- | --- | --- | --- |
 | 1 | `advisor` | everything in scope | **nothing** | default |
 | 2 | `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24 h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
-| 3 | `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0) / Deploy(1) / Colonize(2) / Harvest(4) unconditionally, plus Attack(3) when `policy.actions.allow_combat=true` (§9 correction 70) | ≥7 days clean T2, human edit |
+| 3 | `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0) / Deploy(1) / Colonize(2) / Harvest(4) unconditionally, plus Attack(3) when `policy.actions.allow_combat=true` (§9 correction 70), plus `launchInterplanetaryMissileAttack` under the same flag (§9 correction 72) | ≥7 days clean T2, human edit |
 
 > **Correction, 2026-08-17 (judge review of the general-strategy-engine program).** The T2 row
 > above previously still listed `settlePlanet` — removed from both enforcement layers in Phase 5
@@ -642,9 +647,9 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 >   `walletctl` — see those sections for the enforcement and encoding side of this
 >   capability.
 
-> **Correction, 2026-08-28 (launch-actions plan): the pipeline is now seven bands, not
+> **Correction, 2026-08-28 (launch-actions plan): the pipeline is now eight bands, not
 > five — this section's own band list above was never updated past Phase 5c's five, and
-> drifted silently through two more commits before this correction closed it.** In order:
+> drifted silently through three more commits before this correction closed it.** In order:
 >
 > - **Deploy** (commit 4, correction 69 §9) folded into band 5's own logistics rung
 >   (`8c:logistics-deploy`, ranked second of four — after Transport, before local/foreign
@@ -658,14 +663,21 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 > - **Band 7, Attack** (commit 6, correction 71 §9) — `plan.py` rung `8e:attack`
 >   (`candidates.select_attack_candidate`), gated on `policy.actions.allow_combat` and,
 >   inside the generator, on `snapshot.randomness_readiness.ready`. Reached only when
->   bands 1-6 found nothing at all — the most conservative placement in the entire
->   ladder, more conservative even than Colonize, since committing a fleet to combat
->   risks losing it. See correction 71 for the full detail: target selection, the new
->   `attack_protection` guard gate, and the `combat_only_degradation` health-gate
->   correction it applies.
+>   bands 1-6 found nothing at all — more conservative than Colonize, since committing a
+>   fleet to combat risks losing it. See correction 71 for the full detail: target
+>   selection, the new `attack_protection` guard gate, and the `combat_only_degradation`
+>   health-gate correction it applies.
+> - **Band 8, Missile** (commit 7, correction 72 §9) — `plan.py` rung `8f:missile`
+>   (`candidates.select_missile_candidate`), gated on `policy.actions.allow_combat` (the
+>   same flag Attack uses). Reached only when bands 1-7 found nothing at all — the most
+>   conservative placement in the entire ladder, even more so than Attack, though it
+>   uses `launchInterplanetaryMissileAttack`, a wholly separate, fully synchronous
+>   contract entrypoint sharing nothing with `launchFleetMission`. See correction 72 for
+>   the full detail: the range/primary-target/owned-count guard gate, and the
+>   attack-protection bashing exemption.
 >
-> Both new corrections are summarised here rather than re-explained in full; §9's own
-> entries are the source of truth for exactly what each commit changed and why.
+> All three new corrections are summarised here rather than re-explained in full; §9's
+> own entries are the source of truth for exactly what each commit changed and why.
 
 ### 5.5 `vd guard` — guardrail evaluation
 
@@ -677,7 +689,8 @@ reported**, never short-circuited — the full verdict list is the audit artifac
 | `killswitch` | `$VEYDRIFT_HOME/KILLSWITCH` absent |
 | `tier` | action's function ∈ tier's allowed set |
 | `mission_type` | (Phase 5c, 2026-08-17) for `launchFleetMission` only: `Action.mission_type` ∈ the allowed set {Transport, Deploy, Colonize, Harvest} unconditionally, **plus Attack when `policy.actions.allow_combat=true`** (commit 5, correction 70) — default-deny, `mission_type is None` **BLOCK**s (never "nothing to check"); mirrors `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES`/`COMBAT_ALLOWED_MISSION_TYPES` exactly, independent of and in addition to `tier` |
-| `attack_protection` | (commit 6, correction 71) for an Attack `launchFleetMission` only: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — `None`/unknown or `false` **BLOCK**s, only `true` **PASS**es |
+| `attack_protection` | (commit 6, correction 71; extended to Missile, commit 7, correction 72) for an Attack `launchFleetMission` or a `launchInterplanetaryMissileAttack` action: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — `None`/unknown **BLOCK**s, `true` **PASS**es, `false` **BLOCK**s unless this is a Missile action AND `blockedReason == "bashing"` exactly (missiles ignore the bashing-limit dimension server-side) |
+| `missile_target` | (commit 7, correction 72) for `launchInterplanetaryMissileAttack` only: `policy.actions.allow_combat` is true, `primaryTarget <= Defense.LargeShieldDome`(7), same galaxy and in range (`calc.missile_range`/`missile_system_distance`), origin owns >= `quantity` Interplanetary Missiles — independently re-derived from `Snapshot` alone, no live data needed |
 | `prerequisites` | proposed entity's on-chain requirements (`techtree.py`) are met on the target planet — a level the snapshot didn't report is treated as unmet, never assumed high enough; also enforces shield-dome/missile-slot caps |
 | `address` | destination ∈ **live** `/runtime-config` address set |
 | `abi_hash` | live `deploymentAbiHash` == pinned → else **BLOCK all writes** |
@@ -1871,6 +1884,117 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `_attack_protection_allowed` unit tests plus `_run_tick` wiring tests (fetches
     `attack_targets` only when `allow_combat` is true, fetches
     `attack_protection_allowed` only for an actual Attack proposal).
+
+72. **New, 2026-08-28 (launch-actions plan, commit 7).** Missile becomes
+    planner-reachable via `launchInterplanetaryMissileAttack(uint256 origin, uint256
+    target, uint8 primaryTarget, uint32 quantity)` — the second and, per this plan,
+    final combat action type. Read directly from `VeydriftPlanetManagementModule.sol`
+    (pinned commit): shares NOTHING with `launchFleetMission` — its own selector, no
+    fleet tuple, no mission-type argument, no fleet slot, no travel time, fully
+    synchronous (debits the origin's Interplanetary Missiles and the target's
+    Anti-Ballistic Missiles/`primaryTarget` defense immediately, in the same
+    transaction).
+
+    New ladder rung `8f:missile` (band 8) — placed after Attack (`8e`), reached only
+    once every other band, Attack included, found nothing at all. `candidates.
+    generate_missile_candidates`/`select_missile_candidate`, gated on
+    `policy.actions.allow_combat` (the same flag Attack uses). Sends every owned
+    Interplanetary Missile (`Defense.InterplanetaryMissile`, id 9) in one shot,
+    all-or-nothing, at the target's single most-numerous eligible defense type among ids
+    0-7 (`_choose_missile_primary_target`; ids 8/9 — ABM/IPM themselves — are refused as
+    targets by the contract, `InvalidMissileTarget`). Ranks candidate targets by
+    descending total eligible-defense count, falling back to the next-reachable target
+    when the top pick is out of range.
+
+    `tick._missile_targets` reads the SAME `/highscores` (economy category) response
+    `_attack_targets` already reads, extracting each row's `homePlanet.tactical.
+    defenses.units[]` (defense composition) instead of `raidableResources` — a missile
+    snipes a defense type, not loot. Only fetched when `policy.actions.allow_combat` is
+    true, the same gating `attack_targets` already has.
+
+    **Two new `calc.py` formulas, both read directly from
+    `VeydriftPlanetManagementModule.sol`'s private functions, not guessed at:**
+    `missile_range(impulse_drive_level)` = `impulse_drive_level == 0 ? 0 :
+    impulse_drive_level * 5 - 1` (Impulse Drive 0 means a real, narrow range of exactly 0
+    systems — same galaxy, same system only — never "no range at all"), and
+    `missile_system_distance(a, b)` = `abs(a.system - b.system)`, deliberately a
+    separate function from `distance()` (a fleet-mission travel-distance formula) rather
+    than a branch inside it — the two measure genuinely different things, and a caller
+    must separately check galaxy equality (this function does not).
+
+    **New, 22nd guard gate: `missile_target`** (`guard._gate_missile_target`).
+    Independently re-derives every precondition this codebase's own frozen `Snapshot`
+    can verify: `policy.actions.allow_combat` is true (this function has no shared
+    non-combat sibling the way `launchFleetMission`/Attack does, so this check lives
+    here rather than in `_gate_mission_type`); `primary_target <= Defense.
+    LargeShieldDome` (7); same galaxy and `missile_system_distance(...) <=
+    missile_range(...)`; the origin owns at least `quantity` Interplanetary Missiles.
+    Deliberately does NOT check `_requireNoPendingMissionResolutionForPlanet` for either
+    planet — not knowable from a wallet-scoped read for a foreign target, the same
+    documented gap this spec's own "precondition every action shares" note already
+    covers; `walletctl simulate` catches it before send instead.
+
+    **`guard._gate_attack_protection` (the same gate Attack uses) gains a missile
+    branch.** `_enforceAttackProtection(..., countsBashing=false)` — read directly from
+    source — means a missile ignores the bashing-limit dimension entirely, so a target
+    whose ONLY `blockedReason` is `"bashing"` is a legal missile target even though the
+    same target would be an illegal fleet Attack. `tick._attack_protection_allowed` (the
+    same function Attack uses, extended) now returns `(allowed, blocked_reason)` instead
+    of just `allowed`, fetched for both an Attack and a Missile proposal. `score_
+    protection`/`not_allied` still block a missile exactly like an Attack — only the
+    bashing exemption is missile-specific, and only when positively confirmed (a missing
+    `blocked_reason` on a `False` result still BLOCKs, even for a missile).
+
+    **`guard.idempotency_key` gains a third special case**, alongside `FLEET_MISSION`
+    and `RESOLVE_MISSION`: `MISSILE_ATTACK`'s `entity_id` is always `None` (mirroring
+    `FLEET_MISSION`'s own `ships`-map shape), so without folding in `target_planet_id`/
+    `primary_target`, every missile launched from one planet would collapse onto one
+    key/revert-streak counter. Fixed before this action family could ever actually be
+    proposed at all — unlike `FLEET_MISSION`'s fix (commit 2), this one never had a
+    live-before-fixed window.
+
+    **`veydrift-wallet` changes, in the same commit, never before it** (the same "both
+    layers together" sequencing discipline commits 5-6 already established): a new
+    `COMBAT_SIGNATURES` list (`allowlist.ts`) resolved to a selector set
+    (`combatSelectorSet()`) but **deliberately never merged into `tierSelectors`'s
+    unconditional return value** — unlike Attack (a mission-type *argument* on the
+    shared `launchFleetMission` function, gated inside a calldata decode),
+    `launchInterplanetaryMissileAttack` has no shared function to split "unconditional
+    tier + conditional argument" the way Attack does: the entire function IS combat, so
+    its `allow_combat` conditionality is folded directly into `checkAllowlist`'s
+    selector check (item 2 of five) instead, checked lazily via `resolveAllowCombat`
+    exactly like Attack's own branch. This is a genuine, deliberate shape difference
+    between the two enforcement layers for this one function — `guard.py`'s
+    `_MIN_TIER_FOR_FUNCTION` maps it unconditionally to `operator` (that's still its
+    real tier requirement; the `allow_combat` conditionality lives in `_gate_missile_
+    target` instead), while `allowlist.ts` excludes its selector from the unconditional
+    set entirely. `test_tier_map_agrees_with_the_wallet_engines_allowlist` accounts for
+    this explicitly: a new `guard._COMBAT_ONLY_FUNCTIONS = frozenset({"
+    launchInterplanetaryMissileAttack"})` constant (existing purely for this
+    comparison, not a second enforcement mechanism) is excluded from the ordinary
+    operator-tier function-name diff and instead diffed directly against `allowlist.ts`'s
+    `COMBAT_SIGNATURES`.
+
+    No changes to `tx.ts`/`abi.ts`/`cli.ts` were needed — `buildTx` already resolves any
+    function generically by name/signature via `resolveFunctionAbi`, so a brand-new,
+    non-overloaded selector needed no encoder-side special-casing.
+
+    New tests: `tests/test_calc.py`'s `missile_range`/`missile_system_distance` block (7
+    tests); `tests/test_guard.py`'s `missile_target` block (18 tests, covering every
+    precondition and its missing-data fail-closed case), 6 new `attack_protection`
+    missile-branch tests, and a new `test_health_still_passes_the_exception_for_a_
+    missile_action` (pinning that a missile is deliberately EXCLUDED from `_gate_health`'s
+    `is_combat_action` -- unlike Attack, `launchInterplanetaryMissileAttack` never
+    requests randomness, confirmed by reading the contract source, so the health-gate
+    exception genuinely still applies to it); `tests/test_candidates.py`'s 13-test
+    `generate_missile_candidates`/`select_missile_candidate` block; `tests/test_tick.py`'s
+    `_missile_targets` unit tests, `_action_to_walletctl_json`'s new missile-encoding
+    tests, and `_run_tick` wiring tests (fetches `missile_targets` only when
+    `allow_combat` is true, fetches the shared attack-protection check for a Missile
+    proposal too). `skills/veydrift-wallet/tests/allowlist.test.ts`'s new
+    "launchInterplanetaryMissileAttack" block (7 tests) plus a live `cast sig`
+    cross-check entry. 714 Python tests passed (652 baseline + 62 new); 141 TypeScript
+    tests passed + 2 fork-only skipped = 143 total (135 baseline + 8 new).
 
 ---
 

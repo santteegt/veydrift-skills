@@ -102,7 +102,9 @@ validated the transaction upstream. Five checks, all evaluated and reported:
 
 1. `tx.to` ∈ addresses from a **live** `/runtime-config` fetch — never hardcoded
 2. `tx.data`'s 4-byte selector ∈ the tier's allowed set, **computed from the pinned ABI**
-   (never a hand-typed hex constant)
+   (never a hand-typed hex constant) — at `operator` tier, `launchInterplanetaryMissileAttack`
+   (its own, brand-new selector) is checked conditionally on `policy.actions.allow_combat`
+   here rather than unconditionally, the same lazy resolution item 5 uses for Attack
 3. `tx.value == 0` — no payable action is whitelisted at any tier reachable here
 4. `tx.chainId == 8453` (Base)
 5. `operator`-only: `launchFleetMission`'s mission-type argument (decoded from calldata,

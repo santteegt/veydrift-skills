@@ -650,6 +650,41 @@ def max_planets(astrophysics_level: int) -> int:
     return 1 + astrophysics_level
 
 
+def missile_range(impulse_drive_level: int) -> int:
+    """`VeydriftPlanetManagementModule.sol`'s private `_interplanetaryMissileRange`
+    (pinned commit 701bed35, read directly from source for commit 7 of the launch-actions
+    plan): ``impulse_drive_level == 0 ? 0 : impulse_drive_level * 5 - 1``. Impulse Drive 0
+    means a range of exactly `0` (not "no data" -- a genuinely narrow but real range,
+    same-galaxy-same-system only, `missile_system_distance(...) <= 0` is satisfiable by a
+    same-system target). Every other level widens the range by 5 systems per level, minus
+    one. This is a small, fully-published, pure formula with no live/per-account state —
+    the same "not the banned cost-scaling category" posture the ship-movement-stats table
+    below already takes, not something to fetch live (no route reports it).
+
+    Used by `guard._gate_missile_target` to independently re-derive the range check
+    before send, and by `candidates.generate_missile_candidates` to filter unreachable
+    targets at generation time."""
+    if impulse_drive_level <= 0:
+        return 0
+    return impulse_drive_level * 5 - 1
+
+
+def missile_system_distance(a: Coordinates, b: Coordinates) -> int:
+    """`VeydriftPlanetManagementModule.sol`'s private `_systemDistanceForMissiles`
+    (pinned commit 701bed35): the plain absolute difference between two systems' numbers
+    -- ``abs(a.system - b.system)`` -- with **no galaxy term and no position term**,
+    unlike `distance()` above (a fleet-mission travel-distance formula). A missile launch
+    additionally requires the SAME galaxy (`origin.galaxy == target.galaxy`) as a
+    separate, prior check -- this function does not itself check that; callers must
+    verify galaxy equality themselves before comparing this value against
+    `missile_range()`. Deliberately a distinct function, not a branch inside `distance()`
+    -- the two formulas measure genuinely different things (fleet travel time vs. a flat
+    missile-range gate) and conflating them risks a silent mix-up."""
+    a_galaxy, a_system, _a_position = _parse_coordinates(a)
+    b_galaxy, b_system, _b_position = _parse_coordinates(b)
+    return abs(a_system - b_system)
+
+
 # --------------------------------------------------------------------------------------
 # Ship movement stats (Phase 5c, docs/SPEC.md §5.4) — fixed lookup tables straight from
 # `packages/contracts/src/libraries/VeydriftCatalog.sol` (pinned commit 701bed35). This is

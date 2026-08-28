@@ -35,15 +35,18 @@ different things at each tier.
 | --- | --- | --- | --- |
 | 1 `advisor` (default) | everything in scope | **nothing, ever** | — |
 | 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
-| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) unconditionally, plus Attack(3) with `policy.actions.allow_combat=true` | ≥7 days clean T2, human edit |
+| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) unconditionally, plus Attack(3) with `policy.actions.allow_combat=true`, plus `launchInterplanetaryMissileAttack` under the same flag | ≥7 days clean T2, human edit |
 
-**Most of combat is unreachable at every tier by code, not by config.** `AcsDefend`,
-`Intercept`, `MissileAttack`, `AcsAttack` and `DefenseHold` require editing source, not
-flipping a flag, regardless of `policy.json`. `Attack` is the one exception:
-`policy.json`'s `allow_combat` key is a real gate for it at `operator` tier, **and**, the
-ladder's most conservative rung (`8e:attack`) does propose an Attack action once that
-flag is set, reached only once every other rung finds nothing at all — this is a real
-decision to let the agent attack other players on its own, not an inert flag.
+**Most of combat is unreachable at every tier by code, not by config.** The
+`FleetMissionType` enum's `AcsDefend`, `Intercept`, `MissileAttack`, `AcsAttack` and
+`DefenseHold` values require editing source, not flipping a flag, regardless of
+`policy.json`. Attack and Missile (`launchInterplanetaryMissileAttack`, a wholly
+separate contract entrypoint sharing nothing with `launchFleetMission`) are the two
+exceptions: `policy.json`'s `allow_combat` key is a real gate for both, at `operator`
+tier, **and** the ladder's two most conservative rungs (`8e:attack`, then `8f:missile`)
+do propose one once that flag is set, each reached only once every earlier rung finds
+nothing at all — this is a real decision to let the agent attack other players on its
+own, by either mechanism, not an inert flag.
 
 Even at tier 1, `vd plan run` produces a complete, ready-to-submit transaction description
 — that's what makes a T1→T2 promotion decision evidence-based instead of a guess.
@@ -97,7 +100,7 @@ which is `veydrift-wallet`'s decision, not this skill's.
 
 `vd plan run` evaluates these in order; the **first match wins**, and the pipeline always
 falls back to an explicit NO-OP if nothing matched (`Action.rationale` is never empty).
-Rungs 0-4 are vetoes; rungs 5-11 are a seven-band candidate pipeline (`candidates.py` —
+Rungs 0-4 are vetoes; rungs 5-12 are an eight-band candidate pipeline (`candidates.py` —
 see `references/strategy-playbook.md` for the full derivation):
 
 0. KILLSWITCH present → HALT
@@ -108,7 +111,7 @@ see `references/strategy-playbook.md` for the full derivation):
 2. pending tx unreconciled → NO-OP, reconcile first
 3. a mission has been Resolving > 60s → `resolveFleetMission` (permissionless, free)
 4. incoming hostile fleet → ESCALATE, no proposal
-5-11. generate → filter → score → select, seven bands in order:
+5-12. generate → filter → score → select, eight bands in order:
      1. deadline-driven — storage overflow: spend it, or build the matching storage
      2. economically scored — building upgrade, ascending payback hours
      3. policy-declared — research, then ships/defense, gated on economy-on-track
@@ -122,9 +125,15 @@ see `references/strategy-playbook.md` for the full derivation):
         gated on `policy.strategy.colonize`; reached only when nothing above found
         anything at all
      7. Attack (rung 8e) — attacks the highest-raidable reachable target, gated on
-        `policy.actions.allow_combat` and `randomness_readiness.ready`; the most
-        conservative rung in the whole ladder, reached only when every other band,
-        Colonize included, found nothing at all
+        `policy.actions.allow_combat` and `randomness_readiness.ready`; reached only
+        when every other band, Colonize included, found nothing at all
+     8. Missile (rung 8f) — `launchInterplanetaryMissileAttack`, a wholly separate,
+        fully synchronous contract entrypoint sharing nothing with `launchFleetMission`
+        (no fleet tuple, no mission type, no fleet slot, no travel time); fires every
+        owned Interplanetary Missile at the target's most-numerous eligible defense
+        type, gated on `policy.actions.allow_combat`; the MOST conservative rung in the
+        whole ladder, reached only when every other band, Attack included, found
+        nothing at all
      else → NO-OP with an explicit reason
 
 The economic band's actual choices — which mine, which energy source — are **derived from

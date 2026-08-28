@@ -167,7 +167,12 @@ and reported (never short-circuited in the report, only in the final `ok`):
 2. `tx.data`'s 4-byte selector must be in the tier's allowed set, and that set is **computed from
    the pinned ABI** (`resolveFunctionAbi` + `toFunctionSelector`), not from a hand-typed hex
    constant — if the pinned ABI ever stops containing one of the tier's signatures, computing the
-   selector throws loudly instead of silently allowlisting nothing (or worse, misresolving).
+   selector throws loudly instead of silently allowlisting nothing (or worse, misresolving). At
+   `operator` tier, one selector is conditional rather than unconditional: `launchInterplanetaryMissileAttack`
+   (`COMBAT_SIGNATURES`, launch-actions plan commit 7, 2026-08-28) is checked lazily against
+   `resolveAllowCombat` the same way item 5's mission-type argument is — it's its own brand-new
+   selector, not a `launchFleetMission` argument, so its `allow_combat` conditionality lives in
+   this check directly rather than in item 5's calldata decode. See below.
 3. `tx.value` must be `0` — no payable action is whitelisted at any tier reachable from this
    engine, so this check can never legitimately fail for a real proposed action; if it does,
    something upstream is already wrong.
@@ -229,6 +234,36 @@ DefenseHold) are unaffected — still absent from both sets, on both sides, unco
 `veydrift-agent` skill's own source; it is now a real, independently-checked gate at both
 enforcement layers. See `resolveAllowCombat`'s own doc comment (`src/policy.ts`) and the residual-
 limit section above for exactly what this does and does not defend against.
+
+### 2026-08-28 (launch-actions plan, commit 7): `launchInterplanetaryMissileAttack`, its own selector
+
+Unlike Attack, a missile shares **nothing** with the fleet-mission path — no fleet tuple, no
+mission-type argument, no fleet slot, no travel time (confirmed by reading
+`VeydriftPlanetManagementModule.sol`'s `launchInterplanetaryMissileAttack` directly: it resolves
+fully synchronously, in the same transaction, debiting the origin's Interplanetary Missiles and the
+target's Anti-Ballistic Missiles/primary-target defense immediately). So its `allow_combat`
+conditionality can't be expressed as a `launchFleetMission` calldata-argument decode the way
+Attack's is — there is no argument to decode; the function *itself* is the combat action.
+
+`COMBAT_SIGNATURES = ["launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)"]` — a new
+list, resolved to a selector set (`combatSelectorSet()`) the same way `ECONOMY_SIGNATURES`/
+`LAUNCH_FLEET_MISSION_SIGNATURES` already are, but **deliberately never merged into
+`tierSelectors`'s unconditional return value**. `checkAllowlist`'s own check 2 (the selector check)
+now looks in the unconditional set first, then — only at `operator` tier, and only if the
+unconditional lookup missed — in `combatSelectorSet()`, calling `resolveAllowCombat` lazily exactly
+like Attack's mission-type branch does (same reasoning: a malformed or absent `allow_combat` must
+never block an unrelated, non-combat transaction). This is the same lazy-resolution discipline
+commit 5 established, applied at the selector level instead of the calldata-argument level because
+that's the level this particular combat action lives at.
+
+No change to `guard.py`'s tier map or `veydrift-agent`'s `_MIN_TIER_FOR_FUNCTION` was needed on the
+allowlist side for this to work correctly at `operator` tier specifically — but the agent-side
+package does add its own new `_MIN_TIER_FOR_FUNCTION["launchInterplanetaryMissileAttack"] =
+Tier.OPERATOR` entry plus a new dedicated `missile_target` guard gate (range, primary-target
+validity, owned-missile-count) — see that package's own `CHANGELOG.md`'s `1.13.0` entry.
+`test_tier_map_agrees_with_the_wallet_engines_allowlist` (agent-side) is extended to also assert
+`launchInterplanetaryMissileAttack`'s selector is absent from `tierSelectors`'s own return value at
+every tier and present only in `COMBAT_SIGNATURES`, mirroring the existing mission-type-set diff.
 
 ## The two other traps `send` refuses outright, independent of the allowlist
 

@@ -14,10 +14,10 @@ Ladder, first match wins, exactly as docs/SPEC.md §5.4 specifies:
 2. pending tx unreconciled           -> NO-OP, reconcile first
 3. mission Resolving > 60s           -> resolveFleetMission   (permissionless, free)
 4. incoming hostile fleet            -> ESCALATE, no proposal (fleet-visibility.incoming)
-5-9. a seven-band candidate pipeline (see below) -- deadline-driven storage overflow,
+5-9. an eight-band candidate pipeline (see below) -- deadline-driven storage overflow,
      then economically-scored building, then policy-declared research/ships/defense,
      then a locked declared target's unlock-chain step, then non-combat fleet
-     logistics, then Colonize, then Attack, else an explicit NO-OP.
+     logistics, then Colonize, then Attack, then Missile, else an explicit NO-OP.
 ```
 
 **Rungs 0-4 are vetoes — safety, not strategy — and are untouched by Phase 2 of the
@@ -34,12 +34,12 @@ selection (a small function per rung that replays the exact same priority order 
 pre-Phase-2 ladder used) — see that module's docstring for the full architecture. This
 module now only:
 
-1. Calls the six `select_*` functions in the six-band precedence order below.
+1. Calls the eight `select_*` functions in the eight-band precedence order below.
 2. Attaches the winning `Candidate`'s runner-ups to the returned `Action.alternatives`
    (`AlternativeNote`, capped at `policy.strategy.max_alternatives`) — informational
    only, never a `Decision` input, never re-derived by `guard.py`.
 
-**Seven bands, in order** (docs/SPEC.md §5.4):
+**Eight bands, in order** (docs/SPEC.md §5.4):
 
 1. **Deadline-driven** — storage overflow (`candidates.select_storage_candidate`). A
    loss-avoidance deadline, not an ROI question; keeps precedence over everything else
@@ -87,6 +87,14 @@ module now only:
    even than Colonize: committing a fleet to combat risks losing it, unlike Colonize's
    single deterministic-outcome Colony Ship, so this is reached only after every other
    band — including Colonize — has found nothing at all for any target planet.
+8. **Missile** (commit 7 of the launch-actions plan, rung `8f`) —
+   `candidates.select_missile_candidate`, gated on `policy.actions.allow_combat` (the
+   same flag Attack uses). Placed after Attack, not merged with it: a missile is a
+   narrower, more surgical strike than committing a whole combat fleet (destroys defense
+   units only, no fleet risked, fully synchronous), but this ladder still treats "fire a
+   weapon at another player" as uniformly the most conservative category — reached only
+   once every other band, Attack included, has found nothing at all for any target
+   planet.
 
 **The two invariants that matter most, both derived from planet traits, never
 hardcoded** (unchanged by Phase 2 — see `candidates.py` for where the logic now lives):
@@ -202,18 +210,20 @@ def plan_next_action(
     foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
     colonize_targets: list[tuple[str, int]] | None = None,
     attack_targets: dict[int, tuple[str, Resources, bool | None]] | None = None,
+    missile_targets: dict[int, tuple[str, dict[int, int], bool | None]] | None = None,
 ) -> Action:
     """Decide exactly one `Action` from `snapshot` + `policy`. First matching rung wins;
     `Action.rule` records which one fired (e.g. `"5:storage-overflow-spend"`) so the log
     is auditable without re-running the planner (docs/SPEC.md §5.4).
 
     `killswitch_active`, `pending_tx_unreconciled`, `resolvable_mission_ids`,
-    `own_planet_debris`, `foreign_debris_targets`, `colonize_targets` and
-    `attack_targets` are not on `Snapshot` (that model is frozen and owned by WP1) — they
-    are `tick.py`'s responsibility to discover (killswitch file, `agent-state.json`,
-    `/missions`, `/universe/galaxies/{g}/systems/{s}`, `/raid-finder/debris`,
-    `/highscores`) and pass in. Defaults are the safe "nothing pending" state, so calling
-    this with just a snapshot and policy is a legitimate offline planning call.
+    `own_planet_debris`, `foreign_debris_targets`, `colonize_targets`, `attack_targets`
+    and `missile_targets` are not on `Snapshot` (that model is frozen and owned by WP1)
+    — they are `tick.py`'s responsibility to discover (killswitch file,
+    `agent-state.json`, `/missions`, `/universe/galaxies/{g}/systems/{s}`,
+    `/raid-finder/debris`, `/highscores`) and pass in. Defaults are the safe "nothing
+    pending" state, so calling this with just a snapshot and policy is a legitimate
+    offline planning call.
     """
     if killswitch_active:
         return Action(kind=ActionKind.HALT, rule="0:killswitch", rationale="KILLSWITCH file present; halting before any further action.")
@@ -385,6 +395,20 @@ def plan_next_action(
     )
     if attack_winner is not None:
         return _finalize(attack_winner, attack_alternatives, "8e:attack", policy)
+
+    # Band 8 (commit 7 of the launch-actions plan, rung `8f`): Missile, the second and
+    # final combat action type this codebase can propose. Gated on
+    # `policy.actions.allow_combat` (the same flag Attack uses). Placed AFTER Attack, not
+    # before or merged with it: a missile is a narrower, more surgical strike (destroys
+    # defense units, no fleet risked, fully synchronous) than committing a whole combat
+    # fleet, but this codebase still treats "fire a weapon at another player" as
+    # uniformly the most conservative category, reached only once every other band,
+    # Attack included, found nothing at all for any target planet.
+    missile_winner, missile_alternatives = candidates.select_missile_candidate(
+        snapshot, policy, target_planets, missile_targets=missile_targets
+    )
+    if missile_winner is not None:
+        return _finalize(missile_winner, missile_alternatives, "8f:missile", policy)
 
     return Action(
         kind=ActionKind.NOOP,

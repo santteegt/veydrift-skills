@@ -2895,6 +2895,163 @@ def generate_attack_candidates(
     return []
 
 
+#: `VeydriftPlanetManagementModule.sol`'s own bound: `primaryTarget > Defense.
+#: LargeShieldDome` reverts `InvalidMissileTarget` -- AntiBallisticMissile(8) and
+#: InterplanetaryMissile(9) are not valid missile targets. Duplicated from `guard.py`'s
+#: own copy of this same bound, not imported -- this module never imports from
+#: `guard.py` (the reverse of the established "guard.py duplicates candidates.py's
+#: contract-derived constants" convention, extended here since both modules need it).
+_MISSILE_TARGET_MAX = ids.Defense.LARGE_SHIELD_DOME
+
+
+def _choose_missile_primary_target(defense_counts: dict[int, int]) -> int | None:
+    """Picks the target's single most-numerous defense type among ids 0-7 (Shield
+    Domes/turrets/Rocket Launcher -- excludes ABM(8)/IPM(9) themselves, which the
+    contract refuses as a target), ties broken by lowest id. "Snipe the biggest
+    defensive investment" -- a deliberately simple heuristic, not a power-weighted or
+    ROI-optimizing one; `references/strategy-playbook.md` documents this as a known,
+    intentional simplification, the same posture `generate_colonize_candidates` already
+    takes toward its own deuterium-multiplier-only ranking. `None` when the target has no
+    defense at or below `_MISSILE_TARGET_MAX` at all (an all-ABM/IPM-or-empty defense
+    stance -- rare, but not impossible)."""
+    eligible = {did: count for did, count in defense_counts.items() if 0 <= did <= _MISSILE_TARGET_MAX and count > 0}
+    if not eligible:
+        return None
+    return max(sorted(eligible), key=lambda did: eligible[did])
+
+
+def generate_missile_candidates(
+    snapshot: Snapshot,
+    policy: Policy,
+    planet: PlanetSnapshot,
+    *,
+    missile_targets: dict[int, tuple[str, dict[int, int], bool | None]] | None = None,
+) -> list[Candidate]:
+    """`launchInterplanetaryMissileAttack` -- commit 7 of the launch-actions plan. Fully
+    synchronous, shares NOTHING with the `launchFleetMission` path this generator's
+    siblings all use: no fleet tuple, no `mission_type` argument, no fleet slot, no
+    travel time -- resolves immediately in the same transaction (confirmed by reading
+    `VeydriftPlanetManagementModule.sol`'s `launchInterplanetaryMissileAttack` directly).
+    Gated on `policy.actions.allow_combat` -- the same master combat flag
+    `generate_attack_candidates` uses, deliberately NOT
+    `policy.actions.allow_fleet_noncombat`, since a missile is never non-combat.
+
+    Requires at least one built Interplanetary Missile (`Defense.InterplanetaryMissile`,
+    id 9) on the origin planet -- `InvalidQuantity()` on zero -- and a target within
+    range: same galaxy, and `calc.missile_system_distance(...) <=
+    calc.missile_range(impulse_drive_level)` (Impulse Drive 0 means a narrow-but-real
+    range of exactly 0 systems, not "no data" -- see `calc.missile_range`'s own
+    docstring). Sends every owned Interplanetary Missile in one shot -- an all-or-nothing
+    commitment, the same posture `generate_attack_candidates` takes toward combat ships.
+
+    `missile_targets` is caller-supplied, the same posture `attack_targets` takes toward
+    the frozen `Snapshot` -- `tick.py`'s `_missile_targets` is the live source, reading
+    the same `/highscores` response `_attack_targets` does but extracting each row's
+    defense composition (`homePlanet.tactical.defenses.units[]`) instead of raidable
+    resources -- a missile snipes a specific DEFENSE type, not loot. Keyed by target
+    planet id, each value `(coordinates, defense_counts_by_id, attack_protection_
+    allowed)`. A `None`/`False` third element excludes the target entirely at
+    generation time, the same fail-closed courtesy-filter posture
+    `generate_attack_candidates` takes -- `guard._gate_attack_protection`'s fresh,
+    guard-evaluation-time re-check (extended to Missile in this same commit) is the real
+    enforcement, never this generation-time read.
+
+    Picks `primary_target` via `_choose_missile_primary_target` (the target's most-
+    numerous eligible defense type) and ranks candidate targets by descending TOTAL
+    defense count among eligible types -- "the most heavily defended reachable target,"
+    a deliberately simple heuristic mirroring `generate_attack_candidates`'s own
+    raidable-resource-total ranking, not a power-weighted optimizer."""
+    if not policy.actions.allow_combat or planet.coordinates is None or not missile_targets:
+        return []
+    ipm = _entity(planet.defenses, ids.Defense.INTERPLANETARY_MISSILE)
+    available = ipm.count if ipm is not None and ipm.count else 0
+    if available <= 0:
+        return []
+
+    _combustion, impulse, _hyperspace = _drive_tech_levels(snapshot)
+    range_ = calc.missile_range(impulse)
+
+    ranked = sorted(
+        (
+            (target_planet_id, coordinates, defense_counts)
+            for target_planet_id, (coordinates, defense_counts, allowed) in missile_targets.items()
+            if allowed is True  # None or False both excluded -- fail closed on unknown
+        ),
+        key=lambda t: sum(c for did, c in t[2].items() if 0 <= did <= _MISSILE_TARGET_MAX),
+        reverse=True,
+    )
+    for target_planet_id, coordinates, defense_counts in ranked:
+        try:
+            target_galaxy = int(coordinates.split(":")[0])
+            origin_galaxy = int(planet.coordinates.split(":")[0])
+        except (ValueError, IndexError):
+            continue
+        if target_galaxy != origin_galaxy:
+            continue
+        if calc.missile_system_distance(planet.coordinates, coordinates) > range_:
+            continue
+        primary_target = _choose_missile_primary_target(defense_counts)
+        if primary_target is None:
+            continue
+
+        action = Action(
+            kind=ActionKind.MISSILE_ATTACK,
+            function="launchInterplanetaryMissileAttack",
+            planet_id=planet.planet_id,
+            origin_planet_id=planet.planet_id,
+            target_coordinates=coordinates,
+            target_planet_id=target_planet_id,
+            primary_target=primary_target,
+            quantity=available,
+            cost=Resources(),  # no metal/crystal/deuterium spend -- debits an already-built defense unit
+            rationale=(
+                f"policy.actions.allow_combat=true; planet {planet.planet_id} has "
+                f"{available} Interplanetary Missile(s); planet {target_planet_id} "
+                f"({coordinates}) is in range (Impulse Drive {impulse}, range {range_}) "
+                f"and carries {defense_counts.get(primary_target, 0)} of defense id "
+                f"{primary_target} ({ids.defense_name(primary_target)}), the target's "
+                f"most-numerous eligible defense type."
+            ),
+            expected_effect=(
+                f"up to {available} of planet {target_planet_id}'s "
+                f"{ids.defense_name(primary_target)} units are destroyed, after any "
+                "Anti-Ballistic Missile interception; the origin's Interplanetary "
+                "Missiles are consumed."
+            ),
+        )
+        return [
+            Candidate(
+                action=action,
+                family="missile",
+                score=None,
+                score_basis=f"most heavily defended reachable target (planet {target_planet_id}, {sum(defense_counts.values())} total defense units)",
+            )
+        ]
+    return []
+
+
+def select_missile_candidate(
+    snapshot: Snapshot,
+    policy: Policy,
+    target_planets: list[PlanetSnapshot],
+    *,
+    missile_targets: dict[int, tuple[str, dict[int, int], bool | None]] | None = None,
+) -> tuple[Candidate | None, list[Candidate]]:
+    """First target planet with a selectable Missile candidate wins -- the same
+    "generate every family for this planet, first hit wins" shape every other `select_*`
+    function here uses. Mirrors `select_attack_candidate`'s shape exactly:
+    `missile_targets` is shared across every target planet (it is leaderboard data, not
+    planet-scoped)."""
+    if not target_planets:
+        return None, []
+    alternatives: list[Candidate] = []
+    for planet in target_planets:
+        candidates_ = generate_missile_candidates(snapshot, policy, planet, missile_targets=missile_targets)
+        if candidates_:
+            return candidates_[0], rank_candidates(alternatives)
+    return None, []
+
+
 def select_attack_candidate(
     snapshot: Snapshot,
     policy: Policy,

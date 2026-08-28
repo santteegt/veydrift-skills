@@ -928,6 +928,45 @@ def test_fleet_mission_colonize_encodes_the_packed_coordinate_target():
     assert built["args"][-1] == 0
 
 
+def test_missile_attack_encodes_positional_args(monkeypatch):
+    """Commit 7 of the launch-actions plan. Not overloaded on the deployed ABI -- the bare
+    name is used directly, the same posture every other non-`launchFleetMission` branch
+    already takes (AGENTS.md §7 trap #2 only applies to the one overloaded function)."""
+    from veydrift_agent import ids
+
+    action = _missile_action(origin_planet_id=664, target_planet_id=999, primary_target=ids.Defense.ROCKET_LAUNCHER, quantity=7)
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    assert built["function"] == "launchInterplanetaryMissileAttack"
+    assert built["args"] == [664, 999, ids.Defense.ROCKET_LAUNCHER, 7]
+
+
+def test_missile_attack_resolves_target_coordinates_against_an_owned_planet(monkeypatch):
+    """When `target_planet_id` isn't set (a hand-constructed override), falls back to
+    resolving `target_coordinates` against the snapshot's own planets -- same posture
+    `_resolve_target_planet_id` already takes for launchFleetMission."""
+    action = _missile_action(origin_planet_id=664, target_planet_id=None, target_coordinates="7:181:15")
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    assert built["args"][1] == 665  # resolved from target_coordinates
+
+
+def test_missile_attack_raises_without_a_snapshot():
+    action = _missile_action()
+    with pytest.raises(ValueError, match="Snapshot"):
+        tick._action_to_walletctl_json(action)
+
+
+def test_missile_attack_raises_without_origin_planet_id():
+    action = _missile_action(origin_planet_id=None)
+    with pytest.raises(ValueError, match="origin_planet_id"):
+        tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
+def test_missile_attack_raises_without_primary_target():
+    action = _missile_action(primary_target=None)
+    with pytest.raises(ValueError, match="primary_target"):
+        tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
 def test_encode_colony_target_raises_on_out_of_range_position_rather_than_corrupt_it():
     """Judge finding 2 (2026-08-17): before this fix, `_encode_colony_target` had no
     bounds check, so a position > 255 (COLONIZATION_POSITION_MASK = 0xff,
@@ -1655,6 +1694,89 @@ def test_attack_targets_degrades_to_empty_on_malformed_rankings(monkeypatch):
     assert tick._attack_targets(WALLET) == {}
 
 
+def _missile_highscores_row(**overrides) -> dict:
+    base = {
+        "wallet": "0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1",
+        "homePlanetId": "23",
+        "homePlanet": {
+            "coordinates": {"galaxy": 2, "system": 477, "position": 7},
+            "tactical": {
+                "defenses": {
+                    "units": [
+                        {"id": 0, "count": 6, "power": 12000},
+                        {"id": 1, "count": 13, "power": 26000},
+                    ]
+                }
+            },
+        },
+        "attackProtection": {"allowed": True, "blockedReason": None},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_missile_targets_parses_a_row(monkeypatch):
+    data = _highscores_response(_missile_highscores_row())
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._missile_targets(WALLET)
+    assert result == {23: ("2:477:7", {0: 6, 1: 13}, True)}
+
+
+def test_missile_targets_excludes_the_wallets_own_row(monkeypatch):
+    data = _highscores_response(_missile_highscores_row(wallet=WALLET.upper()))
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._missile_targets(WALLET)
+    assert result == {}
+
+
+def test_missile_targets_records_none_for_missing_or_non_bool_attack_protection(monkeypatch):
+    row_missing = _missile_highscores_row(homePlanetId="1", attackProtection=None)
+    row_non_bool = _missile_highscores_row(homePlanetId="2", attackProtection={"allowed": "yes"})
+    data = _highscores_response(row_missing, row_non_bool)
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._missile_targets(WALLET)
+    assert result[1][2] is None
+    assert result[2][2] is None
+
+
+def test_missile_targets_skips_a_row_with_no_defense_units_present(monkeypatch):
+    data = _highscores_response(
+        _missile_highscores_row(
+            homePlanet={"coordinates": {"galaxy": 2, "system": 477, "position": 7}, "tactical": {"defenses": {"units": []}}}
+        )
+    )
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._missile_targets(WALLET)
+    assert result == {}
+
+
+def test_missile_targets_ignores_a_zero_count_unit(monkeypatch):
+    data = _highscores_response(
+        _missile_highscores_row(
+            homePlanet={
+                "coordinates": {"galaxy": 2, "system": 477, "position": 7},
+                "tactical": {"defenses": {"units": [{"id": 0, "count": 0, "power": 0}, {"id": 1, "count": 5, "power": 10000}]}},
+            }
+        )
+    )
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: data)
+    result = tick._missile_targets(WALLET)
+    assert result[23][1] == {1: 5}
+
+
+def test_missile_targets_degrades_to_empty_on_fetch_failure(monkeypatch):
+    def _boom(**kw):
+        raise http.VeydriftHTTPError(500, "/highscores", "boom")
+
+    monkeypatch.setattr(tick.read, "fetch_highscores", _boom)
+    assert tick._missile_targets(WALLET) == {}
+
+
+def test_missile_targets_degrades_to_empty_on_malformed_rankings(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_highscores", lambda **kw: {"rankings": "not-a-dict"})
+    assert tick._missile_targets(WALLET) == {}
+
+
 def _attack_action(**overrides) -> Action:
     base = dict(
         kind=ActionKind.FLEET_MISSION,
@@ -1672,6 +1794,23 @@ def _attack_action(**overrides) -> Action:
     return Action(**base)
 
 
+def _missile_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.MISSILE_ATTACK,
+        function="launchInterplanetaryMissileAttack",
+        planet_id=664,
+        origin_planet_id=664,
+        target_coordinates="2:477:7",
+        target_planet_id=23,
+        primary_target=tick.ids.Defense.ROCKET_LAUNCHER,
+        quantity=5,
+        rule="8f:missile",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
 def test_attack_protection_allowed_uses_target_planet_id_directly(monkeypatch):
     action = _attack_action()
     calls = []
@@ -1682,21 +1821,23 @@ def test_attack_protection_allowed_uses_target_planet_id_directly(monkeypatch):
 
     monkeypatch.setattr(tick.read, "fetch_attack_protection", _fetch)
     result = tick._attack_protection_allowed(WALLET, action, _healthy_snapshot())
-    assert result is True
+    assert result == (True, None)
     assert calls == [(WALLET, 23)]
 
 
 def test_attack_protection_allowed_falls_back_to_resolving_target_coordinates(monkeypatch):
     action = _attack_action(target_planet_id=None, target_coordinates="7:181:14")  # matches _healthy_snapshot's own planet
-    monkeypatch.setattr(tick.read, "fetch_attack_protection", lambda wallet, target_planet_id, **kw: {"allowed": False})
+    monkeypatch.setattr(
+        tick.read, "fetch_attack_protection", lambda wallet, target_planet_id, **kw: {"allowed": False, "blockedReason": "score_protection"}
+    )
     result = tick._attack_protection_allowed(WALLET, action, _healthy_snapshot())
-    assert result is False
+    assert result == (False, "score_protection")
 
 
 def test_attack_protection_allowed_none_when_target_is_unresolvable():
     action = _attack_action(target_planet_id=None, target_coordinates=None)
     result = tick._attack_protection_allowed(WALLET, action, _healthy_snapshot())
-    assert result is None
+    assert result == (None, None)
 
 
 def test_attack_protection_allowed_none_on_fetch_failure(monkeypatch):
@@ -1705,13 +1846,25 @@ def test_attack_protection_allowed_none_on_fetch_failure(monkeypatch):
 
     monkeypatch.setattr(tick.read, "fetch_attack_protection", _boom)
     result = tick._attack_protection_allowed(WALLET, _attack_action(), _healthy_snapshot())
-    assert result is None
+    assert result == (None, None)
 
 
 def test_attack_protection_allowed_none_when_response_lacks_a_bool_allowed(monkeypatch):
     monkeypatch.setattr(tick.read, "fetch_attack_protection", lambda wallet, target_planet_id, **kw: {"blockedReason": "score_protection"})
     result = tick._attack_protection_allowed(WALLET, _attack_action(), _healthy_snapshot())
-    assert result is None
+    assert result == (None, None)
+
+
+def test_attack_protection_allowed_returns_the_blocked_reason_verbatim_for_a_missile(monkeypatch):
+    """Commit 7: `blocked_reason` (`"bashing"` specifically) is what lets
+    `guard._gate_attack_protection` apply the missile-specific exemption -- this is the
+    fetcher's own responsibility to surface it correctly, independent of which action
+    kind is asking."""
+    monkeypatch.setattr(
+        tick.read, "fetch_attack_protection", lambda wallet, target_planet_id, **kw: {"allowed": False, "blockedReason": "bashing"}
+    )
+    result = tick._attack_protection_allowed(WALLET, _attack_action(), _healthy_snapshot())
+    assert result == (False, "bashing")
 
 
 def test_run_tick_wires_attack_targets_into_the_planner(isolated_home, monkeypatch):
@@ -1726,6 +1879,7 @@ def test_run_tick_wires_attack_targets_into_the_planner(isolated_home, monkeypat
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_attack_targets", lambda wallet: fetch_calls.append(1) or targets)
+    monkeypatch.setattr(tick, "_missile_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
 
     captured = {}
@@ -1760,11 +1914,58 @@ def test_run_tick_never_fetches_attack_targets_when_combat_is_disabled(isolated_
     assert result.exit_code == 0, result.output
 
 
+def test_run_tick_wires_missile_targets_into_the_planner(isolated_home, monkeypatch):
+    """End-to-end: `_run_tick` must actually pass what `_missile_targets` finds into
+    `plan_next_action`'s `missile_targets` kwarg -- and only fetch it at all when
+    `policy.actions.allow_combat` is true. Mirrors the attack_targets wiring test above."""
+    _write_policy_with_combat()
+    targets = {23: ("2:477:7", {0: 6}, True)}
+    fetch_calls = []
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_missile_targets", lambda wallet: fetch_calls.append(1) or targets)
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    captured = {}
+
+    def _capture(snapshot, policy, **kwargs):
+        captured.update(kwargs)
+        return Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x")
+
+    monkeypatch.setattr(plan_mod, "plan_next_action", _capture)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("missile_targets") == targets
+    assert fetch_calls == [1]
+
+
+def test_run_tick_never_fetches_missile_targets_when_combat_is_disabled(isolated_home, monkeypatch):
+    _write_policy()  # actions.allow_combat defaults False
+
+    def _boom(wallet):
+        raise AssertionError("must not fetch missile targets when policy.actions.allow_combat is false")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_missile_targets", _boom)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x"))
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+
 def test_run_tick_wires_attack_protection_allowed_into_the_guard(isolated_home, monkeypatch):
     """End-to-end: for an actual Attack proposal, `_run_tick` must fetch
-    `_attack_protection_allowed` and pass it into `evaluate_guardrails`'s
-    `attack_protection_allowed` kwarg -- and never fetch it at all for a non-Attack
-    action."""
+    `_attack_protection_allowed` and pass its two-tuple into `evaluate_guardrails`'s
+    `attack_protection_allowed`/`attack_protection_blocked_reason` kwargs -- and never
+    fetch it at all for a non-Attack, non-Missile action (see the sibling test below)."""
     _write_policy_with_combat(tier="operator")
     attack_action = _attack_action()
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
@@ -1772,7 +1973,8 @@ def test_run_tick_wires_attack_protection_allowed_into_the_guard(isolated_home, 
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_attack_targets", lambda wallet: {})
-    monkeypatch.setattr(tick, "_attack_protection_allowed", lambda wallet, action, snapshot: True)
+    monkeypatch.setattr(tick, "_missile_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_protection_allowed", lambda wallet, action, snapshot: (True, None))
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: attack_action)
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
     monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
@@ -1788,13 +1990,44 @@ def test_run_tick_wires_attack_protection_allowed_into_the_guard(isolated_home, 
     result = runner.invoke(tick.app, ["--dry-run"])
     assert result.exit_code == 0, result.output
     assert captured.get("attack_protection_allowed") is True
+    assert captured.get("attack_protection_blocked_reason") is None
+
+
+def test_run_tick_wires_attack_protection_allowed_into_the_guard_for_a_missile(isolated_home, monkeypatch):
+    """Commit 7: the same wiring, but for a Missile proposal -- confirms `_run_tick`'s
+    `is_missile_action` branch actually fires, not just the pre-existing Attack one."""
+    _write_policy_with_combat(tier="operator")
+    action = _missile_action()
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_missile_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_attack_protection_allowed", lambda wallet, action, snapshot: (False, "bashing"))
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: action)
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    captured = {}
+
+    def _capture_guard(action, snapshot, policy, agent_state, **kwargs):
+        captured.update(kwargs)
+        return guard_mod.GuardReport(decision=guard_mod.Decision.BLOCK, verdicts=[])
+
+    monkeypatch.setattr(guard_mod, "evaluate_guardrails", _capture_guard)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("attack_protection_allowed") is False
+    assert captured.get("attack_protection_blocked_reason") == "bashing"
 
 
 def test_run_tick_never_fetches_attack_protection_allowed_for_a_non_attack_action(isolated_home, monkeypatch):
     _write_policy()
 
     def _boom(wallet, action, snapshot):
-        raise AssertionError("must not fetch attack_protection_allowed for a non-Attack action")
+        raise AssertionError("must not fetch attack_protection_allowed for a non-Attack/Missile action")
 
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])

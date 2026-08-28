@@ -335,3 +335,33 @@ def test_available_cargo_clamped_at_zero():
 def test_max_planets_formula():
     assert calc.max_planets(0) == 1
     assert calc.max_planets(5) == 6
+
+
+def test_missile_range_zero_at_impulse_drive_zero():
+    """Impulse Drive 0 means a real, narrow range of exactly 0 -- not "unverifiable"."""
+    assert calc.missile_range(0) == 0
+
+
+def test_missile_range_negative_impulse_drive_treated_as_zero():
+    assert calc.missile_range(-1) == 0
+
+
+def test_missile_range_formula():
+    assert calc.missile_range(1) == 4
+    assert calc.missile_range(5) == 24
+    assert calc.missile_range(10) == 49
+
+
+def test_missile_system_distance_same_system_is_zero():
+    assert calc.missile_system_distance("7:181:14", "7:181:99") == 0
+
+
+def test_missile_system_distance_ignores_galaxy_and_position():
+    """No galaxy term and no position term, unlike calc.distance -- a caller must check
+    galaxy equality itself before comparing this against missile_range."""
+    assert calc.missile_system_distance("7:181:14", "9:181:1") == 0
+    assert calc.missile_system_distance("7:100:14", "7:105:14") == 5
+
+
+def test_missile_system_distance_is_symmetric():
+    assert calc.missile_system_distance("7:181:14", "7:100:1") == calc.missile_system_distance("7:100:1", "7:181:14")

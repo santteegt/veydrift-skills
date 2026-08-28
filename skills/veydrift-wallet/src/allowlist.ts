@@ -5,7 +5,10 @@
  *
  * Five checks, all evaluated (never short-circuited in the report, though `ok` is AND of all):
  *   1. tx.to        in the live /runtime-config address set (never a hardcoded list)
- *   2. tx.data[0:4] (selector) in the tier's allowed set, computed from the pinned ABI
+ *   2. tx.data[0:4] (selector) in the tier's allowed set, computed from the pinned ABI --
+ *      unconditionally, OR (at `operator` tier only) conditionally on
+ *      `policy.actions.allow_combat` for a combat-only selector (currently only
+ *      `launchInterplanetaryMissileAttack`, commit 7 -- see `COMBAT_SIGNATURES` below)
  *   3. tx.value      == 0 (no payable action is whitelisted at any tier here)
  *   4. tx.chainId    == 8453 (Base)
  *   5. any failure -> caller must exit non-zero, log the rejection, sign nothing
@@ -16,7 +19,9 @@
  * `policy.actions.allow_combat` resolves true (launch-actions plan, commit 5 -- see
  * `COMBAT_ALLOWED_MISSION_TYPES` below). That restriction can't be expressed as a selector check
  * (the mission type is a regular argument, not part of the selector) so it's decoded from
- * calldata here.
+ * calldata here. Missile (commit 7) needed no equivalent calldata decode -- it's its own,
+ * brand-new selector, not a `launchFleetMission` mission-type argument, so its `allow_combat`
+ * conditionality is folded directly into check 2 instead.
  */
 
 import { decodeFunctionData, getAddress } from "viem";
@@ -120,6 +125,31 @@ export const OPERATOR_ALLOWED_MISSION_TYPES: ReadonlySet<number> = new Set([0, 1
  * generator (once built) can actually produce, not "combat" as an undifferentiated whole.
  */
 export const COMBAT_ALLOWED_MISSION_TYPES: ReadonlySet<number> = new Set([3]);
+
+/**
+ * Full canonical signature for `launchInterplanetaryMissileAttack` (commit 7 of the
+ * launch-actions plan). Unlike Attack (mission type 3 on `launchFleetMission`), a missile
+ * is its own, brand-new selector -- it shares nothing with the fleet path (no fleet
+ * tuple, no mission type argument, no fleet slot, no travel time; fully synchronous,
+ * confirmed by reading `VeydriftPlanetManagementModule.sol`'s
+ * `launchInterplanetaryMissileAttack` directly). Permitted only at `operator` tier AND
+ * only when `policy.actions.allow_combat` resolves `true` (`resolveAllowCombat`,
+ * `policy.ts`) -- the same master combat flag Attack uses, checked the same lazy way (see
+ * `checkAllowlist`'s selector check below), never merged into `tierSelectors`'s
+ * unconditional set.
+ */
+const COMBAT_SIGNATURES = [
+  "launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)",
+] as const;
+
+function combatSelectorSet(): ReadonlySet<`0x${string}`> {
+  const selectors = new Set<`0x${string}`>();
+  for (const sig of COMBAT_SIGNATURES) {
+    const fn = resolveFunctionAbi(sig);
+    selectors.add(getSelector(fn));
+  }
+  return selectors;
+}
 
 /** Tier -> allowed 4-byte selectors, computed from the pinned ABI (never a hardcoded hex list).
  *  `advisor` is deliberately empty: it may build and simulate, but the empty set means the
@@ -232,19 +262,42 @@ export async function checkAllowlist(
     }
   }
 
-  // 2. selector in the tier's allowed set (computed from the pinned ABI).
+  // 2. selector in the tier's allowed set (computed from the pinned ABI). A combat
+  // selector (currently only launchInterplanetaryMissileAttack, commit 7) is never in
+  // this unconditional set -- it's checked separately below, lazily, the same posture
+  // Attack's mission-type argument already takes (checkAllowlist's own doc comment).
   const selector = tx.data.slice(0, 10).toLowerCase() as `0x${string}`;
   let allowedSelectors: ReadonlySet<`0x${string}`>;
+  let combatSelectors: ReadonlySet<`0x${string}`>;
   try {
     allowedSelectors = tierSelectors(tier);
+    combatSelectors = combatSelectorSet();
   } catch (err) {
     fail("selector", `could not compute "${tier}" tier's selector set: ${(err as Error).message}`);
     allowedSelectors = new Set();
+    combatSelectors = new Set();
   }
-  if (!allowedSelectors.has(selector)) {
-    fail("selector", `${selector} is not in the "${tier}" tier's allowed set`);
-  } else {
+  if (allowedSelectors.has(selector)) {
     pass("selector", `${selector} allowed at tier "${tier}"`);
+  } else if (combatSelectors.has(selector) && tier === "operator") {
+    // Lazy on purpose -- see checkAllowlist's own doc comment above. A malformed or
+    // absent actions.allow_combat must never block an unrelated, non-combat
+    // transaction, which is exactly what calling it unconditionally for every send
+    // would do -- this selector IS the combat action, so it's safe to resolve here.
+    try {
+      if (resolveAllowCombat()) {
+        pass("selector", `${selector} allowed at tier "${tier}" (combat, policy.actions.allow_combat=true)`);
+      } else {
+        fail("selector", `${selector} requires policy.actions.allow_combat=true; it is not`);
+      }
+    } catch (err) {
+      fail(
+        "selector",
+        `${selector} requires policy.actions.allow_combat, but it could not be resolved: ${(err as Error).message}`,
+      );
+    }
+  } else {
+    fail("selector", `${selector} is not in the "${tier}" tier's allowed set`);
   }
 
   // Extra: operator's launchFleetMission is restricted to mission types 0 Transport / 1 Deploy /

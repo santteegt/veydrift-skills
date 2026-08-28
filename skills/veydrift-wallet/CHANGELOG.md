@@ -11,6 +11,43 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-28
+
+Launch-actions plan, commit 7: `launchInterplanetaryMissileAttack` becomes allowlisted,
+conditionally on `policy.actions.allow_combat`, at `operator` tier — a brand-new
+selector, sharing nothing with the `launchFleetMission` path.
+
+### Added
+- **`COMBAT_SIGNATURES`** (`allowlist.ts`) — `["launchInterplanetaryMissileAttack(uint256,
+  uint256,uint8,uint32)"]`, resolved to a selector set (`combatSelectorSet()`) the same
+  way `ECONOMY_SIGNATURES`/`LAUNCH_FLEET_MISSION_SIGNATURES` already are, but
+  deliberately never merged into `tierSelectors`'s unconditional return value.
+
+### Changed (breaking — allowlist widening)
+- `checkAllowlist`'s selector check (item 2 of five) now falls through to
+  `combatSelectorSet()` — at `operator` tier only — when the unconditional lookup
+  misses, calling `resolveAllowCombat` lazily exactly like Attack's mission-type branch
+  does (commit 5): a malformed or absent `actions.allow_combat` must never block an
+  unrelated, non-combat transaction. Unlike Attack, there is no calldata argument to
+  decode — the selector itself IS the combat action, so its `allow_combat`
+  conditionality lives in the selector check directly.
+- No changes to `tx.ts`/`abi.ts`/`cli.ts` were needed — `buildTx` already resolves any
+  function generically by name/signature via `resolveFunctionAbi`, so a brand-new,
+  non-overloaded selector needed no encoder-side special-casing, only the new allowlist
+  permission.
+
+8 new tests in `tests/allowlist.test.ts`'s new "launchInterplanetaryMissileAttack" block
+(rejects at economy/advisor regardless of `allow_combat`, rejects/allows at operator
+based on `allow_combat`, refuses to pass vacuously when `resolveAllowCombat` throws, is
+never called outside operator tier, is confirmed absent from `tierSelectors('operator')`'s
+own unconditional set) plus a new entry in `tests/selectors.cast.test.ts`'s live `cast
+sig` cross-check (confirmed live: selector `0xa72cd29a`, matching the pinned ABI's own
+`methodIdentifiers` entry independently). 141 passed + 2 fork-only skipped = 143 total
+(135 baseline from 0.6.0 + 8 new; typecheck clean).
+
+Docs: `references/tx-safety.md`'s "Five checks" list (item 2, now conditional) and a new
+"commit 7" section; `SKILL.md`'s matching checklist item.
+
 ## [0.6.0] - 2026-08-28
 
 The allowlist-widening change below is the same kind of change 0.3.0's Colonize widening

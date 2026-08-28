@@ -11,6 +11,112 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-08-28
+
+Launch-actions plan, commit 7 (final commit of this plan): Missile becomes
+planner-reachable via `launchInterplanetaryMissileAttack` — the second and last combat
+action type this plan adds. `guard.py` gains a new, 22nd gate (`missile_target`), and
+the shared `attack_protection` gate gains a missile-specific exemption.
+
+### Added
+- **`ActionKind.MISSILE_ATTACK`** and **`Action.primary_target: int | None`** (`models.py`)
+  — `quantity`/`origin_planet_id`/`target_planet_id`/`target_coordinates` (all already
+  existing fields) are reused identically for a missile's count/origin/target; only
+  `primary_target` (a `Defense` id) is new.
+- **`calc.missile_range(impulse_drive_level)`** and **`calc.missile_system_distance(a,
+  b)`** — both read directly from `VeydriftPlanetManagementModule.sol`'s private
+  `_interplanetaryMissileRange`/`_systemDistanceForMissiles`, not guessed at. Impulse
+  Drive 0 means a real, narrow range of exactly 0 systems (same galaxy, same system
+  only), never "no range at all." `missile_system_distance` is deliberately a separate
+  function from `distance()` (a fleet-mission travel formula) — the two measure
+  genuinely different things, and a caller must separately check galaxy equality.
+- **`candidates.generate_missile_candidates`/`select_missile_candidate`** — uses
+  `launchInterplanetaryMissileAttack` directly (its own selector; shares nothing with
+  `launchFleetMission` — no fleet tuple, no mission-type argument, no fleet slot, no
+  travel time, fully synchronous). Gated on `policy.actions.allow_combat` (the same flag
+  Attack uses). Sends every owned Interplanetary Missile in one shot, all-or-nothing, at
+  the target's single most-numerous eligible defense type among ids 0-7
+  (`_choose_missile_primary_target` — ids 8/9, ABM/IPM themselves, are refused as
+  targets by the contract). Ranks candidate targets by descending total eligible-defense
+  count, falling back to the next-reachable target when the top pick is out of range.
+- **New ladder rung `8f:missile`** (`plan.py`, band 8) — placed after Attack (`8e`), the
+  most conservative placement in the entire ladder: reached only when every other band,
+  Attack included, found nothing at all for any target planet.
+- **`tick._missile_targets`** — reads the SAME `/highscores` (economy category) response
+  `_attack_targets` already reads, extracting each row's `homePlanet.tactical.
+  defenses.units[]` (defense composition) instead of `raidableResources`. Only fetched
+  when `policy.actions.allow_combat` is true, the same gating `_attack_targets` has.
+- **`guard._gate_missile_target`** — new, 22nd gate. Independently re-derives every
+  precondition this codebase's own frozen `Snapshot` can verify: `policy.actions.
+  allow_combat` is true (this function has no shared non-combat sibling the way
+  `launchFleetMission`/Attack does, so this check lives here rather than in
+  `_gate_mission_type`); `primary_target <= Defense.LargeShieldDome` (7); same galaxy and
+  in range (`calc.missile_range`/`missile_system_distance`); the origin owns at least
+  `quantity` Interplanetary Missiles. Deliberately does NOT check
+  `_requireNoPendingMissionResolutionForPlanet` for either planet — not knowable from a
+  wallet-scoped read for a foreign target, the documented gap this codebase already
+  handles the same way everywhere else (`walletctl simulate` catches it before send).
+- **`tick._action_to_walletctl_json`'s new `launchInterplanetaryMissileAttack` branch** —
+  not overloaded on the deployed ABI, so resolved by bare name, unlike
+  `launchFleetMission`'s two forms.
+
+### Changed
+- **`guard._gate_attack_protection`** (the gate Attack already used) gains a missile
+  branch: `VeydriftPlanetManagementModule.sol`'s `launchInterplanetaryMissileAttack`
+  calls `_enforceAttackProtection(..., countsBashing=false)` — read directly from
+  source — so a target whose ONLY `blockedReason` is `"bashing"` is a legal missile
+  target even though it would be an illegal fleet Attack. `score_protection`/
+  `not_allied` still block a missile exactly like an Attack; only the bashing exemption
+  is missile-specific, and only when positively confirmed (a missing `blocked_reason` on
+  a `False` result still BLOCKs, even for a missile).
+- **`tick._attack_protection_allowed`** now returns `(allowed, blocked_reason)` instead
+  of just `allowed` — fetched for both an Attack and a Missile proposal. Every call site
+  (guard.py, tick.py's own wiring, tests) updated together.
+- **`guard.idempotency_key`** gains a third special case, alongside `FLEET_MISSION` and
+  `RESOLVE_MISSION`: `MISSILE_ATTACK`'s `entity_id` is always `None`, so without folding
+  in `target_planet_id`/`primary_target`, every missile launched from one planet would
+  collapse onto one key/revert-streak counter. Fixed before this action family could
+  ever actually be proposed at all — unlike `FLEET_MISSION`'s fix (commit 2), this one
+  never had a live-before-fixed window.
+- **`guard._gate_health`'s `is_combat_action` check is deliberately Attack-only, not
+  "any combat action."** Missile never requests randomness (interception is
+  deterministic arithmetic, confirmed by reading `VeydriftPlanetManagementModule.sol`
+  directly — no RNG call anywhere in `launchInterplanetaryMissileAttack`), so the
+  `combat_only_degradation` health-gate exception genuinely still applies to it. Documented
+  explicitly in the gate's own docstring so this reads as a considered exclusion, not a
+  gap this gate forgot to extend when Missile was added.
+
+No changes to `veydrift-wallet`'s `tx.ts`/`abi.ts`/`cli.ts` were needed — `buildTx`
+already resolves any function generically by name/signature via `resolveFunctionAbi`, so
+a brand-new, non-overloaded selector needed no encoder-side special-casing, only a new
+allowlist permission (see `veydrift-wallet`'s own `CHANGELOG.md`'s `0.7.0` entry:
+`COMBAT_SIGNATURES`, deliberately never merged into `tierSelectors`'s unconditional set
+— a genuine, documented shape difference from how Attack's own conditionality is
+expressed on that side, since Missile has no shared function to decode a conditional
+argument from the way Attack's mission type does).
+
+New tests: `tests/test_calc.py`'s `missile_range`/`missile_system_distance` block (7
+tests); `tests/test_guard.py`'s `missile_target` block (18 tests) plus 6 new
+`attack_protection` missile-branch tests plus a new health-gate exclusion test;
+`tests/test_candidates.py`'s 13-test `generate_missile_candidates`/
+`select_missile_candidate` block; `tests/test_tick.py`'s `_missile_targets` unit tests,
+`_action_to_walletctl_json`'s new missile-encoding tests, and `_run_tick` wiring tests.
+Also reworked: `test_tier_map_agrees_with_the_wallet_engines_allowlist` gained a new
+`guard._COMBAT_ONLY_FUNCTIONS` constant + comparison, accounting for the genuine shape
+difference between how the two layers express Missile's `allow_combat` conditionality
+(see that constant's own docstring). 714 passed (652 baseline + 62 new).
+
+Docs: `docs/SPEC.md` correction 72 and its §1/§5.4/§5.5 updates; `docs/COVERAGE.md`
+(moved `launchInterplanetaryMissileAttack` from §1.6's out-of-scope table to §1.1's
+implemented table); `docs/RESEARCH-ADDENDUM.md`; `docs/PLAYER-GUIDE.md`/`.html`;
+`docs/TECHNICAL-WALKTHROUGH.md`/`.html` (including closing a gap found during this
+sweep: the `plan.py`/`candidates.py`/`tick.py` module-table rows in the `.md` file had
+drifted stale since before commit 6 and were never caught until now); `README.md`;
+`AGENTS.md`; `references/entity-ids.md`, `references/guardrails.md` (new gate row + its
+own explanatory section, gate count 21 -> 22), `SKILL.md` (ladder section was stale
+since before commit 6 — corrected to the full current eight-band pipeline). Bumped
+1.12.0 -> 1.13.0 (additive, minor) per this skill's own CHANGELOG.md convention.
+
 ## [1.12.0] - 2026-08-28
 
 Launch-actions plan, commit 6: Attack becomes planner-reachable — the first combat

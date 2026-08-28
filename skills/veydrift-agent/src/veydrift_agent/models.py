@@ -53,6 +53,17 @@ class ActionKind(str, Enum):
     #: Non-combat mission types only; combat types are refused independently by
     #: `guard.py`'s mission-type gate and `allowlist.ts`'s OPERATOR_ALLOWED_MISSION_TYPES.
     FLEET_MISSION = "fleet_mission"
+    #: launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32) -- added commit 7
+    #: of the launch-actions plan. Shares NOTHING with FLEET_MISSION: no fleet tuple, no
+    #: `mission_type` argument (`FleetMissionType.MissileAttack` (7) is unreachable dead
+    #: enum space for this codebase's own `launchFleetMission` path -- this is a wholly
+    #: separate contract entrypoint, not a mission type on that one), no fleet slot, no
+    #: travel time -- fully synchronous, confirmed by reading
+    #: `VeydriftPlanetManagementModule.sol`'s `launchInterplanetaryMissileAttack`
+    #: directly. Gated on `policy.actions.allow_combat` (the same master combat flag
+    #: Attack uses) at both enforcement layers, `guard.py`'s `_MIN_TIER_FOR_FUNCTION`
+    #: (`operator` tier) and `veydrift-wallet`'s `COMBAT_SIGNATURES`.
+    MISSILE_ATTACK = "missile_attack"
     NOOP = "noop"
     ESCALATE = "escalate"
     HALT = "halt"
@@ -591,6 +602,22 @@ class Action(Base):
     #: meaning would invite someone to set a duration here and hit a silent Colonize
     #: revert.
     randomness_request_id: int | None = None
+
+    # ----------------------------------------------------------------------------------
+    # Missile field (commit 7 of the launch-actions plan). `None`/unused for every other
+    # `ActionKind` — only `MISSILE_ATTACK` populates it. `quantity` (already declared
+    # above, shared with SHIP/DEFENSE) doubles as the missile count for this kind --
+    # `launchInterplanetaryMissileAttack`'s own `quantity` argument; `origin_planet_id`/
+    # `target_planet_id`/`target_coordinates` (already declared above, shared with
+    # FLEET_MISSION) are reused identically for a missile's origin/target.
+    # ----------------------------------------------------------------------------------
+    #: `ids.Defense` id of the defense type this missile batch targets --
+    #: `launchInterplanetaryMissileAttack`'s `primaryTarget` argument. Must be
+    #: `<= ids.Defense.LARGE_SHIELD_DOME` (7) -- the contract reverts `InvalidMissileTarget`
+    #: on `AntiBallisticMissile` (8) or `InterplanetaryMissile` (9) itself, since neither
+    #: is a valid missile target. `guard._gate_missile_target` independently re-checks
+    #: this bound rather than trusting the generator that set it.
+    primary_target: int | None = None
 
     def is_onchain(self) -> bool:
         return self.function is not None

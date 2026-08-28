@@ -140,22 +140,31 @@ touching related code, re-run the check named alongside each one.
 - **`send` never becomes implicit.** No env var, policy field, or flag makes `--confirm`
   optional. `policy.wallet_engine.require_confirmation` gates whether `tick` sends
   automatically at all — it does not weaken the CLI-level `--confirm` requirement, ever.
-- **Most of combat stays unreachable by code, not by config.** `AcsDefend`/`Intercept`/
-  `MissileAttack`/`AcsAttack`/`DefenseHold` require an actual source change to both
-  `guard.py`'s `_ALLOWED_MISSION_TYPES`/`_COMBAT_MISSION_TYPES` and `allowlist.ts`'s
-  matching pair — that friction is deliberate; don't lower it in passing while fixing
-  something else. **`Attack` is the one exception, since the launch-actions plan's
-  commit 5 (2026-08-28):** `policy.json`'s `allow_combat` key is now a real,
-  independently-checked gate for it at `operator` tier, resolved by `guard.py`'s
-  `_gate_mission_type` (agent side) and `veydrift-wallet`'s `resolveAllowCombat`
-  (`policy.ts`, wallet side) — never trusting a CLI flag or environment variable for
-  this value, on purpose (see `skills/veydrift-wallet/references/tx-safety.md`'s
-  residual-limit section for exactly why). **Since commit 6 (same date), a candidate
-  generator does propose Attack** — `candidates.generate_attack_candidates`, the
-  ladder's most conservative rung (`8e:attack`), reached only once every other rung has
-  found nothing at all, attacking the highest-raidable reachable `/highscores` target
-  whose attack-protection is confirmed allowed by a fresh, guard-time re-check
-  (`guard._gate_attack_protection`, a new 21st gate — never trusting the earlier,
+- **Most of combat stays unreachable by code, not by config.** The `FleetMissionType`
+  enum's `AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold` values require
+  an actual source change to both `guard.py`'s `_ALLOWED_MISSION_TYPES`/
+  `_COMBAT_MISSION_TYPES` and `allowlist.ts`'s matching pair — that friction is
+  deliberate; don't lower it in passing while fixing something else. **`Attack` (via
+  `launchFleetMission` mission type 3) and `Missile` (via the wholly separate
+  `launchInterplanetaryMissileAttack` entrypoint) are the two exceptions**, since the
+  launch-actions plan's commits 5-7 (2026-08-28): `policy.json`'s `allow_combat` key is a
+  real, independently-checked gate for both, at `operator` tier — for Attack, resolved by
+  `guard.py`'s `_gate_mission_type` (agent side) and `veydrift-wallet`'s
+  `resolveAllowCombat` (`policy.ts`, wallet side); for Missile, by a new dedicated
+  `guard._gate_missile_target` (agent side) and, on the wallet side, `allowlist.ts`'s
+  `checkAllowlist` selector check itself (since Missile has no shared non-combat sibling
+  function the way Attack does, its selector is pulled out of the unconditional
+  `tierSelectors('operator')` set entirely rather than decoded as a calldata argument —
+  a deliberate, documented shape difference between the two layers for this one
+  function, see `docs/SPEC.md` correction 72). Neither ever trusts a CLI flag or
+  environment variable for `allow_combat` (see `skills/veydrift-wallet/references/
+  tx-safety.md`'s residual-limit section for exactly why). Candidate generators exist
+  for both — `candidates.generate_attack_candidates` (commit 6, ladder rung `8e:attack`)
+  and `candidates.generate_missile_candidates` (commit 7, ladder rung `8f:missile`, more
+  conservative still) — each reached only once every earlier rung has found nothing at
+  all, targeting the highest-value reachable `/highscores` result whose attack-protection
+  is confirmed allowed by a fresh, guard-time re-check (`guard._gate_attack_protection`,
+  a 22nd gate shared by both action types — never trusting either generator's earlier,
   generation-time read).
 - **Secrets never reach a log or a tracked file.** `log.py` scrubs any
   `0x[0-9a-fA-F]{64}` that isn't a known tx hash, and refuses to write a value matching a

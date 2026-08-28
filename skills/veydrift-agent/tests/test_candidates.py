@@ -2427,3 +2427,189 @@ def test_select_attack_candidate_returns_the_winner_when_enabled():
     assert winner is not None
     assert winner.family == "attack"
     assert alternatives == []
+
+
+# --------------------------------------------------------------------------------------
+# generate_missile_candidates / select_missile_candidate (commit 7 of the launch-actions
+# plan): launchInterplanetaryMissileAttack -- shares nothing with the launchFleetMission
+# path, fully synchronous. Gated on policy.actions.allow_combat.
+# --------------------------------------------------------------------------------------
+
+
+def _missile_planet(**overrides) -> PlanetSnapshot:
+    base = dict(
+        planet_id=664,
+        coordinates="7:181:14",
+        resources_as_of_now=Resources(),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        buildings=[],
+        ships=[],
+        defenses=[Entity(id=ids.Defense.INTERPLANETARY_MISSILE, name="Interplanetary Missile", count=10, cost=Resources())],
+    )
+    base.update(overrides)
+    return PlanetSnapshot(**base)
+
+
+def _missile_snapshot(*, planet=None, impulse_drive_level=5) -> Snapshot:
+    return Snapshot(
+        taken_at="2026-08-28T12:00:00Z",
+        wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        health_ok=True,
+        technologies=[Entity(id=ids.Technology.IMPULSE_DRIVE, name="Impulse Drive", level=impulse_drive_level, cost=Resources())],
+        planets=[planet or _missile_planet()],
+    )
+
+
+#: (coordinates, defense_counts_by_id, allowed) -- the exact tuple shape
+#: tick._missile_targets builds. Same system as origin (7:181:14) so range is never the
+#: limiting factor in tests that don't specifically probe it.
+_M_TARGET = {23: ("7:181:20", {ids.Defense.ROCKET_LAUNCHER: 6, ids.Defense.LIGHT_LASER: 2}, True)}
+
+
+def test_generate_missile_candidates_empty_by_default_policy():
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664])  # actions.allow_combat defaults False
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=_M_TARGET)
+    assert result == []
+
+
+def test_generate_missile_candidates_empty_without_any_interplanetary_missile():
+    snapshot = _missile_snapshot(planet=_missile_planet(defenses=[]))
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=_M_TARGET)
+    assert result == []
+
+
+def test_generate_missile_candidates_empty_without_known_targets():
+    """`missile_targets` unset (the default) means no target is known, not that there is
+    none -- must never fabricate a missile target out of absent data."""
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    assert candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0]) == []
+    assert candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets={}) == []
+
+
+def test_generate_missile_candidates_excludes_a_target_whose_protection_is_unknown_or_denied():
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {
+        1: ("7:181:20", {ids.Defense.ROCKET_LAUNCHER: 5}, None),
+        2: ("7:181:21", {ids.Defense.ROCKET_LAUNCHER: 5}, False),
+    }
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=targets)
+    assert result == []
+
+
+def test_generate_missile_candidates_produces_a_missile_action():
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=_M_TARGET)
+    assert len(result) == 1
+    winner = result[0]
+    assert winner.family == "missile"
+    action = winner.action
+    assert action.kind == ActionKind.MISSILE_ATTACK
+    assert action.function == "launchInterplanetaryMissileAttack"
+    assert action.origin_planet_id == 664
+    assert action.target_coordinates == "7:181:20"
+    assert action.target_planet_id == 23
+    assert action.quantity == 10  # every owned IPM, all-or-nothing
+    assert action.primary_target == ids.Defense.ROCKET_LAUNCHER  # most-numerous eligible defense (6 > 2)
+    assert action.cost == Resources()  # no metal/crystal/deuterium spend
+
+
+def test_generate_missile_candidates_picks_the_most_numerous_eligible_defense_type():
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {
+        23: (
+            "7:181:20",
+            {ids.Defense.ROCKET_LAUNCHER: 2, ids.Defense.LARGE_SHIELD_DOME: 9, ids.Defense.LIGHT_LASER: 5},
+            True,
+        )
+    }
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=targets)
+    assert len(result) == 1
+    assert result[0].action.primary_target == ids.Defense.LARGE_SHIELD_DOME
+
+
+def test_generate_missile_candidates_never_targets_abm_or_ipm_itself():
+    """Even if ABM/IPM are the target's most-numerous defenses, primary_target must never
+    be chosen from ids 8/9 -- the contract refuses them (InvalidMissileTarget)."""
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {
+        23: (
+            "7:181:20",
+            {ids.Defense.ANTI_BALLISTIC_MISSILE: 50, ids.Defense.INTERPLANETARY_MISSILE: 50, ids.Defense.ROCKET_LAUNCHER: 1},
+            True,
+        )
+    }
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=targets)
+    assert len(result) == 1
+    assert result[0].action.primary_target == ids.Defense.ROCKET_LAUNCHER
+
+
+def test_generate_missile_candidates_empty_when_target_has_only_abm_and_ipm_defenses():
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {23: ("7:181:20", {ids.Defense.ANTI_BALLISTIC_MISSILE: 10, ids.Defense.INTERPLANETARY_MISSILE: 10}, True)}
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=targets)
+    assert result == []
+
+
+def test_generate_missile_candidates_falls_back_to_a_reachable_target():
+    """The highest-total-defense target is out of range -- must fall back to the
+    next-best reachable one, not fail entirely."""
+    snapshot = _missile_snapshot(impulse_drive_level=1)  # range = 4
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {
+        1: ("7:400:20", {ids.Defense.ROCKET_LAUNCHER: 50}, True),  # far, out of range
+        2: ("7:182:20", {ids.Defense.ROCKET_LAUNCHER: 3}, True),  # 1 system away, in range
+    }
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=targets)
+    assert len(result) == 1
+    assert result[0].action.target_planet_id == 2
+
+
+def test_generate_missile_candidates_excludes_a_different_galaxy_target():
+    snapshot = _missile_snapshot(impulse_drive_level=10)  # huge range, but galaxy still must match
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {23: ("9:181:20", {ids.Defense.ROCKET_LAUNCHER: 5}, True)}
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=targets)
+    assert result == []
+
+
+def test_generate_missile_candidates_ranks_by_highest_total_eligible_defense():
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    targets = {
+        1: ("7:181:20", {ids.Defense.ROCKET_LAUNCHER: 3}, True),
+        2: ("7:181:21", {ids.Defense.ROCKET_LAUNCHER: 20}, True),
+        3: ("7:181:22", {ids.Defense.ROCKET_LAUNCHER: 8}, True),
+    }
+    result = candidates.generate_missile_candidates(snapshot, policy, snapshot.planets[0], missile_targets=targets)
+    assert len(result) == 1
+    assert result[0].action.target_planet_id == 2
+
+
+def test_select_missile_candidate_returns_none_with_default_policy():
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664])
+    winner, alternatives = candidates.select_missile_candidate(
+        snapshot, policy, snapshot.planets, missile_targets=_M_TARGET
+    )
+    assert winner is None
+    assert alternatives == []
+
+
+def test_select_missile_candidate_returns_the_winner_when_enabled():
+    snapshot = _missile_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_combat=True))
+    winner, alternatives = candidates.select_missile_candidate(
+        snapshot, policy, snapshot.planets, missile_targets=_M_TARGET
+    )
+    assert winner is not None
+    assert winner.family == "missile"
+    assert alternatives == []

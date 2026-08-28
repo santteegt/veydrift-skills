@@ -9,6 +9,7 @@
         "defense",
         "resolve_mission",
         "fleet_mission",
+        "missile_attack",
         "noop",
         "escalate",
         "halt"
@@ -188,6 +189,18 @@
       ],
       "default": null,
       "title": "Planet Id"
+    },
+    "primary_target": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Primary Target"
     },
     "quantity": {
       "anyOf": [

@@ -154,18 +154,36 @@ counterplay mechanics ([VeydriftGameplayModule.sol](https://github.com/Borodutch
 `AcsAttack`, `AcsDefend` and `Intercept` together) and their detailed mechanics are
 undocumented anywhere.
 
-**`AcsAttack` (8), `MissileAttack` (7), `Intercept` (6), `AcsDefend` (5) and
-`DefenseHold` (9) are unreachable from this codebase at every tier, regardless of
-policy** — each requires an actual code change to reach, not a `policy.json` edit.
-`Attack` (3) is the one exception, since the launch-actions plan's commit 5
-(2026-08-28): `policy.actions.allow_combat` is a real, independently-checked gate for it
-at `operator` tier, at both enforcement layers (`guard.py`'s `mission_type` gate,
-`allowlist.ts`'s calldata-level check). **Since commit 6 (same date),
-`candidates.generate_attack_candidates` does construct an Attack `Action`** — the
-ladder's most conservative rung (`8e:attack`), reached only once every other rung has
-found nothing at all for any target planet. A separate, new `attack_protection` guard
-gate re-checks the specific target's live attack-protection status fresh at
-guard-evaluation time, never trusting the generator's own, earlier read.
+**`FleetMissionType`'s `AcsAttack` (8), `MissileAttack` (7), `Intercept` (6), `AcsDefend`
+(5) and `DefenseHold` (9) are unreachable from this codebase at every tier, regardless of
+policy** — each requires an actual code change to reach, not a `policy.json` edit. Note
+that `FleetMissionType.MissileAttack` (7) here is a `launchFleetMission` mission-type
+value, distinct from `launchInterplanetaryMissileAttack` (a wholly separate contract
+function, discussed below) despite the similar name — the former stays unreachable, the
+latter does not.
+
+`Attack` (3) is one exception, since the launch-actions plan's commit 5 (2026-08-28):
+`policy.actions.allow_combat` is a real, independently-checked gate for it at `operator`
+tier, at both enforcement layers (`guard.py`'s `mission_type` gate, `allowlist.ts`'s
+calldata-level check). **Since commit 6 (same date), `candidates.
+generate_attack_candidates` does construct an Attack `Action`** — ladder rung `8e:attack`,
+reached only once every earlier rung has found nothing at all for any target planet.
+
+**`launchInterplanetaryMissileAttack` is the second exception, since commit 7 (same
+date).** It shares nothing with `launchFleetMission` — its own selector, no fleet tuple,
+no mission-type argument, no fleet slot, no travel time, fully synchronous — so it isn't
+part of the `FleetMissionType` enum's reachability story above at all; it's gated the
+same way (`policy.actions.allow_combat` at `operator` tier) but by a dedicated new
+`guard._gate_missile_target`, not `_gate_mission_type`. `candidates.
+generate_missile_candidates` constructs it — ladder rung `8f:missile`, more conservative
+still, reached only once Attack itself has found nothing at all.
+
+A shared, new `attack_protection` guard gate re-checks the specific target's live
+attack-protection status fresh at guard-evaluation time for BOTH action types, never
+trusting either generator's own, earlier read — with one missile-specific exemption: a
+target blocked only by the bashing limit is still a legal missile target
+(`launchInterplanetaryMissileAttack` ignores that dimension server-side), though it
+would be an illegal fleet Attack.
 
 **Since 2026-08-17 (Phase 5c/5b), `plan.py` can construct a `launchFleetMission`
 `Action`** for every one of the four non-combat mission types — all gated on

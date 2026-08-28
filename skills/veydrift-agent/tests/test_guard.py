@@ -155,35 +155,38 @@ def verdict(report, gate: str):
 
 
 # --------------------------------------------------------------------------------------
-# All 21 gates are always present, never short-circuited.
+# All 22 gates are always present, never short-circuited.
 #
-# Was 17, then 18, then 19, then 20 (this test's own name is now four gates stale, kept
-# for git-blame continuity). Most recently, commit 6 of the launch-actions plan added
-# `attack_protection` (`_gate_attack_protection`) -- a live, target-specific re-check of
-# `/wallet/{addr}/attack-protection`, independent of whatever `candidates.
-# generate_attack_candidates` already read at generation time. Before it, commit 2 added
-# `fleet_slots` (`_gate_fleet_slots`) -- a re-derivation of the contract's
-# `FleetSlotLimitReached` check, independent of whatever the planner already verified.
-# Before it, this change added the `game_paused` gate (`_gate_game_paused`) as the
-# second, independent line of defense behind `plan.py`'s rung `1b` for a chain-side
-# maintenance pause -- see that function's docstring. Before that, Phase 5c (docs/SPEC.md
-# §5.5) added `mission_type` for `launchFleetMission` -- see guard.py's
-# `_gate_mission_type` and `_ALLOWED_MISSION_TYPES`. Each of these is the same situation
-# this test's own comment already described: a new *mandatory* gate necessarily changes
-# the fixed-length enumeration this test pins, and there is no way to add a gate without
-# that. All four are additive and PASS trivially for the routine build action used here
-# (see below), so this is the only place their addition is visible in a pre-existing
-# test.
+# Was 17, then 18, then 19, then 20, then 21 (this test's own name is now five gates
+# stale, kept for git-blame continuity). Most recently, commit 7 of the launch-actions
+# plan added `missile_target` (`_gate_missile_target`) -- an independent re-derivation of
+# `launchInterplanetaryMissileAttack`'s range/primary-target/owned-missile-count
+# preconditions. Before it, commit 6 added `attack_protection`
+# (`_gate_attack_protection`) -- a live, target-specific re-check of `/wallet/{addr}/
+# attack-protection`, independent of whatever `candidates.generate_attack_candidates`
+# already read at generation time. Before it, commit 2 added `fleet_slots`
+# (`_gate_fleet_slots`) -- a re-derivation of the contract's `FleetSlotLimitReached`
+# check, independent of whatever the planner already verified. Before it, this change
+# added the `game_paused` gate (`_gate_game_paused`) as the second, independent line of
+# defense behind `plan.py`'s rung `1b` for a chain-side maintenance pause -- see that
+# function's docstring. Before that, Phase 5c (docs/SPEC.md §5.5) added `mission_type`
+# for `launchFleetMission` -- see guard.py's `_gate_mission_type` and
+# `_ALLOWED_MISSION_TYPES`. Each of these is the same situation this test's own comment
+# already described: a new *mandatory* gate necessarily changes the fixed-length
+# enumeration this test pins, and there is no way to add a gate without that. All five
+# are additive and PASS trivially for the routine build action used here (see below), so
+# this is the only place their addition is visible in a pre-existing test.
 # --------------------------------------------------------------------------------------
 
 
 def test_all_nineteen_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 21
+    assert report.total == 22
     gates = {v.gate for v in report.verdicts}
     assert gates == {
-        "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "attack_protection", "address",
+        "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "missile_target", "attack_protection",
+        "address",
         "abi_hash", "health",
         "game_paused", "index_lag", "affordability", "energy", "storage_overflow", "fields", "reserve",
         "gas", "eth_floor", "value_ceiling", "idempotency", "revert_streak",
@@ -443,6 +446,300 @@ def test_attack_protection_passes_when_the_live_check_says_allowed():
     policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
     report = evaluate(action, make_snapshot(), policy, attack_protection_allowed=True)
     assert verdict(report, "attack_protection").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# attack_protection — missile branch (commit 7 of the launch-actions plan). A missile
+# ignores the bashing-limit dimension entirely (countsBashing=false server-side), so a
+# target blocked ONLY by bashing is legal for a missile even though it's illegal for a
+# fleet Attack; score_protection/not_allied still block a missile exactly like Attack.
+# --------------------------------------------------------------------------------------
+
+
+def make_missile_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.MISSILE_ATTACK,
+        function="launchInterplanetaryMissileAttack",
+        planet_id=664,
+        origin_planet_id=664,
+        target_coordinates="7:181:20",
+        target_planet_id=23,
+        primary_target=ids.Defense.ROCKET_LAUNCHER,
+        quantity=5,
+        rule="8f:missile",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def test_attack_protection_passes_trivially_for_a_non_missile_non_attack_action():
+    report = evaluate(make_build_action(), make_snapshot(), make_policy(), attack_protection_allowed=None)
+    assert verdict(report, "attack_protection").status is GuardStatus.PASS
+
+
+def test_attack_protection_missile_blocks_on_unknown():
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_snapshot(), policy, attack_protection_allowed=None)
+    assert verdict(report, "attack_protection").status is GuardStatus.BLOCK
+
+
+def test_attack_protection_missile_passes_when_allowed_is_true():
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_snapshot(), policy, attack_protection_allowed=True)
+    assert verdict(report, "attack_protection").status is GuardStatus.PASS
+
+
+def test_attack_protection_missile_exempts_a_bashing_only_block():
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(
+        action, make_snapshot(), policy, attack_protection_allowed=False, attack_protection_blocked_reason="bashing"
+    )
+    v = verdict(report, "attack_protection")
+    assert v.status is GuardStatus.PASS
+    assert "bashing" in v.detail.lower()
+
+
+def test_attack_protection_missile_still_blocks_on_score_protection():
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        attack_protection_allowed=False,
+        attack_protection_blocked_reason="score_protection",
+    )
+    assert verdict(report, "attack_protection").status is GuardStatus.BLOCK
+
+
+def test_attack_protection_missile_still_blocks_on_not_allied():
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(
+        action, make_snapshot(), policy, attack_protection_allowed=False, attack_protection_blocked_reason="not_allied"
+    )
+    assert verdict(report, "attack_protection").status is GuardStatus.BLOCK
+
+
+def test_attack_protection_missile_blocks_on_false_with_no_reason_given():
+    """A `False` result with a missing/unparsed `blocked_reason` must still BLOCK for a
+    missile -- only a POSITIVELY confirmed bashing-only block is exempted, never absence
+    of information."""
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(
+        action, make_snapshot(), policy, attack_protection_allowed=False, attack_protection_blocked_reason=None
+    )
+    assert verdict(report, "attack_protection").status is GuardStatus.BLOCK
+
+
+def test_attack_protection_fleet_attack_still_blocks_on_bashing_unlike_missile():
+    """The exemption is missile-specific -- a fleet Attack blocked by bashing must still
+    BLOCK, confirming the branch is keyed on action type, not merely on the reason."""
+    action = make_fleet_action(mission_type=ids.FleetMissionType.ATTACK)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(
+        action, make_snapshot(), policy, attack_protection_allowed=False, attack_protection_blocked_reason="bashing"
+    )
+    assert verdict(report, "attack_protection").status is GuardStatus.BLOCK
+
+
+# --------------------------------------------------------------------------------------
+# missile_target — new gate, commit 7 of the launch-actions plan. Independently
+# re-derives launchInterplanetaryMissileAttack's range/primary-target/owned-missile-count
+# preconditions from Snapshot + Action alone (no live data needed, unlike
+# attack_protection above).
+# --------------------------------------------------------------------------------------
+
+
+def make_missile_planet(**overrides) -> PlanetSnapshot:
+    base = dict(
+        planet_id=664,
+        coordinates="7:181:14",
+        resources_as_of_now=Resources(),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        buildings=[],
+        ships=[],
+        defenses=[
+            Entity(id=ids.Defense.INTERPLANETARY_MISSILE, name="Interplanetary Missile", count=10, cost=Resources(metal=12_500, crystal=2_500, deuterium=10_000)),
+        ],
+    )
+    base.update(overrides)
+    return PlanetSnapshot(**base)
+
+
+def make_missile_snapshot(*, planet=None, impulse_drive_level=5) -> Snapshot:
+    technologies = (
+        [Entity(id=ids.Technology.IMPULSE_DRIVE, name="Impulse Drive", level=impulse_drive_level, cost=Resources())]
+        if impulse_drive_level is not None
+        else []
+    )
+    return Snapshot(
+        taken_at=NOW,
+        wallet=WALLET,
+        health_ok=True,
+        deployment_abi_hash=guard.PINNED_ABI_HASH,
+        technologies=technologies,
+        planets=[planet or make_missile_planet()],
+    )
+
+
+def test_missile_target_passes_trivially_for_a_non_missile_action():
+    report = evaluate(make_build_action(), make_missile_snapshot(), make_policy())
+    assert verdict(report, "missile_target").status is GuardStatus.PASS
+
+
+def test_missile_target_blocks_when_allow_combat_is_false():
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR)  # actions.allow_combat defaults False
+    report = evaluate(action, make_missile_snapshot(), policy)
+    v = verdict(report, "missile_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "allow_combat" in v.detail
+
+
+def test_missile_target_blocks_when_primary_target_is_none():
+    action = make_missile_action(primary_target=None)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    v = verdict(report, "missile_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "no primary_target" in v.detail
+
+
+def test_missile_target_blocks_when_primary_target_is_anti_ballistic_missile():
+    action = make_missile_action(primary_target=ids.Defense.ANTI_BALLISTIC_MISSILE)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    v = verdict(report, "missile_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "InvalidMissileTarget" in v.detail
+
+
+def test_missile_target_blocks_when_primary_target_is_interplanetary_missile_itself():
+    action = make_missile_action(primary_target=ids.Defense.INTERPLANETARY_MISSILE)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    assert verdict(report, "missile_target").status is GuardStatus.BLOCK
+
+
+def test_missile_target_allows_large_shield_dome_the_top_of_the_valid_range():
+    action = make_missile_action(primary_target=ids.Defense.LARGE_SHIELD_DOME, target_coordinates="7:181:20")
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    assert verdict(report, "missile_target").status is GuardStatus.PASS
+
+
+def test_missile_target_blocks_different_galaxy():
+    action = make_missile_action(target_coordinates="9:181:20")
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    v = verdict(report, "missile_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "galaxy" in v.detail.lower()
+
+
+def test_missile_target_blocks_out_of_range_same_galaxy():
+    # Impulse Drive 5 -> range 24; system 181 -> 181+25 = 206 is 25 away, out of range.
+    action = make_missile_action(target_coordinates="7:206:20")
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(impulse_drive_level=5), policy)
+    v = verdict(report, "missile_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "range" in v.detail.lower()
+
+
+def test_missile_target_allows_exactly_at_the_range_boundary():
+    # Impulse Drive 5 -> range 24; system 181 -> 181+24 = 205 is exactly at the boundary.
+    action = make_missile_action(target_coordinates="7:205:20")
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(impulse_drive_level=5), policy)
+    assert verdict(report, "missile_target").status is GuardStatus.PASS
+
+
+def test_missile_target_blocks_any_real_distance_when_impulse_drive_is_zero():
+    action = make_missile_action(target_coordinates="7:182:20")  # 1 system away
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(impulse_drive_level=0), policy)
+    assert verdict(report, "missile_target").status is GuardStatus.BLOCK
+
+
+def test_missile_target_allows_same_system_when_impulse_drive_is_zero():
+    """Impulse Drive 0 means range exactly 0, not "no range at all" -- a same-system
+    target is still in range."""
+    action = make_missile_action(target_coordinates="7:181:20")  # same system as origin
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(impulse_drive_level=0), policy)
+    assert verdict(report, "missile_target").status is GuardStatus.PASS
+
+
+def test_missile_target_blocks_when_impulse_drive_is_unreported():
+    """`None`/never-researched both mean level 0 -- a real, narrow range, not
+    "unverifiable" -- but this test pins that a same-system target still passes even
+    then, confirming the fail-closed posture is about missing SNAPSHOT DATA (defense
+    counts, coordinates), not about an unresearched technology defaulting sensibly to 0."""
+    action = make_missile_action(target_coordinates="7:181:20")
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(impulse_drive_level=None), policy)
+    assert verdict(report, "missile_target").status is GuardStatus.PASS
+
+
+def test_missile_target_blocks_zero_or_negative_quantity():
+    action = make_missile_action(quantity=0)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    v = verdict(report, "missile_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "quantity" in v.detail.lower()
+
+
+def test_missile_target_blocks_when_ipm_count_is_unreported():
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    snapshot = make_missile_snapshot(planet=make_missile_planet(defenses=[]))
+    report = evaluate(action, snapshot, policy)
+    v = verdict(report, "missile_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "not reported" in v.detail.lower()
+
+
+def test_missile_target_blocks_when_not_enough_ipms_owned():
+    action = make_missile_action(quantity=20)  # planet only has 10
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    v = verdict(report, "missile_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "InvalidQuantity" in v.detail
+
+
+def test_missile_target_passes_when_every_precondition_is_met():
+    action = make_missile_action(quantity=10)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    assert verdict(report, "missile_target").status is GuardStatus.PASS
+
+
+def test_missile_target_blocks_when_origin_planet_not_in_snapshot():
+    action = make_missile_action(origin_planet_id=999)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, make_missile_snapshot(), policy)
+    assert verdict(report, "missile_target").status is GuardStatus.BLOCK
+
+
+def test_missile_target_idempotency_key_distinguishes_target_and_primary_target():
+    """Commit 7's own fix to `idempotency_key` -- two missile actions from the same
+    planet against different targets, or the same target with a different
+    primary_target, must not collapse onto the same key."""
+    a = make_missile_action(target_planet_id=23, primary_target=ids.Defense.ROCKET_LAUNCHER)
+    b = make_missile_action(target_planet_id=24, primary_target=ids.Defense.ROCKET_LAUNCHER)
+    c = make_missile_action(target_planet_id=23, primary_target=ids.Defense.LARGE_SHIELD_DOME)
+    keys = {guard.idempotency_key(a), guard.idempotency_key(b), guard.idempotency_key(c)}
+    assert len(keys) == 3
 
 
 # --------------------------------------------------------------------------------------
@@ -1221,6 +1518,25 @@ def test_health_still_passes_the_exception_for_every_non_combat_fleet_mission():
         assert verdict(report, "health").status is GuardStatus.PASS, mt
 
 
+def test_health_still_passes_the_exception_for_a_missile_action():
+    """Commit 7: unlike Attack, `launchInterplanetaryMissileAttack` never requests
+    randomness (interception is deterministic arithmetic, confirmed by reading
+    `VeydriftPlanetManagementModule.sol` directly) -- so a randomness-only degradation
+    genuinely is irrelevant to it, and the exception correctly still applies. This is a
+    considered exclusion from `_gate_health`'s `is_combat_action`, not a gap the gate
+    forgot to extend when Missile was added."""
+    snapshot = make_snapshot(
+        health_ok=False,
+        readiness_ready=True,
+        degradation_reasons=[],
+        randomness_readiness=RandomnessReadiness(ready=False, reasons=["randomness safety check unavailable"]),
+    )
+    action = make_missile_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True))
+    report = evaluate(action, snapshot, policy)
+    assert verdict(report, "health").status is GuardStatus.PASS
+
+
 def test_health_still_blocks_when_readiness_itself_is_not_ready():
     snapshot = make_snapshot(
         health_ok=False,
@@ -1806,16 +2122,39 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
 
     py_economy = {fn for fn, tier in guard._MIN_TIER_FOR_FUNCTION.items() if tier is Tier.ECONOMY}
     py_operator = {fn for fn, tier in guard._MIN_TIER_FOR_FUNCTION.items() if tier is Tier.OPERATOR}
+    # Commit 7 of the launch-actions plan: launchInterplanetaryMissileAttack is
+    # unconditionally `operator` in guard.py's tier map (that's still its real tier
+    # requirement), but allowlist.ts pulls its selector out of the unconditional
+    # tierSelectors('operator') set entirely -- it lives in the separate, always-
+    # conditional COMBAT_SIGNATURES instead (see guard._COMBAT_ONLY_FUNCTIONS's own
+    # docstring for why this is a genuine, not accidental, shape difference between the
+    # two layers). Excluded here, diffed against COMBAT_SIGNATURES below instead.
+    py_operator_unconditional = py_operator - guard._COMBAT_ONLY_FUNCTIONS
 
     assert py_economy == ts_economy, (
         "economy-tier functions disagree between guard.py and allowlist.ts.\n"
         f"  only in guard.py:    {sorted(py_economy - ts_economy)}\n"
         f"  only in allowlist.ts:{sorted(ts_economy - py_economy)}"
     )
-    assert py_operator == ts_operator_extra, (
+    assert py_operator_unconditional == ts_operator_extra, (
         "operator-tier functions disagree between guard.py and allowlist.ts.\n"
-        f"  only in guard.py:    {sorted(py_operator - ts_operator_extra)}\n"
-        f"  only in allowlist.ts:{sorted(ts_operator_extra - py_operator)}"
+        f"  only in guard.py:    {sorted(py_operator_unconditional - ts_operator_extra)}\n"
+        f"  only in allowlist.ts:{sorted(ts_operator_extra - py_operator_unconditional)}"
+    )
+
+    ts_combat_signature_names = names_in("COMBAT_SIGNATURES")
+    assert guard._COMBAT_ONLY_FUNCTIONS == ts_combat_signature_names, (
+        "combat-only (allow_combat-gated) functions disagree between guard.py's "
+        "_COMBAT_ONLY_FUNCTIONS and allowlist.ts's COMBAT_SIGNATURES.\n"
+        f"  only in guard.py:    {sorted(guard._COMBAT_ONLY_FUNCTIONS - ts_combat_signature_names)}\n"
+        f"  only in allowlist.ts:{sorted(ts_combat_signature_names - guard._COMBAT_ONLY_FUNCTIONS)}"
+    )
+    # Every combat-only function must still be in _MIN_TIER_FOR_FUNCTION at operator --
+    # allow_combat widens WHICH functions are permitted, never the tier requirement
+    # itself, the exact same principle _gate_mission_type's docstring states for Attack.
+    assert guard._COMBAT_ONLY_FUNCTIONS <= py_operator, (
+        f"guard._COMBAT_ONLY_FUNCTIONS contains a function not mapped to Tier.OPERATOR in "
+        f"_MIN_TIER_FOR_FUNCTION: {sorted(guard._COMBAT_ONLY_FUNCTIONS - py_operator)}"
     )
 
     # Phase 5c (docs/SPEC.md §5.5): the two layers must also agree on WHICH mission types

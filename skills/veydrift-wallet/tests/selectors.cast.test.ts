@@ -26,6 +26,7 @@ describe.skipIf(!castAvailable)("live `cast sig` cross-check", () => {
     "settlePlanet(uint256)",
     "startDefenseProduction(uint256,uint8,uint32)",
     "attackProtectionStatus(address,uint256)",
+    "launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)",
   ];
 
   it.each(signatures)("%s matches `cast sig` output", (sig) => {

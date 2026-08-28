@@ -480,10 +480,11 @@ def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) 
     `walletctl build --action` expects (`veydrift-wallet/src/tx.ts`'s `Action` interface).
     Positional `args` match the ABI's declared input order exactly.
 
-    `snapshot` is only required for `launchFleetMission` (to resolve
-    `target_coordinates` -> a real on-chain planet id, see `_resolve_target_planet_id`) --
-    every other branch ignores it, so callers building a non-fleet action (still the vast
-    majority in this codebase today) need not supply one."""
+    `snapshot` is only required for `launchFleetMission` and (commit 7)
+    `launchInterplanetaryMissileAttack` (both resolve a target via
+    `_resolve_target_planet_id`) -- every other branch ignores it, so callers building a
+    non-fleet, non-missile action (still the vast majority in this codebase today) need
+    not supply one."""
     fn = action.function
     if fn == "startBuildingUpgrade" or fn == "startResearch":
         args = [action.planet_id, action.entity_id]
@@ -499,6 +500,22 @@ def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) 
             raise ValueError("tick.py needs a Snapshot to build launchFleetMission calldata")
         signature, args = _fleet_mission_args(action, snapshot)
         return {"function": signature, "args": args, "purpose": (action.rationale or "")[:200]}
+    if fn == "launchInterplanetaryMissileAttack":
+        # Commit 7 of the launch-actions plan. Not overloaded on the deployed ABI -- the
+        # bare name resolves unambiguously (`abi.ts`'s `resolveFunctionAbi`), the same
+        # posture every other non-overloaded function branch above already takes; only
+        # `launchFleetMission` needs the full-signature dance (AGENTS.md §7 trap #2).
+        # Shares nothing else with the fleet-mission path: no fleet tuple, no mission
+        # type, fully synchronous -- (origin, target, primaryTarget, quantity) directly.
+        if snapshot is None:
+            raise ValueError("tick.py needs a Snapshot to build launchInterplanetaryMissileAttack calldata")
+        if action.origin_planet_id is None:
+            raise ValueError("launchInterplanetaryMissileAttack action has no origin_planet_id")
+        if action.primary_target is None:
+            raise ValueError("launchInterplanetaryMissileAttack action has no primary_target")
+        target_planet_id = _resolve_target_planet_id(action, snapshot)
+        args = [action.origin_planet_id, target_planet_id, int(action.primary_target), action.quantity or 0]
+        return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
     # `settlePlanet` had a branch here through Phase 4. Removed in Phase 5
     # (docs/SPEC.md §5.4/§9): its body at the pinned commit
     # (`_touchPlayer(msg.sender); _collectPlanetResources(planetId);`) is byte-identical
@@ -1003,6 +1020,7 @@ def _describe_override(
     foreign_debris_targets: dict[int, tuple[str, Resources]],
     colonize_targets: list[tuple[str, int]],
     attack_targets: dict[int, tuple[str, Resources, bool | None]],
+    missile_targets: dict[int, tuple[str, dict[int, int], bool | None]],
 ) -> tuple[dict[str, Any], str]:
     """`(override_record, override_line)` for a `vd tick --action`-supplied action --
     the code-enforced disagreement record `references/manual-action-override.md`
@@ -1029,6 +1047,7 @@ def _describe_override(
         foreign_debris_targets=foreign_debris_targets,
         colonize_targets=colonize_targets,
         attack_targets=attack_targets,
+        missile_targets=missile_targets,
     )
     record = {
         "operator_action": {
@@ -1405,25 +1424,108 @@ def _attack_targets(wallet: str) -> dict[int, tuple[str, Resources, bool | None]
     return out
 
 
-def _attack_protection_allowed(wallet: str, action: Action, snapshot: Snapshot) -> bool | None:
-    """Live, target-specific re-check for the chosen Attack `action` --
-    `guard._gate_attack_protection`'s `attack_protection_allowed` parameter (commit 6 of
-    the launch-actions plan). Fetched fresh at guard-evaluation time, for the SPECIFIC
-    target this action encodes, never trusted from whatever `candidates.
-    generate_attack_candidates` read at generation time -- that earlier read is a
-    courtesy filter only; `VeydriftAntiRaidPrimitives.sol` re-evaluates protection at
-    IMPACT, not at launch, so even this fresh read is a best-effort pre-flight check, not
-    a guarantee, but it is materially fresher than a generation-time read from a
-    potentially-stale `/highscores` fetch.
+def _missile_targets(wallet: str) -> dict[int, tuple[str, dict[int, int], bool | None]]:
+    """Candidate Missile targets -- `generate_missile_candidates`'s `missile_targets`
+    parameter (commit 7 of the launch-actions plan). Sourced from the same `/highscores`
+    (economy category) response `_attack_targets` reads -- a separate fetch, not a shared
+    one, matching this codebase's existing precedent of dedicated fetchers per generator
+    even when their data sources overlap (`_own_planet_debris` vs.
+    `_foreign_debris_targets`). Extracts each row's `homePlanet.tactical.defenses.units[]`
+    (`{id: count}`) instead of `raidableResources` -- a missile snipes a specific
+    DEFENSE type, not resources, so `generate_missile_candidates` needs the target's
+    defense composition, not its loot.
 
-    Prefers `action.target_planet_id` directly when set (the normal case for an
-    Attack -- `generate_attack_candidates` always sets it, the same foreign-target
-    posture `generate_foreign_harvest_candidates` established in commit 3), falling back
-    to `_resolve_target_planet_id` only for a hand-constructed override action that set
+    The `attackProtection.allowed`/`blockedReason` semantics are identical to
+    `_attack_targets`'s -- both read the SAME account-level, no-`targetPlanetId` block,
+    which never carries `"bashing"` as a `blockedReason` (bashing is a per-(attacker,
+    defender,PLANET) triple this coarser endpoint cannot see at all). So there is no
+    missile-specific interpretation needed at generation time; the missile-vs-fleet
+    distinction only matters at guard time, against the richer per-planet
+    `/wallet/{addr}/attack-protection` response (see `_attack_protection_allowed`'s own
+    commit-7 update).
+
+    Keyed by the row's `homePlanetId`, same one-row-one-target scope limit
+    `_attack_targets` documents. Best-effort: never raises, degrades to `{}` on any
+    fetch/parse failure, skips any individual row with an unparseable shape. Excludes the
+    wallet's own row."""
+    try:
+        data = read.fetch_highscores(category="economy", current_wallet=wallet, page_size=_ATTACK_TARGET_PAGE_SIZE)
+    except http.VeydriftAPIError:
+        return {}
+    rankings = data.get("rankings")
+    rows = rankings.get("economy") if isinstance(rankings, dict) else None
+    if not isinstance(rows, list):
+        return {}
+
+    wallet_lower = wallet.lower()
+    out: dict[int, tuple[str, dict[int, int], bool | None]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_wallet = row.get("wallet")
+        if isinstance(row_wallet, str) and row_wallet.lower() == wallet_lower:
+            continue
+        home_planet = row.get("homePlanet")
+        if not isinstance(home_planet, dict):
+            continue
+        coords = home_planet.get("coordinates") or {}
+        tactical = home_planet.get("tactical") or {}
+        defense_units = (tactical.get("defenses") or {}).get("units")
+        if not isinstance(defense_units, list):
+            continue
+        try:
+            planet_id = int(row.get("homePlanetId"))
+            galaxy = int(coords["galaxy"])
+            system = int(coords["system"])
+            position = int(coords["position"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        defense_counts: dict[int, int] = {}
+        for unit in defense_units:
+            if not isinstance(unit, dict):
+                continue
+            try:
+                defense_id = int(unit.get("id"))
+                count = int(unit.get("count", 0))
+            except (TypeError, ValueError):
+                continue
+            if count > 0:
+                defense_counts[defense_id] = count
+        if not defense_counts:
+            continue
+        protection = row.get("attackProtection")
+        allowed = protection.get("allowed") if isinstance(protection, dict) else None
+        allowed = allowed if isinstance(allowed, bool) else None
+        out[planet_id] = (f"{galaxy}:{system}:{position}", defense_counts, allowed)
+    return out
+
+
+def _attack_protection_allowed(wallet: str, action: Action, snapshot: Snapshot) -> tuple[bool | None, str | None]:
+    """Live, target-specific re-check for the chosen Attack/Missile `action` --
+    `guard._gate_attack_protection`'s `attack_protection_allowed`/
+    `attack_protection_blocked_reason` parameters (commit 6, extended to Missile in
+    commit 7 of the launch-actions plan). Fetched fresh at guard-evaluation time, for the
+    SPECIFIC target this action encodes, never trusted from whatever `candidates.
+    generate_attack_candidates`/`generate_missile_candidates` read at generation time --
+    that earlier read is a courtesy filter only; `VeydriftAntiRaidPrimitives.sol`
+    re-evaluates protection at IMPACT (Attack) or at launch (Missile, synchronously), not
+    trusted from a potentially-stale `/highscores` fetch either way.
+
+    Prefers `action.target_planet_id` directly when set (the normal case for both action
+    families -- their generators always set it, the same foreign-target posture
+    `generate_foreign_harvest_candidates` established in commit 3), falling back to
+    `_resolve_target_planet_id` only for a hand-constructed override action that set
     `target_coordinates` instead.
 
-    Returns `None` (never a default of `True`/`False`) on any fetch/parse failure, an
-    unresolvable target, or a response missing a boolean `allowed` key --
+    **Returns `(allowed, blocked_reason)`, commit 7** -- `blocked_reason` (`"score_
+    protection"` / `"bashing"` / `"not_allied"`, only present when `allowed` is `false`)
+    is what lets `guard._gate_attack_protection` apply the missile-specific exemption:
+    `VeydriftPlanetManagementModule.sol`'s `launchInterplanetaryMissileAttack` calls
+    `_enforceAttackProtection(..., countsBashing=false)` -- a missile ignores the
+    bashing-limit dimension entirely, so a target whose ONLY blocked reason is bashing is
+    a legal missile target even though it would be an illegal fleet Attack. Both
+    positions are `None` (never a default of `True`/`False`/`""`) on any fetch/parse
+    failure, an unresolvable target, or a response missing a boolean `allowed` key --
     `guard._gate_attack_protection` fails closed on `None` exactly like every other
     live-data gate in this codebase (AGENTS.md §5)."""
     if action.target_planet_id is not None:
@@ -1432,13 +1534,16 @@ def _attack_protection_allowed(wallet: str, action: Action, snapshot: Snapshot) 
         try:
             target_planet_id = _resolve_target_planet_id(action, snapshot)
         except ValueError:
-            return None
+            return None, None
     try:
         data = read.fetch_attack_protection(wallet, target_planet_id)
     except http.VeydriftAPIError:
-        return None
+        return None, None
     allowed = data.get("allowed")
-    return allowed if isinstance(allowed, bool) else None
+    if not isinstance(allowed, bool):
+        return None, None
+    blocked_reason = data.get("blockedReason")
+    return allowed, (blocked_reason if isinstance(blocked_reason, str) else None)
 
 
 def _await_indexed(*, wallet: str, policy_planets: list[int], target_block: int, max_wait_s: int) -> bool:
@@ -1681,6 +1786,9 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # for this network call, matching commit 4's colonize_targets posture exactly.
     attack_targets = _attack_targets(policy_model.wallet) if policy_model.actions.allow_combat else {}
 
+    # Commit 7 of the launch-actions plan: same gating as attack_targets above.
+    missile_targets = _missile_targets(policy_model.wallet) if policy_model.actions.allow_combat else {}
+
     # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
@@ -1699,6 +1807,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             foreign_debris_targets=foreign_debris_targets,
             colonize_targets=colonize_targets,
             attack_targets=attack_targets,
+            missile_targets=missile_targets,
         )
     else:
         action = plan_mod.plan_next_action(
@@ -1711,6 +1820,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             foreign_debris_targets=foreign_debris_targets,
             colonize_targets=colonize_targets,
             attack_targets=attack_targets,
+            missile_targets=missile_targets,
         )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an
@@ -1726,6 +1836,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     gas_cost_wei: int | None = None
     outgoing_colonize_count: int | None = None
     attack_protection_allowed: bool | None = None
+    attack_protection_blocked_reason: str | None = None
     if action.is_onchain():
         unsigned_tx, gas_cost_wei, build_error, built_tx_path = _walletctl_build(
             action, provider=policy_model.wallet_engine.provider, snapshot=snapshot
@@ -1743,11 +1854,16 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         # network call on every single tick.
         if action.function == "launchFleetMission" and action.mission_type == ids.FleetMissionType.COLONIZE:
             outgoing_colonize_count = _outgoing_colonize_count(policy_model.wallet)
-        # Commit 6 of the launch-actions plan: only fetched for an actual Attack
-        # proposal -- a live, target-specific re-check at guard-evaluation time, never
-        # trusted from generation time (see guard._gate_attack_protection's docstring).
-        if action.function == "launchFleetMission" and action.mission_type == ids.FleetMissionType.ATTACK:
-            attack_protection_allowed = _attack_protection_allowed(policy_model.wallet, action, snapshot)
+        # Commit 6 of the launch-actions plan (extended to Missile in commit 7): only
+        # fetched for an actual Attack or Missile proposal -- a live, target-specific
+        # re-check at guard-evaluation time, never trusted from generation time (see
+        # guard._gate_attack_protection's docstring).
+        is_attack_action = action.function == "launchFleetMission" and action.mission_type == ids.FleetMissionType.ATTACK
+        is_missile_action = action.function == "launchInterplanetaryMissileAttack"
+        if is_attack_action or is_missile_action:
+            attack_protection_allowed, attack_protection_blocked_reason = _attack_protection_allowed(
+                policy_model.wallet, action, snapshot
+            )
 
     guard_report = guard_mod.evaluate_guardrails(
         action,
@@ -1761,6 +1877,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         eth_balance_wei=eth_balance_wei,
         outgoing_colonize_count=outgoing_colonize_count,
         attack_protection_allowed=attack_protection_allowed,
+        attack_protection_blocked_reason=attack_protection_blocked_reason,
         now=now,
     )
     if build_error:

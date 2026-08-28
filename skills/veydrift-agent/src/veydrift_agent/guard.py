@@ -1,10 +1,10 @@
-"""`vd guard` — the 21-gate guardrail evaluator (docs/SPEC.md §5.5).
+"""`vd guard` — the 22-gate guardrail evaluator (docs/SPEC.md §5.5).
 
 `evaluate_guardrails()` is the pure core: given an `Action`, the `Snapshot` it was
 planned from, the `Policy`, the persisted `AgentState`, and a handful of caller-supplied
 facts that don't live on any of those frozen/local models (live contract addresses, the
 live ABI hash, a built `UnsignedTx` + gas estimate, the wallet's ETH balance), it returns
-a `GuardReport` with **all 21 gates evaluated, never short-circuited** — the full
+a `GuardReport` with **all 22 gates evaluated, never short-circuited** — the full
 `GuardReport.verdicts` list is the audit artifact (docs/SPEC.md §5.5), so a passing tick
 is exactly as informative as a blocked one.
 
@@ -100,9 +100,31 @@ _MIN_TIER_FOR_FUNCTION: dict[str, Tier] = {
     # on launchFleetMission. Mirrors ECONOMY_SIGNATURES in veydrift-wallet/src/allowlist.ts.
     "startShipProduction": Tier.ECONOMY,
     "launchFleetMission": Tier.OPERATOR,
+    # Added commit 7 of the launch-actions plan, 2026-08-28. Shares nothing with
+    # launchFleetMission -- its own selector, no fleet tuple, no mission_type argument --
+    # so this is a wholly new tier-map entry, not an extension of the row above. Gated
+    # further by `_gate_missile_target` (below) on `policy.actions.allow_combat`, the
+    # same master combat flag Attack uses; `operator` alone is not sufficient, exactly
+    # like every other combat-adjacent function in this map. Mirrors
+    # veydrift-wallet/src/allowlist.ts's `COMBAT_SIGNATURES`.
+    "launchInterplanetaryMissileAttack": Tier.OPERATOR,
 }
 
 _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR: 3}
+
+#: Functions in `_MIN_TIER_FOR_FUNCTION` above that are ALSO conditional on
+#: `policy.actions.allow_combat`, in addition to their `operator` tier requirement -- the
+#: real enforcement lives in each function's own dedicated gate (currently just
+#: `_gate_missile_target`, for `launchInterplanetaryMissileAttack`), not here; this set
+#: exists purely so `test_tier_map_agrees_with_the_wallet_engines_allowlist` can diff it
+#: against `allowlist.ts`'s `COMBAT_SIGNATURES` declaratively, the same way
+#: `_COMBAT_MISSION_TYPES` is diffed against `COMBAT_ALLOWED_MISSION_TYPES`. Unlike Attack
+#: (a mission-type *argument* on the shared `launchFleetMission` function, gated inside
+#: `_gate_mission_type`), Missile has no shared function to split "unconditional tier +
+#: conditional argument" the way Attack does -- the entire function IS combat, so
+#: `allowlist.ts` pulls its selector out of the unconditional tier set entirely rather
+#: than decoding an argument; this set mirrors that shape on the Python side.
+_COMBAT_ONLY_FUNCTIONS: frozenset[str] = frozenset({"launchInterplanetaryMissileAttack"})
 
 #: `FleetMissionType` values `launchFleetMission` may submit unconditionally -- no
 #: policy flag affects this set (Phase 5c, docs/SPEC.md §5.5). Default-deny: any
@@ -148,6 +170,15 @@ _ALLOWED_MISSION_TYPES: frozenset[int] = frozenset(
 #: source change here AND in `allowlist.ts`, never a policy flag alone.
 _COMBAT_MISSION_TYPES: frozenset[int] = frozenset({ids.FleetMissionType.ATTACK})
 
+#: `VeydriftPlanetManagementModule.sol`'s own bound for `launchInterplanetaryMissileAttack`'s
+#: `primaryTarget` argument: `primaryTarget > Defense.LargeShieldDome` reverts
+#: `InvalidMissileTarget` -- AntiBallisticMissile(8)/InterplanetaryMissile(9) are not
+#: valid missile targets. Duplicated from `candidates.py`'s own copy of this same bound
+#: (`_MISSILE_TARGET_MAX`), not imported -- this module never imports from
+#: `candidates.py` (the module docstring's "duplicated here, sourced from the exact same
+#: pin" convention, already applied to every other contract-derived constant here).
+_MISSILE_TARGET_MAX = ids.Defense.LARGE_SHIELD_DOME
+
 _MINE_ENTITY_IDS = {ids.Building.METAL_MINE, ids.Building.CRYSTAL_MINE, ids.Building.DEUTERIUM_SYNTHESIZER}
 _ENERGY_FIX_BUILDINGS = {ids.Building.SOLAR_PLANT, ids.Building.FUSION_REACTOR}
 
@@ -177,24 +208,28 @@ def _format_eta_hm(hours: float) -> str:
 
 def idempotency_key(action: Action) -> str:
     """`(planet, action, entity)` per docs/SPEC.md §5.5's `idempotency` row -- except for
-    two action kinds where that base triple collapses distinct actions onto one key and
-    one `AgentState.revert_counts` streak, both fixed together here 2026-08-28 (commit 2
-    of the launch-actions plan):
+    three action kinds where that base triple collapses distinct actions onto one key and
+    one `AgentState.revert_counts` streak:
 
-    - **`FLEET_MISSION`** (`launchFleetMission`): `entity_id` is always `None` (a fleet
-      mission carries a `ships` map, not a single entity), so every fleet mission
-      launched from one planet -- Transport, Deploy, Colonize, Harvest, and (once later
-      commits add them) Attack and Missile -- would otherwise share one key. Fixed by
-      folding in `mission_type` and the target (`action.target_coordinates`).
-    - **`RESOLVE_MISSION`** (`resolveFleetMission`): `plan.py`'s rung 3 never sets
-      `planet_id` (only `mission_id`), so *every* resolve action collapsed onto the
-      single global key `"None:resolveFleetMission:None"` regardless of which mission was
-      being resolved -- a second real bug in the same base formula, found while fixing
-      the first. Fixed by folding in `mission_id` instead.
+    - **`FLEET_MISSION`** (`launchFleetMission`, fixed commit 2, 2026-08-28): `entity_id`
+      is always `None` (a fleet mission carries a `ships` map, not a single entity), so
+      every fleet mission launched from one planet -- Transport, Deploy, Colonize,
+      Harvest, Attack -- would otherwise share one key. Fixed by folding in
+      `mission_type` and the target (`action.target_coordinates`).
+    - **`RESOLVE_MISSION`** (`resolveFleetMission`, fixed commit 2): `plan.py`'s rung 3
+      never sets `planet_id` (only `mission_id`), so *every* resolve action collapsed
+      onto the single global key `"None:resolveFleetMission:None"` regardless of which
+      mission was being resolved -- a second real bug in the same base formula, found
+      while fixing the first. Fixed by folding in `mission_id` instead.
+    - **`MISSILE_ATTACK`** (`launchInterplanetaryMissileAttack`, fixed commit 7, same
+      date): the exact same collision as `FLEET_MISSION`'s above -- `entity_id` is always
+      `None` here too. Fixed the same way, before this action family could ever actually
+      be proposed at all (no generator existed for it until commit 7 itself), so this
+      one never had a live-before-fixed window the way the first two did.
 
-    Both were live before any mission type beyond Transport/Harvest could actually be
-    proposed, so this closes the gap before the wider mission-type surface this plan adds
-    could turn a latent collision into a routine one.
+    All three were live before their respective mission/action type could actually be
+    proposed, so each fix closed the gap before a wider surface this plan adds could turn
+    a latent collision into a routine one.
 
     Shared with `state.PendingTx.key` / `AgentState.revert_counts` so `idempotency` and
     `revert_streak` key off the exact same identity. No migration needed for the format
@@ -207,6 +242,14 @@ def idempotency_key(action: Action) -> str:
         key = f"{key}:{action.mission_type}:{action.target_coordinates}"
     elif action.kind is ActionKind.RESOLVE_MISSION:
         key = f"{key}:{action.mission_id}"
+    elif action.kind is ActionKind.MISSILE_ATTACK:
+        # Commit 7 of the launch-actions plan: the exact same collision FLEET_MISSION's
+        # branch above already fixed once (commit 2) -- `entity_id` is always `None` for
+        # a missile action, so every missile launched from one planet would otherwise
+        # share one key/revert-streak counter regardless of target or primary_target.
+        # Fixed the same way, before this action family could ever actually be proposed
+        # (no generator existed for it until this same commit).
+        key = f"{key}:{action.target_planet_id}:{action.primary_target}"
     return key
 
 
@@ -605,35 +648,59 @@ def _gate_fleet_slots(action: Action, snapshot: Snapshot) -> GuardVerdict:
     )
 
 
-def _gate_attack_protection(action: Action, *, attack_protection_allowed: bool | None) -> GuardVerdict:
-    """New gate, commit 6 of the launch-actions plan. Only relevant to an Attack
-    (`mission_type == ATTACK`) `launchFleetMission` action -- every other action PASSes
-    trivially, the same posture every other function/mission-type-scoped gate in this
-    module takes (`address`/`abi_hash`/`gas`/`eth_floor` toward `action.is_onchain()`,
-    `mission_type`'s own Colonize-only sub-checks toward `mission_type == COLONIZE`).
+def _gate_attack_protection(
+    action: Action,
+    *,
+    attack_protection_allowed: bool | None,
+    attack_protection_blocked_reason: str | None = None,
+) -> GuardVerdict:
+    """New gate, commit 6 of the launch-actions plan; extended to Missile in commit 7.
+    Only relevant to an Attack (`mission_type == ATTACK`) `launchFleetMission` action or a
+    `launchInterplanetaryMissileAttack` action -- every other action PASSes trivially, the
+    same posture every other function/mission-type-scoped gate in this module takes
+    (`address`/`abi_hash`/`gas`/`eth_floor` toward `action.is_onchain()`, `mission_type`'s
+    own Colonize-only sub-checks toward `mission_type == COLONIZE`).
 
     `/wallet/{addr}/attack-protection?targetPlanetId=N` is the authoritative live legality
     oracle for `VeydriftAntiRaidPrimitives.sol`'s score-protection / bashing-limit /
     same-alliance / defender-inactivity rules -- but the contract re-evaluates protection
-    at IMPACT, not at launch, so this is a best-effort pre-flight check, not a guarantee: a
-    target that becomes protected mid-flight still bounces the fleet home with no battle
-    (a wasted round trip, not a wasted gas or corrupted state). This gate's job is to catch
-    the common, already-known-blocked case cheaply before spending gas on it, not to
-    guarantee every launched Attack lands a battle.
+    at IMPACT (Attack) or synchronously at launch (Missile), so this is a best-effort
+    pre-flight check, not a guarantee: an Attack target that becomes protected mid-flight
+    still bounces the fleet home with no battle (a wasted round trip, not a wasted gas or
+    corrupted state). This gate's job is to catch the common, already-known-blocked case
+    cheaply before spending gas on it, not to guarantee every launched Attack lands a
+    battle.
 
-    `tick.py` fetches this live for `action`'s actual resolved target at
+    **Missile branch, commit 7**: `VeydriftPlanetManagementModule.sol`'s
+    `launchInterplanetaryMissileAttack` calls `_enforceAttackProtection(...,
+    countsBashing=false)` (read directly from source) -- a missile ignores the
+    bashing-limit dimension entirely, so a target whose ONLY `blockedReason` is
+    `"bashing"` is a LEGAL missile target even though `attack_protection_allowed` reports
+    `false` for it (that boolean reflects the fleet-Attack computation, `countsBashing=
+    true`). `score_protection`/`not_allied` still block a missile exactly like they block
+    an Attack -- only the bashing exemption is missile-specific. Without this branch, a
+    whole class of legal missile actions (any target whose sole issue is a fleet-Attack
+    bashing cooldown) would be permanently, incorrectly unreachable.
+
+    `tick.py` fetches both pieces live for `action`'s actual resolved target at
     guard-evaluation time (`_attack_protection_allowed`, never at generation time --
-    `candidates.generate_attack_candidates`'s own read of the highscores-embedded,
-    coarser, ACCOUNT-level `attackProtection` is a courtesy filter only, not trusted here)
-    and passes the boolean result in, mirroring every other live-data parameter this
-    module already takes (`live_addresses`, `gas_cost_wei`, `eth_balance_wei`,
+    `candidates.generate_attack_candidates`/`generate_missile_candidates`'s own read of
+    the highscores-embedded, coarser, ACCOUNT-level `attackProtection` is a courtesy
+    filter only, not trusted here), mirroring every other live-data parameter this module
+    already takes (`live_addresses`, `gas_cost_wei`, `eth_balance_wei`,
     `outgoing_colonize_count`).
 
     Fails closed: `attack_protection_allowed is None` (fetch failed, target
     unresolvable, or the response didn't parse a boolean `allowed`) BLOCKs -- "couldn't
-    check" is never "allowed" (AGENTS.md §5). `False` BLOCKs. Only `True` PASSes."""
-    if action.function != "launchFleetMission" or action.mission_type != ids.FleetMissionType.ATTACK:
-        return _verdict("attack_protection", GuardStatus.PASS, "action is not an Attack fleet mission")
+    check" is never "allowed" (AGENTS.md §5). `False` BLOCKs, UNLESS this is a Missile
+    action and `attack_protection_blocked_reason == "bashing"` exactly (a missing/other
+    `blocked_reason` on a `False` result still BLOCKs, even for a missile -- only a
+    positively-confirmed bashing-only block is exempted). Only `True` unconditionally
+    PASSes."""
+    is_attack = action.function == "launchFleetMission" and action.mission_type == ids.FleetMissionType.ATTACK
+    is_missile = action.function == "launchInterplanetaryMissileAttack"
+    if not is_attack and not is_missile:
+        return _verdict("attack_protection", GuardStatus.PASS, "action is not an Attack or Missile action")
     if attack_protection_allowed is None:
         return _verdict(
             "attack_protection",
@@ -641,14 +708,130 @@ def _gate_attack_protection(action: Action, *, attack_protection_allowed: bool |
             "could not fetch/verify /wallet/{addr}/attack-protection for this target -- "
             "an unverifiable check is never treated as allowed",
         )
-    if not attack_protection_allowed:
+    if attack_protection_allowed:
+        return _verdict("attack_protection", GuardStatus.PASS, "attack-protection reports this target is currently attackable")
+    if is_missile and attack_protection_blocked_reason == "bashing":
         return _verdict(
             "attack_protection",
-            GuardStatus.BLOCK,
-            "attack-protection reports this target is not currently attackable (score "
-            "protection, bashing limit, same-alliance, or defender-inactivity rule)",
+            GuardStatus.PASS,
+            "attack-protection reports this target is blocked only by the bashing limit, "
+            "which does not apply to a missile (launchInterplanetaryMissileAttack calls "
+            "_enforceAttackProtection with countsBashing=false)",
         )
-    return _verdict("attack_protection", GuardStatus.PASS, "attack-protection reports this target is currently attackable")
+    return _verdict(
+        "attack_protection",
+        GuardStatus.BLOCK,
+        "attack-protection reports this target is not currently attackable "
+        f"(blockedReason={attack_protection_blocked_reason!r}; score protection, same-"
+        "alliance, or defender-inactivity block a missile exactly like an Attack)",
+    )
+
+
+def _missile_impulse_drive_level(snapshot: Snapshot) -> int:
+    """Absent-from-`technologies` (never researched) and present-with-`level=None` both
+    mean level 0 -- the same convention `_astrophysics_level` above already uses for this
+    exact shape of data; not "unknown," since `/research` always reports every
+    technology it knows about."""
+    entity = next((t for t in snapshot.technologies if t.id == ids.Technology.IMPULSE_DRIVE), None)
+    return entity.level if entity is not None and entity.level is not None else 0
+
+
+def _gate_missile_target(action: Action, snapshot: Snapshot, policy: Policy) -> GuardVerdict:
+    """New gate, commit 7 of the launch-actions plan. `launchInterplanetaryMissileAttack`
+    only -- every other action PASSes trivially. Independently re-derives every
+    precondition `VeydriftPlanetManagementModule.sol`'s `launchInterplanetaryMissileAttack`
+    itself enforces that this codebase can verify from `Snapshot` alone (range,
+    primary-target validity, owned-missile count) -- the same defense-in-depth posture
+    every other gate in this module takes toward the generator that proposed the action.
+
+    **Deliberately does NOT check `_requireNoPendingMissionResolutionForPlanet` for
+    either planet** -- unlike the checks below, that precondition is not knowable from a
+    wallet-scoped read for a foreign target planet (AGENTS.md §"A precondition every
+    action shares, currently omitted everywhere" already documents this exact gap and
+    the established handling: `walletctl simulate` catches it before send, at the cost of
+    a wasted tick rather than wasted gas, not a proactive guard check here). This gate is
+    not a claim that gate coverage is complete for every contract-side revert reason --
+    only for the ones this codebase's own frozen `Snapshot` can actually verify.
+
+    Checks, in order, each independently fail-closed on missing data (AGENTS.md §5):
+
+    1. `policy.actions.allow_combat` is `true` -- the same master combat flag Attack
+       uses; `_MIN_TIER_FOR_FUNCTION`'s `operator` requirement alone is not sufficient,
+       exactly like every other combat-adjacent function.
+    2. `action.primary_target` is set and `<= ids.Defense.LARGE_SHIELD_DOME` (7) --
+       `InvalidMissileTarget` on `AntiBallisticMissile`(8)/`InterplanetaryMissile`(9) or
+       anything higher.
+    3. Same galaxy, and `calc.missile_system_distance(...) <=
+       calc.missile_range(impulse_drive_level)` -- `InterplanetaryMissileOutOfRange`
+       otherwise. Impulse Drive 0 means a narrow-but-real range of exactly 0 systems
+       (same galaxy, same system only), never "unverifiable."
+    4. The origin planet owns at least `action.quantity` Interplanetary Missiles
+       (`Defense.InterplanetaryMissile`, id 9) -- `InvalidQuantity()` otherwise. A count
+       the snapshot didn't report BLOCKs, never treated as `0` built and never treated as
+       "enough."
+    """
+    if action.function != "launchInterplanetaryMissileAttack":
+        return _verdict("missile_target", GuardStatus.PASS, "action is not launchInterplanetaryMissileAttack")
+    if not policy.actions.allow_combat:
+        return _verdict("missile_target", GuardStatus.BLOCK, "policy.actions.allow_combat is false")
+    if action.primary_target is None:
+        return _verdict("missile_target", GuardStatus.BLOCK, "action has no primary_target set -- a malformed action, not nothing to check")
+    if action.primary_target > _MISSILE_TARGET_MAX or action.primary_target < 0:
+        return _verdict(
+            "missile_target",
+            GuardStatus.BLOCK,
+            f"primary_target {action.primary_target} is out of range [0, {_MISSILE_TARGET_MAX}] -- "
+            "the contract reverts InvalidMissileTarget on AntiBallisticMissile(8)/InterplanetaryMissile(9) or higher",
+        )
+    if action.origin_planet_id is None or action.target_coordinates is None:
+        return _verdict("missile_target", GuardStatus.BLOCK, "action has no origin_planet_id/target_coordinates to check range against")
+    origin = snapshot.planet(action.origin_planet_id)
+    if origin is None or origin.coordinates is None:
+        return _verdict("missile_target", GuardStatus.BLOCK, f"origin planet {action.origin_planet_id} not found in snapshot, or has no coordinates")
+
+    origin_parts = origin.coordinates.split(":")
+    target_parts = action.target_coordinates.split(":")
+    if len(origin_parts) != 3 or len(target_parts) != 3:
+        return _verdict("missile_target", GuardStatus.BLOCK, "origin/target coordinates are not a 'G:S:P' string")
+    try:
+        origin_galaxy = int(origin_parts[0])
+        target_galaxy = int(target_parts[0])
+    except ValueError:
+        return _verdict("missile_target", GuardStatus.BLOCK, "origin/target coordinates are not a 'G:S:P' string")
+    if origin_galaxy != target_galaxy:
+        return _verdict(
+            "missile_target",
+            GuardStatus.BLOCK,
+            f"origin galaxy {origin_galaxy} != target galaxy {target_galaxy} -- InterplanetaryMissileOutOfRange (different galaxy is never in range)",
+        )
+    impulse_level = _missile_impulse_drive_level(snapshot)
+    range_ = calc.missile_range(impulse_level)
+    system_distance = calc.missile_system_distance(origin.coordinates, action.target_coordinates)
+    if system_distance > range_:
+        return _verdict(
+            "missile_target",
+            GuardStatus.BLOCK,
+            f"system distance {system_distance} > range {range_} (Impulse Drive {impulse_level}) -- InterplanetaryMissileOutOfRange",
+        )
+
+    quantity = action.quantity if action.quantity is not None else 0
+    if quantity <= 0:
+        return _verdict("missile_target", GuardStatus.BLOCK, "action.quantity is not positive -- InvalidQuantity")
+    owned = _defense_count(origin, ids.Defense.INTERPLANETARY_MISSILE)
+    if owned is None:
+        return _verdict("missile_target", GuardStatus.BLOCK, f"Interplanetary Missile count not reported for planet {origin.planet_id}; cannot verify {quantity} are owned")
+    if owned < quantity:
+        return _verdict(
+            "missile_target",
+            GuardStatus.BLOCK,
+            f"action requests {quantity} Interplanetary Missile(s), only {owned} built on planet {origin.planet_id} -- InvalidQuantity",
+        )
+    return _verdict(
+        "missile_target",
+        GuardStatus.PASS,
+        f"primary_target {action.primary_target} valid, in range (distance {system_distance} <= {range_}), "
+        f"{owned} Interplanetary Missile(s) available (requesting {quantity})",
+    )
 
 
 def _gate_prerequisites(action: Action, snapshot: Snapshot) -> GuardVerdict:
@@ -747,14 +930,27 @@ def _gate_health(action: Action, snapshot: Snapshot) -> GuardVerdict:
     exception used to be unconditional -- reasoned about when combat was unconditionally
     unreachable regardless of policy (`RandomnessReadiness`'s old docstring). That premise
     stopped holding in commit 5 (`allow_combat` became a real gate for Attack), and this is
-    the commit that withdraws the exception specifically for a combat action: a
+    the commit that withdraws the exception specifically for an Attack action: a
     randomness-degraded `/health` is exactly the state that would make an Attack request
-    VRF it cannot get, so an Attack action must BLOCK here even when every other subsystem
-    is confirmed healthy. Every non-combat action keeps the exception unchanged -- the
-    degradation genuinely is irrelevant to a `startBuildingUpgrade`/Transport/Colonize/etc,
-    which never touches randomness at all."""
+    VRF it cannot get (`_requestAttackBattleRandomness`), so an Attack action must BLOCK
+    here even when every other subsystem is confirmed healthy.
+
+    **Missile (commit 7) is deliberately NOT included in `is_combat_action` below, even
+    though it is combat.** Read directly from `VeydriftPlanetManagementModule.sol`'s
+    `launchInterplanetaryMissileAttack`: interception (`intercepted`/`hits`/
+    `destroyedPrimary`) is plain deterministic arithmetic -- no randomness request
+    anywhere in the function. `randomnessReadiness` degrading genuinely is irrelevant to
+    a missile the same way it's irrelevant to a build/Transport/Colonize, so the
+    exception correctly still applies to it -- this is a considered exclusion from
+    `is_combat_action`, not an oversight this gate forgot to extend when Missile was
+    added.
+
+    Every other non-combat action (and Missile, per above) keeps the exception
+    unchanged."""
     if snapshot.health_ok:
         return _verdict("health", GuardStatus.PASS, "/health ok and ready")
+    # Deliberately Attack-only, not "any combat action" -- see this function's own
+    # docstring for why Missile (commit 7) is correctly excluded here.
     is_combat_action = action.function == "launchFleetMission" and action.mission_type in _COMBAT_MISSION_TYPES
     if not is_combat_action and snapshot.combat_only_degradation():
         return _verdict(
@@ -762,7 +958,9 @@ def _gate_health(action: Action, snapshot: Snapshot) -> GuardVerdict:
             GuardStatus.PASS,
             "/health reported ok=false, but positively confirmed as a randomness/combat-"
             "readiness-only degradation (readiness.ready=true, no other degradation "
-            "reasons, game not paused) -- irrelevant to this non-combat action",
+            "reasons, game not paused) -- irrelevant to this action (never touches "
+            "randomness -- true both for ordinary actions and for a deterministic "
+            "Missile launch)",
         )
     if is_combat_action and snapshot.combat_only_degradation():
         return _verdict(
@@ -1247,7 +1445,7 @@ def _gate_revert_streak(action: Action, agent_state: AgentState, policy: Policy)
 
 
 # --------------------------------------------------------------------------------------
-# The full 21-gate evaluation.
+# The full 22-gate evaluation.
 # --------------------------------------------------------------------------------------
 
 
@@ -1264,9 +1462,10 @@ def evaluate_guardrails(
     eth_balance_wei: int | None = None,
     outgoing_colonize_count: int | None = None,
     attack_protection_allowed: bool | None = None,
+    attack_protection_blocked_reason: str | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 21 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 22 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -1276,9 +1475,11 @@ def evaluate_guardrails(
     missions, only meaningful for a Colonize action -- see `_colony_cap_violation`'s
     docstring for why this closes an in-flight-mission blind spot the cap check
     otherwise has, and why `None` fails closed rather than assuming zero.
-    `attack_protection_allowed` (commit 6) is `tick.py`'s live, target-specific
-    `/wallet/{addr}/attack-protection` re-check, only meaningful for an Attack action --
-    see `_gate_attack_protection`'s docstring for why `None` fails closed the same way.
+    `attack_protection_allowed`/`attack_protection_blocked_reason` (commit 6, the latter
+    added commit 7) are `tick.py`'s live, target-specific `/wallet/{addr}/attack-
+    protection` re-check, meaningful for an Attack or Missile action -- see
+    `_gate_attack_protection`'s docstring for why `None` fails closed the same way, and
+    for the missile-specific `blocked_reason` branch.
     """
     from datetime import UTC
     from datetime import datetime as _datetime
@@ -1291,7 +1492,12 @@ def evaluate_guardrails(
         _gate_mission_type(action, snapshot, policy, outgoing_colonize_count=outgoing_colonize_count),
         _gate_prerequisites(action, snapshot),
         _gate_fleet_slots(action, snapshot),
-        _gate_attack_protection(action, attack_protection_allowed=attack_protection_allowed),
+        _gate_missile_target(action, snapshot, policy),
+        _gate_attack_protection(
+            action,
+            attack_protection_allowed=attack_protection_allowed,
+            attack_protection_blocked_reason=attack_protection_blocked_reason,
+        ),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),
         _gate_abi_hash(action, snapshot),
         _gate_health(action, snapshot),
