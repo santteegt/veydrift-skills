@@ -215,6 +215,11 @@
           "title": "Building Priority",
           "type": "array"
         },
+        "colonize": {
+          "default": false,
+          "title": "Colonize",
+          "type": "boolean"
+        },
         "defense_targets": {
           "items": {
             "$ref": "#/$defs/EntityTarget"
@@ -226,6 +231,18 @@
           "default": false,
           "title": "Enable Crawler",
           "type": "boolean"
+        },
+        "fleet_home_planet_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fleet Home Planet Id"
         },
         "max_alternatives": {
           "default": 5,

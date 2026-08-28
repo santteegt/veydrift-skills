@@ -75,12 +75,13 @@ exactly `0`.
 `guard.py`'s `mission_type` gate and `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES`
 both allow mission type 2 at `operator` tier, widened together in the same change (never
 one before the other — widening the wallet-side allowlist alone would have reopened the
-single-layer-enforcement gap the Python-side gate exists to close). **Not yet planner-
-proposed**: no `candidates.py` generator constructs a Colonize `Action` — that needs a
-"where to colonise" target-selection policy this phase's brief did not ask for. The
-entrypoint is implemented, encoded (`tick.py`'s `_action_to_walletctl_json`) and gated;
-only the "which coordinates" decision is left to a human via `walletctl` directly, or to
-a future planner generator. See this package's `CHANGELOG.md` for the full history.
+single-layer-enforcement gap the Python-side gate exists to close). **Now also
+planner-proposed**, as of 2026-08-28: `candidates.generate_colonize_candidates` (gated on
+`policy.strategy.colonize`) supplies the "where to colonise" decision this note used to
+flag as missing — target selection reads `/universe/galaxies/{g}/systems/{s}` for free
+slots in the wallet's own systems, ranked by live `deuteriumMultiplierBps`. A human via
+`walletctl` directly remains available too, unaffected by this. See this package's
+`CHANGELOG.md` for the full history.
 
 The tier column is read straight from `allowlist.ts`'s `ECONOMY_SIGNATURES` and
 `LAUNCH_FLEET_MISSION_SIGNATURES` constants (`skills/veydrift-wallet/references/tx-safety.md`

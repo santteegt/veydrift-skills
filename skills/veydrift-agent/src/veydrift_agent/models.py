@@ -412,6 +412,18 @@ class StrategyCfg(Base):
     #: family as `ship_targets`/`research_priority`/etc, not a wallet-engine or top-level
     #: account setting. See `references/manual-action-override.md`.
     allow_agent_action_override: bool = False
+    #: Explicit opt-in for Colonize target-selection (commit 4 of the launch-actions
+    #: plan). Default `False` reproduces the pre-existing behaviour exactly: no rung ever
+    #: proposes a Colonize action -- `generate_colonize_candidates` returns `[]`
+    #: unconditionally when this is `false`, the same "empty/off == old behaviour"
+    #: convention every prior `strategy` flag uses.
+    colonize: bool = False
+    #: The planet flyable ships should be permanently repositioned to via Deploy (commit
+    #: 4). `None` (default) reproduces pre-existing behaviour exactly:
+    #: `generate_deploy_candidates` returns `[]` unconditionally. Also requires
+    #: `policy.actions.allow_fleet_noncombat`, the same gate every other non-combat fleet
+    #: generator already requires -- this field alone does not enable fleet logistics.
+    fleet_home_planet_id: int | None = None
 
 
 class Policy(Base):

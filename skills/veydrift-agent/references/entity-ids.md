@@ -161,15 +161,18 @@ code path). `DefenseHold` (9) is stationing, not an attack, but is likewise out 
 for this codebase.
 
 **Since 2026-08-17 (Phase 5c/5b), `plan.py` can construct a `launchFleetMission`
-`Action`** for the non-combat types: `candidates.generate_transport_candidates`/
-`generate_harvest_candidates`/`generate_foreign_harvest_candidates` (Transport/Harvest,
-gated on `policy.actions.allow_fleet_noncombat`, default `false` — Harvest against both a
-local and a foreign debris field is live as of 2026-08-28, commits 1 and 3 of the
-launch-actions plan), and `Colonize` (2) is allowlisted and gated at both enforcement
-layers though no generator proposes it yet (see `references/contract-writes.md`'s
-colonisation note). `Deploy` (1) is allowlisted but has no generator either — a
-deliberate scope limit, not a gap in enforcement. `resolveFleetMission` (ladder rung 3)
-remains the only *permissionless* fleet-adjacent function.
+`Action`** for every one of the four non-combat mission types — all gated on
+`policy.actions.allow_fleet_noncombat` (default `false`) except Colonize, gated on
+`policy.strategy.colonize` (also default `false`): `candidates.
+generate_transport_candidates` (Transport), `generate_deploy_candidates` (Deploy, added
+2026-08-28, commit 4 of the launch-actions plan — permanently repositions an entire
+flyable fleet toward a declared `policy.strategy.fleet_home_planet_id`),
+`generate_harvest_candidates`/`generate_foreign_harvest_candidates` (Harvest against a
+local or foreign debris field — live as of 2026-08-28, commits 1 and 3), and
+`generate_colonize_candidates` (Colonize, added commit 4 — target selection reads
+`/universe/galaxies/{g}/systems/{s}` for free slots in the wallet's own systems).
+`resolveFleetMission` (ladder rung 3) remains the only *permissionless* fleet-adjacent
+function.
 
 ## 6. `Resource`
 

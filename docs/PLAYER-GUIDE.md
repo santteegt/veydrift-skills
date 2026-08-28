@@ -264,7 +264,7 @@ change called out:
     "allow_building": true, "allow_research": true,
     "allow_defense": false,           // flip to true once you want defense proposals
     "allow_ships": false,             // flip to true once you want ship proposals
-    "allow_fleet_noncombat": false,   // gates Transport/Harvest proposals -- operator tier, see §13
+    "allow_fleet_noncombat": false,   // gates Transport/Deploy/Harvest proposals -- operator tier, see §13
     "allow_combat": false             // ignored everywhere on purpose -- see §16
   },
   "escalation": {
@@ -280,7 +280,9 @@ change called out:
     "research_priority": [],          // ordered technology names, e.g. ["Energy Technology"]
     "building_priority": [],          // ordered infrastructure names (Robotics Factory etc.)
     "enable_crawler": false,          // opt-in for the scored Crawler family — see below
-    "allow_agent_action_override": false  // vd tick --action opt-in -- see §9
+    "allow_agent_action_override": false,  // vd tick --action opt-in -- see §9
+    "colonize": false,                // opt-in for Colonize proposals -- see §13
+    "fleet_home_planet_id": null      // set to a planet id to enable Deploy -- see §13
   }
 }
 ```
@@ -484,6 +486,8 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `building_priority` | list of string | ordered Building names — **asymmetric with the three fields above; see callout below**. **Empty: the infrastructure family never fires** — rung 6 falls through to its ordinary value-density mine/energy walk, which payback scoring does not drive except to break an exact tie between two mines. **Does not round-robin either — same callout.** | `[]` |
 | `enable_crawler` | bool | `true`/`false` | `false` |
 | `allow_agent_action_override` | bool | `true`/`false` — gates `vd tick --action <file>`. See §9. | `false` |
+| `colonize` | bool | `true`/`false` — opt-in for Colonize proposals, the most conservative rung in the ladder (fires only once nothing else has anything to propose). Also requires a built Colony Ship; target selection needs no other declared field. See §13. | `false` |
+| `fleet_home_planet_id` | int or `null` | a planet id you own — opt-in for Deploy proposals (permanently repositioning a whole flyable fleet home). Also requires `actions.allow_fleet_noncombat: true`; this field alone does not enable it. See §13. | `null` |
 
 > **`resource_weights` is used to tie-break, not to pick a family — it only ever changes
 > the winning proposal in three narrow places, and only ever changes a *displayed* number
@@ -878,28 +882,35 @@ config toggle.
 
 **What operator actually does, not just allows.** With `policy.actions.allow_fleet_noncombat`
 set to `true` (it defaults to `false` — promoting to operator alone does **not** turn this
-on), the agent can propose three kinds of fleet mission on its own, in this order of
+on), the agent can propose four kinds of fleet mission on its own, in this order of
 preference per planet:
 
 - **Transport** — moving a surplus resource from a planet that has more of it than your
   configured `reserves` floor to whichever of your other planets currently holds the
   least, using ships you've already built. It never proposes building a ship to make this
   possible.
+- **Deploy** — permanently repositioning an entire flyable fleet (not just cargo ships)
+  to a planet you name in `policy.strategy.fleet_home_planet_id`. Only fires once you
+  declare that field; it stays off by default. Ranks ahead of both Harvest options below
+  it — a destination you explicitly named outranks debris the agent merely happened to
+  find.
 - **Harvest, your own planet** — recovering debris sitting on one of your own planets,
   using a Recycler you've already built.
 - **Harvest, a third party's planet** — the same idea against someone else's debris
-  field, discovered via the game's own raid-finder data. Only fires if neither of the
-  first two has anything to propose, since it's the only one of the three whose target
-  you don't own.
+  field, discovered via the game's own raid-finder data. Only fires if none of the other
+  three has anything to propose, since it's the only one whose target you don't own.
 
-**Colonisation** (`launchFleetMission` mission type `Colonize`) is allowed at both
-enforcement layers — the wallet-engine allowlist and the agent's own
-`mission_type` guard both accept it at operator tier — but the agent does not yet propose
-*where* to colonise on its own. If you want to colonise, you'd build and send that
-transaction through `walletctl` directly rather than waiting for a tick to suggest it;
-picking a target is a judgement call this codebase leaves to you for now.
+**Colonisation** (`launchFleetMission` mission type `Colonize`) is also live, gated on a
+separate field: set `policy.strategy.colonize` to `true` and, once you have a built
+Colony Ship, the agent will pick a free coordinate slot in one of your own systems (it
+looks for the coldest available slot — highest deuterium multiplier — and checks the
+Colony Ship can actually reach it before proposing) and send it there. This is the most
+conservative rung in the whole ladder: it only ever fires once every other option —
+including all four fleet-mission kinds above — has nothing to propose, since it spends a
+hard-to-replace ship on a permanent commitment. You can still build and send a Colonize
+transaction through `walletctl` by hand at any time instead of waiting for a tick.
 
-Both of these only ever fire at `operator` tier, behind the same guardrail evaluation as
+All of these only ever fire at `operator` tier, behind the same guardrail evaluation as
 everything else — including `mission_type`, which independently re-checks the mission
 type against the same allowed set the wallet engine enforces, and `fleet_slots`, which
 independently re-checks that a fleet slot is actually free (§10 covers what

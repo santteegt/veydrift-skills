@@ -1988,3 +1988,264 @@ def test_select_logistics_candidate_falls_back_to_foreign_harvest():
     )
     assert winner is not None
     assert winner.family == "logistics-harvest-foreign"
+
+
+# --------------------------------------------------------------------------------------
+# generate_deploy_candidates (commit 4 of the launch-actions plan, 2026-08-28): moves an
+# entire flyable fleet to a declared policy.strategy.fleet_home_planet_id. Contract-
+# identical to Transport at launch; the difference is at resolution (ships credited to
+# target, fleet slot released at arrival instead of at return).
+# --------------------------------------------------------------------------------------
+
+
+def test_generate_deploy_candidates_empty_by_default_policy():
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(planets=[664, 665], strategy=StrategyCfg(fleet_home_planet_id=665))  # allow_fleet_noncombat defaults False
+    origin = snapshot.planet(664)
+    assert candidates.generate_deploy_candidates(snapshot, policy, origin) == []
+
+
+def test_generate_deploy_candidates_empty_without_a_declared_home_planet():
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True))
+    origin = snapshot.planet(664)
+    assert candidates.generate_deploy_candidates(snapshot, policy, origin) == []
+
+
+def test_generate_deploy_candidates_empty_at_the_home_planet_itself():
+    """No self-deploy: the home planet never proposes deploying to itself."""
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(
+        planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), strategy=StrategyCfg(fleet_home_planet_id=664)
+    )
+    origin = snapshot.planet(664)
+    assert candidates.generate_deploy_candidates(snapshot, policy, origin) == []
+
+
+def test_generate_deploy_candidates_empty_when_home_planet_is_not_owned():
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(
+        planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), strategy=StrategyCfg(fleet_home_planet_id=999)
+    )
+    origin = snapshot.planet(664)
+    assert candidates.generate_deploy_candidates(snapshot, policy, origin) == []
+
+
+def test_generate_deploy_candidates_empty_without_any_flyable_ship():
+    snapshot = _two_planet_snapshot(origin=_origin_planet(ships=[]))
+    policy = make_policy(
+        planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), strategy=StrategyCfg(fleet_home_planet_id=665)
+    )
+    origin = snapshot.planet(664)
+    assert candidates.generate_deploy_candidates(snapshot, policy, origin) == []
+
+
+def test_generate_deploy_candidates_moves_the_entire_flyable_fleet_home():
+    origin_planet = _origin_planet(
+        ships=[
+            Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=2, cost=Resources()),
+            Entity(id=ids.Ship.LIGHT_FIGHTER, name="Light Fighter", count=3, cost=Resources()),
+            # Non-flyable ships must never appear in the mission's ships tuple.
+            Entity(id=ids.Ship.SOLAR_SATELLITE, name="Solar Satellite", count=1, cost=Resources()),
+        ]
+    )
+    snapshot = _two_planet_snapshot(origin=origin_planet)
+    policy = make_policy(
+        planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), strategy=StrategyCfg(fleet_home_planet_id=665)
+    )
+    origin = snapshot.planet(664)
+    result = candidates.generate_deploy_candidates(snapshot, policy, origin)
+    assert len(result) == 1
+    winner = result[0]
+    assert winner.family == "logistics-deploy"
+    action = winner.action
+    assert action.kind == ActionKind.FLEET_MISSION
+    assert action.mission_type == ids.FleetMissionType.DEPLOY
+    assert action.origin_planet_id == 664
+    assert action.target_coordinates == "7:181:15"
+    assert action.target_planet_id is None  # Deploy targets an owned planet -- coordinates alone resolve it
+    assert action.ships == {ids.Ship.SMALL_CARGO: 2, ids.Ship.LIGHT_FIGHTER: 3}
+    assert ids.Ship.SOLAR_SATELLITE not in action.ships
+    assert action.cargo == Resources()  # Deploy carries no cargo -- consolidating the fleet, not moving goods
+    assert action.cost.deuterium > 0  # true launch spend includes fuel
+
+
+def test_generate_deploy_candidates_empty_when_fleet_cannot_carry_its_own_fuel():
+    """A fleet whose total cargo capacity is smaller than the fuel the trip costs must
+    never be proposed -- CargoCapacityExceeded on the deployed contract."""
+    origin_planet = _origin_planet(ships=[Entity(id=ids.Ship.LIGHT_FIGHTER, name="Light Fighter", count=1, cost=Resources())])
+    far_destination = _destination_planet(planet_id=666, coordinates="9:999:255")
+    snapshot = _two_planet_snapshot(origin=origin_planet, destination=far_destination)
+    policy = make_policy(
+        planets=[664, 666], actions=ActionsCfg(allow_fleet_noncombat=True), strategy=StrategyCfg(fleet_home_planet_id=666)
+    )
+    origin = snapshot.planet(664)
+    assert candidates.generate_deploy_candidates(snapshot, policy, origin) == []
+
+
+def test_select_logistics_candidate_prefers_deploy_over_harvest():
+    """Deploy ranks above local/foreign Harvest -- an explicit declared destination
+    outranks an opportunistic debris pick, the same 'declared beats opportunistic'
+    precedence building_priority already uses elsewhere in this codebase."""
+    origin_planet = _origin_planet(
+        resources_as_of_now=Resources(),  # no Transport surplus
+        ships=[Entity(id=ids.Ship.LIGHT_FIGHTER, name="Light Fighter", count=1, cost=Resources())],
+    )
+    snapshot = _two_planet_snapshot(origin=origin_planet)
+    policy = make_policy(
+        planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), strategy=StrategyCfg(fleet_home_planet_id=665)
+    )
+    winner, alternatives = candidates.select_logistics_candidate(snapshot, policy, snapshot.planets)
+    assert winner is not None
+    assert winner.family == "logistics-deploy"
+
+
+# --------------------------------------------------------------------------------------
+# generate_colonize_candidates / select_colonize_candidate (commit 4 of the
+# launch-actions plan, 2026-08-28): consumes an already-built Colony Ship toward a
+# declared policy.strategy.colonize.
+# --------------------------------------------------------------------------------------
+
+
+def _colony_ship_planet(**overrides) -> PlanetSnapshot:
+    base = dict(
+        planet_id=664,
+        coordinates="7:181:14",
+        resources_as_of_now=Resources(),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        buildings=[],
+        ships=[Entity(id=ids.Ship.COLONY_SHIP, name="Colony Ship", count=1, cost=Resources(metal=10_000, crystal=20_000, deuterium=10_000))],
+        defenses=[],
+    )
+    base.update(overrides)
+    return PlanetSnapshot(**base)
+
+
+def _colonize_snapshot(*, owned_planet_count=0, technologies=None, planet=None) -> Snapshot:
+    return Snapshot(
+        taken_at="2026-08-17T12:00:00Z",
+        wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        health_ok=True,
+        owned_planet_count=owned_planet_count,
+        technologies=technologies or [],
+        planets=[planet or _colony_ship_planet()],
+    )
+
+
+def test_generate_colonize_candidates_empty_by_default_policy():
+    snapshot = _colonize_snapshot()
+    policy = make_policy(planets=[664])  # strategy.colonize defaults False
+    result = candidates.generate_colonize_candidates(
+        snapshot, policy, snapshot.planets[0], colonize_targets=[("7:181:20", 12_640)]
+    )
+    assert result == []
+
+
+def test_generate_colonize_candidates_empty_without_a_colony_ship():
+    snapshot = _colonize_snapshot(planet=_colony_ship_planet(ships=[]))
+    policy = make_policy(planets=[664], strategy=StrategyCfg(colonize=True))
+    result = candidates.generate_colonize_candidates(
+        snapshot, policy, snapshot.planets[0], colonize_targets=[("7:181:20", 12_640)]
+    )
+    assert result == []
+
+
+def test_generate_colonize_candidates_empty_without_known_targets():
+    """`colonize_targets` unset (the default) means no free slot is known, not that
+    there is none -- must never fabricate a colonize target out of absent data."""
+    snapshot = _colonize_snapshot()
+    policy = make_policy(planets=[664], strategy=StrategyCfg(colonize=True))
+    assert candidates.generate_colonize_candidates(snapshot, policy, snapshot.planets[0]) == []
+    assert candidates.generate_colonize_candidates(snapshot, policy, snapshot.planets[0], colonize_targets=[]) == []
+
+
+def test_generate_colonize_candidates_empty_when_owned_planet_count_is_unknown():
+    """Never passes vacuously on absent data -- an unknown owned_planet_count means the
+    cap cannot be verified, so no Colonize is proposed, mirroring guard._colony_cap_
+    violation's own fail-closed posture on this exact field."""
+    snapshot = Snapshot(
+        taken_at="2026-08-17T12:00:00Z",
+        wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        health_ok=True,
+        owned_planet_count=None,
+        planets=[_colony_ship_planet()],
+    )
+    policy = make_policy(planets=[664], strategy=StrategyCfg(colonize=True))
+    result = candidates.generate_colonize_candidates(
+        snapshot, policy, snapshot.planets[0], colonize_targets=[("7:181:20", 12_640)]
+    )
+    assert result == []
+
+
+def test_generate_colonize_candidates_empty_at_the_colony_cap():
+    # Astrophysics level 0 (no technologies reported) -> cap = 1 + 0 = 1; already owning 1.
+    snapshot = _colonize_snapshot(owned_planet_count=1)
+    policy = make_policy(planets=[664], strategy=StrategyCfg(colonize=True))
+    result = candidates.generate_colonize_candidates(
+        snapshot, policy, snapshot.planets[0], colonize_targets=[("7:181:20", 12_640)]
+    )
+    assert result == []
+
+
+def test_generate_colonize_candidates_produces_a_colonize_action():
+    snapshot = _colonize_snapshot(owned_planet_count=0)
+    policy = make_policy(planets=[664], strategy=StrategyCfg(colonize=True))
+    result = candidates.generate_colonize_candidates(
+        snapshot, policy, snapshot.planets[0], colonize_targets=[("7:181:20", 12_640)]
+    )
+    assert len(result) == 1
+    winner = result[0]
+    assert winner.family == "colonize"
+    action = winner.action
+    assert action.kind == ActionKind.FLEET_MISSION
+    assert action.mission_type == ids.FleetMissionType.COLONIZE
+    assert action.origin_planet_id == 664
+    assert action.target_coordinates == "7:181:20"
+    assert action.ships == {ids.Ship.COLONY_SHIP: 1}
+    assert action.cargo == Resources()  # CargoNotAllowed on the deployed contract
+    assert action.cost.metal == 0 and action.cost.crystal == 0  # fuel-only spend
+    assert action.cost.deuterium > 0
+    assert action.randomness_request_id is None  # tick.py's encoder coerces this to 0
+
+
+def test_generate_colonize_candidates_picks_the_target_with_the_highest_deuterium_multiplier():
+    snapshot = _colonize_snapshot(owned_planet_count=0)
+    policy = make_policy(planets=[664], strategy=StrategyCfg(colonize=True))
+    result = candidates.generate_colonize_candidates(
+        snapshot,
+        policy,
+        snapshot.planets[0],
+        colonize_targets=[("7:181:20", 5_000), ("7:181:21", 12_640), ("7:181:22", 8_000)],
+    )
+    assert len(result) == 1
+    assert result[0].action.target_coordinates == "7:181:21"
+
+
+def test_generate_colonize_candidates_falls_back_to_a_reachable_target():
+    """The highest-ranked target is unreachable (fuel exceeds the Colony Ship's own
+    cargo capacity) -- must fall back to the next-best reachable one, not fail entirely
+    or silently propose an unreachable target."""
+    snapshot = _colonize_snapshot(owned_planet_count=0, planet=_colony_ship_planet(coordinates="1:1:1"))
+    policy = make_policy(planets=[664], strategy=StrategyCfg(colonize=True))
+    # 1:1:1 -> 9:999:255 is 160,000 distance -- fuel (18,287) exceeds the Colony Ship's
+    # own 7,500 cargo capacity (computed live via calc, not hand-derived); 1:1:1 -> 1:1:20
+    # is a same-system hop, trivially reachable.
+    result = candidates.generate_colonize_candidates(
+        snapshot,
+        policy,
+        snapshot.planets[0],
+        colonize_targets=[("9:999:255", 20_000), ("1:1:20", 12_640)],  # far, unreachable | near, reachable
+    )
+    assert len(result) == 1
+    assert result[0].action.target_coordinates == "1:1:20"
+
+
+def test_select_colonize_candidate_returns_none_with_default_policy():
+    snapshot = _colonize_snapshot()
+    policy = make_policy(planets=[664])
+    winner, alternatives = candidates.select_colonize_candidate(
+        snapshot, policy, snapshot.planets, colonize_targets=[("7:181:20", 12_640)]
+    )
+    assert winner is None
+    assert alternatives == []

@@ -321,7 +321,7 @@ def test_mission_type_allows_transport_deploy_colonize_harvest():
         ids.FleetMissionType.HARVEST,
     ):
         action = make_fleet_action(mission_type=mt)
-        report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+        report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=0)
         assert verdict(report, "mission_type").status is GuardStatus.PASS, mt
 
 
@@ -392,7 +392,7 @@ def test_mission_type_allows_an_in_range_colonize_target():
     action = make_fleet_action(
         mission_type=ids.FleetMissionType.COLONIZE, target_coordinates="1:2:5", ships={ids.Ship.COLONY_SHIP: 1}
     )
-    report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR))
+    report = evaluate(action, make_snapshot(), make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=0)
     assert verdict(report, "mission_type").status is GuardStatus.PASS
 
 
@@ -417,7 +417,9 @@ def make_colonize_action(**overrides) -> Action:
 
 def test_mission_type_blocks_colonize_when_owned_planet_count_is_unknown_never_passes_vacuously():
     action = make_colonize_action()
-    report = evaluate(action, make_snapshot(owned_planet_count=None), make_policy(tier=Tier.OPERATOR))
+    report = evaluate(
+        action, make_snapshot(owned_planet_count=None), make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=0
+    )
     v = verdict(report, "mission_type")
     assert v.status is GuardStatus.BLOCK
     assert "owned planet count is unknown" in v.detail
@@ -426,11 +428,13 @@ def test_mission_type_blocks_colonize_when_owned_planet_count_is_unknown_never_p
 def test_mission_type_blocks_colonize_at_the_colony_cap():
     # Astrophysics level 0 (no technologies reported) -> cap = 1 + 0 = 1; already owning 1.
     action = make_colonize_action()
-    report = evaluate(action, make_snapshot(owned_planet_count=1), make_policy(tier=Tier.OPERATOR))
+    report = evaluate(
+        action, make_snapshot(owned_planet_count=1), make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=0
+    )
     v = verdict(report, "mission_type")
     assert v.status is GuardStatus.BLOCK
     assert "colony cap" in v.detail
-    assert "1/1" in v.detail
+    assert "1 owned" in v.detail
 
 
 def test_mission_type_blocks_colonize_above_the_colony_cap():
@@ -438,7 +442,9 @@ def test_mission_type_blocks_colonize_above_the_colony_cap():
     cap (e.g. Astrophysics was since downgraded, or the count is stale), not just when
     exactly at it."""
     action = make_colonize_action()
-    report = evaluate(action, make_snapshot(owned_planet_count=5), make_policy(tier=Tier.OPERATOR))
+    report = evaluate(
+        action, make_snapshot(owned_planet_count=5), make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=0
+    )
     assert verdict(report, "mission_type").status is GuardStatus.BLOCK
 
 
@@ -449,15 +455,59 @@ def test_mission_type_allows_colonize_under_the_colony_cap_with_higher_astrophys
         owned_planet_count=2,
         technologies=[Entity(id=ids.Technology.ASTROPHYSICS, name="Astrophysics", level=2, cost=Resources())],
     )
-    report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR))
+    report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=0)
     assert verdict(report, "mission_type").status is GuardStatus.PASS
 
 
 def test_mission_type_colony_cap_check_does_not_apply_to_non_colonize_missions():
     """A Transport action at `owned_planet_count=1` (which would BLOCK a Colonize) must
-    not be affected -- the cap only ever gates Colonize."""
+    not be affected -- the cap only ever gates Colonize. Also confirms `outgoing_
+    colonize_count` being unset (`None`) never affects a non-Colonize mission."""
     action = make_fleet_action(mission_type=ids.FleetMissionType.TRANSPORT)
     report = evaluate(action, make_snapshot(owned_planet_count=1), make_policy(tier=Tier.OPERATOR))
+    assert verdict(report, "mission_type").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# _colony_cap_violation's outgoing_colonize_count dimension (commit 4 of the
+# launch-actions plan) -- closes the in-flight-Colonize blind spot: owned_planet_count
+# alone only reflects planets that have already resolved.
+# --------------------------------------------------------------------------------------
+
+
+def test_mission_type_blocks_colonize_when_outgoing_colonize_count_is_unknown_never_passes_vacuously():
+    """Under the cap by owned_planet_count alone, but the in-flight count is unfetchable
+    -- must still BLOCK, never silently assume zero in flight."""
+    action = make_colonize_action()
+    report = evaluate(
+        action, make_snapshot(owned_planet_count=0), make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=None
+    )
+    v = verdict(report, "mission_type")
+    assert v.status is GuardStatus.BLOCK
+    assert "in-flight Colonize mission count is unknown" in v.detail
+
+
+def test_mission_type_blocks_colonize_when_in_flight_missions_would_reach_the_cap():
+    """owned_planet_count=0 alone is under the Astro-0 cap of 1 -- but one already-
+    in-flight Colonize mission projects to exactly the cap, so this must BLOCK, not PASS
+    on the stale owned-count alone."""
+    action = make_colonize_action()
+    report = evaluate(
+        action, make_snapshot(owned_planet_count=0), make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=1
+    )
+    v = verdict(report, "mission_type")
+    assert v.status is GuardStatus.BLOCK
+    assert "1 in-flight Colonize" in v.detail
+
+
+def test_mission_type_allows_colonize_when_in_flight_missions_stay_under_the_cap():
+    # Astrophysics level 2 -> cap = 3; 1 owned + 1 in-flight = 2, still under it.
+    action = make_colonize_action()
+    snapshot = make_snapshot(
+        owned_planet_count=1,
+        technologies=[Entity(id=ids.Technology.ASTROPHYSICS, name="Astrophysics", level=2, cost=Resources())],
+    )
+    report = evaluate(action, snapshot, make_policy(tier=Tier.OPERATOR), outgoing_colonize_count=1)
     assert verdict(report, "mission_type").status is GuardStatus.PASS
 
 

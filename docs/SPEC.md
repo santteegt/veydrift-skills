@@ -1616,6 +1616,100 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     `::test_foreign_debris_targets_empty_targets_returns_empty`,
     `::test_run_tick_wires_foreign_debris_targets_into_the_planner`.
 
+69. **New, 2026-08-28 (commit 4 of the launch-actions plan).** Colonize and Deploy are
+    now planner-reachable — both were allowlisted at both enforcement layers and fully
+    encodable since Phase 5b (2026-08-17), with nothing between then and now proposing
+    either. New ladder rung `8d:colonize` (band 6, the most conservative placement:
+    reached only when every other band found nothing at all — colonizing consumes a
+    hard-to-replace Colony Ship for a permanent commitment) and Deploy folded into band
+    5's existing logistics rung (`8c:logistics-deploy`, ranked second among the four
+    logistics families — a declared destination is an explicit intent signal, the same
+    "declared beats opportunistic" precedence `building_priority` already uses, so it
+    outranks the two opportunistic Harvest generators but not Transport).
+
+    **Colonize** (`candidates.generate_colonize_candidates`/`select_colonize_candidate`,
+    gated on new `policy.strategy.colonize`, default `false`): every precondition mirrors
+    a real contract check in `VeydriftColonizationModule.sol`'s
+    `_launchColonizeFleetMission`/`_validateColonyCreation` — exactly one Colony Ship and
+    nothing else in the mission tuple, empty cargo (`CargoNotAllowed()` on any non-zero
+    value), `randomness_request_id` left `None` (`tick.py`'s encoder coerces this to `0`;
+    anything else reverts `InvalidId`), and the colony cap
+    (`1 + astrophysicsLevel`, `calc.max_planets`). Target selection reads
+    `/universe/galaxies/{g}/systems/{s}` (`tick._colonize_targets`), scoped to the same
+    systems the wallet's own planets are already in — not a wider radius scan, a
+    deliberate, documented scope limit. A slot qualifies only when the universe route
+    reports both `occupiedBy` and `migrationReservation` as `null`
+    (`isCoordinateAvailable == true` alone is insufficient — a migration-reserved slot
+    can still revert `CoordinatesOccupied` at launch or silently bounce the mission home
+    at arrival); ranked by descending live `deuteriumMultiplierBps`, falling back to the
+    next-best target when the highest-ranked one is unreachable (fuel exceeds the Colony
+    Ship's own cargo capacity — cargo must be empty, so fuel alone is the entire
+    committed capacity).
+
+    **A genuine hazard, only partially closed.** `VeydriftColonizationModule.sol:255-260`
+    does not revert when a Colonize mission's re-checked preconditions fail at
+    resolution (slot occupied, cap reached, slot invalid) — it silently flips the
+    mission to `Returning` instead, so a `resolveFleetMission` receipt reading
+    `status: "success"` does **not** by itself mean a colony was created. Closed here:
+    `guard._colony_cap_violation` gains a new `outgoing_colonize_count` parameter
+    (`tick._outgoing_colonize_count`, reading `/wallet/{addr}/fleet-visibility`'s
+    `outgoing` for still-`Outbound` Colonize missions) folded into the projected count
+    *before launch*, so two Colonize proposals on consecutive ticks can no longer both
+    pass the pre-flight cap check — the second now correctly BLOCKs instead of launching
+    toward a mission that would silently bounce. **Not closed**: post-resolve
+    verification that a `resolveFleetMission` receipt for a Colonize mission actually
+    produced a new planet (e.g. diffing `owned_planet_count` or re-checking
+    `isCoordinateAvailable` after the resolve). This needs `tick.py` to distinguish a
+    resolve's mission type and do a differential check around it — a real gap, recorded
+    explicitly rather than half-implemented under this change's scope; see
+    `references/strategy-playbook.md`'s verification-status section.
+
+    Both new `StrategyCfg` fields (`colonize`, `fleet_home_planet_id`) are additive —
+    `schemas/policy.schema.json` regenerated, no `Action` schema change this commit
+    (unlike foreign Harvest's `target_planet_id` in correction 68; Colonize/Deploy both
+    resolve their target through the existing `target_coordinates` path, Colonize via its
+    own packed-coordinate encoding and Deploy via the same own-planet coordinate lookup
+    Transport already uses).
+
+    `tests/test_candidates.py::test_generate_deploy_candidates_empty_by_default_policy`,
+    `::test_generate_deploy_candidates_empty_without_a_declared_home_planet`,
+    `::test_generate_deploy_candidates_empty_at_the_home_planet_itself`,
+    `::test_generate_deploy_candidates_empty_when_home_planet_is_not_owned`,
+    `::test_generate_deploy_candidates_empty_without_any_flyable_ship`,
+    `::test_generate_deploy_candidates_moves_the_entire_flyable_fleet_home`,
+    `::test_generate_deploy_candidates_empty_when_fleet_cannot_carry_its_own_fuel`,
+    `::test_select_logistics_candidate_prefers_deploy_over_harvest`,
+    `::test_generate_colonize_candidates_empty_by_default_policy`,
+    `::test_generate_colonize_candidates_empty_without_a_colony_ship`,
+    `::test_generate_colonize_candidates_empty_without_known_targets`,
+    `::test_generate_colonize_candidates_empty_when_owned_planet_count_is_unknown`,
+    `::test_generate_colonize_candidates_empty_at_the_colony_cap`,
+    `::test_generate_colonize_candidates_produces_a_colonize_action`,
+    `::test_generate_colonize_candidates_picks_the_target_with_the_highest_deuterium_multiplier`,
+    `::test_generate_colonize_candidates_falls_back_to_a_reachable_target`,
+    `::test_select_colonize_candidate_returns_none_with_default_policy`,
+    `tests/test_tick.py::test_colonize_targets_finds_a_free_slot`,
+    `::test_colonize_targets_skips_an_occupied_slot`,
+    `::test_colonize_targets_skips_a_reserved_slot`,
+    `::test_colonize_targets_skips_a_slot_with_no_deuterium_multiplier`,
+    `::test_colonize_targets_degrades_to_empty_on_fetch_failure`,
+    `::test_colonize_targets_fetches_each_owned_system_only_once`,
+    `::test_outgoing_colonize_count_counts_matching_outbound_entries`,
+    `::test_outgoing_colonize_count_ignores_other_mission_types`,
+    `::test_outgoing_colonize_count_ignores_resolved_entries`,
+    `::test_outgoing_colonize_count_degrades_to_none_on_fetch_failure`,
+    `::test_outgoing_colonize_count_empty_outgoing_returns_zero`,
+    `::test_run_tick_wires_colonize_targets_into_the_planner`,
+    `::test_run_tick_never_fetches_colonize_targets_when_not_declared`,
+    `::test_run_tick_wires_outgoing_colonize_count_into_the_guard`,
+    `::test_run_tick_never_fetches_outgoing_colonize_count_for_a_non_colonize_action`,
+    plus four `tests/test_guard.py` tests for `outgoing_colonize_count`'s own dimension
+    of `_colony_cap_violation` and four existing Colonize-cap tests updated to supply it
+    explicitly (`test_mission_type_blocks_colonize_when_outgoing_colonize_count_is_
+    unknown_never_passes_vacuously`, `::test_mission_type_blocks_colonize_when_in_flight_
+    missions_would_reach_the_cap`, `::test_mission_type_allows_colonize_when_in_flight_
+    missions_stay_under_the_cap`, and the pre-existing colony-cap tests).
+
 ---
 
 ## 10. Risks

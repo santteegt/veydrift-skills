@@ -493,13 +493,21 @@ where it moved.
    propose non-combat fleet logistics.** New rung, `candidates.select_logistics_candidate`,
    checked only after rungs 5-8b above have all found nothing for every target planet —
    same "never outrank a scored economic pick or the storage-overflow deadline"
-   precedence rule rung 8b already uses, extended by one more rung. Three generators,
+   precedence rule rung 8b already uses, extended by one more rung. Four generators,
    first selectable one per planet wins, in this order:
    - **Transport** (`generate_transport_candidates`): moves whichever resource is
      furthest above `policy.reserves` on the origin planet to whichever other own planet
      currently holds the least of it, using already-built cargo-capable ships only.
      Bounded by `calc.available_cargo` (capacity minus `calc.mission_fuel`'s fuel cost),
      never by surplus alone.
+   - **Deploy** (`generate_deploy_candidates`, added 2026-08-28): permanently repositions
+     an *entire* flyable fleet (not just cargo-capable ships) to a declared
+     `policy.strategy.fleet_home_planet_id`. Contract-identical to Transport at launch;
+     the difference is at resolution — ships are credited to the target and the fleet
+     slot is released at arrival instead of at return, making Deploy strictly better than
+     Transport for permanently moving ships. Ranks second, ahead of both Harvest
+     generators: a declared destination is an explicit intent signal, the same "declared
+     beats opportunistic" precedence `building_priority` already uses elsewhere.
    - **Local Harvest** (`generate_harvest_candidates`): the contract's own local special
      case (`originPlanetId == targetPlanetId`) — a planet's own debris field. Requires an
      already-built Recycler. Live since 2026-08-28: `tick.py`'s `_own_planet_debris`
@@ -512,16 +520,30 @@ where it moved.
      `origin == target`, only local Harvest's own *distance* is a special case. Sourced
      from `tick._foreign_debris_targets` (`/raid-finder/debris`, a discovery index —
      fine for finding candidates, never treated as authoritative). Ranks last of the
-     three: a closer/simpler opportunity on the wallet's own planets always wins first
+     four: a closer/simpler opportunity on the wallet's own planets always wins first
      when more than one is available.
-   - All three gated, independently, on `policy.actions.allow_fleet_noncombat` (default
-     `false`) — with the default policy this rung never fires, same safety property
-     every earlier phase's new rung shipped with.
+   - Transport/local/foreign Harvest are gated, independently, on
+     `policy.actions.allow_fleet_noncombat` (default `false`); Deploy requires that
+     **and** `policy.strategy.fleet_home_planet_id` being declared — with the default
+     policy this rung never fires, same safety property every earlier phase's new rung
+     shipped with.
    - Always `score=None`, same reasoning as rung 8b: this is an opportunity to use idle
      capacity, not something comparable to `calc.production_per_hour`'s payback-hours
      scoring.
-9. **Otherwise -> NO-OP with an explicit reason.** Always reachable; `Action.rationale`
-   is never empty.
+9. **(rung `8d`, added 2026-08-28) Nothing above fired -> propose Colonize.**
+   `candidates.select_colonize_candidate`, gated on `policy.strategy.colonize` (default
+   `false`). The most conservative placement in the ladder, deliberately: colonizing
+   consumes an already-built Colony Ship for a permanent, high-stakes commitment, so it
+   is reached only after every other rung — including logistics — has found nothing at
+   all for any target planet. Target selection reads
+   `/universe/galaxies/{g}/systems/{s}` for free slots in the wallet's own systems (not a
+   wider radius scan — a deliberate scope limit), requiring both `occupiedBy` and
+   `migrationReservation` to be `null`, ranked by descending live
+   `deuteriumMultiplierBps` with fallback to the next-best reachable target when the
+   top-ranked one is out of the Colony Ship's own fuel range. Always `score=None`, same
+   reasoning as the other idle-capacity rungs.
+10. **Otherwise -> NO-OP with an explicit reason.** Always reachable; `Action.rationale`
+    is never empty.
 
 **Phase 3's governing principle, stated once here:** *the engine computes what is legal
 (`techtree.unmet()`), affordable (`guard.py`, unchanged) and economically comparable
@@ -591,17 +613,22 @@ state:**
 | Storage overflow (rung 5) | Synthetic fixtures with hand-set `resources_as_of_now`/`production_per_hour` | A live account genuinely approaching a storage cap |
 | Research selection (rung 7) | Fixture with all-zero tech levels (tie-break only) | Any live scenario with mixed tech levels |
 | Shipyard rung (rung 8) | Fixture only, `allow_ships`/`allow_defense` forced `true` for the test | Real economy-on-track detection against live, non-idle queues |
-| Mission-resolving rung (rung 3) | Not tested against real data at all — see below | Everything; the rung cannot fire without data `Snapshot` does not carry |
+| Mission-resolving rung (rung 3) | Live since 2026-08-17 (Phase 5) — see below; confirmed against a real `vd tick --dry-run` | A real mission actually sitting Resolving > 60s (none observed on this account's own history) |
+| Logistics rung (rung 8c) | Fixtures only (Transport/Deploy/local Harvest/foreign Harvest, each unit-tested in isolation) | A live account with real cargo ships, a real declared `fleet_home_planet_id`, or real debris (own or foreign) — none of these has ever been observed together with the rung actually firing on a live tick |
+| Colonize rung (rung 8d) | Fixtures only (`generate_colonize_candidates`'s own unit tests) | A live account with a built Colony Ship and `policy.strategy.colonize=true` proposing and sending a real Colonize; the fork-testing runbook's own Colonize send (`skills/veydrift-wallet/references/fork-testing.md` §10) hand-wrote the action rather than going through this rung |
 
-**Rung 3 (`resolveFleetMission`) is a documented gap, not a silent omission.** The frozen
-`Snapshot` model carries `incoming_fleets` (for rung 4's hostile detection) but no list of
-the player's *own* fleet missions and their status, so there is nothing to check
-"Resolving > 60s" against. `plan_next_action` accepts `resolvable_mission_ids` as an
-explicit caller-supplied parameter (default empty) specifically so the rung is
-implemented and ready — `tests/test_plan.py::test_resolvable_mission_takes_priority_over_building`
-confirms it fires correctly *given* that data — but until `read.py`/`models.py` grows a
-field for it (a future, additive change per `models.py`'s own stated policy of adding
-fields freely), rung 3 will never fire from a real tick.
+**Rung 3 (`resolveFleetMission`) was a documented gap through Phase 4; closed in Phase 5
+(2026-08-17), not a silent fix.** The frozen `Snapshot` model still carries no list of the
+player's *own* fleet missions and their status (only `incoming_fleets`, for rung 4's
+hostile detection) — that constraint didn't change. What changed: rather than waiting for
+`models.py` to grow a field for it, `tick.py`'s `_resolvable_mission_ids` reads
+`/wallet/{addr}/fleet-visibility` directly, bypassing `Snapshot` entirely (the same
+out-of-band posture `_own_planet_debris`/`_foreign_debris_targets`/`_colonize_targets`
+all later adopted for the same reason), and `_run_tick` passes what it finds into
+`plan_next_action`'s `resolvable_mission_ids` parameter. Confirmed against the live API,
+not just the fixture test
+(`tests/test_plan.py::test_resolvable_mission_takes_priority_over_building`) that already
+covered the logic given that data.
 
 ## 11. Checklist: sanity-checking a proposal by hand
 

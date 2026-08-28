@@ -11,6 +11,72 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-08-28
+
+### Added
+
+- **Colonize and Deploy — commit 4 of the launch-actions plan.** Both were allowlisted
+  at both enforcement layers and fully encodable since Phase 5b (2026-08-17); nothing
+  proposed either until now.
+  - `candidates.generate_colonize_candidates`/`select_colonize_candidate`, gated on new
+    `policy.strategy.colonize` (default `false`). Every precondition mirrors a real
+    contract check in `VeydriftColonizationModule.sol` — exactly one Colony Ship and
+    nothing else in the mission tuple, empty cargo (`CargoNotAllowed()` otherwise),
+    `randomness_request_id` left `None` (coerced to `0`; anything else reverts
+    `InvalidId`), and the colony cap. Target selection reads
+    `/universe/galaxies/{g}/systems/{s}` (`tick._colonize_targets`), scoped to the same
+    systems the wallet's own planets are in, requiring both `occupiedBy` and
+    `migrationReservation` to be `null`; ranked by descending live
+    `deuteriumMultiplierBps`, falling back to the next-reachable target when the
+    top-ranked one exceeds the Colony Ship's own fuel range. New ladder rung `8d`, the
+    most conservative placement in the ladder — reached only when every other band,
+    including logistics, found nothing at all.
+  - `candidates.generate_deploy_candidates`, gated on `policy.actions.
+    allow_fleet_noncombat` **and** new `policy.strategy.fleet_home_planet_id`. Moves an
+    entire flyable fleet (not just cargo ships) to a declared home planet — contract-
+    identical to Transport at launch, but ships are credited to the target and the fleet
+    slot releases at arrival instead of at return. Folded into the existing logistics
+    rung (`8c:logistics-deploy`), ranked second among its four families (after Transport,
+    ahead of both Harvest generators) — a declared destination is an explicit intent
+    signal, the same precedence `building_priority` already uses elsewhere.
+  - Both new `StrategyCfg` fields are additive; `schemas/policy.schema.json`
+    regenerated. No `Action` schema change this commit.
+
+### Fixed
+
+- **`guard._colony_cap_violation` closes an in-flight-Colonize blind spot.** The cap
+  check keyed off `Snapshot.owned_planet_count` alone, which only reflects planets that
+  have already resolved — and `VeydriftColonizationModule.sol:255-260` does not revert
+  when a Colonize mission's re-checked preconditions fail at resolution, it silently
+  flips the mission to `Returning` instead. Two Colonize proposals on consecutive ticks
+  could therefore both pass the pre-flight cap check. New `outgoing_colonize_count`
+  parameter (`tick._outgoing_colonize_count`, reading `/wallet/{addr}/fleet-visibility`
+  for still-`Outbound` Colonize missions) folds in-flight missions into the projected
+  count before launch; `None` fails closed exactly like `owned_planet_count is None`
+  already does. **Not closed**: post-resolve verification that a `resolveFleetMission`
+  receipt for a Colonize mission actually produced a new planet — a real, documented gap,
+  not attempted this commit; see `references/strategy-playbook.md` §10.
+
+35 new tests (17 in `test_candidates.py` for the two new generators and their ranking in
+`select_logistics_candidate`, 15 in `test_tick.py` for `_colonize_targets`/
+`_outgoing_colonize_count` and their wiring, 3 in `test_guard.py` for `outgoing_
+colonize_count`'s dimension of `_colony_cap_violation` — plus 4 pre-existing Colonize-cap
+tests updated to supply it explicitly, not counted as new). 615 passed (580 baseline from
+commit 3 + 35 new). Verified live against a scratch-home dry-run tick, both with the
+default policy and with `strategy.colonize: true`, and `vd doctor`.
+
+Docs: `docs/SPEC.md` correction 69, `docs/COVERAGE.md`'s `max_planets` row and the
+`launchFleetMission` overload rows, `references/strategy-playbook.md`'s ladder
+description (now six bands / ten rungs) and §10's verification-status table (also
+corrected a genuinely stale, pre-existing claim found in passing: rung 3
+(`resolveFleetMission`) was described as "will never fire from a real tick", which
+predates this session — it was actually wired live back in Phase 5, 2026-08-17),
+`references/guardrails.md`'s parameter table, `references/entity-ids.md`,
+`references/contract-writes.md`'s colonisation note (previously said "not yet
+planner-proposed"), and `docs/PLAYER-GUIDE.md`/`.html`'s operator-tier section and field
+reference table. Bumped 1.9.0 -> 1.10.0 (additive, minor) per this skill's own
+CHANGELOG.md convention.
+
 ## [1.9.0] - 2026-08-28
 
 ### Added

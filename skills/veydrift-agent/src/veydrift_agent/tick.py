@@ -994,6 +994,7 @@ def _describe_override(
     resolvable_mission_ids: list[int],
     own_planet_debris: dict[int, Resources],
     foreign_debris_targets: dict[int, tuple[str, Resources]],
+    colonize_targets: list[tuple[str, int]],
 ) -> tuple[dict[str, Any], str]:
     """`(override_record, override_line)` for a `vd tick --action`-supplied action --
     the code-enforced disagreement record `references/manual-action-override.md`
@@ -1018,6 +1019,7 @@ def _describe_override(
         resolvable_mission_ids=resolvable_mission_ids,
         own_planet_debris=own_planet_debris,
         foreign_debris_targets=foreign_debris_targets,
+        colonize_targets=colonize_targets,
     )
     record = {
         "operator_action": {
@@ -1106,6 +1108,44 @@ def _resolvable_mission_ids(wallet: str) -> list[int]:
     return out
 
 
+def _outgoing_colonize_count(wallet: str) -> int | None:
+    """How many of the wallet's own outgoing fleet missions are an in-flight Colonize --
+    `guard._colony_cap_violation`'s in-flight-mission blind spot, closed here (commit 4
+    of the launch-actions plan). The cap check keys off `Snapshot.owned_planet_count`,
+    which only reflects planets that have already resolved -- and Colonize's own
+    `resolveFleetMission` re-check at arrival does *not* revert on failure
+    (`VeydriftColonizationModule.sol:255-260` silently flips the mission to `Returning`
+    instead), so two Colonize proposals on consecutive ticks could otherwise both pass
+    the cap check and the second would silently bounce home with a `status: "success"`
+    resolve receipt and no colony created.
+
+    Reads the same `/wallet/{addr}/fleet-visibility` route `_resolvable_mission_ids`
+    already reads, counting `outgoing` entries whose `missionType` wire string
+    (`read.FLEET_MISSION_TYPE_IDS`, the same table `read._incoming_fleet` uses for the
+    `incoming` side of this identical shape) resolves to `FleetMissionType.COLONIZE` and
+    whose `status` is still `"Outbound"` -- a returned/resolved mission no longer counts
+    against the cap.
+
+    Returns `None` (never `0`) on any fetch/parse failure -- "unknown" must never be
+    silently treated as "zero in flight," which would defeat the entire point of this
+    check; `guard._colony_cap_violation` fails closed on `None` for exactly this
+    reason."""
+    try:
+        data = read.fetch_fleet_visibility(wallet)
+    except http.VeydriftAPIError:
+        return None
+    outgoing = data.get("outgoing")
+    if not isinstance(outgoing, list):
+        return None
+    count = 0
+    for item in outgoing:
+        if not isinstance(item, dict) or item.get("status") != "Outbound":
+            continue
+        if read.FLEET_MISSION_TYPE_IDS.get(item.get("missionType")) == ids.FleetMissionType.COLONIZE:
+            count += 1
+    return count
+
+
 def _own_planet_debris(snapshot: Snapshot) -> dict[int, Resources]:
     """Which of the wallet's own planets carry a non-empty debris field on their own slot
     -- `generate_harvest_candidates`'s `own_planet_debris` parameter
@@ -1173,6 +1213,61 @@ def _own_planet_debris(snapshot: Snapshot) -> dict[int, Resources]:
             if metal <= 0 and crystal <= 0:
                 continue
             out[planet.planet_id] = Resources(metal=metal, crystal=crystal)
+    return out
+
+
+def _colonize_targets(snapshot: Snapshot) -> list[tuple[str, int]]:
+    """Free coordinate slots reachable for Colonize -- `generate_colonize_candidates`'s
+    `colonize_targets` parameter (`candidates.py`, commit 4 of the launch-actions plan).
+
+    Sourced from `/universe/galaxies/{g}/systems/{s}` (`read.fetch_universe_system`),
+    scoped to the SAME systems the wallet's own planets are already in -- a deliberate,
+    documented scope limit, not an oversight: a wider radius scan (`/universe/systems`)
+    would need its own precedent for how far to look, which this codebase does not have
+    and is not inventing here. A slot only qualifies when the universe route reports
+    both `occupiedBy` and `migrationReservation` as `null` -- `occupiedBy == null` alone
+    is what `isCoordinateAvailable` checks on-chain, but the contract also requires
+    `_isPopulatedPlanetSlot` (a reserved-for-migration slot can still revert
+    `CoordinatesOccupied` at launch, or silently bounce the mission home at arrival) --
+    the universe route's own slot enumeration already satisfies the populated-slot half
+    by construction (it only ever lists real slots), so `occupiedBy`/
+    `migrationReservation` are the only two fields this function needs to check.
+
+    Each returned entry is `(coordinates, deuterium_multiplier_bps)` -- the live value
+    the API already computes for that slot, never recomputed, matching this codebase's
+    posture toward every other live-vs-recomputed value.
+
+    Best-effort, matching `_own_planet_debris`'s exact contract: never raises, a fetch
+    failure for one system does not abort the others, and groups owned planets by
+    `(galaxy, system)` so a multi-planet wallet sharing a system fetches it once."""
+    by_system: dict[tuple[int, int], None] = {}
+    for planet in snapshot.planets:
+        if not planet.coordinates:
+            continue
+        parts = planet.coordinates.split(":")
+        if len(parts) != 3:
+            continue
+        try:
+            galaxy, system, _position = (int(p) for p in parts)
+        except ValueError:
+            continue
+        by_system[(galaxy, system)] = None
+
+    out: list[tuple[str, int]] = []
+    for galaxy, system in by_system:
+        try:
+            data = read.fetch_universe_system(galaxy, system)
+        except http.VeydriftAPIError:
+            continue
+        for slot in data.get("planets") or []:
+            if slot.get("occupiedBy") is not None or slot.get("migrationReservation") is not None:
+                continue
+            try:
+                position = int(slot.get("position"))
+                deuterium_multiplier_bps = int(slot.get("deuteriumMultiplierBps"))
+            except (TypeError, ValueError):
+                continue
+            out.append((f"{galaxy}:{system}:{position}", deuterium_multiplier_bps))
     return out
 
 
@@ -1451,6 +1546,11 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # Harvest coverage (own-planet debris was commit 1). Best-effort; never aborts the tick.
     foreign_debris_targets = _foreign_debris_targets(policy_model.wallet)
 
+    # Commit 4 of the launch-actions plan: only fetched when Colonize is actually
+    # declared -- an idle wallet with `policy.strategy.colonize=false` (the default)
+    # never pays for this network call, matching every other opt-in band's posture.
+    colonize_targets = _colonize_targets(snapshot) if policy_model.strategy.colonize else []
+
     # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
@@ -1467,6 +1567,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             resolvable_mission_ids=resolvable_mission_ids,
             own_planet_debris=own_planet_debris,
             foreign_debris_targets=foreign_debris_targets,
+            colonize_targets=colonize_targets,
         )
     else:
         action = plan_mod.plan_next_action(
@@ -1477,6 +1578,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             resolvable_mission_ids=resolvable_mission_ids,
             own_planet_debris=own_planet_debris,
             foreign_debris_targets=foreign_debris_targets,
+            colonize_targets=colonize_targets,
         )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an
@@ -1490,6 +1592,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     wallet_address: str | None = None
     built_tx_path: Path | None = None
     gas_cost_wei: int | None = None
+    outgoing_colonize_count: int | None = None
     if action.is_onchain():
         unsigned_tx, gas_cost_wei, build_error, built_tx_path = _walletctl_build(
             action, provider=policy_model.wallet_engine.provider, snapshot=snapshot
@@ -1501,6 +1604,12 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             # `_walletctl_status`'s docstring for why this replaced the old
             # `_walletctl_eth_balance_wei`-only call here.
             eth_balance_wei, wallet_address = _walletctl_status(provider=policy_model.wallet_engine.provider)
+        # Commit 4 of the launch-actions plan: only fetched for an actual Colonize
+        # proposal -- every other action kind never touches `_colony_cap_violation`'s
+        # in-flight check at all, so fetching this unconditionally would be a wasted
+        # network call on every single tick.
+        if action.function == "launchFleetMission" and action.mission_type == ids.FleetMissionType.COLONIZE:
+            outgoing_colonize_count = _outgoing_colonize_count(policy_model.wallet)
 
     guard_report = guard_mod.evaluate_guardrails(
         action,
@@ -1512,6 +1621,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         unsigned_tx=unsigned_tx,
         gas_cost_wei=gas_cost_wei,
         eth_balance_wei=eth_balance_wei,
+        outgoing_colonize_count=outgoing_colonize_count,
         now=now,
     )
     if build_error:

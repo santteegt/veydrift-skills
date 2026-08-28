@@ -2135,6 +2135,19 @@ def _cargo_ships(planet: PlanetSnapshot) -> list[tuple[int, int]]:
     return [(ship_id, counts[ship_id]) for ship_id in _HAULER_SHIP_IDS if counts.get(ship_id)]
 
 
+def _flyable_ships(planet: PlanetSnapshot) -> list[tuple[int, int]]:
+    """`(ship_id, count)` for every ship type on `planet` with a nonzero count, except
+    the two non-flyable ids (`ids.NON_FLYABLE_SHIPS`: Solar Satellite, Crawler), which
+    have no slot in the 14-slot fleet tuple and must never appear in fleet-mission input
+    (AGENTS.md §7 trap 1). Unlike `_cargo_ships` above (restricted to genuine haulers,
+    for a Transport mission's cargo-moving purpose), `generate_deploy_candidates` moves
+    the *entire* fleet, combat ships included -- consolidating a fleet home is not
+    restricted to cargo-capable ships the way moving goods is."""
+    return [
+        (entity.id, entity.count) for entity in planet.ships if entity.count and entity.id not in ids.NON_FLYABLE_SHIPS
+    ]
+
+
 def _fleet_mission_cost(cargo: Resources, fuel: int) -> Resources:
     """The true on-chain launch spend for a `launchFleetMission` action: cargo plus fuel,
     fuel counted as deuterium -- `VeydriftGameplayModule.sol:246-260` (pinned commit
@@ -2212,6 +2225,127 @@ def _select_haulers_for_cargo(
 
     fuel, available = fuel_and_available(selected)
     return selected, fuel, available
+
+
+def generate_colonize_candidates(
+    snapshot: Snapshot,
+    policy: Policy,
+    planet: PlanetSnapshot,
+    *,
+    colonize_targets: list[tuple[str, int]] | None = None,
+) -> list[Candidate]:
+    """`FleetMissionType.Colonize` (2) -- commit 4 of the launch-actions plan. Every
+    precondition here mirrors a real contract check in
+    `VeydriftColonizationModule.sol`'s `_launchColonizeFleetMission`/
+    `_validateColonyCreation`:
+
+    - Exactly one Colony Ship and nothing else in the mission tuple
+      (`ships.colonyShip != 1 || _missionShipTotal(ships) != 1` -> `InvalidQuantity()`).
+    - Empty cargo -- `CargoNotAllowed()` reverts on any non-zero cargo, so `Action.cargo`
+      is always `Resources()` here, never derived from anything on `planet`. Because
+      cargo must be empty, fuel alone is the entire committed capacity
+      (`CargoCapacityExceeded` if it doesn't fit) -- checked explicitly below, not left
+      for the contract to discover.
+    - `randomness_request_id` is left `None`, which `tick.py`'s encoder coerces to `0`
+      -- Colonize reverts `InvalidId` on anything else.
+    - The colony cap (`1 + astrophysicsLevel`, `calc.max_planets`) -- `guard.
+      _colony_cap_violation` independently re-checks this (and, new this commit, folds
+      in in-flight Colonize missions too -- see that function's docstring), but this
+      generator also declines up front rather than proposing an action it already knows
+      would be blocked.
+
+    Gated on the new `policy.strategy.colonize` (default `False` -- the same "empty/off
+    == old behaviour" convention every prior `strategy` flag uses).
+
+    `colonize_targets` is caller-supplied, the same posture `own_planet_debris`/
+    `foreign_debris_targets` take toward the frozen `Snapshot` -- `tick.py`'s
+    `_colonize_targets` is the live source, reading `/universe/galaxies/{g}/systems/{s}`
+    for the SAME systems the wallet's own planets are in (not a wider radius scan -- a
+    deliberate, documented scope limit, not an oversight; see that function's own
+    docstring). Each entry is `(coordinates, deuterium_multiplier_bps)`; a slot only
+    qualifies if the universe route reported both `occupiedBy` and `migrationReservation`
+    as `null` -- `isCoordinateAvailable == true` alone is NOT sufficient, since the
+    contract also requires `_isPopulatedPlanetSlot`, which the universe route's own slot
+    enumeration already satisfies by construction (it only ever lists real slots).
+
+    Ranks candidates by descending `deuterium_multiplier_bps` (the live value the API
+    already computes, preferred over recomputing it, matching this codebase's existing
+    posture toward every other live-vs-recomputed value) -- the one concrete, quantifiable
+    trait knowable about an unsettled slot before colonizing it -- and picks the highest-
+    ranked target the Colony Ship can actually reach with its own fuel. This is a
+    deliberately simple rule, not a full colonization-strategy heuristic: a more nuanced
+    ranking (weighing a scorching slot's *future* energy potential once settled, or
+    `policy.strategy.resource_weights`) is a documented gap, not a silently-guessed-at
+    one -- see `references/strategy-playbook.md`."""
+    if not policy.strategy.colonize or planet.coordinates is None or not colonize_targets:
+        return []
+    colony_ship = _entity(planet.ships, ids.Ship.COLONY_SHIP)
+    if colony_ship is None or not colony_ship.count:
+        return []
+    if snapshot.owned_planet_count is None:
+        return []
+    astrophysics = next((t for t in snapshot.technologies if t.id == ids.Technology.ASTROPHYSICS), None)
+    astrophysics_level = astrophysics.level if astrophysics is not None and astrophysics.level is not None else 0
+    if snapshot.owned_planet_count >= calc.max_planets(astrophysics_level):
+        return []
+
+    combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
+    capacity, fuel_consumption, speed = calc.ship_movement_stats(ids.Ship.COLONY_SHIP, combustion, impulse, hyperspace)
+
+    for coordinates, deuterium_multiplier_bps in sorted(colonize_targets, key=lambda t: t[1], reverse=True):
+        distance = calc.distance(planet.coordinates, coordinates)
+        fuel = calc.mission_fuel([(fuel_consumption, 1, speed)], distance, speed)
+        if fuel > capacity:
+            continue  # Colony Ship can't carry its own fuel this far -- try the next target
+
+        action = Action(
+            kind=ActionKind.FLEET_MISSION,
+            function="launchFleetMission",
+            planet_id=planet.planet_id,
+            mission_type=ids.FleetMissionType.COLONIZE,
+            origin_planet_id=planet.planet_id,
+            target_coordinates=coordinates,
+            ships={ids.Ship.COLONY_SHIP: 1},
+            cargo=Resources(),
+            cost=_fleet_mission_cost(Resources(), fuel),
+            rationale=(
+                f"policy.strategy.colonize=true; colonizing {coordinates} (deuterium "
+                f"multiplier {deuterium_multiplier_bps}bps, distance {distance}, ~{fuel} "
+                f"fuel) with planet {planet.planet_id}'s Colony Ship."
+            ),
+            expected_effect=f"a new planet is created at {coordinates}; planet {planet.planet_id}'s Colony Ship is consumed.",
+        )
+        return [
+            Candidate(
+                action=action,
+                family="colonize",
+                score=None,
+                score_basis=f"best reachable colonization target by deuterium multiplier ({deuterium_multiplier_bps}bps)",
+            )
+        ]
+    return []
+
+
+def select_colonize_candidate(
+    snapshot: Snapshot,
+    policy: Policy,
+    target_planets: list[PlanetSnapshot],
+    *,
+    colonize_targets: list[tuple[str, int]] | None = None,
+) -> tuple[Candidate | None, list[Candidate]]:
+    """First target planet with a selectable Colonize candidate wins -- the same
+    "generate every family for this planet, first hit wins" shape every other `select_*`
+    function here uses. `colonize_targets` is shared across every target planet (it is
+    universe data, not planet-scoped), unlike `own_planet_debris`/`foreign_debris_targets`
+    which key by the planet they belong to."""
+    if not target_planets:
+        return None, []
+    alternatives: list[Candidate] = []
+    for planet in target_planets:
+        candidates_ = generate_colonize_candidates(snapshot, policy, planet, colonize_targets=colonize_targets)
+        if candidates_:
+            return candidates_[0], rank_candidates(alternatives)
+    return None, []
 
 
 def generate_transport_candidates(
@@ -2293,6 +2427,82 @@ def generate_transport_candidates(
             family="logistics-transport",
             score=None,
             score_basis=f"surplus {label} above reserve floor, sent to own planet {destination.planet_id}",
+        )
+    ]
+
+
+def generate_deploy_candidates(
+    snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot
+) -> list[Candidate]:
+    """`FleetMissionType.Deploy` (1): permanently reposition `planet`'s entire flyable
+    fleet to `policy.strategy.fleet_home_planet_id` -- commit 4 of the launch-actions
+    plan. Contract-identical to Transport at launch (`_requirePlanetOwner(targetPlanetId)`
+    applies to both -- confirmed live, `docs/RESEARCH-ADDENDUM.md` §4.3); the difference
+    is at resolution: Deploy credits the ships to the target and releases the fleet slot
+    at arrival (`Resolved`) instead of at return (`Returning`), making it strictly better
+    than Transport for permanently moving ships rather than round-tripping resources.
+
+    Gated on BOTH `policy.actions.allow_fleet_noncombat` (the same non-combat-fleet knob
+    every other logistics generator requires) and the new
+    `policy.strategy.fleet_home_planet_id` (default `None` -- an explicit declared
+    destination; this generator never guesses "deploy toward the largest planet" or any
+    other heuristic). Carries no cargo (`Resources()`) -- consolidating the fleet is this
+    generator's only job; moving resources at the same time is Transport's job, not
+    folded in here.
+
+    Uses `_flyable_ships`, not `_cargo_ships` -- Deploy moves the whole fleet, combat
+    ships included, unlike Transport's cargo-only restriction."""
+    if not policy.actions.allow_fleet_noncombat or policy.strategy.fleet_home_planet_id is None:
+        return []
+    if planet.planet_id == policy.strategy.fleet_home_planet_id or planet.coordinates is None:
+        return []
+    home = snapshot.planet(policy.strategy.fleet_home_planet_id)
+    if home is None or home.coordinates is None:
+        return []
+    fleet = _flyable_ships(planet)
+    if not fleet:
+        return []
+
+    combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
+    total_capacity = 0
+    ship_stats: list[tuple[int, int, int]] = []
+    ships: dict[int, int] = {}
+    for ship_id, count in fleet:
+        capacity, fuel_consumption, speed = calc.ship_movement_stats(ship_id, combustion, impulse, hyperspace)
+        total_capacity += capacity * count
+        ship_stats.append((fuel_consumption, count, speed))
+        ships[ship_id] = count
+    slowest_speed = min(speed for _, _, speed in ship_stats)
+    distance = calc.distance(planet.coordinates, home.coordinates)
+    fuel = calc.mission_fuel(ship_stats, distance, slowest_speed)
+    if fuel > total_capacity:
+        # The fleet cannot even carry its own fuel this far -- CargoCapacityExceeded on
+        # the deployed contract. Never proposed; not a candidate that "might" work.
+        return []
+
+    action = Action(
+        kind=ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=planet.planet_id,
+        mission_type=ids.FleetMissionType.DEPLOY,
+        origin_planet_id=planet.planet_id,
+        target_coordinates=home.coordinates,
+        ships=ships,
+        cargo=Resources(),
+        cost=_fleet_mission_cost(Resources(), fuel),
+        rationale=(
+            f"policy.strategy.fleet_home_planet_id={policy.strategy.fleet_home_planet_id}; "
+            f"deploying planet {planet.planet_id}'s fleet ({len(ships)} ship type(s)) home to "
+            f"planet {home.planet_id} ({home.coordinates}, {distance} distance, ~{fuel} fuel)."
+        ),
+        expected_effect=f"planet {home.planet_id} gains planet {planet.planet_id}'s fleet permanently.",
+    )
+    return [
+        Candidate(
+            action=action,
+            family="logistics-deploy",
+            score=None,
+            score_basis=f"policy-declared fleet consolidation to planet {home.planet_id}",
         )
     ]
 
@@ -2489,45 +2699,49 @@ def select_logistics_candidate(
     own_planet_debris: dict[int, Resources] | None = None,
     foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
 ) -> tuple[Candidate | None, list[Candidate]]:
-    """Transport, then local Harvest, then foreign Harvest (commit 3 of the launch-actions
-    plan), per target planet, first selectable candidate wins -- the same "generate every
-    family for this planet, first hit wins" shape `select_shipyard_candidate` already
-    uses. All three generators are gated (once each) on `policy.actions.
-    allow_fleet_noncombat`, so with the default policy (`False`) this returns
-    `(None, [])` on the first planet without doing any real work, matching every other
-    Phase 5c/5b safety property.
+    """Transport, then Deploy, then local Harvest, then foreign Harvest, per target
+    planet, first selectable candidate wins -- the same "generate every family for this
+    planet, first hit wins" shape `select_shipyard_candidate` already uses. All four
+    generators are gated (once each) on `policy.actions.allow_fleet_noncombat`, so with
+    the default policy (`False`) this returns `(None, [])` on the first planet without
+    doing any real work, matching every other Phase 5c/5b safety property.
 
-    Foreign Harvest ranks last among the three, deliberately: it is the only one of the
-    three whose target the wallet does not own, so a closer/simpler opportunity on the
-    wallet's own planets (a surplus to move, a local debris field) always wins first when
-    more than one is available."""
+    Ordering rationale:
+    - **Transport first**: resource logistics is the original, most-established member
+      of this family.
+    - **Deploy second** (commit 4 of the launch-actions plan): only ever fires when
+      `policy.strategy.fleet_home_planet_id` is explicitly declared -- an explicit human
+      intent signal, the same "a declared priority wins outright" precedence
+      `building_priority` already uses elsewhere in this codebase -- so it outranks the
+      two Harvest generators below, which fire opportunistically on whatever debris
+      happens to be found, no declaration required.
+    - **Local Harvest, then foreign Harvest** (commit 3): foreign Harvest ranks last of
+      the four, deliberately -- it is the only one whose target the wallet does not own,
+      so a closer/simpler opportunity on the wallet's own planets always wins first when
+      more than one is available.
+
+    Every generator here returns at most one `Candidate` (never a list to rank
+    internally), so concatenating all four lists in priority order and taking the first
+    element -- when the concatenation is non-empty -- is exactly "first selectable
+    candidate wins," with every remaining element (from any of the four) correctly
+    landing in `alternatives`."""
     if not target_planets:
         return None, []
     alternatives: list[Candidate] = []
     for planet in target_planets:
         transports = generate_transport_candidates(snapshot, policy, planet, target_planets)
+        deploys = generate_deploy_candidates(snapshot, policy, planet)
         local_harvests = generate_harvest_candidates(snapshot, policy, planet, own_planet_debris=own_planet_debris)
-        if transports:
-            foreign_harvests = generate_foreign_harvest_candidates(
-                snapshot, policy, planet, foreign_debris_targets=foreign_debris_targets
-            )
-            return transports[0], rank_candidates(alternatives + transports[1:] + local_harvests + foreign_harvests)
-        if local_harvests:
-            foreign_harvests = generate_foreign_harvest_candidates(
-                snapshot, policy, planet, foreign_debris_targets=foreign_debris_targets
-            )
-            return local_harvests[0], rank_candidates(alternatives + local_harvests[1:] + foreign_harvests)
         foreign_harvests = generate_foreign_harvest_candidates(
             snapshot, policy, planet, foreign_debris_targets=foreign_debris_targets
         )
-        if foreign_harvests:
-            return foreign_harvests[0], rank_candidates(alternatives + foreign_harvests[1:])
-        # No `alternatives.extend(...)` here (judge finding, also-worth-fixing #3, extended
-        # to the third generator on the same reasoning): every generator returns at most
-        # one `Candidate`, and every `if ...:` branch above already returns whenever its
-        # generator is non-empty -- so by this point all three are always `[]`. Extending
-        # with them was dead code (an empty-list no-op every time this line ran), removed
-        # rather than kept as decoration.
+        all_candidates = transports + deploys + local_harvests + foreign_harvests
+        if all_candidates:
+            winner, *rest = all_candidates
+            return winner, rank_candidates(alternatives + rest)
+        # No `alternatives.extend(...)` here (judge finding, also-worth-fixing #3): every
+        # generator above returns at most one `Candidate`, and `all_candidates` being
+        # empty means every one of the four was `[]` -- there is nothing to extend with.
     return None, []
 
 

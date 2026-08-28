@@ -327,7 +327,7 @@ def _astrophysics_level(snapshot: Snapshot) -> int:
     return entity.level if entity is not None and entity.level is not None else 0
 
 
-def _colony_cap_violation(snapshot: Snapshot) -> str | None:
+def _colony_cap_violation(snapshot: Snapshot, *, outgoing_colonize_count: int | None) -> str | None:
     """`None` when a Colonize mission would not exceed
     `VeydriftColonizationModule.sol:289-301`'s per-account colony cap (`limit = 1 +
     astrophysicsLevel`, :func:`calc.max_planets`); otherwise a detail string.
@@ -338,20 +338,38 @@ def _colony_cap_violation(snapshot: Snapshot) -> str | None:
     can be a single-planet subset of the account's real holdings (see
     `Snapshot.owned_planet_count`'s own docstring for why), which would let this check
     silently under-count and pass an already-at-cap account.
-    """
+
+    **`outgoing_colonize_count` (commit 4 of the launch-actions plan)**: `owned_planet_
+    count` alone only reflects planets that have already resolved. Colonize's own
+    `resolveFleetMission` re-checks the cap at arrival but does **not** revert on
+    failure -- `VeydriftColonizationModule.sol:255-260` silently flips the mission to
+    `Returning` instead, so two Colonize proposals on consecutive ticks could both pass
+    this check under the old (single-field) formula, and the second would silently
+    bounce home at arrival with a `status: "success"` resolve receipt and no colony
+    created. `outgoing_colonize_count` -- the wallet's own still-`Outbound` Colonize
+    missions, supplied by `tick._outgoing_colonize_count` -- closes that gap by folding
+    in-flight missions into the projected count. **`None` here fails closed exactly like
+    `owned_planet_count is None` does** -- an unfetchable in-flight count is not "assume
+    zero in flight," the same AGENTS.md §5 rule this function already applies to its
+    other input."""
     if snapshot.owned_planet_count is None:
         return "owned planet count is unknown -- cannot verify the colony cap"
+    if outgoing_colonize_count is None:
+        return "in-flight Colonize mission count is unknown -- cannot verify the colony cap accounts for them"
     limit = calc.max_planets(_astrophysics_level(snapshot))
-    if snapshot.owned_planet_count >= limit:
+    projected = snapshot.owned_planet_count + outgoing_colonize_count
+    if projected >= limit:
+        in_flight_note = f" + {outgoing_colonize_count} in-flight Colonize" if outgoing_colonize_count else ""
         return (
-            f"already at the colony cap ({snapshot.owned_planet_count}/{limit} planets; "
-            "limit = 1 + astrophysicsLevel) -- VeydriftColonizationModule reverts "
-            "PlanetLimitReached rather than silently declining the mission"
+            f"already at or would exceed the colony cap ({snapshot.owned_planet_count} owned"
+            f"{in_flight_note} >= {limit}; limit = 1 + astrophysicsLevel) -- "
+            "VeydriftColonizationModule reverts PlanetLimitReached rather than silently "
+            "declining the mission"
         )
     return None
 
 
-def _gate_mission_type(action: Action, snapshot: Snapshot) -> GuardVerdict:
+def _gate_mission_type(action: Action, snapshot: Snapshot, *, outgoing_colonize_count: int | None = None) -> GuardVerdict:
     """Phase 5c (docs/SPEC.md §5.5): default-deny gate for `launchFleetMission`'s
     `mission_type` argument, independent of and in addition to the `tier` gate above.
     Mirrors `allowlist.ts`'s calldata-level mission-type check -- defense in depth, not a
@@ -404,7 +422,7 @@ def _gate_mission_type(action: Action, snapshot: Snapshot) -> GuardVerdict:
                 "value would silently corrupt the packed on-chain colony target rather "
                 "than raise",
             )
-        cap_violation = _colony_cap_violation(snapshot)
+        cap_violation = _colony_cap_violation(snapshot, outgoing_colonize_count=outgoing_colonize_count)
         if cap_violation is not None:
             return _verdict("mission_type", GuardStatus.BLOCK, f"Colonize mission blocked: {cap_violation}")
     return _verdict(
@@ -1143,7 +1161,7 @@ def _gate_revert_streak(action: Action, agent_state: AgentState, policy: Policy)
 
 
 # --------------------------------------------------------------------------------------
-# The full 19-gate evaluation.
+# The full 20-gate evaluation.
 # --------------------------------------------------------------------------------------
 
 
@@ -1158,6 +1176,7 @@ def evaluate_guardrails(
     unsigned_tx: UnsignedTx | None = None,
     gas_cost_wei: int | None = None,
     eth_balance_wei: int | None = None,
+    outgoing_colonize_count: int | None = None,
     now=None,
 ) -> GuardReport:
     """Evaluate all 20 gates and return the full `GuardReport`. Never short-circuits: even
@@ -1165,7 +1184,11 @@ def evaluate_guardrails(
     report -- not just the final decision -- is the audit artifact.
 
     `now` defaults to `datetime.now(UTC)`; accepted as a parameter purely so tests can
-    freeze time for `index_lag`.
+    freeze time for `index_lag`. `outgoing_colonize_count` (commit 4 of the launch-
+    actions plan) is `tick.py`'s live count of the wallet's own still-`Outbound` Colonize
+    missions, only meaningful for a Colonize action -- see `_colony_cap_violation`'s
+    docstring for why this closes an in-flight-mission blind spot the cap check
+    otherwise has, and why `None` fails closed rather than assuming zero.
     """
     from datetime import UTC
     from datetime import datetime as _datetime
@@ -1175,7 +1198,7 @@ def evaluate_guardrails(
     verdicts = [
         _gate_killswitch(killswitch_active=killswitch_active),
         _gate_tier(action, policy),
-        _gate_mission_type(action, snapshot),
+        _gate_mission_type(action, snapshot, outgoing_colonize_count=outgoing_colonize_count),
         _gate_prerequisites(action, snapshot),
         _gate_fleet_slots(action, snapshot),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),

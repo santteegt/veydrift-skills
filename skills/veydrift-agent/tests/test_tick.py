@@ -380,6 +380,21 @@ def _write_policy_allowing_override(**overrides):
     return policy_path()
 
 
+def _write_policy_with_colonize(**overrides):
+    """`_write_policy`, but with `strategy.colonize` forced true (commit 4 of the
+    launch-actions plan) -- same reasoning as `_write_policy_allowing_override`: the
+    field is nested under `strategy`, so `_write_policy`'s flat `policy.update` can't set
+    it alone."""
+    policy = json.loads((Path(__file__).parent.parent / "assets" / "policy.example.json").read_text())
+    policy["strategy"]["colonize"] = True
+    policy.update(overrides)
+    init_policy()
+    from veydrift_agent.state import policy_path
+
+    policy_path().write_text(json.dumps(policy))
+    return policy_path()
+
+
 def _write_override_action_file(tmp_path, **overrides) -> Path:
     action = dict(
         kind="build",
@@ -1308,6 +1323,242 @@ def test_run_tick_wires_own_planet_debris_into_the_planner(isolated_home, monkey
     result = runner.invoke(tick.app, ["--dry-run"])
     assert result.exit_code == 0, result.output
     assert captured.get("own_planet_debris") == debris
+
+
+# --------------------------------------------------------------------------------------
+# _colonize_targets / _outgoing_colonize_count (commit 4 of the launch-actions plan) --
+# revives candidates.generate_colonize_candidates and closes guard._colony_cap_
+# violation's in-flight-mission blind spot, respectively.
+# --------------------------------------------------------------------------------------
+
+
+def _colonize_slot(position: int, **overrides) -> dict:
+    base = {
+        "position": position,
+        "key": f"7:181:{position}",
+        "fields": 173,
+        "temperature": 20,
+        "deuteriumMultiplierBps": 12_640,
+        "archetype": "frozen-ice",
+        "occupiedBy": None,
+        "migrationReservation": None,
+        "debrisField": None,
+        "hasMoon": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_colonize_targets_finds_a_free_slot(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_universe_system", lambda galaxy, system, **kw: _universe_system(_colonize_slot(20)))
+    assert tick._colonize_targets(_healthy_snapshot()) == [("7:181:20", 12_640)]
+
+
+def test_colonize_targets_skips_an_occupied_slot(monkeypatch):
+    monkeypatch.setattr(
+        tick.read,
+        "fetch_universe_system",
+        lambda galaxy, system, **kw: _universe_system(_colonize_slot(20, occupiedBy={"planetId": "999", "owner": "0xabc"})),
+    )
+    assert tick._colonize_targets(_healthy_snapshot()) == []
+
+
+def test_colonize_targets_skips_a_reserved_slot(monkeypatch):
+    """`isCoordinateAvailable == true` alone is not sufficient -- a slot reserved for
+    migration must also be excluded, or the launch reverts CoordinatesOccupied."""
+    monkeypatch.setattr(
+        tick.read,
+        "fetch_universe_system",
+        lambda galaxy, system, **kw: _universe_system(_colonize_slot(20, migrationReservation={"wallet": "0xabc"})),
+    )
+    assert tick._colonize_targets(_healthy_snapshot()) == []
+
+
+def test_colonize_targets_skips_a_slot_with_no_deuterium_multiplier(monkeypatch):
+    monkeypatch.setattr(
+        tick.read, "fetch_universe_system", lambda galaxy, system, **kw: _universe_system(_colonize_slot(20, deuteriumMultiplierBps=None))
+    )
+    assert tick._colonize_targets(_healthy_snapshot()) == []
+
+
+def test_colonize_targets_degrades_to_empty_on_fetch_failure(monkeypatch):
+    def _boom(galaxy, system, **kw):
+        raise http.VeydriftHTTPError(500, "/universe", "boom")
+
+    monkeypatch.setattr(tick.read, "fetch_universe_system", _boom)
+    assert tick._colonize_targets(_healthy_snapshot()) == []
+
+
+def test_colonize_targets_fetches_each_owned_system_only_once(monkeypatch):
+    planet_a = PlanetSnapshot(planet_id=1, coordinates="7:181:3")
+    planet_b = PlanetSnapshot(planet_id=2, coordinates="7:181:14")
+    snapshot = _healthy_snapshot(planets=[planet_a, planet_b])
+
+    calls: list[tuple[int, int]] = []
+
+    def _fetch(galaxy, system, **kw):
+        calls.append((galaxy, system))
+        return _universe_system(_colonize_slot(20), _colonize_slot(21, deuteriumMultiplierBps=8_000))
+
+    monkeypatch.setattr(tick.read, "fetch_universe_system", _fetch)
+    result = tick._colonize_targets(snapshot)
+    assert calls == [(7, 181)]
+    assert set(result) == {("7:181:20", 12_640), ("7:181:21", 8_000)}
+
+
+def _outgoing_colonize_entry(**overrides) -> dict:
+    base = {"missionId": "1", "status": "Outbound", "missionType": "Colonize"}
+    base.update(overrides)
+    return base
+
+
+def test_outgoing_colonize_count_counts_matching_outbound_entries(monkeypatch):
+    monkeypatch.setattr(
+        tick.read,
+        "fetch_fleet_visibility",
+        lambda wallet, **kw: {"outgoing": [_outgoing_colonize_entry(), _outgoing_colonize_entry(missionId="2")]},
+    )
+    assert tick._outgoing_colonize_count(WALLET) == 2
+
+
+def test_outgoing_colonize_count_ignores_other_mission_types(monkeypatch):
+    monkeypatch.setattr(
+        tick.read,
+        "fetch_fleet_visibility",
+        lambda wallet, **kw: {"outgoing": [_outgoing_colonize_entry(missionType="Transport")]},
+    )
+    assert tick._outgoing_colonize_count(WALLET) == 0
+
+
+def test_outgoing_colonize_count_ignores_resolved_entries(monkeypatch):
+    """A Colonize mission that already resolved (successfully or by bouncing home) no
+    longer counts against the cap."""
+    monkeypatch.setattr(
+        tick.read, "fetch_fleet_visibility", lambda wallet, **kw: {"outgoing": [_outgoing_colonize_entry(status="Resolved")]}
+    )
+    assert tick._outgoing_colonize_count(WALLET) == 0
+
+
+def test_outgoing_colonize_count_degrades_to_none_on_fetch_failure(monkeypatch):
+    """Never `0` on failure -- `guard._colony_cap_violation` fails closed on `None`
+    specifically because "unknown" must never be silently treated as "zero in flight"."""
+
+    def _boom(wallet, **kw):
+        raise http.VeydriftHTTPError(500, "/fleet-visibility", "boom")
+
+    monkeypatch.setattr(tick.read, "fetch_fleet_visibility", _boom)
+    assert tick._outgoing_colonize_count(WALLET) is None
+
+
+def test_outgoing_colonize_count_empty_outgoing_returns_zero(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_fleet_visibility", lambda wallet, **kw: {"outgoing": []})
+    assert tick._outgoing_colonize_count(WALLET) == 0
+
+
+def test_run_tick_wires_colonize_targets_into_the_planner(isolated_home, monkeypatch):
+    """End-to-end: `_run_tick` must actually pass what `_colonize_targets` finds into
+    `plan_next_action`'s `colonize_targets` kwarg -- and only fetch it at all when
+    `policy.strategy.colonize` is true."""
+    _write_policy_with_colonize()
+    targets = [("7:181:20", 12_640)]
+    fetch_calls = []
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_colonize_targets", lambda snapshot: fetch_calls.append(1) or targets)
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    captured = {}
+
+    def _capture(snapshot, policy, **kwargs):
+        captured.update(kwargs)
+        return Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x")
+
+    monkeypatch.setattr(plan_mod, "plan_next_action", _capture)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("colonize_targets") == targets
+    assert fetch_calls == [1]
+
+
+def test_run_tick_never_fetches_colonize_targets_when_not_declared(isolated_home, monkeypatch):
+    _write_policy()  # strategy.colonize defaults False
+
+    def _boom(snapshot):
+        raise AssertionError("must not fetch colonize targets when policy.strategy.colonize is false")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_colonize_targets", _boom)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x"))
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+
+def test_run_tick_wires_outgoing_colonize_count_into_the_guard(isolated_home, monkeypatch):
+    """End-to-end: for an actual Colonize proposal, `_run_tick` must fetch
+    `_outgoing_colonize_count` and pass it into `evaluate_guardrails`'s
+    `outgoing_colonize_count` kwarg -- and never fetch it at all for a non-Colonize
+    action."""
+    _write_policy_with_colonize(tier="operator")
+    colonize_action = Action(
+        kind=ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=664,
+        mission_type=tick.ids.FleetMissionType.COLONIZE,
+        origin_planet_id=664,
+        target_coordinates="7:181:20",
+        ships={tick.ids.Ship.COLONY_SHIP: 1},
+        rule="8d:colonize",
+        rationale="test",
+    )
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_colonize_targets", lambda snapshot: [])
+    monkeypatch.setattr(tick, "_outgoing_colonize_count", lambda wallet: 1)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: colonize_action)
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    captured = {}
+
+    def _capture_guard(action, snapshot, policy, agent_state, **kwargs):
+        captured.update(kwargs)
+        return guard_mod.GuardReport(decision=guard_mod.Decision.BLOCK, verdicts=[])
+
+    monkeypatch.setattr(guard_mod, "evaluate_guardrails", _capture_guard)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert captured.get("outgoing_colonize_count") == 1
+
+
+def test_run_tick_never_fetches_outgoing_colonize_count_for_a_non_colonize_action(isolated_home, monkeypatch):
+    _write_policy()
+
+    def _boom(wallet):
+        raise AssertionError("must not fetch outgoing_colonize_count for a non-Colonize action")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_colonize_targets", lambda snapshot: [])
+    monkeypatch.setattr(tick, "_outgoing_colonize_count", _boom)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
 
 
 # --------------------------------------------------------------------------------------
