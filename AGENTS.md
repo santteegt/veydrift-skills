@@ -446,9 +446,17 @@ enough to call out here specifically, not a duplicate of that ledger.
 - `skills/veydrift-wallet/references/fork-testing.md` — the fork-testing runbook: exercising
   tier≥2 sends against a local Anvil fork with an impersonated account, the intended first real
   use of `sendTx`'s send path against a real chain state (never mainnet). As of round 2 (§9 of
-  that document, 2026-08-19) all 7 allowlisted selectors have been either live-sent this way or,
-  for `resolveFleetMission`, confirmed correct by source in the absence of a real mission to
-  resolve — see this file's §10 for the precise, non-overclaiming summary.
+  that document, 2026-08-19) all 7 originally-allowlisted selectors have been either live-sent
+  this way or, for `resolveFleetMission`, confirmed correct by source in the absence of a real
+  mission to resolve — see this file's §10 for the precise, non-overclaiming summary. **Round 4
+  (§11, 2026-08-30)** live-sent both launch-actions-plan combat additions: Attack's full launch
+  path (ships/fuel/mission-type/randomness-request all confirmed against real emitted events,
+  though battle resolution itself remains out of reach — it needs an off-chain randomness reveal
+  this codebase has no part in) and Missile's complete launch-through-resolution path
+  (fully deterministic, confirmed against real before/after on-chain defense counts on both the
+  origin and target planets, the strongest verification any selector in this runbook has
+  received). That round also surfaced a previously-undocumented contract mechanic: an unresolved
+  Attack mission locks *both* the origin and the target planet, not just the attacker's side.
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.

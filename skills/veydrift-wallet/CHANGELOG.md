@@ -11,6 +11,18 @@ lockstep.
 
 ## [Unreleased]
 
+### Docs
+- **`references/fork-testing.md` gained §11 (round 4, 2026-08-30)** — Attack and Missile,
+  commits 6-7's two combat additions, both live-sent on a local Anvil fork for the first
+  time. Attack's full launch path (ships/fuel/mission-type/randomness-request) is confirmed
+  against real emitted events; its battle resolution remains genuinely out of reach on a
+  fork (an off-chain, precommitted randomness reveal this codebase has no part in).
+  Missile's complete launch-through-resolution path is confirmed deterministically against
+  real before/after on-chain defense counts on both the origin and target planets — the
+  strongest verification any allowlisted selector has received in this runbook. No code
+  changed; both selectors behaved exactly as designed. `docs/COVERAGE.md`'s Missile and
+  Attack rows updated to match.
+
 ## [0.7.0] - 2026-08-28
 
 Launch-actions plan, commit 7: `launchInterplanetaryMissileAttack` becomes allowlisted,

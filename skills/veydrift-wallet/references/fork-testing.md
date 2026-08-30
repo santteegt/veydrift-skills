@@ -30,6 +30,14 @@
   - [10.8 Colonize `launchFleetMission` — live-sent after the workaround](#108-colonize-launchfleetmission-live-sent-after-the-workaround)
   - [10.9 The actual verification — before/after state, the point of this whole exercise](#109-the-actual-verification-beforeafter-state-the-point-of-this-whole-exercise)
   - [10.10 What this closes, precisely](#1010-what-this-closes-precisely)
+- [11. Round 4 (2026-08-30) — Attack and Missile, live on a pinned fork](#11-round-4-2026-08-30--attack-and-missile-live-on-a-pinned-fork)
+  - [11.1 Setup](#111-setup)
+  - [11.2 Attack — launched live, ships/fuel/randomness all confirmed against events](#112-attack--launched-live-shipsfueltrandomness-all-confirmed-against-events)
+  - [11.3 A genuine finding: an unresolved Attack mission locks BOTH planets, not just the origin](#113-a-genuine-finding-an-unresolved-attack-mission-locks-both-planets-not-just-the-origin)
+  - [11.4 Attack's battle resolution could not be exercised — and why that's an honest limit, not a gap in this codebase](#114-attacks-battle-resolution-could-not-be-exercised--and-why-thats-an-honest-limit-not-a-gap-in-this-codebase)
+  - [11.5 Missile — Missile Silo and Impulse Drive raised via storage write, an Interplanetary Missile produced live](#115-missile--missile-silo-and-impulse-drive-raised-via-storage-write-an-interplanetary-missile-produced-live)
+  - [11.6 Missile launched live — fully deterministic, and the event confirms the exact arithmetic](#116-missile-launched-live--fully-deterministic-and-the-event-confirms-the-exact-arithmetic)
+  - [11.7 What this closes, precisely](#117-what-this-closes-precisely)
 
 ---
 
@@ -744,3 +752,210 @@ plan and is now closed.
   unverified. Don't read §10.1 as having closed that.
 - **Mainnet**: still untouched by this fork-testing effort specifically, same as every round
   before this one (real mainnet sends have since happened separately, outside this effort).
+
+## 11. Round 4 (2026-08-30) — Attack and Missile, live on a pinned fork
+
+The launch-actions plan's commits 5-7 (`AGENTS.md` §5) made Attack (`launchFleetMission`
+mission type 3) and Missile (`launchInterplanetaryMissileAttack`) planner-reachable, gated on
+`policy.actions.allow_combat`. Neither had been fork-tested — this round closes that, for both.
+
+### 11.1 Setup
+
+Same account as rounds 2-3, `0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1` (10 owned planets) —
+chosen because it already owns combat ships and has non-trivial tech levels, unlike the
+project's own single-planet account. Fork pinned at Base block `50670794`
+(`anvil --fork-url $VEYDRIFT_FORK_RPC_URL --chain-id 8453 --fork-block-number 50670794`),
+balance topped up to 100 ETH via `anvil_setBalance` (gas headroom, same as every prior round).
+
+**A real `policy.json` was required this round, not an empty `VEYDRIFT_HOME`.** Every prior
+round's `VEYDRIFT_HOME=/tmp/empty` pattern (§2) relies on `resolveTier`'s ENOENT fallback to
+`--tier`. `resolveAllowCombat` (commit 5, `policy.ts`) has **no such fallback, ever** — an
+absent policy file resolves `allow_combat` to `false` unconditionally (§5's design, by
+intent). A scratch `$VEYDRIFT_HOME/policy.json` was written with `tier: "operator"` and
+`actions.allow_combat: true` so `checkAllowlist`'s combat branches (`resolveAllowCombat()`)
+would actually pass — this is a genuine, useful confirmation in itself: **an empty
+`VEYDRIFT_HOME` cannot send combat, by design**, unlike every other selector in this runbook.
+
+Both accounts/targets below were chosen from live `/highscores?includeAttackProtection=
+true&currentWallet=...` and `/wallet/{addr}/attack-protection?targetPlanetId=N` reads —
+`allowed: true, blockedReason: "none"` was confirmed for each target **before** building any
+transaction, the same discovery method `candidates.generate_attack_candidates`/
+`generate_missile_candidates` use internally.
+
+### 11.2 Attack — launched live, ships/fuel/randomness all confirmed against events
+
+Action: `launchFleetMission(23, 25, 3, {lightFighter:2, cruiser:1}, {0,0,0}, 0)` — origin
+planet 23 (`2:477:7`, the attacker's own), target planet 25 (`2:419:10`, owner
+`0x71ce5605ab649d97446ef179bc2983b18ddc9a48`, live-confirmed `allowed: true`). `walletctl
+build` estimated gas 4005207; `simulate` returned `ok: true`; `send --confirm --provider
+fork-impersonate --tier operator` submitted it. tx hash
+`0x928fb3125f15a356cc248c86e3be4f4fad8aced42b9c8484d24b137ef881714d`, **`status: "success"`**,
+gasUsed 3824007.
+
+**A first attempt reverted, and the revert is itself a useful finding.** The first ship
+composition tried included 15 Reapers (a slow, heavy ship), targeting a planet in a distant
+galaxy (galaxy 9). It reverted `CargoCapacityExceeded(capacity=105388, cargo=235452)` — the
+fuel required for that many slow ships over that distance exceeded the fleet's combined
+cargo capacity (fuel is drawn from the same capacity cargo would occupy, same rule Colonize's
+`CargoNotAllowed` finding already established for a single ship). Dropping to
+`{lightFighter:2, cruiser:1}` against a same-galaxy target (distance 8210, not the
+astronomical galaxy-9 distance) fit easily. **Lesson for candidate generation, not a bug**:
+`generate_attack_candidates` sends whatever combat ships are on hand; a slow, numerous fleet
+against a far target can genuinely be unaffordable on fuel alone, and `walletctl simulate`
+catches this before send exactly as designed.
+
+Three emitted events, decoded directly from the receipt's logs (not inferred):
+
+- **`FleetMissionLaunched(missionId=55400, owner=0x4e15e..., missionType=3, originPlanetId=23,
+  targetPlanetId=25, arrivalAt=1788132169, returnAt=1788132888, randomnessRequestId=12685)`**
+  — `missionType=3` confirms this is a real, on-chain Attack, not merely an accepted
+  transaction of unknown type. `randomnessRequestId=12685` is **nonzero even though the built
+  calldata passed `0`** — confirms `_requestAttackBattleRandomness` genuinely overwrites the
+  argument, exactly as `docs/SPEC.md`/commit 6's plan text says it does (`VeydriftGameStorage.
+  sol:262`), for the first time observed against a real contract rather than read from source.
+- **`FleetMissionCargo(missionId=55400, metal=0, crystal=0, deuterium=0, fuelCost=261)`** —
+  matches `calc.py`'s independent prediction *exactly*: `calc.distance("2:477:7", "2:419:10")
+  = 8210`, and `calc.mission_fuel` over `{lightFighter: 2, cruiser: 1}` at the account's real
+  drive-tech levels (Combustion 6, Impulse 6, Hyperspace 7) predicts `261`. This is the same
+  method §8.3 used for Transport, now confirmed for Attack too — `calc.py`'s fuel formula does
+  not special-case mission type.
+- **`FleetMissionShips(missionId=55400, lightFighter=2, cruiser=1, ...)`** — every other slot
+  zero, confirming the 14-slot fleet-tuple encoding (§8.2) is correct for this mission type as
+  well, not just Transport/Colonize.
+
+### 11.3 A genuine finding: an unresolved Attack mission locks BOTH planets, not just the origin
+
+Attempting `finishDefenseProduction(23)` shortly after the Attack send — an unrelated action
+on the *origin* planet — reverted `FleetMissionNotResolved(1788132169)`, the Attack mission's
+own `arrivalAt`. Reading `VeydriftResourceReserves.sol:347-350` (`_requireNoPending
+MissionResolutionForPlanet`) explains why: it checks `_resolutionMissionIdsByPlanet[planetId]`
+for *any* pending-resolution mission, and `launchInterplanetaryMissileAttack`/
+`launchFleetMission` register the mission under **both** the origin and target planet ids —
+confirmed by the second half of this finding below.
+
+The originally-planned Missile target was also planet 25 (the same Attack target above) — an
+attempt to launch a Missile at it, from a *different* planet the attacker owns, also reverted
+`FleetMissionNotResolved(1788132169)` — the identical Attack mission's `arrivalAt`, even
+though the Missile's own origin/target planets (148 and 25) were neither the Attack's origin.
+**This means the defender's own planet is locked out of certain planet-scoped actions by an
+attack against it that hasn't resolved yet** — not merely the attacker's own origin planet, as
+the plan's "a precondition every action shares" section (main plan doc) already anticipated
+in the abstract ("other players' arrived-but-unresolved missions on the target count"). This
+round is the first live confirmation of that specific cross-account mechanic: it is not
+knowable from a wallet-scoped read of the *attacker's own* state, only from what happens when
+the *defender's* planet is next touched — exactly the "wasted tick, not gas" cost the plan
+document already named as the accepted, undetectable-in-advance gap. The Missile test was
+retargeted to a different planet (297, same owner, not the planet already under attack) to
+route around it, rather than trying to force a resolution.
+
+### 11.4 Attack's battle resolution could not be exercised — and why that's an honest limit, not a gap in this codebase
+
+Calling `resolveFleetMission(55400)` after time-travelling past `arrivalAt` reverted
+`PendingRandomness(12685)` — itself a useful confirmation that the contract correctly refuses
+to resolve a combat mission before its randomness arrives. Reading `RandomnessEngine.sol`
+(the deployed contract's own in-house randomness oracle — **not** Chainlink VRF) explains why
+this can't be forced on a fork: `fulfillRandomness(requestId, randomWord)` requires the
+revealed `randomWord` to hash to a `randomnessCommitment` the real, off-chain `fulfiller`
+account committed *before* the request existed (`precommitRequired = true` is this deployment's
+live mode). That commitment's preimage is a secret only the real fulfiller holds — it cannot
+be reconstructed or guessed from chain state, on a fork or otherwise. Directly overwriting the
+`Request` struct's `fulfilledAt`/`randomWord` storage slots would "resolve" the mission, but
+would be **faking the exact mechanism under test** (unlike the Astrophysics/Missile-Silo
+storage writes elsewhere in this round, which raise an orthogonal precondition, not the thing
+being verified) — so this was deliberately not done. **What this round verifies for Attack is
+the full launch path — build, simulate, send, and the ships/fuel/mission-type/randomness-
+request all confirmed correct against real emitted events — not battle resolution**, which
+depends on an off-chain party this codebase has no part in and was never going to exercise via
+a local fork regardless of technique.
+
+### 11.5 Missile — Missile Silo and Impulse Drive raised via storage write, an Interplanetary Missile produced live
+
+Neither test account owned an Interplanetary Missile (`Defense.InterplanetaryMissile`, id 9)
+going in — `defenseCount(planetId, 9)` read `0` everywhere checked. Producing one needs
+`VeydriftDependencies.sol:159,162`'s Missile Silo ≥ 4 and Impulse Drive ≥ 1; the attacker
+account's planets all had Missile Silo `0`. Following the exact precedent §10.7 set for
+Astrophysics (a single, surgical `anvil_setStorageAt` write for an orthogonal precondition,
+not a change to anything under test):
+
+- `_buildingLevels[148][14]` (slot 6, nested `cast index uint256 148 6` → `cast index uint8 14
+  <outer>`) raised `0 → 4` — Missile Silo on planet 148.
+- `_technologyLevels[0x4e15e...][9]` (slot 20, the same slot §10.7 used, different tech id)
+  raised `6 → 12` — Impulse Drive, account-wide (this mapping is keyed by address, not planet,
+  so it applies to every planet the account owns at once, unlike the building level above).
+  `12` was chosen deliberately to land the intended target at the **exact range boundary**:
+  `calc.missile_range(12) = 12*5-1 = 59`, matching the live distance to the chosen target
+  exactly — the same boundary case `test_guard.py::test_missile_target_allows_exactly_at_
+  the_range_boundary` already pins in isolation, now also confirmed against a real contract
+  call rather than only Python-side unit math.
+
+Both writes verified before use (`buildingLevel(148, 14) → 4`, `technologyLevel(0x4e15e...,
+9) → 12`, both via `cast call`, not just `cast storage`). `startDefenseProduction(148, 9, 1)`
+(qty 1 — 5 was tried first and reverted `InsufficientResources`, since 5 IPMs' 62500 metal /
+12500 crystal / 50000 deuterium cost exceeded the planet's real balance) was built, simulated
+(`ok: true`), and sent: `status: "success"`, `DefenseQueued` fired with `readyAt - startedAt =
+1964` seconds — matching the live API's `durationSeconds: 1964` for this defense exactly.
+Time-travelled past completion (`anvil_increaseTime 2000` + `anvil_mine`), then
+`finishDefenseProduction(148)` (permissionless, `cast send --unlocked`, same pattern §10.3
+used for `finishShipProduction`) settled the queue: `status: 1 (success)`, and
+`defenseCount(148, 9)` confirmed `1` — the account genuinely owns an Interplanetary Missile
+on-chain, not merely in a queue.
+
+### 11.6 Missile launched live — fully deterministic, and the event confirms the exact arithmetic
+
+The original Missile target (planet 25) was already locked by the pending Attack mission
+against it (§11.3) — retargeted to **planet 297** (`2:419:6`, same owner
+`0x71ce5605ab649d97446ef179bc2983b18ddc9a48`, live-confirmed `allowed: true,
+blockedReason: "none"`), distance 59 from planet 148 (`2:478:15`) — the exact range boundary
+set up in §11.5. Live defense read on planet 297 before send: RocketLauncher (id 0) = 12,
+the most numerous of ids 0-7 (`_choose_missile_primary_target`'s own selection rule), so
+`primaryTarget = 0`. Action: `launchInterplanetaryMissileAttack(148, 297, 0, 1)`. `walletctl
+build` estimated gas 6320822; `simulate` returned `ok: true`; sent. tx hash
+`0x950e01a2d8e0eb1f17fd9c7b9846ead7c52ea245b7f8a57c7895559f335fca52`, **`status: "success"`**,
+gasUsed 5998767.
+
+Unlike Attack, **Missile resolves fully synchronously in the same transaction** — no VRF, no
+pending resolution, confirmed directly by the emitted event rather than only by reading
+source (`AGENTS.md` §5 already established this from `VeydriftPlanetManagementModule.sol`'s
+implementation; this is the first live confirmation).
+`InterplanetaryMissileAttack(attacker=0x4e15e..., originPlanetId=148, targetPlanetId=297,
+primaryTarget=0, launched=1, intercepted=0, hits=1, destroyedPrimary=1)` fired in the same
+transaction as the send. `intercepted=0` is exactly right — planet 297's Anti-Ballistic
+Missile count (id 8) was live-confirmed `0` before send, so there was nothing to intercept
+with. Two `PlanetDefenseCountChanged` events in the same receipt confirm the arithmetic
+against real state, not just the event's own self-reported numbers: planet 148's
+Interplanetary Missile count (id 9) `1 → 0` (the missile was genuinely consumed), and planet
+297's RocketLauncher count (id 0) `12 → 11` (exactly one destroyed, matching
+`destroyedPrimary=1`). This is a stronger verification than Attack's non-deterministic combat
+could ever provide on a fork: every number the contract computed is checked against the
+before/after state independently, not merely trusted from the event.
+
+### 11.7 What this closes, precisely
+
+- **Attack's launch path**: closed. Real send, `status: "success"`, `missionType=3` confirmed
+  on-chain, ship-tuple encoding confirmed correct via `FleetMissionShips`, fuel cost confirmed
+  to match `calc.py`'s independent prediction exactly via `FleetMissionCargo`, and a genuine
+  VRF randomness request confirmed via `FleetMissionLaunched`'s nonzero
+  `randomnessRequestId` despite the built calldata passing `0`.
+- **Attack's battle resolution**: **not closed, and not closeable by this technique** — it
+  depends on an off-chain, precommitted randomness reveal only the real fulfiller account can
+  produce; forcibly writing the result via `anvil_setStorageAt` was deliberately avoided since
+  it would fake the exact mechanism under test rather than exercise it. `resolveFleetMission`
+  itself remains verified (§10.4, a non-combat, deterministic Colonize resolution) — what
+  remains open is specifically an Attack resolving through real randomness, which this
+  codebase does not control and was never going to be able to force.
+- **A previously-undocumented contract mechanic, confirmed live**: an unresolved Attack
+  mission locks *both* the origin and the **target** planet out of further
+  `_requireNoPendingMissionResolutionForPlanet`-gated actions, not just the attacker's own
+  side — confirmed by a real cross-account collision (§11.3), not merely read from source.
+- **Missile's full launch-through-resolution path**: closed, completely — production
+  (`startDefenseProduction`/`finishDefenseProduction`, after a documented, orthogonal
+  Missile-Silo/Impulse-Drive precondition bump), the send itself, and the deterministic combat
+  arithmetic (`launched`/`intercepted`/`hits`/`destroyedPrimary`) all confirmed against real
+  emitted events *and* independently against before/after on-chain defense counts on both the
+  origin and target planets. This is the strongest verification any selector in this runbook
+  has received, and it is the newest, least-shared-code selector in the allowlist.
+- **The range-boundary formula** (`calc.missile_range`/`calc.missile_system_distance`): now
+  confirmed against a real contract send at the exact boundary (distance 59, range 59), not
+  only against `test_guard.py`'s unit test of the same boundary.
+- **Mainnet**: still untouched by this fork-testing effort specifically — same as every round
+  before this one.
