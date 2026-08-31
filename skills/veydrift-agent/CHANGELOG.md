@@ -11,6 +11,8 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-08-31
+
 ### Fixed
 - **`assets/policy.example.json` was missing `strategy.colonize` and
   `strategy.fleet_home_planet_id`** — both added by the launch-actions plan's commit 4

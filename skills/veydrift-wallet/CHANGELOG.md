@@ -11,6 +11,8 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-31
+
 ### Docs
 - **`references/fork-testing.md` gained §11 (round 4, 2026-08-30)** — Attack and Missile,
   commits 6-7's two combat additions, both live-sent on a local Anvil fork for the first
