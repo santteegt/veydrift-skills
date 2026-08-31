@@ -11,6 +11,15 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+### Fixed
+- **`assets/policy.example.json` was missing `strategy.colonize` and
+  `strategy.fleet_home_planet_id`** — both added by the launch-actions plan's commit 4
+  (`docs/SPEC.md` correction 69) and already documented in `docs/PLAYER-GUIDE.md`'s field
+  table and inline JSON example, but never added to the actual bundled example file
+  `vd init` copies to `$VEYDRIFT_HOME/policy.json`. Both now present, `false`/`null`
+  respectively — the same "off/unset == pre-existing behaviour" default every other
+  `strategy` flag in this file already uses.
+
 ## [1.13.0] - 2026-08-28
 
 Launch-actions plan, commit 7 (final commit of this plan): Missile becomes
