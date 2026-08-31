@@ -11,9 +11,13 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.13.2] - 2026-08-31
+
 ### Added
 - `license: MIT` in `SKILL.md`'s frontmatter and `pyproject.toml` — the repo root now
   carries a `LICENSE` file.
+- `AGENTS.md` §4: any new/changed field on `Policy`/`StrategyCfg`/`ActionsCfg` must land
+  in `assets/policy.example.json` in the same change.
 
 ## [1.13.1] - 2026-08-31
 

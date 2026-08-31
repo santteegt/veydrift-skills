@@ -93,6 +93,10 @@ as breaking:
 - `models.py`'s pydantic models are the on-disk JSON format for `policy.json`,
   `proposals.jsonl`, `actions.jsonl`, and the generated `schemas/*.json`. Renaming or
   retyping a field breaks anything that reads old log lines.
+- Any new or changed field on `Policy`/`StrategyCfg`/`ActionsCfg` (or any nested config
+  model) must land in `assets/policy.example.json` in the same change — it's the literal
+  file `vd init` copies to a fresh `$VEYDRIFT_HOME/policy.json`, not just a spec
+  restatement.
 - `cli.py` mounts each module's top-level `app: typer.Typer` with **tolerant imports** —
   a half-built tree still runs the parts that exist. Don't hardcode subcommand wiring
   anywhere else; add a new module to `_SUBAPPS` instead.
