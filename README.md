@@ -1,5 +1,9 @@
 # Veydrift Agent Infrastructure
 
+Tier-gated Claude Code skills for Veydrift: one plans on-chain actions through a
+conservative decision ladder, the other independently re-validates and, only once a human
+promotes past read-only, signs and sends them.
+
 Two installable agent skills that read [Veydrift](https://veydrift.com) game state, propose
 the next action for a Veydrift planet, and — only once a human has explicitly raised the
 tier — build, allowlist, simulate and submit the transaction for it. Veydrift is an
