@@ -11,6 +11,10 @@ lockstep.
 
 ## [Unreleased]
 
+### Added
+- `license: MIT` in `SKILL.md`'s frontmatter and `package.json` — the repo root now
+  carries a `LICENSE` file.
+
 ## [0.7.1] - 2026-08-31
 
 ### Docs

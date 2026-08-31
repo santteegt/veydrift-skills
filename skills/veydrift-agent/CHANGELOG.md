@@ -11,6 +11,10 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+### Added
+- `license: MIT` in `SKILL.md`'s frontmatter and `pyproject.toml` — the repo root now
+  carries a `LICENSE` file.
+
 ## [1.13.1] - 2026-08-31
 
 ### Fixed

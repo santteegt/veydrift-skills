@@ -1,5 +1,6 @@
 ---
 name: veydrift-agent
+license: MIT
 description: Reads Veydrift game state, proposes the next build/research/fleet action for a Veydrift planet, and explains build orders and the energy-first strategy. Use this whenever the user is playing Veydrift, mentions a Veydrift planet (e.g. planet 664), asks "what should I build next," "run a tick," "check my queues/energy/resources," "is my planet under attack," or anything about Veydrift's tier system (advisor/economy/operator), guardrails, or promotion from T1 to T2. Trigger even if the user just says "check Veydrift" or pastes a planet id/coordinates like "7:181:14" without naming the skill. Do NOT use this for OGame or other browser-strategy games in general, or for generic "how does blockchain gaming work" questions that aren't about this specific project — this skill is Veydrift-specific and knows nothing generic. For signing, submitting, or wallet-provider questions, hand off to `veydrift-wallet` instead; this skill never signs anything.
 ---
 

@@ -1,5 +1,6 @@
 ---
 name: veydrift-wallet
+license: MIT
 description: Builds, allowlists, simulates and — only on an explicit human --confirm — submits Veydrift game transactions on Base (chainId 8453). Use this whenever the user wants to actually sign or send a Veydrift action, check wallet/provider status, verify the pinned contract ABI against live, encode a fleet-mission ship tuple, or work on the keystore/envkey wallet providers, the transaction allowlist, or EIP-7702/custody questions *for this Veydrift project specifically*. Trigger on "sign this", "send the tx", "walletctl", "check my wallet balance/address", "is the ABI still pinned correctly", "build a fleet mission", or any mention of the keystore/envkey providers. Do NOT use this for generic wallet/signing questions unrelated to Veydrift (e.g. general viem/ethers usage, an unrelated dApp's wallet integration, or a different chain/project's custody design) — this skill's allowlist, ABI pin and address-binding reasoning are specific to the deployed Veydrift contract on Base. For reading game state, planning the next build/research action, or gameplay strategy, hand off to `veydrift-agent` instead; this skill never decides *what* to do, only signs and sends what it's given.
 ---
 
