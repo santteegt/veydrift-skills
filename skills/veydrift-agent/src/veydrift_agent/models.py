@@ -41,7 +41,7 @@ class QueueKind(str, Enum):
 
 
 class ActionKind(str, Enum):
-    """What the planner decided. Only the first six map to a contract call."""
+    """What the planner decided. Every kind before NOOP maps to a contract call."""
 
     BUILD = "build"                      # startBuildingUpgrade(uint256,uint8)
     RESEARCH = "research"                # startResearch(uint256,uint8)
@@ -64,6 +64,18 @@ class ActionKind(str, Enum):
     #: Attack uses) at both enforcement layers, `guard.py`'s `_MIN_TIER_FOR_FUNCTION`
     #: (`operator` tier) and `veydrift-wallet`'s `COMBAT_SIGNATURES`.
     MISSILE_ATTACK = "missile_attack"
+    #: One of 15 membership functions on `VeydriftAllianceSystem` -- a wholly separate
+    #: deployed contract, its own pinned ABI, its own address (`allianceContractAddress`).
+    #: `action.function` disambiguates which of the 15 (createAlliance, inviteMember,
+    #: acceptInvite, leaveAlliance, etc.) the same "one kind, many functions" shape
+    #: `FLEET_MISSION` already uses toward `launchFleetMission`'s mission types. **Never
+    #: planner-produced** -- no `candidates.py` generator, no `plan.py` ladder rung emits
+    #: this kind. Reachable only via `vd tick --action` +
+    #: `policy.strategy.allow_agent_action_override`, additionally gated on
+    #: `policy.actions.allow_alliance` at `economy` tier (not `operator` -- membership
+    #: actions carry no fund/combat risk the way sending fleets or missiles does). See
+    #: `references/manual-action-override.md` for a worked example.
+    ALLIANCE = "alliance"
     NOOP = "noop"
     ESCALATE = "escalate"
     HALT = "halt"
@@ -321,6 +333,96 @@ class Snapshot(Base):
 
 
 # --------------------------------------------------------------------------------------
+# Alliance state -- fetched fresh each tick from GET /wallet/{addr}/alliance, passed as an
+# explicit `evaluate_guardrails(..., alliance_state=...)` parameter. Deliberately NOT a
+# field on `Snapshot`/`PlanetSnapshot` above: `Snapshot` is frozen (AGENTS.md §4) and this
+# data spans membership, rosters, and pending-request lookups across the 15 alliance
+# functions -- flattening it into a dozen more `evaluate_guardrails` kwargs would be worse
+# than one grouped model, but it's still guard-time-only live data, the same posture
+# `attack_protection_allowed`/`outgoing_colonize_count` already take (tick.py fetches it,
+# nobody else does). `extra="ignore"` (via `Base`) tolerates the live indexer response's
+# shape drifting without a schema change here.
+# --------------------------------------------------------------------------------------
+
+
+class AllianceMembership(Base):
+    """The caller's own membership row, `allianceOf(address)` on the deployed contract --
+    or the live indexer's `membership` field, which is what `tick.py` actually reads.
+    `None` at the `AllianceState` level means "not in an alliance," not "unknown" -- the
+    live route always reports this key, `null` or populated, for any wallet with a home
+    planet."""
+
+    alliance_id: int
+    role: int  # alliance_ids.AllianceRole value, plain int -- same convention as Action.role
+    joined_at: datetime | None = None
+
+
+class AllianceMember(Base):
+    """One row of the caller's own alliance roster (`alliance_state.members`) -- used by
+    `guard._gate_alliance_action` to verify a `kickMember`/`setMemberRole`/
+    `transferAllianceOwnership` target is a real member with the role the action assumes,
+    rather than trusting the generation-time read."""
+
+    address: str
+    role: int
+    joined_at: datetime | None = None
+    total_score: int | None = None
+
+
+class AlliancePendingInvite(Base):
+    """One alliance id the caller holds an active, unaccepted invite for --
+    `acceptInvite`'s precondition."""
+
+    alliance_id: int
+
+
+class AlliancePendingJoinRequest(Base):
+    """One alliance id the caller has an active, un-dismissed join request against --
+    `cancelJoinRequest`'s precondition."""
+
+    alliance_id: int
+
+
+class AllianceJoinRequestForOwner(Base):
+    """One incoming join request against the CALLER'S OWN alliance (only populated when
+    the caller is Officer/Owner of that alliance) -- `approveJoinRequest`/
+    `dismissJoinRequest`'s precondition that a matching `(alliance_id, requester)` row
+    actually exists."""
+
+    alliance_id: int
+    requester: str
+
+
+class AllianceDirectoryEntry(Base):
+    """One alliance from the live indexer's `directory` list -- used by
+    `requestJoinAlliance`'s precondition that the target alliance exists and is active.
+    Keyed by `alliance_id` in `AllianceState.directory` below, not carried as its own
+    field, to make the "does this id exist at all" check a plain dict lookup."""
+
+    active: bool | None = None
+    member_count: int | None = None
+
+
+class AllianceState(Base):
+    """Everything `guard._gate_alliance_action` needs to independently re-derive every one
+    of the 15 alliance functions' preconditions, sourced from a single
+    `GET /wallet/{addr}/alliance` fetch (`tick._alliance_state`). `None` at the top level
+    (not this class -- the caller's own `alliance_state: AllianceState | None` parameter)
+    means the fetch failed; the gate BLOCKs on that, never assumes "no alliance
+    involvement" (AGENTS.md §5)."""
+
+    membership: AllianceMembership | None = None
+    #: The roster of the CALLER'S OWN alliance only (empty/irrelevant if not a member) --
+    #: not a global member directory.
+    members: list[AllianceMember] = Field(default_factory=list)
+    pending_invites: list[AlliancePendingInvite] = Field(default_factory=list)
+    pending_join_requests: list[AlliancePendingJoinRequest] = Field(default_factory=list)
+    alliance_join_requests: list[AllianceJoinRequestForOwner] = Field(default_factory=list)
+    #: Keyed by alliance id. Sourced from the live indexer's `directory` list.
+    directory: dict[int, AllianceDirectoryEntry] = Field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------------------
 # Policy — parsed from $VEYDRIFT_HOME/policy.json. Invalid policy is a hard stop.
 # --------------------------------------------------------------------------------------
 
@@ -366,6 +468,21 @@ class ActionsCfg(Base):
     #: "empty/off == old behaviour" opt-in every other `policy.actions`/`policy.strategy`
     #: flag in this codebase already is.
     allow_combat: bool = False
+    #: Alliance-membership actions (`ActionKind.ALLIANCE` -- createAlliance, inviteMember,
+    #: acceptInvite, leaveAlliance, and 11 more, all on the separate `VeydriftAllianceSystem`
+    #: contract). Default `False` reproduces the pre-existing behaviour exactly: no path
+    #: (planner or override) can submit an alliance action while this is off, same
+    #: "empty/off == old behaviour" convention every flag in this class already uses.
+    #: Unlike `allow_combat`, this unlocks at tier `economy`, not `operator` -- membership
+    #: actions carry no fund/combat risk, so gating them behind the same bar real
+    #: fund-moving/combat actions need would be stricter than the actual risk warrants.
+    #: Checked independently at both enforcement layers (`guard.py`'s
+    #: `_gate_alliance_action` and `veydrift-wallet`'s `checkAllowlist`, each resolving it
+    #: from `policy.json` separately), the same "never one layer trusting the other's
+    #: read" discipline `allow_combat` already established. There is no CLI flag or
+    #: environment variable for this at the wallet layer, ever -- see
+    #: `veydrift-wallet/src/policy.ts`'s `resolveAllowAlliance`.
+    allow_alliance: bool = False
 
 
 class EscalationCfg(Base):
@@ -618,6 +735,34 @@ class Action(Base):
     #: is a valid missile target. `guard._gate_missile_target` independently re-checks
     #: this bound rather than trusting the generator that set it.
     primary_target: int | None = None
+
+    # ----------------------------------------------------------------------------------
+    # Alliance fields (membership-only, VeydriftAllianceSystem). `None`/empty for every
+    # other `ActionKind` — only `ALLIANCE` populates them.
+    # ----------------------------------------------------------------------------------
+    #: Shared by every one of the 15 functions except `leaveAlliance` (no on-chain args at
+    #: all -- `alliance_id` is informational only there, resolved by `tick.py` from live
+    #: `AllianceState` for logging/idempotency) and `createAlliance` (returns, does not
+    #: take, an allianceId -- also informational, unknowable before send).
+    alliance_id: int | None = None
+    #: The one address argument beyond `alliance_id` most of these functions take --
+    #: `inviteMember`/`cancelInvite`/`dismissJoinRequest`/`approveJoinRequest`/
+    #: `kickMember`/`setMemberRole`'s target, and `transferAllianceOwnership`'s `newOwner`.
+    #: Reused across those meanings rather than one field per function, the same "reuse
+    #: across kinds, document per call site" convention `quantity` already takes for
+    #: missile count vs. ship/defense count.
+    target_player: str | None = None
+    #: `kickMembers`/`setMembersRole` only -- the batch address array those two functions
+    #: take in place of `target_player`.
+    target_players: list[str] = Field(default_factory=list)
+    #: `alliance_ids.AllianceRole` value for `setMemberRole`/`setMembersRole`. Deliberately
+    #: a plain int, not the enum -- the same "narrowing here would imply an enforcement
+    #: this field does not provide" convention `mission_type` above already documents.
+    role: int | None = None
+    #: `createAlliance`/`updateAllianceProfile` only.
+    alliance_tag: str | None = None
+    alliance_name: str | None = None
+    alliance_description: str | None = None
 
     def is_onchain(self) -> bool:
         return self.function is not None

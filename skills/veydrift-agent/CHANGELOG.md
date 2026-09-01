@@ -11,6 +11,55 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-09-01
+
+Alliance feature, commit 3/6: `guard.py` gains a new, 23rd gate for the 15 membership
+functions on `VeydriftAllianceSystem` -- a wholly separate deployed contract, never
+touched by this codebase before. Manual-override-only (no `candidates.py` generator, no
+`plan.py` ladder rung); gated on a new `policy.actions.allow_alliance` flag, floor
+`economy` tier (not `operator` -- membership actions carry no fund/combat risk).
+
+### Added
+- New module `alliance_ids.py` -- `AllianceRole` (`None`/`Member`/`Officer`/`Owner`),
+  name/id lookups, `meets_min_role()`. Deliberately a sibling to `ids.py`, not folded
+  into it: `ids.py`'s own docstring scopes itself to the game contract's six enums;
+  `AllianceRole` belongs to a genuinely different deployed contract with its own pinned
+  ABI.
+- `models.py`: `ActionKind.ALLIANCE`, `ActionsCfg.allow_alliance`, a new banner-commented
+  `Action` field block (`alliance_id`, `target_player`, `target_players`, `role`,
+  `alliance_tag`/`alliance_name`/`alliance_description`), and a new `AllianceState` model
+  group (`AllianceMembership`, `AllianceMember`, `AlliancePendingInvite`,
+  `AlliancePendingJoinRequest`, `AllianceJoinRequestForOwner`, `AllianceDirectoryEntry`)
+  -- guard-time-only live data from `GET /wallet/{addr}/alliance`, deliberately never
+  added to the frozen `Snapshot`.
+- `guard.py`: `_MIN_TIER_FOR_FUNCTION` gains all 15 alliance functions at `Tier.ECONOMY`;
+  new `_ALLIANCE_FUNCTIONS` frozenset (the cross-layer-test counterpart to
+  `_COMBAT_ONLY_FUNCTIONS`); new `_gate_alliance_action` -- one precondition branch per
+  function (role floors, membership/invite/request-row lookups, batch-fails-closed for
+  `kickMembers`/`setMembersRole`, sole-owner check for `leaveAlliance`,
+  Officer-and-not-self check for `transferAllianceOwnership`); `_gate_abi_hash` gained an
+  alliance branch that PASSes with an explicit "no live-hash verification path" detail
+  (there is no `allianceAbiHash`/`allianceDeploymentCommit` field anywhere in
+  `/runtime-config` to compare against, ever -- a permanent limit, not a transitional
+  gap). `evaluate_guardrails()` gained a new `alliance_state` keyword parameter.
+
+### Fixed
+- `test_tier_map_agrees_with_the_wallet_engines_allowlist` extended: `_ALLIANCE_FUNCTIONS`
+  is now subtracted from the unconditional economy-tier diff (mirroring how
+  `_COMBAT_ONLY_FUNCTIONS` is subtracted from the operator-tier diff) and compared
+  directly against `allowlist.ts`'s new `ALLIANCE_SIGNATURES`.
+
+75 new tests (`tests/test_guard.py`'s `alliance_action` block: one per precondition
+branch above, the mandatory `alliance_state is None` missing-data test, and a
+deliberately-paired low-/high-stakes tier test). 789 passed (714 baseline + 75 new).
+
+Two known gaps, documented rather than papered over: a third party's own preconditions
+(an invitee's home-planet/membership status, a join requester's alliance) cannot be
+independently verified from a wallet-scoped `/wallet/{addr}/alliance` read --
+`walletctl simulate` remains the real pre-flight backstop; and "caller has a home planet"
+is approximated via `snapshot.owned_planet_count > 0`, not a direct
+`game.homePlanetOf(player)` read (no existing `read.py` wrapper exposes that view).
+
 ## [1.13.2] - 2026-08-31
 
 ### Added

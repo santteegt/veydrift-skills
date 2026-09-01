@@ -1,10 +1,10 @@
-"""`vd guard` — the 22-gate guardrail evaluator (docs/SPEC.md §5.5).
+"""`vd guard` — the 23-gate guardrail evaluator (docs/SPEC.md §5.5).
 
 `evaluate_guardrails()` is the pure core: given an `Action`, the `Snapshot` it was
 planned from, the `Policy`, the persisted `AgentState`, and a handful of caller-supplied
 facts that don't live on any of those frozen/local models (live contract addresses, the
 live ABI hash, a built `UnsignedTx` + gas estimate, the wallet's ETH balance), it returns
-a `GuardReport` with **all 22 gates evaluated, never short-circuited** — the full
+a `GuardReport` with **all 23 gates evaluated, never short-circuited** — the full
 `GuardReport.verdicts` list is the audit artifact (docs/SPEC.md §5.5), so a passing tick
 is exactly as informative as a blocked one.
 
@@ -32,10 +32,11 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from veydrift_agent import calc, ids
+from veydrift_agent import alliance_ids, calc, ids
 from veydrift_agent.models import (
     Action,
     ActionKind,
+    AllianceState,
     Decision,
     GuardReport,
     GuardStatus,
@@ -108,6 +109,30 @@ _MIN_TIER_FOR_FUNCTION: dict[str, Tier] = {
     # like every other combat-adjacent function in this map. Mirrors
     # veydrift-wallet/src/allowlist.ts's `COMBAT_SIGNATURES`.
     "launchInterplanetaryMissileAttack": Tier.OPERATOR,
+    # Alliance feature, commit 3. All 15 in-scope VeydriftAllianceSystem membership
+    # functions -- a wholly separate deployed contract, its own selector namespace, but
+    # gated by the SAME shape every combat-adjacent entry above already uses: `economy`
+    # alone is not sufficient, further gated by `_gate_alliance_action` (below) on
+    # `policy.actions.allow_alliance`. Unlike combat's `operator` floor, this floor is
+    # `economy` -- membership actions carry no fund/combat risk, so the bar is
+    # deliberately lower, not because the two-layer-independent-check discipline is
+    # weaker here (it isn't; see `_ALLIANCE_FUNCTIONS` below). Mirrors
+    # veydrift-wallet/src/allowlist.ts's `ALLIANCE_SIGNATURES`.
+    "createAlliance": Tier.ECONOMY,
+    "updateAllianceProfile": Tier.ECONOMY,
+    "inviteMember": Tier.ECONOMY,
+    "cancelInvite": Tier.ECONOMY,
+    "acceptInvite": Tier.ECONOMY,
+    "requestJoinAlliance": Tier.ECONOMY,
+    "cancelJoinRequest": Tier.ECONOMY,
+    "dismissJoinRequest": Tier.ECONOMY,
+    "approveJoinRequest": Tier.ECONOMY,
+    "kickMember": Tier.ECONOMY,
+    "kickMembers": Tier.ECONOMY,
+    "leaveAlliance": Tier.ECONOMY,
+    "setMemberRole": Tier.ECONOMY,
+    "setMembersRole": Tier.ECONOMY,
+    "transferAllianceOwnership": Tier.ECONOMY,
 }
 
 _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR: 3}
@@ -125,6 +150,33 @@ _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR:
 #: `allowlist.ts` pulls its selector out of the unconditional tier set entirely rather
 #: than decoding an argument; this set mirrors that shape on the Python side.
 _COMBAT_ONLY_FUNCTIONS: frozenset[str] = frozenset({"launchInterplanetaryMissileAttack"})
+
+#: The 15 functions in `_MIN_TIER_FOR_FUNCTION` above that are ALSO conditional on
+#: `policy.actions.allow_alliance`, in addition to their `economy` tier requirement --
+#: plays the exact same cross-layer-test role `_COMBAT_ONLY_FUNCTIONS` plays for Missile,
+#: one tier down: lets `test_tier_map_agrees_with_the_wallet_engines_allowlist` diff this
+#: set against `allowlist.ts`'s `ALLIANCE_SIGNATURES` declaratively, and confirm every
+#: member is actually mapped to at least `Tier.ECONOMY` above. The real enforcement lives
+#: in `_gate_alliance_action` (below), not here.
+_ALLIANCE_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        "createAlliance",
+        "updateAllianceProfile",
+        "inviteMember",
+        "cancelInvite",
+        "acceptInvite",
+        "requestJoinAlliance",
+        "cancelJoinRequest",
+        "dismissJoinRequest",
+        "approveJoinRequest",
+        "kickMember",
+        "kickMembers",
+        "leaveAlliance",
+        "setMemberRole",
+        "setMembersRole",
+        "transferAllianceOwnership",
+    }
+)
 
 #: `FleetMissionType` values `launchFleetMission` may submit unconditionally -- no
 #: policy flag affects this set (Phase 5c, docs/SPEC.md §5.5). Default-deny: any
@@ -834,6 +886,225 @@ def _gate_missile_target(action: Action, snapshot: Snapshot, policy: Policy) -> 
     )
 
 
+def _alliance_member(alliance_state: AllianceState, address: str) -> object | None:
+    """Case-insensitive lookup into `alliance_state.members` -- addresses in JSON/JS
+    contexts are frequently mixed-case-inconsistent (checksummed vs. lowercase), and this
+    gate must not BLOCK a legitimate target purely on casing."""
+    needle = address.lower()
+    return next((m for m in alliance_state.members if m.address.lower() == needle), None)
+
+
+def _gate_alliance_action(
+    action: Action, snapshot: Snapshot, policy: Policy, alliance_state: AllianceState | None
+) -> GuardVerdict:
+    """New gate, alliance feature commit 3 -- the 15 membership functions on
+    `VeydriftAllianceSystem`, a wholly separate deployed contract. Every other action
+    PASSes trivially. Independently re-derives every precondition this codebase can
+    verify from a live `GET /wallet/{addr}/alliance` fetch (`tick._alliance_state`) --
+    the same defense-in-depth posture `_gate_missile_target` takes toward the contract's
+    own on-chain checks, adapted to a wallet-scoped indexer read since this contract has
+    no equivalent to `Snapshot`.
+
+    **Cannot verify a third party's own preconditions** -- an invitee's home-planet/
+    membership status, a join requester's alliance -- because the wallet-scoped
+    `/wallet/{addr}/alliance` route only ever describes the CALLING wallet's own state.
+    Same category of gap `_gate_missile_target`'s docstring already accepts for a foreign
+    planet's pending-mission state; `walletctl simulate` remains the real pre-flight
+    backstop (a wasted tick, not wasted gas, on failure).
+
+    "Caller has a home planet" (a real on-chain precondition on `createAlliance`/
+    `inviteMember`/`requestJoinAlliance`) is approximated via
+    `snapshot.owned_planet_count > 0`, not a direct read of `game.homePlanetOf(player)` --
+    no existing `read.py` wrapper exposes that view. A documented, deliberately narrow
+    proxy, not a silent substitution.
+
+    Checks, in order, each independently fail-closed on missing data (AGENTS.md §5):
+
+    1. `action.function` is one of the 15 in `_ALLIANCE_FUNCTIONS` -- else PASS trivially.
+    2. `policy.actions.allow_alliance` is `true`.
+    3. `alliance_state` is not `None` -- a failed fetch BLOCKs, never treated as "no
+       alliance involvement."
+    4. A per-function precondition branch (membership/role/roster/pending-request checks
+       -- see each branch below for its own contract-derived rationale). Batch functions
+       (`kickMembers`/`setMembersRole`) fail the WHOLE batch if any one target fails its
+       individual check -- fail-closed on the batch, never partial-allow.
+    """
+    fn = action.function
+    if fn not in _ALLIANCE_FUNCTIONS:
+        return _verdict("alliance_action", GuardStatus.PASS, "action is not an alliance function")
+    if not policy.actions.allow_alliance:
+        return _verdict("alliance_action", GuardStatus.BLOCK, "policy.actions.allow_alliance is false")
+    if alliance_state is None:
+        return _verdict(
+            "alliance_action",
+            GuardStatus.BLOCK,
+            "could not fetch live /wallet/{addr}/alliance state -- an unverifiable check is never treated as allowed",
+        )
+
+    has_home_planet = bool(snapshot.owned_planet_count)
+    member = alliance_state.membership
+
+    def _caller_role_at_least(alliance_id: int, minimum: int) -> GuardVerdict | None:
+        """Shared by every function requiring the caller be Officer/Owner of a specific
+        alliance. Returns a BLOCK verdict, or `None` when the check passes (caller may
+        proceed to the function's own remaining checks)."""
+        if member is None or member.alliance_id != alliance_id:
+            return _verdict(
+                "alliance_action",
+                GuardStatus.BLOCK,
+                f"caller is not a member of alliance {alliance_id} -- NotAllianceMember/NotAuthorized",
+            )
+        if not alliance_ids.meets_min_role(member.role, minimum):
+            return _verdict(
+                "alliance_action",
+                GuardStatus.BLOCK,
+                f"caller's role ({alliance_ids.role_name(member.role)}) is below "
+                f"{alliance_ids.role_name(minimum)} in alliance {alliance_id} -- NotAuthorized",
+            )
+        return None
+
+    if fn == "createAlliance":
+        if not action.alliance_tag or not action.alliance_name or not action.alliance_description:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "tag/name/description must all be non-empty -- EmptyAllianceProfile")
+        if member is not None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"caller is already a member of alliance {member.alliance_id} -- AlreadyInAlliance")
+        if not has_home_planet:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "caller has no owned planet (proxy for homePlanetOf) -- NoPlanet")
+        return _verdict("alliance_action", GuardStatus.PASS, "createAlliance preconditions satisfied")
+
+    if fn == "updateAllianceProfile":
+        if not action.alliance_tag or not action.alliance_name or not action.alliance_description:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "tag/name/description must all be non-empty -- EmptyAllianceProfile")
+        if action.alliance_id is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id set")
+        blocked = _caller_role_at_least(action.alliance_id, alliance_ids.AllianceRole.OWNER)
+        if blocked is not None:
+            return blocked
+        return _verdict("alliance_action", GuardStatus.PASS, "updateAllianceProfile preconditions satisfied")
+
+    if fn in ("inviteMember", "cancelInvite"):
+        if action.alliance_id is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id set")
+        blocked = _caller_role_at_least(action.alliance_id, alliance_ids.AllianceRole.OFFICER)
+        if blocked is not None:
+            return blocked
+        return _verdict("alliance_action", GuardStatus.PASS, f"{fn} preconditions satisfied")
+
+    if fn == "acceptInvite":
+        if action.alliance_id is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id set")
+        if not any(inv.alliance_id == action.alliance_id for inv in alliance_state.pending_invites):
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"no pending invite for alliance {action.alliance_id} -- InvalidInvite")
+        if member is not None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"caller is already a member of alliance {member.alliance_id} -- AlreadyInAlliance")
+        return _verdict("alliance_action", GuardStatus.PASS, "acceptInvite preconditions satisfied")
+
+    if fn == "requestJoinAlliance":
+        if action.alliance_id is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id set")
+        if member is not None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"caller is already a member of alliance {member.alliance_id} -- AlreadyInAlliance")
+        if not has_home_planet:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "caller has no owned planet (proxy for homePlanetOf) -- NoPlanet")
+        target = alliance_state.directory.get(action.alliance_id)
+        if target is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"alliance {action.alliance_id} not found in the live directory -- InvalidAlliance")
+        if target.active is False:
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"alliance {action.alliance_id} is not active -- AllianceInactive")
+        return _verdict("alliance_action", GuardStatus.PASS, "requestJoinAlliance preconditions satisfied")
+
+    if fn == "cancelJoinRequest":
+        if action.alliance_id is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id set")
+        if not any(r.alliance_id == action.alliance_id for r in alliance_state.pending_join_requests):
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"no pending join request for alliance {action.alliance_id} -- InvalidJoinRequest")
+        return _verdict("alliance_action", GuardStatus.PASS, "cancelJoinRequest preconditions satisfied")
+
+    if fn in ("dismissJoinRequest", "approveJoinRequest"):
+        if action.alliance_id is None or action.target_player is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id/target_player set")
+        blocked = _caller_role_at_least(action.alliance_id, alliance_ids.AllianceRole.OFFICER)
+        if blocked is not None:
+            return blocked
+        target_needle = action.target_player.lower()
+        if not any(
+            r.alliance_id == action.alliance_id and r.requester.lower() == target_needle
+            for r in alliance_state.alliance_join_requests
+        ):
+            return _verdict(
+                "alliance_action",
+                GuardStatus.BLOCK,
+                f"no pending join request from {action.target_player} against alliance {action.alliance_id} -- InvalidJoinRequest",
+            )
+        return _verdict("alliance_action", GuardStatus.PASS, f"{fn} preconditions satisfied")
+
+    if fn in ("kickMember", "kickMembers"):
+        if action.alliance_id is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id set")
+        blocked = _caller_role_at_least(action.alliance_id, alliance_ids.AllianceRole.OFFICER)
+        if blocked is not None:
+            return blocked
+        targets = action.target_players if fn == "kickMembers" else ([action.target_player] if action.target_player else [])
+        if not targets:
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"{fn} has no target(s) -- would submit an empty/missing batch")
+        assert member is not None  # _caller_role_at_least already confirmed this
+        for target in targets:
+            row = _alliance_member(alliance_state, target)
+            if row is None:
+                return _verdict("alliance_action", GuardStatus.BLOCK, f"{target} is not a verifiable member of alliance {action.alliance_id} -- NotAllianceMember")
+            if row.role == alliance_ids.AllianceRole.OWNER:
+                return _verdict("alliance_action", GuardStatus.BLOCK, f"{target} is the alliance Owner -- cannot be kicked")
+            if member.role == alliance_ids.AllianceRole.OFFICER and row.role == alliance_ids.AllianceRole.OFFICER:
+                return _verdict("alliance_action", GuardStatus.BLOCK, f"caller is an Officer and cannot kick fellow Officer {target} -- NotAuthorized")
+        return _verdict("alliance_action", GuardStatus.PASS, f"{fn} preconditions satisfied for {len(targets)} target(s)")
+
+    if fn == "leaveAlliance":
+        if member is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "caller is not a member of any alliance -- NoAlliance/NotAllianceMember")
+        if member.role == alliance_ids.AllianceRole.OWNER and len(alliance_state.members) != 1:
+            return _verdict(
+                "alliance_action",
+                GuardStatus.BLOCK,
+                f"caller is Owner of alliance {member.alliance_id} with {len(alliance_state.members)} member(s) -- "
+                "must transferAllianceOwnership before leaving unless sole member",
+            )
+        return _verdict("alliance_action", GuardStatus.PASS, "leaveAlliance preconditions satisfied")
+
+    if fn in ("setMemberRole", "setMembersRole"):
+        if action.alliance_id is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id set")
+        blocked = _caller_role_at_least(action.alliance_id, alliance_ids.AllianceRole.OWNER)
+        if blocked is not None:
+            return blocked
+        if action.role is None or not (alliance_ids.AllianceRole.NONE <= action.role <= alliance_ids.AllianceRole.OWNER):
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"role {action.role!r} is out of range [0, 3] -- InvalidRole")
+        targets = action.target_players if fn == "setMembersRole" else ([action.target_player] if action.target_player else [])
+        if not targets:
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"{fn} has no target(s) -- would submit an empty/missing batch")
+        for target in targets:
+            if _alliance_member(alliance_state, target) is None:
+                return _verdict("alliance_action", GuardStatus.BLOCK, f"{target} is not a verifiable member of alliance {action.alliance_id} -- NotAllianceMember")
+        return _verdict("alliance_action", GuardStatus.PASS, f"{fn} preconditions satisfied for {len(targets)} target(s)")
+
+    if fn == "transferAllianceOwnership":
+        if action.alliance_id is None or action.target_player is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no alliance_id/target_player set")
+        blocked = _caller_role_at_least(action.alliance_id, alliance_ids.AllianceRole.OWNER)
+        if blocked is not None:
+            return blocked
+        if action.target_player.lower() == policy.wallet.lower():
+            return _verdict("alliance_action", GuardStatus.BLOCK, "newOwner cannot be the caller itself -- NotAuthorized")
+        new_owner = _alliance_member(alliance_state, action.target_player)
+        if new_owner is None or new_owner.role != alliance_ids.AllianceRole.OFFICER:
+            return _verdict("alliance_action", GuardStatus.BLOCK, f"{action.target_player} is not a verifiable Officer of alliance {action.alliance_id} -- NewOwnerMustBeOfficer")
+        return _verdict("alliance_action", GuardStatus.PASS, "transferAllianceOwnership preconditions satisfied")
+
+    # Defensive: every name in `_ALLIANCE_FUNCTIONS` has a branch above. Unreachable in
+    # practice, but a silent PASS here would be exactly the "guardrail passes on absent
+    # data" class of bug AGENTS.md §5 names as this repo's highest-value bug class.
+    return _verdict("alliance_action", GuardStatus.BLOCK, f"unhandled alliance function {fn!r}")
+
+
 def _gate_prerequisites(action: Action, snapshot: Snapshot) -> GuardVerdict:
     """New gate (docs/SPEC.md §5.5), slotted immediately after `tier` and before
     `address`. Independently re-derives the planet's building/technology level vectors
@@ -909,6 +1180,25 @@ def _gate_address(action: Action, *, live_addresses: set[str] | None, unsigned_t
 def _gate_abi_hash(action: Action, snapshot: Snapshot) -> GuardVerdict:
     if not action.is_onchain():
         return _verdict("abi_hash", GuardStatus.PASS, "action has no calldata to pin-check")
+    if action.function in _ALLIANCE_FUNCTIONS:
+        # Decoupled deliberately, not a gap: `snapshot.deployment_abi_hash` is the GAME
+        # contract's live hash (from GET /health's own runtime-config-derived field) --
+        # comparing it against an alliance action would either BLOCK for the wrong reason
+        # or, worse, coincidentally PASS/fail for reasons unrelated to the alliance ABI's
+        # own state. There is no live-hash equivalent for VeydriftAllianceSystem at all
+        # (/runtime-config exposes allianceContractAddress but no
+        # allianceAbiHash/allianceDeploymentCommit field) -- the alliance ABI pin was
+        # verified once, by construction, at commit time; see
+        # veydrift-wallet/references/abi-pinning.md's "Second contract" section for the
+        # full explanation of why this is a permanent limit, not a transitional gap.
+        return _verdict(
+            "abi_hash",
+            GuardStatus.PASS,
+            "alliance contract has no live-hash verification path (runtime-config exposes "
+            "only the game contract's deploymentAbiHash) -- the alliance ABI pin was "
+            "verified once, by construction, at commit time; see "
+            "veydrift-wallet/references/abi-pinning.md",
+        )
     live_hash = snapshot.deployment_abi_hash
     if not live_hash:
         return _verdict("abi_hash", GuardStatus.BLOCK, "live deploymentAbiHash missing from snapshot; blocking all writes")
@@ -1445,7 +1735,7 @@ def _gate_revert_streak(action: Action, agent_state: AgentState, policy: Policy)
 
 
 # --------------------------------------------------------------------------------------
-# The full 22-gate evaluation.
+# The full 23-gate evaluation.
 # --------------------------------------------------------------------------------------
 
 
@@ -1463,9 +1753,10 @@ def evaluate_guardrails(
     outgoing_colonize_count: int | None = None,
     attack_protection_allowed: bool | None = None,
     attack_protection_blocked_reason: str | None = None,
+    alliance_state: AllianceState | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 22 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 23 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -1479,7 +1770,9 @@ def evaluate_guardrails(
     added commit 7) are `tick.py`'s live, target-specific `/wallet/{addr}/attack-
     protection` re-check, meaningful for an Attack or Missile action -- see
     `_gate_attack_protection`'s docstring for why `None` fails closed the same way, and
-    for the missile-specific `blocked_reason` branch.
+    for the missile-specific `blocked_reason` branch. `alliance_state` (alliance feature
+    commit 3) is `tick.py`'s live `/wallet/{addr}/alliance` fetch, meaningful only for one
+    of the 15 alliance functions -- see `_gate_alliance_action`'s docstring.
     """
     from datetime import UTC
     from datetime import datetime as _datetime
@@ -1493,6 +1786,7 @@ def evaluate_guardrails(
         _gate_prerequisites(action, snapshot),
         _gate_fleet_slots(action, snapshot),
         _gate_missile_target(action, snapshot, policy),
+        _gate_alliance_action(action, snapshot, policy, alliance_state),
         _gate_attack_protection(
             action,
             attack_protection_allowed=attack_protection_allowed,

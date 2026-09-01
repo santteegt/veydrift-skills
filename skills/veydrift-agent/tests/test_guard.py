@@ -1,4 +1,4 @@
-"""Tests for veydrift_agent.guard — the 21-gate guardrail evaluator.
+"""Tests for veydrift_agent.guard — the 23-gate guardrail evaluator.
 
 The most important tests here are the "missing data must not vacuously pass" ones (one
 per gate where that risk is real: `address`, `abi_hash`, `affordability`, `energy`,
@@ -14,11 +14,18 @@ from datetime import UTC, datetime
 
 import pytest
 
-from veydrift_agent import guard, ids
+from veydrift_agent import alliance_ids, guard, ids
 from veydrift_agent.models import (
     Action,
     ActionKind,
     ActionsCfg,
+    AllianceDirectoryEntry,
+    AllianceJoinRequestForOwner,
+    AllianceMember,
+    AllianceMembership,
+    AlliancePendingInvite,
+    AlliancePendingJoinRequest,
+    AllianceState,
     Decision,
     EnergyBalance,
     Entity,
@@ -182,10 +189,11 @@ def verdict(report, gate: str):
 def test_all_nineteen_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 22
+    assert report.total == 23
     gates = {v.gate for v in report.verdicts}
     assert gates == {
-        "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "missile_target", "attack_protection",
+        "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "missile_target",
+        "alliance_action", "attack_protection",
         "address",
         "abi_hash", "health",
         "game_paused", "index_lag", "affordability", "energy", "storage_overflow", "fields", "reserve",
@@ -199,6 +207,9 @@ def test_all_nineteen_gates_always_present_even_when_blocked():
     assert verdict(report, "mission_type").status is GuardStatus.PASS
     # fleet_slots PASSes trivially for the same reason -- scoped to FLEET_MISSION only.
     assert verdict(report, "fleet_slots").status is GuardStatus.PASS
+    # alliance_action PASSes trivially for the same reason -- scoped to the 15 alliance
+    # functions only.
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
     # game_paused PASSes given make_snapshot's default not-paused game_maintenance.
     assert verdict(report, "game_paused").status is GuardStatus.PASS
 
@@ -2130,11 +2141,17 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
     # docstring for why this is a genuine, not accidental, shape difference between the
     # two layers). Excluded here, diffed against COMBAT_SIGNATURES below instead.
     py_operator_unconditional = py_operator - guard._COMBAT_ONLY_FUNCTIONS
+    # Alliance feature, commit 3: the same shape as the missile carve-out above, one tier
+    # down -- the 15 alliance functions are `economy` in guard.py's tier map (their real
+    # tier requirement), but allowlist.ts's `ECONOMY_SIGNATURES` is the UNCONDITIONAL
+    # economy set; alliance's selectors live in the separate, always-conditional
+    # ALLIANCE_SIGNATURES instead. Excluded here, diffed against ALLIANCE_SIGNATURES below.
+    py_economy_unconditional = py_economy - guard._ALLIANCE_FUNCTIONS
 
-    assert py_economy == ts_economy, (
+    assert py_economy_unconditional == ts_economy, (
         "economy-tier functions disagree between guard.py and allowlist.ts.\n"
-        f"  only in guard.py:    {sorted(py_economy - ts_economy)}\n"
-        f"  only in allowlist.ts:{sorted(ts_economy - py_economy)}"
+        f"  only in guard.py:    {sorted(py_economy_unconditional - ts_economy)}\n"
+        f"  only in allowlist.ts:{sorted(ts_economy - py_economy_unconditional)}"
     )
     assert py_operator_unconditional == ts_operator_extra, (
         "operator-tier functions disagree between guard.py and allowlist.ts.\n"
@@ -2155,6 +2172,25 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
     assert guard._COMBAT_ONLY_FUNCTIONS <= py_operator, (
         f"guard._COMBAT_ONLY_FUNCTIONS contains a function not mapped to Tier.OPERATOR in "
         f"_MIN_TIER_FOR_FUNCTION: {sorted(guard._COMBAT_ONLY_FUNCTIONS - py_operator)}"
+    )
+
+    # Alliance feature, commit 3: the same pair of assertions as combat's, one tier down.
+    # NOTE: `names_in()` compares bare function names with no contract-scoping -- harmless
+    # today since none of the 15 alliance names collide with any allowlisted game-contract
+    # name, but a future name collision across the two contracts would be silently
+    # conflated by this comparison. Not worth solving while zero collisions exist.
+    ts_alliance_signature_names = names_in("ALLIANCE_SIGNATURES")
+    assert guard._ALLIANCE_FUNCTIONS == ts_alliance_signature_names, (
+        "alliance (allow_alliance-gated) functions disagree between guard.py's "
+        "_ALLIANCE_FUNCTIONS and allowlist.ts's ALLIANCE_SIGNATURES.\n"
+        f"  only in guard.py:    {sorted(guard._ALLIANCE_FUNCTIONS - ts_alliance_signature_names)}\n"
+        f"  only in allowlist.ts:{sorted(ts_alliance_signature_names - guard._ALLIANCE_FUNCTIONS)}"
+    )
+    # Every alliance function must still be mapped to at least Tier.ECONOMY --
+    # allow_alliance widens WHICH functions are permitted, never the tier floor itself.
+    assert guard._ALLIANCE_FUNCTIONS <= py_economy, (
+        f"guard._ALLIANCE_FUNCTIONS contains a function not mapped to Tier.ECONOMY in "
+        f"_MIN_TIER_FOR_FUNCTION: {sorted(guard._ALLIANCE_FUNCTIONS - py_economy)}"
     )
 
     # Phase 5c (docs/SPEC.md §5.5): the two layers must also agree on WHICH mission types
@@ -2217,3 +2253,522 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
         ("allowlist.ts's combat-gated set", ts_combat_mission_types),
     ):
         assert not (s & never_allowed_combat_types), f"{label} allows an always-excluded combat type: {s & never_allowed_combat_types}"
+
+
+# --------------------------------------------------------------------------------------
+# alliance_action — new gate, alliance feature commit 3. Independently re-derives every
+# precondition VeydriftAllianceSystem's 15 membership functions enforce on-chain, from a
+# live GET /wallet/{addr}/alliance fetch (alliance_state), the same defense-in-depth
+# posture missile_target takes toward the game contract's own checks.
+# --------------------------------------------------------------------------------------
+
+ALLIANCE_WALLET = WALLET
+
+
+def make_alliance_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.ALLIANCE,
+        function="leaveAlliance",
+        rule="operator override",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def make_alliance_state(**overrides) -> AllianceState:
+    base = dict(
+        membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OWNER),
+        members=[
+            AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OWNER),
+        ],
+        pending_invites=[],
+        pending_join_requests=[],
+        alliance_join_requests=[],
+        directory={},
+    )
+    base.update(overrides)
+    return AllianceState(**base)
+
+
+def test_alliance_action_passes_trivially_for_a_non_alliance_action():
+    report = evaluate(make_build_action(), make_snapshot(), make_policy())
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [
+        "createAlliance", "updateAllianceProfile", "inviteMember", "cancelInvite", "acceptInvite",
+        "requestJoinAlliance", "cancelJoinRequest", "dismissJoinRequest", "approveJoinRequest",
+        "kickMember", "kickMembers", "leaveAlliance", "setMemberRole", "setMembersRole",
+        "transferAllianceOwnership",
+    ],
+)
+def test_alliance_action_blocks_when_allow_alliance_is_false(fn):
+    action = make_alliance_action(function=fn)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=False))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_alliance_action_blocks_when_alliance_state_is_none():
+    """The mandatory missing-data test (AGENTS.md §5): a failed live fetch must BLOCK,
+    never be treated as "no alliance involvement"."""
+    action = make_alliance_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=None)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+# --- createAlliance ---
+
+def test_create_alliance_blocks_on_empty_profile():
+    action = make_alliance_action(function="createAlliance", alliance_tag="", alliance_name="X", alliance_description="Y")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(owned_planet_count=1), policy, alliance_state=make_alliance_state(membership=None, members=[]))
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_create_alliance_blocks_when_already_a_member():
+    action = make_alliance_action(function="createAlliance", alliance_tag="T", alliance_name="N", alliance_description="D")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(owned_planet_count=1), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_create_alliance_blocks_without_a_home_planet():
+    action = make_alliance_action(function="createAlliance", alliance_tag="T", alliance_name="N", alliance_description="D")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(owned_planet_count=0), policy, alliance_state=make_alliance_state(membership=None, members=[]))
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_create_alliance_passes_when_every_precondition_is_satisfied():
+    action = make_alliance_action(function="createAlliance", alliance_tag="T", alliance_name="N", alliance_description="D")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(owned_planet_count=1), policy, alliance_state=make_alliance_state(membership=None, members=[]))
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- updateAllianceProfile ---
+
+def test_update_alliance_profile_blocks_on_empty_profile():
+    action = make_alliance_action(function="updateAllianceProfile", alliance_id=1, alliance_tag="", alliance_name="N", alliance_description="D")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_update_alliance_profile_blocks_when_caller_is_not_owner():
+    action = make_alliance_action(function="updateAllianceProfile", alliance_id=1, alliance_tag="T", alliance_name="N", alliance_description="D")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OFFICER))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_update_alliance_profile_blocks_on_wrong_alliance_id():
+    action = make_alliance_action(function="updateAllianceProfile", alliance_id=2, alliance_tag="T", alliance_name="N", alliance_description="D")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())  # membership.alliance_id=1
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_update_alliance_profile_passes_for_the_owner():
+    action = make_alliance_action(function="updateAllianceProfile", alliance_id=1, alliance_tag="T", alliance_name="N", alliance_description="D")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- inviteMember / cancelInvite ---
+
+@pytest.mark.parametrize("fn", ["inviteMember", "cancelInvite"])
+def test_invite_member_and_cancel_invite_block_when_not_officer_or_owner(fn):
+    action = make_alliance_action(function=fn, alliance_id=1, target_player="0xtarget")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.MEMBER))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("fn", ["inviteMember", "cancelInvite"])
+def test_invite_member_and_cancel_invite_pass_for_an_officer(fn):
+    action = make_alliance_action(function=fn, alliance_id=1, target_player="0xtarget")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OFFICER))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+def test_invite_member_blocks_without_an_alliance_id():
+    action = make_alliance_action(function="inviteMember", target_player="0xtarget")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+# --- acceptInvite ---
+
+def test_accept_invite_blocks_without_a_pending_invite():
+    action = make_alliance_action(function="acceptInvite", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state(membership=None, members=[], pending_invites=[]))
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_accept_invite_blocks_when_already_a_member():
+    action = make_alliance_action(function="acceptInvite", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(pending_invites=[AlliancePendingInvite(alliance_id=5)])  # already member of alliance 1
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_accept_invite_passes_with_a_pending_invite_and_no_existing_membership():
+    action = make_alliance_action(function="acceptInvite", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=None, members=[], pending_invites=[AlliancePendingInvite(alliance_id=5)])
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- requestJoinAlliance ---
+
+def test_request_join_alliance_blocks_when_already_a_member():
+    action = make_alliance_action(function="requestJoinAlliance", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(owned_planet_count=1), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_request_join_alliance_blocks_without_a_home_planet():
+    action = make_alliance_action(function="requestJoinAlliance", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=None, members=[], directory={5: AllianceDirectoryEntry(active=True)})
+    report = evaluate(action, make_snapshot(owned_planet_count=0), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_request_join_alliance_blocks_on_unknown_alliance():
+    action = make_alliance_action(function="requestJoinAlliance", alliance_id=999)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=None, members=[], directory={})
+    report = evaluate(action, make_snapshot(owned_planet_count=1), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_request_join_alliance_blocks_on_inactive_alliance():
+    action = make_alliance_action(function="requestJoinAlliance", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=None, members=[], directory={5: AllianceDirectoryEntry(active=False)})
+    report = evaluate(action, make_snapshot(owned_planet_count=1), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_request_join_alliance_passes_when_every_precondition_is_satisfied():
+    action = make_alliance_action(function="requestJoinAlliance", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=None, members=[], directory={5: AllianceDirectoryEntry(active=True)})
+    report = evaluate(action, make_snapshot(owned_planet_count=1), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- cancelJoinRequest ---
+
+def test_cancel_join_request_blocks_without_a_pending_request():
+    action = make_alliance_action(function="cancelJoinRequest", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state(pending_join_requests=[]))
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_cancel_join_request_passes_with_a_pending_request():
+    action = make_alliance_action(function="cancelJoinRequest", alliance_id=5)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(pending_join_requests=[AlliancePendingJoinRequest(alliance_id=5)])
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- dismissJoinRequest / approveJoinRequest ---
+
+@pytest.mark.parametrize("fn", ["dismissJoinRequest", "approveJoinRequest"])
+def test_dismiss_and_approve_join_request_block_when_not_officer_or_owner(fn):
+    action = make_alliance_action(function=fn, alliance_id=1, target_player="0xrequester")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.MEMBER))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("fn", ["dismissJoinRequest", "approveJoinRequest"])
+def test_dismiss_and_approve_join_request_block_without_a_matching_request_row(fn):
+    action = make_alliance_action(function=fn, alliance_id=1, target_player="0xrequester")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state(alliance_join_requests=[]))
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("fn", ["dismissJoinRequest", "approveJoinRequest"])
+def test_dismiss_and_approve_join_request_pass_with_a_matching_request_row(fn):
+    action = make_alliance_action(function=fn, alliance_id=1, target_player="0xRequester")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(alliance_join_requests=[AllianceJoinRequestForOwner(alliance_id=1, requester="0xrequester")])
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- kickMember / kickMembers ---
+
+def test_kick_member_blocks_when_not_officer_or_owner():
+    action = make_alliance_action(function="kickMember", alliance_id=1, target_player="0xmember")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.MEMBER))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_kick_member_blocks_targeting_a_non_member():
+    action = make_alliance_action(function="kickMember", alliance_id=1, target_player="0xghost")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_kick_member_blocks_targeting_the_owner():
+    action = make_alliance_action(function="kickMember", alliance_id=1, target_player=ALLIANCE_WALLET)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())  # target IS the owner
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_kick_member_blocks_officer_kicking_a_fellow_officer():
+    action = make_alliance_action(function="kickMember", alliance_id=1, target_player="0xofficer2")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(
+        membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OFFICER),
+        members=[
+            AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OFFICER),
+            AllianceMember(address="0xofficer2", role=alliance_ids.AllianceRole.OFFICER),
+        ],
+    )
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_kick_member_passes_officer_kicking_an_ordinary_member():
+    action = make_alliance_action(function="kickMember", alliance_id=1, target_player="0xmember")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(
+        membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OFFICER),
+        members=[
+            AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OFFICER),
+            AllianceMember(address="0xmember", role=alliance_ids.AllianceRole.MEMBER),
+        ],
+    )
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+def test_kick_members_blocks_on_an_empty_batch():
+    action = make_alliance_action(function="kickMembers", alliance_id=1, target_players=[])
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_kick_members_blocks_the_whole_batch_if_one_target_is_bad():
+    """Fail-closed on the batch, never partial-allow -- one bad target (here: not a
+    verifiable member) blocks kicking the other, otherwise-valid target too."""
+    action = make_alliance_action(function="kickMembers", alliance_id=1, target_players=["0xmember", "0xghost"])
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(
+        membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OWNER),
+        members=[
+            AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OWNER),
+            AllianceMember(address="0xmember", role=alliance_ids.AllianceRole.MEMBER),
+        ],
+    )
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_kick_members_passes_for_a_valid_batch():
+    action = make_alliance_action(function="kickMembers", alliance_id=1, target_players=["0xmember1", "0xmember2"])
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(
+        membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OWNER),
+        members=[
+            AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OWNER),
+            AllianceMember(address="0xmember1", role=alliance_ids.AllianceRole.MEMBER),
+            AllianceMember(address="0xmember2", role=alliance_ids.AllianceRole.MEMBER),
+        ],
+    )
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- leaveAlliance ---
+
+def test_leave_alliance_blocks_when_not_a_member():
+    action = make_alliance_action(function="leaveAlliance")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state(membership=None, members=[]))
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_leave_alliance_blocks_owner_with_other_members():
+    action = make_alliance_action(function="leaveAlliance")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(
+        members=[
+            AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OWNER),
+            AllianceMember(address="0xmember", role=alliance_ids.AllianceRole.MEMBER),
+        ],
+    )
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_leave_alliance_passes_owner_as_sole_member():
+    action = make_alliance_action(function="leaveAlliance")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())  # sole member by default
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+def test_leave_alliance_passes_for_an_ordinary_member_unconditionally():
+    action = make_alliance_action(function="leaveAlliance")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(
+        membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.MEMBER),
+        members=[
+            AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.MEMBER),
+            AllianceMember(address="0xowner", role=alliance_ids.AllianceRole.OWNER),
+        ],
+    )
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- setMemberRole / setMembersRole ---
+
+@pytest.mark.parametrize("fn", ["setMemberRole", "setMembersRole"])
+def test_set_member_role_blocks_when_not_owner(fn):
+    kwargs = {"target_player": "0xmember"} if fn == "setMemberRole" else {"target_players": ["0xmember"]}
+    action = make_alliance_action(function=fn, alliance_id=1, role=alliance_ids.AllianceRole.OFFICER, **kwargs)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OFFICER))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_set_member_role_blocks_on_out_of_range_role():
+    action = make_alliance_action(function="setMemberRole", alliance_id=1, target_player="0xmember", role=99)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(members=[
+        AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OWNER),
+        AllianceMember(address="0xmember", role=alliance_ids.AllianceRole.MEMBER),
+    ])
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_set_member_role_blocks_targeting_a_non_member():
+    action = make_alliance_action(function="setMemberRole", alliance_id=1, target_player="0xghost", role=alliance_ids.AllianceRole.OFFICER)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_set_members_role_blocks_on_an_empty_batch():
+    action = make_alliance_action(function="setMembersRole", alliance_id=1, target_players=[], role=alliance_ids.AllianceRole.OFFICER)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_set_member_role_passes_for_the_owner_targeting_a_real_member():
+    action = make_alliance_action(function="setMemberRole", alliance_id=1, target_player="0xmember", role=alliance_ids.AllianceRole.OFFICER)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(members=[
+        AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OWNER),
+        AllianceMember(address="0xmember", role=alliance_ids.AllianceRole.MEMBER),
+    ])
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- transferAllianceOwnership ---
+
+def test_transfer_ownership_blocks_when_not_owner():
+    action = make_alliance_action(function="transferAllianceOwnership", alliance_id=1, target_player="0xofficer")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(membership=AllianceMembership(alliance_id=1, role=alliance_ids.AllianceRole.OFFICER))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_transfer_ownership_blocks_when_new_owner_is_the_caller():
+    action = make_alliance_action(function="transferAllianceOwnership", alliance_id=1, target_player=ALLIANCE_WALLET)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_transfer_ownership_blocks_when_new_owner_is_not_an_officer():
+    action = make_alliance_action(function="transferAllianceOwnership", alliance_id=1, target_player="0xmember")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(members=[
+        AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OWNER),
+        AllianceMember(address="0xmember", role=alliance_ids.AllianceRole.MEMBER),
+    ])
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_transfer_ownership_passes_when_new_owner_is_a_real_officer():
+    action = make_alliance_action(function="transferAllianceOwnership", alliance_id=1, target_player="0xofficer")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    state = make_alliance_state(members=[
+        AllianceMember(address=ALLIANCE_WALLET, role=alliance_ids.AllianceRole.OWNER),
+        AllianceMember(address="0xofficer", role=alliance_ids.AllianceRole.OFFICER),
+    ])
+    report = evaluate(action, make_snapshot(), policy, alliance_state=state)
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+
+
+# --- tier floor: economy is a floor, not a ceiling; low- vs high-stakes both land there ---
+
+@pytest.mark.parametrize("fn", ["leaveAlliance", "transferAllianceOwnership"])
+def test_alliance_functions_are_blocked_below_economy_tier(fn):
+    """Deliberately pairs a low-stakes function (leaveAlliance, affects only the caller)
+    and a high-stakes one (transferAllianceOwnership, governance over another player) --
+    both land at the same `economy` floor per this feature's own design decision. Kept
+    here, in the test suite, so that asymmetry stays visible in CI output, not just in
+    the plan's own prose."""
+    action = make_alliance_action(function=fn, alliance_id=1, target_player="0xofficer")
+    policy = make_policy(tier=Tier.ADVISOR, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "tier").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("fn", ["leaveAlliance", "transferAllianceOwnership"])
+@pytest.mark.parametrize("tier", [Tier.ECONOMY, Tier.OPERATOR])
+def test_alliance_functions_pass_the_tier_gate_at_economy_or_above(fn, tier):
+    action = make_alliance_action(function=fn, alliance_id=1, target_player="0xofficer")
+    policy = make_policy(tier=tier, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "tier").status is GuardStatus.PASS
+
+
+def test_alliance_action_abi_hash_passes_even_when_the_game_hash_mismatches():
+    """The game contract's ABI hash and the alliance contract's are decoupled -- an
+    alliance action must PASS `abi_hash` regardless of the game contract's own live
+    hash, since there is no live-hash verification path for the alliance ABI at all."""
+    action = make_alliance_action(function="leaveAlliance")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(action, make_snapshot(abi_hash="sha256:not-the-pinned-hash"), policy, alliance_state=make_alliance_state())
+    assert verdict(report, "abi_hash").status is GuardStatus.PASS
