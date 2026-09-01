@@ -68,6 +68,32 @@ to `"manual_override"` after validation — a stray `"source": "planner"` in the
 never spoof it. This is what makes `proposals.jsonl`/`actions.jsonl` auditable: every
 record says plainly whether the planner or an operator chose it.
 
+### Alliance actions are override-only, always
+
+Every alliance-membership action (`createAlliance`, `inviteMember`, `acceptInvite`,
+`leaveAlliance`, and 11 more on `VeydriftAllianceSystem`) reaches this codebase *exclusively*
+through `--action` — no `candidates.py` generator, no `plan.py` ladder rung ever proposes one.
+`vd tick`'s normal output already reports current membership and pending invites/join-requests
+on every tick when `policy.actions.allow_alliance` is set (an "alliance:" line, sourced from a
+live `GET /wallet/{addr}/alliance` fetch), but *acting* on any of it — accepting an invite,
+approving a join request, leaving — always goes through this override mechanism:
+
+```json
+{
+  "kind": "alliance",
+  "function": "acceptInvite",
+  "alliance_id": 12,
+  "rule": "operator override",
+  "rationale": "joining Alliance #12 after an out-of-band invite"
+}
+```
+
+Two independent requirements stack here, not one: `policy.strategy.allow_agent_action_override`
+(this section's own gate) **and** `policy.actions.allow_alliance` at `economy` tier or above
+(`guard.py`'s `_gate_alliance_action`, `veydrift-wallet`'s `ALLIANCE_SIGNATURES`) — both must be
+true, independently, or the send is refused at whichever layer catches it first. See
+`references/guardrails.md`'s `alliance_action` gate for the full per-function precondition list.
+
 ## What still runs — everything
 
 Once your `Action` is loaded, it flows through the **exact same** `_run_tick` pipeline a

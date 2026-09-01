@@ -11,6 +11,48 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-09-01
+
+Alliance feature, commit 4/6: end-to-end reachability. `vd tick` can now build, guard,
+and (with confirmation) send any of the 15 alliance actions via `--action`, and reports
+current membership/pending invites/join-requests on every tick when
+`policy.actions.allow_alliance` is set. Verified live against the real API and a real
+account (0x224aba...): the tick report correctly showed "alliance 29 (Member), 1 incoming
+join request(s) to review", and a hand-written `leaveAlliance` override correctly built
+against the real alliance contract address (`0x0E5a6210...`) with the correct selector.
+
+### Added
+- `read.fetch_alliance_state(wallet)` -- thin `GET /wallet/{addr}/alliance` wrapper,
+  exact structural mirror of `fetch_attack_protection`.
+- `tick._alliance_state(wallet)` -- parses the live indexer's denormalized response into
+  `AllianceState`, degrading to `None` on any fetch/parse failure. Handles a real,
+  confirmed-live quirk: the response's `membership` is never JSON `null` -- a wallet with
+  no alliance reports a sentinel `{"allianceId": "0", "role": "none", "joinedAt": "0"}`
+  object, which this function correctly folds into `membership is None`. Every
+  numeric-looking field except `directory[].memberCount` is a decimal string, not a JSON
+  number, in the live response -- confirmed, not assumed, and coerced explicitly.
+- `tick._alliance_summary_line`, a new "alliance:" line in `vd tick`'s printed report and
+  `log.format_tick_block` -- membership, pending invites/join-requests, incoming
+  join-requests to review. Reported on every tick when the flag is on, independent of
+  what action that tick resolves to (satisfies the feature's own "report on every tick,
+  act only via override" design).
+- 15 new `tick._action_to_walletctl_json` branches (via a new `_ALLIANCE_ARG_BUILDERS`
+  dispatch table) -- every one sets `"contract": "alliance"`, the field
+  `veydrift-wallet`'s `buildTx` reads to resolve both the ABI and the destination
+  address.
+- `references/manual-action-override.md` gained a worked `acceptInvite` example and a
+  note that alliance actions are override-only, always, needing both
+  `allow_agent_action_override` and `allow_alliance` independently.
+
+### Fixed
+- `tick._live_addresses()` now includes `allianceContractAddress` -- without this fix,
+  `guard._gate_address` would have spuriously BLOCKed every alliance transaction (a
+  genuinely different destination address from the game contract's).
+
+35 new tests (`test_tick.py`'s alliance-action-encoding/missing-field/`_alliance_state`/
+`_live_addresses`/`_run_tick`-wiring/`_alliance_summary_line` blocks, `test_read.py`'s
+`fetch_alliance_state` pair). 824 passed (789 baseline + 35 new).
+
 ## [1.14.0] - 2026-09-01
 
 Alliance feature, commit 3/6: `guard.py` gains a new, 23rd gate for the 15 membership

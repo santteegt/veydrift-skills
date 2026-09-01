@@ -28,6 +28,12 @@ from veydrift_agent import plan as plan_mod
 from veydrift_agent.models import (
     Action,
     ActionKind,
+    AllianceJoinRequestForOwner,
+    AllianceMember,
+    AllianceMembership,
+    AlliancePendingInvite,
+    AlliancePendingJoinRequest,
+    AllianceState,
     AlternativeNote,
     Decision,
     EnergyBalance,
@@ -401,6 +407,20 @@ def _write_policy_with_combat(**overrides):
     nested under `actions`, so `_write_policy`'s flat `policy.update` can't set it alone."""
     policy = json.loads((Path(__file__).parent.parent / "assets" / "policy.example.json").read_text())
     policy["actions"]["allow_combat"] = True
+    policy.update(overrides)
+    init_policy()
+    from veydrift_agent.state import policy_path
+
+    policy_path().write_text(json.dumps(policy))
+    return policy_path()
+
+
+def _write_policy_with_alliance(**overrides):
+    """`_write_policy`, but with `actions.allow_alliance` forced true (alliance feature
+    commit 4) -- same reasoning as `_write_policy_with_combat`."""
+    policy = json.loads((Path(__file__).parent.parent / "assets" / "policy.example.json").read_text())
+    policy["actions"]["allow_alliance"] = True
+    policy["strategy"]["allow_agent_action_override"] = True
     policy.update(overrides)
     init_policy()
     from veydrift_agent.state import policy_path
@@ -965,6 +985,85 @@ def test_missile_attack_raises_without_primary_target():
     action = _missile_action(primary_target=None)
     with pytest.raises(ValueError, match="primary_target"):
         tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
+# --------------------------------------------------------------------------------------
+# alliance actions — 15 new `_action_to_walletctl_json` branches, alliance feature commit
+# 4. Unlike every other function here, each sets `contract: "alliance"` -- the field
+# `veydrift-wallet`'s `buildTx` reads to resolve both the ABI and the destination address.
+# None needs a `Snapshot` -- unlike `launchFleetMission`/the missile, no target-planet
+# resolution is involved.
+# --------------------------------------------------------------------------------------
+
+
+def _alliance_action(**overrides) -> Action:
+    base = dict(kind=ActionKind.ALLIANCE, function="leaveAlliance", rule="operator override", rationale="test")
+    base.update(overrides)
+    return Action(**base)
+
+
+@pytest.mark.parametrize(
+    ("function", "action_kwargs", "expected_args"),
+    [
+        ("createAlliance", dict(alliance_tag="T", alliance_name="N", alliance_description="D"), ["T", "N", "D"]),
+        (
+            "updateAllianceProfile",
+            dict(alliance_id=1, alliance_tag="T", alliance_name="N", alliance_description="D"),
+            [1, "T", "N", "D"],
+        ),
+        ("inviteMember", dict(alliance_id=1, target_player="0xabc"), [1, "0xabc"]),
+        ("cancelInvite", dict(alliance_id=1, target_player="0xabc"), [1, "0xabc"]),
+        ("acceptInvite", dict(alliance_id=5), [5]),
+        ("requestJoinAlliance", dict(alliance_id=5), [5]),
+        ("cancelJoinRequest", dict(alliance_id=5), [5]),
+        ("dismissJoinRequest", dict(alliance_id=1, target_player="0xabc"), [1, "0xabc"]),
+        ("approveJoinRequest", dict(alliance_id=1, target_player="0xabc"), [1, "0xabc"]),
+        ("kickMember", dict(alliance_id=1, target_player="0xabc"), [1, "0xabc"]),
+        ("kickMembers", dict(alliance_id=1, target_players=["0xa", "0xb"]), [1, ["0xa", "0xb"]]),
+        ("leaveAlliance", {}, []),
+        ("setMemberRole", dict(alliance_id=1, target_player="0xabc", role=2), [1, "0xabc", 2]),
+        ("setMembersRole", dict(alliance_id=1, target_players=["0xa"], role=2), [1, ["0xa"], 2]),
+        ("transferAllianceOwnership", dict(alliance_id=1, target_player="0xabc"), [1, "0xabc"]),
+    ],
+)
+def test_alliance_action_encodes_positional_args_and_sets_alliance_contract(function, action_kwargs, expected_args):
+    action = _alliance_action(function=function, **action_kwargs)
+    built = tick._action_to_walletctl_json(action)  # no Snapshot needed -- regression, see below
+    assert built["function"] == function
+    assert built["args"] == expected_args
+    assert built["contract"] == "alliance"
+
+
+def test_alliance_action_needs_no_snapshot_at_all():
+    """Regression: unlike launchFleetMission/the missile, no alliance function resolves a
+    target planet id, so `_action_to_walletctl_json(action)` (no `snapshot` argument at
+    all) must succeed."""
+    built = tick._action_to_walletctl_json(_alliance_action())
+    assert built["function"] == "leaveAlliance"
+
+
+@pytest.mark.parametrize(
+    ("function", "action_kwargs", "missing"),
+    [
+        ("createAlliance", dict(alliance_name="N", alliance_description="D"), "alliance_tag"),
+        ("inviteMember", dict(alliance_id=1), "target_player"),
+        ("acceptInvite", {}, "alliance_id"),
+        ("kickMembers", dict(alliance_id=1, target_players=[]), "target_players"),
+        ("setMemberRole", dict(alliance_id=1, target_player="0xabc"), "role"),
+        ("transferAllianceOwnership", dict(alliance_id=1), "target_player"),
+    ],
+)
+def test_alliance_action_raises_on_missing_required_field(function, action_kwargs, missing):
+    action = _alliance_action(function=function, **action_kwargs)
+    with pytest.raises(ValueError, match=missing):
+        tick._action_to_walletctl_json(action)
+
+
+def test_non_alliance_action_still_omits_contract_key_regression():
+    """Regression: the alliance branch's `contract: "alliance"` key must not leak onto an
+    existing, unrelated action kind."""
+    built = tick._action_to_walletctl_json(_build_action())
+    assert "contract" not in built
 
 
 def test_encode_colony_target_raises_on_out_of_range_position_rather_than_corrupt_it():
@@ -2040,6 +2139,169 @@ def test_run_tick_never_fetches_attack_protection_allowed_for_a_non_attack_actio
 
     result = runner.invoke(tick.app, ["--dry-run"])
     assert result.exit_code == 0, result.output
+
+
+# --------------------------------------------------------------------------------------
+# _alliance_state / _live_addresses / _run_tick wiring — alliance feature, commit 4.
+# --------------------------------------------------------------------------------------
+
+
+def _alliance_fixture_payload(**overrides) -> dict:
+    base = {
+        "membership": {"allianceId": "1", "role": "owner", "joinedAt": "1783481579"},
+        "members": [
+            {"address": WALLET, "role": "owner", "joinedAt": "1783481579", "totalScore": "92997"},
+        ],
+        "pendingInvites": [],
+        "pendingJoinRequests": [],
+        "allianceJoinRequests": [
+            {"allianceId": "1", "requester": "0xd52d1043768f6747e271a897ef2aa0ad70625527"},
+        ],
+        "directory": [{"allianceId": "1", "active": True, "memberCount": 1}],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_alliance_state_parses_a_representative_live_fixture(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_alliance_state", lambda wallet: _alliance_fixture_payload())
+    state = tick._alliance_state(WALLET)
+    assert state.membership == AllianceMembership(alliance_id=1, role=3, joined_at=state.membership.joined_at)
+    assert state.members == [AllianceMember(address=WALLET, role=3, joined_at=state.members[0].joined_at, total_score=92997)]
+    assert state.alliance_join_requests == [
+        AllianceJoinRequestForOwner(alliance_id=1, requester="0xd52d1043768f6747e271a897ef2aa0ad70625527")
+    ]
+    assert state.directory[1].active is True
+    assert state.directory[1].member_count == 1
+
+
+def test_alliance_state_treats_allianceid_zero_role_none_as_no_membership():
+    """Confirmed live 2026-09-01: a wallet with no alliance reports a real sentinel
+    object (`{"allianceId": "0", "role": "none", "joinedAt": "0"}`), never JSON `null` --
+    this must resolve to `membership is None`, not a membership in a nonexistent
+    alliance 0."""
+    payload = _alliance_fixture_payload(membership={"allianceId": "0", "role": "none", "joinedAt": "0"})
+
+    class _FakeRead:
+        @staticmethod
+        def fetch_alliance_state(wallet):
+            return payload
+
+    import veydrift_agent.tick as tick_module
+
+    old = tick_module.read.fetch_alliance_state
+    tick_module.read.fetch_alliance_state = _FakeRead.fetch_alliance_state
+    try:
+        state = tick._alliance_state(WALLET)
+    finally:
+        tick_module.read.fetch_alliance_state = old
+    assert state.membership is None
+
+
+def test_alliance_state_returns_none_on_api_error(monkeypatch):
+    def _boom(wallet):
+        raise http.VeydriftHTTPError(500, "/wallet/x/alliance", "server error")
+
+    monkeypatch.setattr(tick.read, "fetch_alliance_state", _boom)
+    assert tick._alliance_state(WALLET) is None
+
+
+def test_alliance_state_skips_malformed_rows_rather_than_raising(monkeypatch):
+    payload = _alliance_fixture_payload(
+        members=[{"address": WALLET}, "not-a-dict", {"address": "0xok", "role": "member"}],
+        allianceJoinRequests=[{"allianceId": "not-an-int", "requester": "0xabc"}],
+    )
+    monkeypatch.setattr(tick.read, "fetch_alliance_state", lambda wallet: payload)
+    state = tick._alliance_state(WALLET)
+    # the first member row has no "role" -> skipped; the malformed string row -> skipped;
+    # only the third, well-formed row survives.
+    assert len(state.members) == 1
+    assert state.members[0].address == "0xok"
+    assert state.alliance_join_requests == []
+
+
+def test_live_addresses_includes_the_alliance_contract_address():
+    with respx.mock:
+        respx.get(f"{BASE}/runtime-config").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "gameContractAddress": "0xGAME",
+                    "allianceContractAddress": "0xALLIANCE",
+                },
+            )
+        )
+        addresses = tick._live_addresses()
+    assert addresses == {"0xGAME", "0xALLIANCE"}
+
+
+def test_run_tick_wires_alliance_state_into_the_guard(isolated_home, monkeypatch, tmp_path):
+    """End-to-end: for an actual alliance override, `_run_tick` must fetch
+    `_alliance_state` and pass it into `evaluate_guardrails`'s `alliance_state` kwarg."""
+    _write_policy_with_alliance()
+    action_file = tmp_path / "leave.json"
+    action_file.write_text(json.dumps({"kind": "alliance", "function": "leaveAlliance", "rule": "operator override", "rationale": "test"}))
+    state = AllianceState(membership=AllianceMembership(alliance_id=1, role=3))
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_alliance_state", lambda wallet: state)
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    captured = {}
+
+    def _capture_guard(action, snapshot, policy, agent_state, **kwargs):
+        captured.update(kwargs)
+        return guard_mod.GuardReport(decision=guard_mod.Decision.BLOCK, verdicts=[])
+
+    monkeypatch.setattr(guard_mod, "evaluate_guardrails", _capture_guard)
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+    assert result.exit_code == 0, result.output
+    assert captured.get("alliance_state") is state
+
+
+def test_run_tick_never_fetches_alliance_state_when_the_flag_is_off(isolated_home, monkeypatch):
+    _write_policy()  # actions.allow_alliance defaults False
+
+    def _boom(wallet):
+        raise AssertionError("must not fetch alliance state when policy.actions.allow_alliance is false")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick, "_alliance_state", _boom)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+
+def test_alliance_summary_line_reports_no_alliance():
+    assert tick._alliance_summary_line(AllianceState()) == "not in an alliance"
+
+
+def test_alliance_summary_line_reports_membership_and_pending_counts():
+    state = AllianceState(
+        membership=AllianceMembership(alliance_id=1, role=3),
+        pending_invites=[AlliancePendingInvite(alliance_id=2)],
+        pending_join_requests=[AlliancePendingJoinRequest(alliance_id=3)],
+        alliance_join_requests=[AllianceJoinRequestForOwner(alliance_id=1, requester="0xabc")],
+    )
+    line = tick._alliance_summary_line(state)
+    assert "alliance 1 (Owner)" in line
+    assert "1 pending invite(s)" in line
+    assert "1 pending join request(s) of your own" in line
+    assert "1 incoming join request(s) to review" in line
+
+
+def test_alliance_summary_line_is_none_when_the_feature_is_off():
+    assert tick._alliance_summary_line(None) is None
 
 
 # --------------------------------------------------------------------------------------

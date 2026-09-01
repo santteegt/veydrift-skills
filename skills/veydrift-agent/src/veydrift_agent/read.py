@@ -694,6 +694,23 @@ def fetch_attack_protection(wallet: str, target_planet_id: int, *, max_age: floa
     return http.fetch(f"/wallet/{wallet}/attack-protection", {"targetPlanetId": target_planet_id}, max_age=max_age)
 
 
+def fetch_alliance_state(wallet: str, *, max_age: float | None = None) -> dict[str, Any]:
+    """GET /wallet/{addr}/alliance, bypassing the CLI/`_emit` layer -- same posture as
+    `fetch_attack_protection` above. Alliance feature, commit 4. A denormalized indexer
+    view (confirmed live): `membership` ({allianceId, role, joinedAt} | null), `profile`,
+    `directory` (per-alliance, each with `members[]`), `pendingInvites`,
+    `pendingJoinRequests`, `allianceJoinRequests` (incoming requests to the CALLER's own
+    alliance -- only meaningful when the caller is Officer/Owner), `members` (the
+    caller's own alliance roster). `role` serializes lowercase (`"owner"`/`"officer"`/
+    `"member"`).
+
+    `guard._gate_alliance_action`'s caller (`tick._alliance_state`) fetches this fresh
+    each tick and degrades to `None` on failure -- the gate BLOCKs on `None`, never
+    assumes "no alliance involvement." Does NOT catch `http.VeydriftAPIError` -- same
+    contract as `fetch_attack_protection`; the caller decides how to degrade."""
+    return http.fetch(f"/wallet/{wallet}/alliance", max_age=max_age)
+
+
 def fetch_highscores(
     *,
     category: str,

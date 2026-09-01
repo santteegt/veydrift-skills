@@ -87,12 +87,19 @@ from typing import Any
 import typer
 from rich.console import Console
 
-from veydrift_agent import guard as guard_mod
+from veydrift_agent import alliance_ids, guard as guard_mod
 from veydrift_agent import http, ids, log, read
 from veydrift_agent import plan as plan_mod
 from veydrift_agent.models import (
     Action,
     ActionKind,
+    AllianceDirectoryEntry,
+    AllianceJoinRequestForOwner,
+    AllianceMember,
+    AllianceMembership,
+    AlliancePendingInvite,
+    AlliancePendingJoinRequest,
+    AllianceState,
     Decision,
     GameMaintenance,
     GuardReport,
@@ -475,6 +482,78 @@ def _fleet_mission_args(action: Action, snapshot: Snapshot) -> tuple[str, list[A
     return _LAUNCH_FLEET_MISSION_6ARG_SIGNATURE, args
 
 
+def _require(value: object, message: str) -> object:
+    """Raise `ValueError(message)` if `value` is `None` -- shared by every alliance
+    arg-builder below so a missing required field fails loudly at build time rather than
+    encoding `None`/`null` into calldata."""
+    if value is None:
+        raise ValueError(message)
+    return value
+
+
+#: Alliance feature, commit 4. One positional-arg builder per in-scope
+#: `VeydriftAllianceSystem` function, keyed by function name -- `_action_to_walletctl_json`
+#: dispatches through this dict rather than 15 more `if fn == "...":` branches inline,
+#: since every builder here is a one-liner and the dict keeps the dispatch table itself
+#: readable as a single unit (which functions exist, at a glance) separately from each
+#: one's own argument-order derivation.
+_ALLIANCE_ARG_BUILDERS: dict[str, Any] = {
+    "createAlliance": lambda a: [
+        _require(a.alliance_tag, "createAlliance action has no alliance_tag"),
+        _require(a.alliance_name, "createAlliance action has no alliance_name"),
+        _require(a.alliance_description, "createAlliance action has no alliance_description"),
+    ],
+    "updateAllianceProfile": lambda a: [
+        _require(a.alliance_id, "updateAllianceProfile action has no alliance_id"),
+        _require(a.alliance_tag, "updateAllianceProfile action has no alliance_tag"),
+        _require(a.alliance_name, "updateAllianceProfile action has no alliance_name"),
+        _require(a.alliance_description, "updateAllianceProfile action has no alliance_description"),
+    ],
+    "inviteMember": lambda a: [
+        _require(a.alliance_id, "inviteMember action has no alliance_id"),
+        _require(a.target_player, "inviteMember action has no target_player"),
+    ],
+    "cancelInvite": lambda a: [
+        _require(a.alliance_id, "cancelInvite action has no alliance_id"),
+        _require(a.target_player, "cancelInvite action has no target_player"),
+    ],
+    "acceptInvite": lambda a: [_require(a.alliance_id, "acceptInvite action has no alliance_id")],
+    "requestJoinAlliance": lambda a: [_require(a.alliance_id, "requestJoinAlliance action has no alliance_id")],
+    "cancelJoinRequest": lambda a: [_require(a.alliance_id, "cancelJoinRequest action has no alliance_id")],
+    "dismissJoinRequest": lambda a: [
+        _require(a.alliance_id, "dismissJoinRequest action has no alliance_id"),
+        _require(a.target_player, "dismissJoinRequest action has no target_player"),
+    ],
+    "approveJoinRequest": lambda a: [
+        _require(a.alliance_id, "approveJoinRequest action has no alliance_id"),
+        _require(a.target_player, "approveJoinRequest action has no target_player"),
+    ],
+    "kickMember": lambda a: [
+        _require(a.alliance_id, "kickMember action has no alliance_id"),
+        _require(a.target_player, "kickMember action has no target_player"),
+    ],
+    "kickMembers": lambda a: [
+        _require(a.alliance_id, "kickMembers action has no alliance_id"),
+        _require(a.target_players or None, "kickMembers action has no target_players"),
+    ],
+    "leaveAlliance": lambda a: [],
+    "setMemberRole": lambda a: [
+        _require(a.alliance_id, "setMemberRole action has no alliance_id"),
+        _require(a.target_player, "setMemberRole action has no target_player"),
+        _require(a.role, "setMemberRole action has no role"),
+    ],
+    "setMembersRole": lambda a: [
+        _require(a.alliance_id, "setMembersRole action has no alliance_id"),
+        _require(a.target_players or None, "setMembersRole action has no target_players"),
+        _require(a.role, "setMembersRole action has no role"),
+    ],
+    "transferAllianceOwnership": lambda a: [
+        _require(a.alliance_id, "transferAllianceOwnership action has no alliance_id"),
+        _require(a.target_player, "transferAllianceOwnership action has no target_player"),
+    ],
+}
+
+
 def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) -> dict[str, Any]:
     """`Action` (this package's pydantic model) -> the `{function, args, purpose}` shape
     `walletctl build --action` expects (`veydrift-wallet/src/tx.ts`'s `Action` interface).
@@ -516,6 +595,16 @@ def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) 
         target_planet_id = _resolve_target_planet_id(action, snapshot)
         args = [action.origin_planet_id, target_planet_id, int(action.primary_target), action.quantity or 0]
         return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
+    if fn in _ALLIANCE_ARG_BUILDERS:
+        # Alliance feature, commit 4. `VeydriftAllianceSystem` -- a wholly separate
+        # contract, its own address, its own pinned ABI. Every branch below sets
+        # `"contract": "alliance"`, the field `veydrift-wallet`'s `buildTx` reads to
+        # resolve both the ABI and the destination address (defaults to "game" when
+        # absent, so every non-alliance branch above is unaffected). None of these 15
+        # functions is overloaded, so a bare name resolves unambiguously, same posture
+        # as `launchInterplanetaryMissileAttack` above.
+        args = _ALLIANCE_ARG_BUILDERS[fn](action)
+        return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200], "contract": "alliance"}
     # `settlePlanet` had a branch here through Phase 4. Removed in Phase 5
     # (docs/SPEC.md §5.4/§9): its body at the pinned commit
     # (`_touchPlayer(msg.sender); _collectPlanetResources(planetId);`) is byte-identical
@@ -771,7 +860,18 @@ def _live_addresses() -> set[str] | None:
         config = http.fetch("/runtime-config")
     except http.VeydriftAPIError:
         return None
-    addresses = {a for a in (config.get("gameContractAddress"), config.get("contractAddress")) if a}
+    # allianceContractAddress added alliance feature commit 4 -- required, not optional:
+    # without it, guard._gate_address spuriously BLOCKs every alliance action, since its
+    # destination is a genuinely different address from the game contract's.
+    addresses = {
+        a
+        for a in (
+            config.get("gameContractAddress"),
+            config.get("contractAddress"),
+            config.get("allianceContractAddress"),
+        )
+        if a
+    }
     return addresses or None
 
 
@@ -1546,6 +1646,157 @@ def _attack_protection_allowed(wallet: str, action: Action, snapshot: Snapshot) 
     return allowed, (blocked_reason if isinstance(blocked_reason, str) else None)
 
 
+def _epoch_seconds_to_datetime(raw: object) -> datetime | None:
+    """The live API's own timestamp shape for this route -- a decimal-string unix epoch,
+    e.g. `"1783481579"` (confirmed live 2026-09-01) -- same discrepancy against ISO-format
+    fixtures `_resolvable_mission_ids` above already documents for a different route.
+    `None` on anything unparseable, never a guessed/defaulted timestamp."""
+    try:
+        return datetime.fromtimestamp(int(raw), tz=UTC)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _alliance_state(wallet: str) -> AllianceState | None:
+    """Live `/wallet/{addr}/alliance` fetch, once per tick -- `guard._gate_alliance_action`'s
+    `alliance_state` parameter (alliance feature, commit 4). Best-effort: catches
+    `http.VeydriftAPIError` and degrades to `None` -- the gate BLOCKs on `None`, never
+    assumes "no alliance involvement" (AGENTS.md §5). Individual malformed sub-entries are
+    skipped, never raised, matching `_attack_targets`/`_missile_targets`'s posture toward
+    a single bad row in an otherwise-good response.
+
+    **The live response's `membership` is never JSON `null`** -- confirmed live 2026-09-01
+    across four real wallets: a wallet with no alliance reports `{"allianceId": "0",
+    "role": "none", "joinedAt": "0"}`, a real sentinel object, not an absent key. This
+    function treats `allianceId == 0` (or `role == "none"`) as "no membership," matching
+    `AllianceState.membership`'s own `None`-means-not-a-member contract on the Python side
+    -- a naive `data.get("membership")` truthiness check would otherwise treat every
+    wallet as a member of alliance 0.
+
+    Every numeric-looking field in the live response (`allianceId`, `createdAt`,
+    `joinedAt`, `totalScore`) is a decimal STRING, not a JSON number, except
+    `directory[].memberCount`, which is a genuine JSON int -- confirmed live, not
+    assumed; each is coerced explicitly below, never left to pydantic's own coercion."""
+    try:
+        data = read.fetch_alliance_state(wallet)
+    except http.VeydriftAPIError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    def _role_id(raw: object) -> int | None:
+        if not isinstance(raw, str):
+            return None
+        try:
+            return alliance_ids.role_id(raw)
+        except KeyError:
+            return None
+
+    membership: AllianceMembership | None = None
+    raw_membership = data.get("membership")
+    if isinstance(raw_membership, dict):
+        try:
+            alliance_id = int(raw_membership.get("allianceId"))
+        except (TypeError, ValueError):
+            alliance_id = None
+        role = _role_id(raw_membership.get("role"))
+        if alliance_id and role is not None and role != alliance_ids.AllianceRole.NONE:
+            membership = AllianceMembership(
+                alliance_id=alliance_id, role=role, joined_at=_epoch_seconds_to_datetime(raw_membership.get("joinedAt"))
+            )
+
+    members: list[AllianceMember] = []
+    for row in data.get("members") or []:
+        if not isinstance(row, dict):
+            continue
+        address = row.get("address")
+        role = _role_id(row.get("role"))
+        if not isinstance(address, str) or role is None:
+            continue
+        total_score_raw = row.get("totalScore")
+        try:
+            total_score = int(total_score_raw) if total_score_raw is not None else None
+        except (TypeError, ValueError):
+            total_score = None
+        members.append(
+            AllianceMember(address=address, role=role, joined_at=_epoch_seconds_to_datetime(row.get("joinedAt")), total_score=total_score)
+        )
+
+    def _alliance_ids_from(rows: object) -> list[int]:
+        out: list[int] = []
+        for row in rows or []:
+            raw_id = row.get("allianceId") if isinstance(row, dict) else row
+            try:
+                out.append(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    pending_invites = [AlliancePendingInvite(alliance_id=aid) for aid in _alliance_ids_from(data.get("pendingInvites"))]
+    pending_join_requests = [
+        AlliancePendingJoinRequest(alliance_id=aid) for aid in _alliance_ids_from(data.get("pendingJoinRequests"))
+    ]
+
+    alliance_join_requests: list[AllianceJoinRequestForOwner] = []
+    for row in data.get("allianceJoinRequests") or []:
+        if not isinstance(row, dict):
+            continue
+        requester = row.get("requester")
+        try:
+            alliance_id = int(row.get("allianceId"))
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(requester, str):
+            continue
+        alliance_join_requests.append(AllianceJoinRequestForOwner(alliance_id=alliance_id, requester=requester))
+
+    directory: dict[int, AllianceDirectoryEntry] = {}
+    for row in data.get("directory") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            alliance_id = int(row.get("allianceId"))
+        except (TypeError, ValueError):
+            continue
+        member_count_raw = row.get("memberCount")
+        try:
+            member_count = int(member_count_raw) if member_count_raw is not None else None
+        except (TypeError, ValueError):
+            member_count = None
+        directory[alliance_id] = AllianceDirectoryEntry(active=row.get("active"), member_count=member_count)
+
+    return AllianceState(
+        membership=membership,
+        members=members,
+        pending_invites=pending_invites,
+        pending_join_requests=pending_join_requests,
+        alliance_join_requests=alliance_join_requests,
+        directory=directory,
+    )
+
+
+def _alliance_summary_line(state: AllianceState | None) -> str | None:
+    """One-line summary of `alliance_state` for the tick report/`proposals.jsonl` --
+    `None` only when the feature is off (`alliance_state` itself is `None` in that case
+    too, so there is nothing to report). Satisfies the manual-override-only design's own
+    "read and report alliance state" half: an operator sees pending invites/join-requests
+    and current membership on every tick without having to fetch `/wallet/{addr}/alliance`
+    by hand first, even on a tick that proposes nothing alliance-related at all."""
+    if state is None:
+        return None
+    if state.membership is None:
+        parts = ["not in an alliance"]
+    else:
+        parts = [f"alliance {state.membership.alliance_id} ({alliance_ids.role_name(state.membership.role)})"]
+    if state.pending_invites:
+        parts.append(f"{len(state.pending_invites)} pending invite(s)")
+    if state.pending_join_requests:
+        parts.append(f"{len(state.pending_join_requests)} pending join request(s) of your own")
+    if state.alliance_join_requests:
+        parts.append(f"{len(state.alliance_join_requests)} incoming join request(s) to review")
+    return ", ".join(parts)
+
+
 def _await_indexed(*, wallet: str, policy_planets: list[int], target_block: int, max_wait_s: int) -> bool:
     """The mandatory post-receipt wait (docs/SPEC.md §5.7): polls a fresh snapshot's
     `latest_indexed_block` until it covers `target_block`, or `max_wait_s` elapses.
@@ -1789,6 +2040,14 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # Commit 7 of the launch-actions plan: same gating as attack_targets above.
     missile_targets = _missile_targets(policy_model.wallet) if policy_model.actions.allow_combat else {}
 
+    # Alliance feature, commit 4: fetched whenever the flag is on, regardless of what
+    # action this tick resolves to -- unlike attack_targets/missile_targets (fed to the
+    # planner), this is guard-time data AND tick-report narration (the "Alliance" report
+    # section below), so it must be available on every tick, not only when the chosen
+    # action happens to be an alliance one. Never fed to `plan_next_action` -- alliance
+    # actions are manual-override-only, the planner has no rung that reads this.
+    alliance_state = _alliance_state(policy_model.wallet) if policy_model.actions.allow_alliance else None
+
     # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
@@ -1878,6 +2137,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         outgoing_colonize_count=outgoing_colonize_count,
         attack_protection_allowed=attack_protection_allowed,
         attack_protection_blocked_reason=attack_protection_blocked_reason,
+        alliance_state=alliance_state,
         now=now,
     )
     if build_error:
@@ -1942,6 +2202,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         human_activity_line=human_activity_line,
         override_record=override_record,
         override_line=override_line,
+        alliance_state=alliance_state,
     )
 
 
@@ -2157,6 +2418,7 @@ def _finish_tick(
     human_activity_line: str | None = None,
     override_record: dict[str, Any] | None = None,
     override_line: str | None = None,
+    alliance_state: AllianceState | None = None,
 ) -> None:
     proposal_record = {
         "ts": now.isoformat(),
@@ -2184,6 +2446,7 @@ def _finish_tick(
         "executed": executed,
         "human_activity_check": human_activity_record,
         "override": override_record,
+        "alliance": alliance_state.model_dump() if alliance_state is not None else None,
     }
 
     # Dedup: a content-identical repeat of the immediately-previous logged proposal (e.g.
@@ -2246,6 +2509,7 @@ def _finish_tick(
         ),
         duplicate_of=duplicate_note,
         human_activity_line=human_activity_line,
+        alliance_line=_alliance_summary_line(alliance_state),
     )
 
     if not is_duplicate:

@@ -32,6 +32,7 @@ from veydrift_agent.read import (
     _randomness_readiness,
     app,
     fetch_activity,
+    fetch_alliance_state,
     fetch_fleet_visibility,
 )
 
@@ -688,6 +689,26 @@ def test_fetch_fleet_visibility_raises_on_http_error_rather_than_exiting():
 
     with pytest.raises(http.VeydriftHTTPError):
         fetch_fleet_visibility(WALLET)
+
+
+@respx.mock
+def test_fetch_alliance_state_returns_the_raw_dict_with_no_query_params():
+    route = respx.get(f"{BASE}/wallet/{WALLET}/alliance").mock(
+        return_value=httpx.Response(200, json={"wallet": WALLET, "membership": {"allianceId": "0", "role": "none"}})
+    )
+
+    data = fetch_alliance_state(WALLET)
+
+    assert data["wallet"] == WALLET
+    assert dict(route.calls.last.request.url.params) == {}
+
+
+@respx.mock
+def test_fetch_alliance_state_raises_on_http_error_rather_than_exiting():
+    respx.get(f"{BASE}/wallet/{WALLET}/alliance").mock(return_value=httpx.Response(404, text="not found"))
+
+    with pytest.raises(http.VeydriftHTTPError):
+        fetch_alliance_state(WALLET)
 
 
 # --------------------------------------------------------------------------------------
