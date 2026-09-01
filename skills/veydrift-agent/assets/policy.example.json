@@ -18,7 +18,7 @@
   "actions": {
     "allow_building": true, "allow_research": true,
     "allow_defense": false, "allow_ships": false,
-    "allow_fleet_noncombat": false, "allow_combat": false
+    "allow_fleet_noncombat": false, "allow_combat": false, "allow_alliance": false
   },
   "escalation": {
     "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,

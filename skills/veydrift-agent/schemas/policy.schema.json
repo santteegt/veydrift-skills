@@ -2,6 +2,11 @@
   "$defs": {
     "ActionsCfg": {
       "properties": {
+        "allow_alliance": {
+          "default": false,
+          "title": "Allow Alliance",
+          "type": "boolean"
+        },
         "allow_building": {
           "default": true,
           "title": "Allow Building",

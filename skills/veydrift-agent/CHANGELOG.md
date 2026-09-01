@@ -11,6 +11,21 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-09-01
+
+Alliance feature, commit 5/6: policy plumbing. Small, isolated commit so the
+"`allow_alliance` must ship in `policy.example.json` in the same change as the schema
+field" invariant (`AGENTS.md` §4) is trivially auditable in review -- it wasn't, for
+`allow_combat`, until three releases later; not repeating that here.
+
+### Fixed
+- `assets/policy.example.json` gained `"allow_alliance": false` in the `actions` block
+  -- the actual field was added two commits ago (1.14.0) but the bundled example file
+  `vd init` copies to a fresh `$VEYDRIFT_HOME/policy.json` was never updated.
+- `schemas/policy.schema.json`/`schemas/action.schema.json` regenerated from the
+  pydantic models (`scripts/generate_schemas.py`) to reflect `allow_alliance`,
+  `ActionKind.ALLIANCE`, and the new `Action` alliance fields.
+
 ## [1.15.0] - 2026-09-01
 
 Alliance feature, commit 4/6: end-to-end reachability. `vd tick` can now build, guard,

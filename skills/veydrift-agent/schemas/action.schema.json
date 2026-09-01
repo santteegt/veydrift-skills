@@ -1,7 +1,7 @@
 {
   "$defs": {
     "ActionKind": {
-      "description": "What the planner decided. Only the first six map to a contract call.",
+      "description": "What the planner decided. Every kind before NOOP maps to a contract call.",
       "enum": [
         "build",
         "research",
@@ -10,6 +10,7 @@
         "resolve_mission",
         "fleet_mission",
         "missile_attack",
+        "alliance",
         "noop",
         "escalate",
         "halt"
@@ -85,6 +86,54 @@
   },
   "description": "Zero or one of these per tick. `function` is None for noop/escalate/halt.",
   "properties": {
+    "alliance_description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Alliance Description"
+    },
+    "alliance_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Alliance Id"
+    },
+    "alliance_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Alliance Name"
+    },
+    "alliance_tag": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Alliance Tag"
+    },
     "alternatives": {
       "items": {
         "$ref": "#/$defs/AlternativeNote"
@@ -231,6 +280,18 @@
       "title": "Rationale",
       "type": "string"
     },
+    "role": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Role"
+    },
     "rule": {
       "default": "",
       "title": "Rule",
@@ -299,6 +360,25 @@
       ],
       "default": null,
       "title": "Target Planet Id"
+    },
+    "target_player": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Player"
+    },
+    "target_players": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Target Players",
+      "type": "array"
     }
   },
   "required": [
