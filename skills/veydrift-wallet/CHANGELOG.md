@@ -11,6 +11,23 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-01
+
+### Added
+- Alliance feature, commit 1/6: pinned a second contract, `VeydriftAllianceSystem`
+  (`abi/VeydriftAllianceSystem.701bed3.json` + `abi/PINNED.alliance.json`, same commit and
+  build settings as the game contract's pin). `src/abi.ts`'s loaders/resolvers
+  (`loadPinnedArtifact`, `loadPinnedMeta`, `getPinnedAbi`, `findFunctionsByName`,
+  `findFunctionBySignature`, `resolveFunctionAbi`, `computePinnedAbiHash`) all gained an
+  optional `contract: "game" | "alliance" = "game"` parameter — every pre-existing call site
+  is unaffected by the default. `functionsForSelector` (decode/display only) now searches
+  both pinned ABIs. `RuntimeConfig` gained `allianceContractAddress`. `verifyAbi()` stays
+  game-only, deliberately — no live `allianceAbiHash`/`allianceDeploymentCommit` field
+  exists anywhere in `/runtime-config` to check the alliance pin against; see
+  `references/abi-pinning.md`'s new "Second contract" section for the permanent limit this
+  implies. No behavior change yet — nothing alliance-related is reachable through any live
+  path until the next few commits land.
+
 ## [0.7.2] - 2026-08-31
 
 ### Added

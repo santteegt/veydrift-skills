@@ -129,6 +129,30 @@ directly; `checkAllowlist` does not currently re-run the hash check per-transact
 pinned ABI file on disk for selector computation), so **run `walletctl verify-abi` before any
 `send` session**, not just once at setup.
 
+## Second contract: `VeydriftAllianceSystem`
+
+The alliance feature added a second pinned contract — `abi/VeydriftAllianceSystem.701bed3.json`
+(artifact) + `abi/PINNED.alliance.json` (meta), same shape and same hash derivation
+(`sha256(JSON.stringify(abi))`, compact separators) as the game contract's pair above. Both
+built from the same local clone, same commit, same `forge build --skip test --skip script`
+invocation — the alliance artifact was already present in `out/VeydriftAllianceSystem.sol/` from
+that same build, so no separate rebuild was needed. `src/abi.ts`'s loaders/resolvers all take an
+optional `contract: "game" | "alliance" = "game"` parameter now; every pre-existing call site
+(predating this feature) is unaffected by the default.
+
+**This pin has no live-hash re-verification path, and never will.** `/runtime-config` exposes
+`allianceContractAddress` directly (confirmed live, 2026-09-01:
+`0x0E5a6210482B15780cf5Ec036107031dcA702001`) but no `allianceAbiHash`/`allianceDeploymentCommit`
+field anywhere — only the single `backend.build.deploymentAbiHash`/`deploymentCommit` pair,
+which is for the game contract. `verifyAbi()` stays game-only, deliberately, with no
+`verifyAllianceAbi()` sibling: there is nothing on the live API for it to compare against. The
+alliance ABI pin was therefore verified exactly once, by construction — exact commit checkout +
+exact forge settings, matching the game contract's own pinned settings from the same build — and
+that is the permanent ceiling on this pin's guarantee. If the backend ever adds an equivalent
+hash/commit field for the alliance contract, `verifyAbi()` should grow a real alliance-aware
+counterpart at that point; until then, don't invent a substitute check that only looks like
+verification.
+
 ## Provenance
 
 - ABI hash and deployment commit re-verified live against

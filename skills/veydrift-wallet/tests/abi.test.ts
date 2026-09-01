@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computePinnedAbiHash,
   findFunctionsByName,
+  functionsForSelector,
   getPinnedAbi,
   getSelectorForSignature,
   isNonpayableRead,
@@ -128,5 +129,88 @@ describe("pinned ABI", () => {
 
   it("isNonpayableRead is false for an ordinary write function", () => {
     expect(isNonpayableRead("startBuildingUpgrade")).toBe(false);
+  });
+});
+
+// Alliance feature: VeydriftAllianceSystem.sol is a wholly separate deployed contract, pinned
+// as a sibling artifact/meta file, resolved via the same functions above with an explicit
+// `contract: "alliance"` argument. See references/abi-pinning.md's "Second contract" section.
+describe("pinned alliance ABI (VeydriftAllianceSystem)", () => {
+  // Ground truth: forge's own methodIdentifiers from the pinned commit's build, cross-checked
+  // against `cast sig` independently (not derived from our own encoder) at pin time.
+  const ALLIANCE_SIGNATURES: [string, `0x${string}`][] = [
+    ["createAlliance(string,string,string)", "0x944cde0e"],
+    ["updateAllianceProfile(uint256,string,string,string)", "0x3fd0e7a5"],
+    ["inviteMember(uint256,address)", "0x9e6d6830"],
+    ["cancelInvite(uint256,address)", "0x93a900f0"],
+    ["acceptInvite(uint256)", "0xbf8e9176"],
+    ["requestJoinAlliance(uint256)", "0xbc46277a"],
+    ["cancelJoinRequest(uint256)", "0xc5c4bdcc"],
+    ["dismissJoinRequest(uint256,address)", "0xcd844a18"],
+    ["approveJoinRequest(uint256,address)", "0x8ff388c7"],
+    ["kickMember(uint256,address)", "0xbd0e667c"],
+    ["kickMembers(uint256,address[])", "0x7c581707"],
+    ["leaveAlliance()", "0xdabd761d"],
+    ["setMemberRole(uint256,address,uint8)", "0xbfbb73f1"],
+    ["setMembersRole(uint256,address[],uint8)", "0xe0c22e19"],
+    ["transferAllianceOwnership(uint256,address)", "0xb1d3b1e4"],
+  ];
+
+  it("EXPECTED_ALLIANCE_HASH: PINNED.alliance.json hashes to the recorded value", () => {
+    const meta = loadPinnedMeta("alliance");
+    expect(computePinnedAbiHash("alliance")).toBe(meta.abiHash);
+    expect(meta.abiHash).toBe(
+      "sha256:3992c8215c0f1f6bb01dd8afdbc39514a79a1f3fd9b2f7be07056b131cd4de8f",
+    );
+    expect(meta.commit).toBe("701bed3578cff4d134657c714c599dbdb55a4b6a");
+  });
+
+  it("getPinnedAbi('alliance') returns a non-empty ABI, distinct from the game ABI", () => {
+    const allianceAbi = getPinnedAbi("alliance");
+    expect(allianceAbi.length).toBeGreaterThan(0);
+    expect(allianceAbi.length).not.toBe(getPinnedAbi("game").length);
+  });
+
+  it.each(ALLIANCE_SIGNATURES)("%s resolves via resolveFunctionAbi(sig, 'alliance') -> %s", (sig, expected) => {
+    const fn = resolveFunctionAbi(sig, "alliance");
+    expect(getSelectorForSignature(sig)).toBe(expected);
+    expect(fn.name).toBe(sig.slice(0, sig.indexOf("(")));
+  });
+
+  it("createAlliance is not present on the game ABI", () => {
+    expect(findFunctionsByName("createAlliance", "game")).toHaveLength(0);
+    expect(findFunctionsByName("createAlliance", "alliance").length).toBeGreaterThan(0);
+  });
+
+  it("regression: resolveFunctionAbi with no contract argument still only resolves game functions -- an alliance signature passed bare must throw, not silently start scanning both ABIs", () => {
+    expect(() => resolveFunctionAbi("createAlliance(string,string,string)")).toThrow(/pinned "game" artifact/);
+  });
+
+  it("functionsForSelector finds an alliance function via the merged cross-contract search", () => {
+    const matches = functionsForSelector("0xdabd761d"); // leaveAlliance()
+    expect(matches.some((fn) => fn.name === "leaveAlliance")).toBe(true);
+  });
+
+  it("functionsForSelector still finds game-contract functions (the merge is additive, not a regression)", () => {
+    const matches = functionsForSelector("0x165715e3"); // startBuildingUpgrade(uint256,uint8)
+    expect(matches.some((fn) => fn.name === "startBuildingUpgrade")).toBe(true);
+  });
+
+  it("no alliance function is a disguised nonpayable read -- NONPAYABLE_READ_FUNCTIONS stays game-only", () => {
+    for (const [sig] of ALLIANCE_SIGNATURES) {
+      const fn = resolveFunctionAbi(sig, "alliance");
+      expect(isNonpayableRead(fn.name)).toBe(false);
+    }
+  });
+
+  it("none of the 15 in-scope membership functions is payable -- the wallet's blanket value!=0 refusal excludes nothing here", () => {
+    // The full alliance ABI does contain one payable function -- upgradeToAndCall(address,bytes),
+    // the standard UUPS owner-only upgrade entrypoint (payable by OZ convention) -- but it is not
+    // one of the 15 in-scope membership functions and is owner-only besides, so it's irrelevant
+    // to this codebase's reachable surface. Scope the assertion to the 15, not the whole ABI.
+    for (const [sig] of ALLIANCE_SIGNATURES) {
+      const fn = resolveFunctionAbi(sig, "alliance");
+      expect(fn.stateMutability).not.toBe("payable");
+    }
   });
 });

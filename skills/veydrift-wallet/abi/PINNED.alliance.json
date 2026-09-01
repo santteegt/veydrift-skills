@@ -1,0 +1,25 @@
+{
+  "commit": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+  "abiHash": "sha256:3992c8215c0f1f6bb01dd8afdbc39514a79a1f3fd9b2f7be07056b131cd4de8f",
+  "foundry": {
+    "solc": "0.8.28",
+    "optimizer_runs": 1,
+    "via_ir": true,
+    "cbor_metadata": false,
+    "bytecode_hash": "none"
+  },
+  "fetchedAt": "2026-09-01T23:17:08Z",
+  "source": {
+    "repo": "https://github.com/Borodutch/veydrift.git",
+    "localClone": "/Users/santteegt/GitRepositories/clones/veydrift",
+    "commit": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+    "artifactPath": "packages/contracts/out/VeydriftAllianceSystem.sol/VeydriftAllianceSystem.json",
+    "buildCommand": "forge build --skip test --skip script",
+    "verifiedAgainstLiveRuntimeConfig": false,
+    "liveRuntimeConfigUrl": "https://api.veydrift.com/runtime-config",
+    "liveDeploymentAbiHashAtVerification": null,
+    "liveDeploymentCommitAtVerification": null,
+    "verifiedAt": null
+  },
+  "note": "abi/VeydriftAllianceSystem.701bed3.json contains { abi, methodIdentifiers } extracted from the forge artifact above, same shape and hashing convention as PINNED.json/VeydriftGame.701bed3.json (abiHash = sha256(JSON.stringify(pinned.abi)), compact separators, key order as emitted by forge/JSON.parse -- confirmed byte-identical between a Python and a live `node -e` computation at pin time). UNLIKE the game contract's pin, this one has NO live-hash re-verification path: /runtime-config exposes `allianceContractAddress` (confirmed live, 2026-09-01: 0x0E5a6210482B15780cf5Ec036107031dcA702001) but no `allianceAbiHash`/`allianceDeploymentCommit` field anywhere -- only the single `backend.build.deploymentAbiHash`/`deploymentCommit` pair, which is for the game contract. This pin was therefore verified exactly once, by construction (exact commit checkout + exact forge settings above, matching the game contract's own pinned settings from the same build), and can never be automatically re-checked the way `verify-abi` re-checks the game contract's pin. See references/abi-pinning.md's 'Second contract' section."
+}
