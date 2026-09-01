@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  AllowAllianceResolutionError,
   AllowCombatResolutionError,
   policyPath,
+  resolveAllowAlliance,
   resolveAllowCombat,
   resolveTier,
   resolveVeydriftHome,
@@ -201,5 +203,89 @@ describe("resolveAllowCombat -- launch-actions plan commit 5: no CLI flag, no en
       readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_combat: false } }),
     });
     expect(allowed).toBe(false); // the policy file's actual value wins; the bogus env var is never read
+  });
+});
+
+describe("resolveAllowAlliance -- alliance feature: no CLI flag, no env var, ever (same shape as resolveAllowCombat, different field/error type)", () => {
+  it("returns true when the policy file's actions.allow_alliance is true", () => {
+    const allowed = resolveAllowAlliance({
+      env: { VEYDRIFT_HOME: "/fake" },
+      readFile: () => JSON.stringify({ version: 1, tier: "economy", actions: { allow_alliance: true } }),
+    });
+    expect(allowed).toBe(true);
+  });
+
+  it("returns false when the policy file's actions.allow_alliance is false", () => {
+    const allowed = resolveAllowAlliance({
+      env: { VEYDRIFT_HOME: "/fake" },
+      readFile: () => JSON.stringify({ version: 1, tier: "economy", actions: { allow_alliance: false } }),
+    });
+    expect(allowed).toBe(false);
+  });
+
+  it("returns false (never refuses) when no policy file exists at all -- there is no flag to fall back to", () => {
+    const readFile = (p: string) => {
+      throw enoent(p);
+    };
+    expect(resolveAllowAlliance({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
+  });
+
+  it("refuses (never falls back to a permissive default) when the policy file is unparseable JSON", () => {
+    expect(() =>
+      resolveAllowAlliance({ env: { VEYDRIFT_HOME: "/fake" }, readFile: () => "{ not valid json" }),
+    ).toThrow(AllowAllianceResolutionError);
+  });
+
+  it("refuses when actions.allow_alliance is missing", () => {
+    expect(() =>
+      resolveAllowAlliance({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "economy", actions: {} }),
+      }),
+    ).toThrow(/no valid "actions.allow_alliance" field/);
+  });
+
+  it("refuses when the actions object itself is missing", () => {
+    expect(() =>
+      resolveAllowAlliance({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "economy" }),
+      }),
+    ).toThrow(/no valid "actions.allow_alliance" field/);
+  });
+
+  it("refuses when actions.allow_alliance is not a boolean", () => {
+    expect(() =>
+      resolveAllowAlliance({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "economy", actions: { allow_alliance: "true" } }),
+      }),
+    ).toThrow(/no valid "actions.allow_alliance" field/);
+  });
+
+  it("refuses when the policy file exists but errors on read for a reason other than ENOENT", () => {
+    const readFile = () => {
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    };
+    expect(() => resolveAllowAlliance({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toThrow(
+      AllowAllianceResolutionError,
+    );
+  });
+
+  it("has no --allow-alliance CLI flag or VEYDRIFT_ALLOW_ALLIANCE env var -- ResolveAllowAllianceOptions has no such fields", () => {
+    const allowed = resolveAllowAlliance({
+      env: { VEYDRIFT_HOME: "/fake", VEYDRIFT_ALLOW_ALLIANCE: "true" } as NodeJS.ProcessEnv,
+      readFile: () => JSON.stringify({ version: 1, tier: "economy", actions: { allow_alliance: false } }),
+    });
+    expect(allowed).toBe(false); // the policy file's actual value wins; the bogus env var is never read
+  });
+
+  it("allow_combat and allow_alliance are independent -- one being true does not imply the other", () => {
+    const readFile = () =>
+      JSON.stringify({ version: 1, tier: "operator", actions: { allow_combat: true, allow_alliance: false } });
+    expect(resolveAllowCombat({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(true);
+    expect(resolveAllowAlliance({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
   });
 });

@@ -13,12 +13,14 @@ import {
 } from "../src/tx.js";
 
 const GAME_ADDRESS = getAddress("0xf397910F005151b09644228573a4353818D3755d");
+const ALLIANCE_ADDRESS = getAddress("0x0E5a6210482B15780cf5Ec036107031dcA702001");
 
 function fixtureConfig(): RuntimeConfig {
   return {
     chainId: 8453,
     contractAddress: GAME_ADDRESS,
     gameContractAddress: GAME_ADDRESS,
+    allianceContractAddress: ALLIANCE_ADDRESS,
     backend: { build: { deploymentAbiHash: "sha256:fixture", deploymentCommit: "fixture" } },
   };
 }
@@ -92,6 +94,42 @@ describe("buildTx", () => {
     );
     expect(built.gas).toBeUndefined();
     expect(built.gasEstimateError).toMatch(/execution reverted/);
+  });
+
+  it("defaults contract to \"game\" -- an action with no contract field still builds against the game address, unchanged (regression for every pre-alliance-feature action JSON, hand-written or otherwise)", async () => {
+    const built = await buildTx(
+      { function: "startBuildingUpgrade(uint256,uint8)", args: [664, 3] },
+      { fetchConfig: async () => fixtureConfig() },
+    );
+    expect(built.to).toBe(GAME_ADDRESS);
+  });
+
+  it("builds against the alliance contract's address when contract: \"alliance\" is set", async () => {
+    const built = await buildTx(
+      { function: "leaveAlliance()", args: [], contract: "alliance" },
+      { fetchConfig: async () => fixtureConfig() },
+    );
+    expect(built.to).toBe(ALLIANCE_ADDRESS);
+    expect(built.functionName).toBe("leaveAlliance");
+
+    const fn = resolveFunctionAbi("leaveAlliance()", "alliance");
+    const expectedData = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [] });
+    expect(built.data).toBe(expectedData);
+  });
+
+  it("throws a contract-specific error when contract: \"alliance\" is set but /runtime-config has no allianceContractAddress", async () => {
+    await expect(
+      buildTx(
+        { function: "leaveAlliance()", args: [], contract: "alliance" },
+        {
+          fetchConfig: async () => ({
+            chainId: 8453,
+            gameContractAddress: GAME_ADDRESS,
+            backend: { build: { deploymentAbiHash: "sha256:fixture", deploymentCommit: "fixture" } },
+          }),
+        },
+      ),
+    ).rejects.toThrow(/no allianceContractAddress/);
   });
 
   it("requires a full signature for the overloaded launchFleetMission -- never picks one by name", async () => {

@@ -1,11 +1,12 @@
 /**
- * Two security-relevant values this engine resolves from `$VEYDRIFT_HOME/policy.json` rather
+ * Security-relevant values this engine resolves from `$VEYDRIFT_HOME/policy.json` rather
  * than from a caller-supplied flag: the enforcing **tier** (`resolveTier`, the original purpose
- * of this module) and, since the launch-actions plan's commit 5, whether **combat** is permitted
- * (`resolveAllowCombat`). Same threat model for both: `walletctl` must not trust a caller-
- * asserted value for either as authoritative for `checkAllowlist` -- that would let a fully
- * compromised `veydrift-agent` (which is exactly who §6.4's allowlist exists to defend against)
- * simply assert whatever it wants, regardless of what its own policy actually authorizes.
+ * of this module) and two boolean feature flags gated the same stricter way --
+ * `resolveAllowCombat` (launch-actions plan, commit 5) and `resolveAllowAlliance` (the alliance
+ * feature). Same threat model for all three: `walletctl` must not trust a caller-asserted value
+ * as authoritative for `checkAllowlist` -- that would let a fully compromised `veydrift-agent`
+ * (which is exactly who §6.4's allowlist exists to defend against) simply assert whatever it
+ * wants, regardless of what its own policy actually authorizes.
  *
  * Fix, for tier: read `$VEYDRIFT_HOME/policy.json` (the same file `veydrift-agent` reads,
  * `docs/SPEC.md` §2.1) -- never from this process's own CLI flag or env var, except as a
@@ -23,8 +24,10 @@
  *      A malformed security policy must never be treated as "absent" and fall through to a
  *      permissive default.
  *
- * `resolveAllowCombat` follows the same policy-file-is-authoritative shape but is deliberately
- * stricter in one respect -- see its own doc comment below for exactly how and why.
+ * `resolveAllowCombat`/`resolveAllowAlliance` follow the same policy-file-is-authoritative shape
+ * but are deliberately stricter in one respect -- see `resolveAllowCombat`'s own doc comment
+ * below for exactly how and why (both share the same `resolveBooleanActionFlag` implementation;
+ * `resolveAllowAlliance` doesn't repeat the rationale, only the field name and error type differ).
  */
 
 import { readFileSync } from "node:fs";
@@ -35,6 +38,8 @@ import { isTier, TIERS, type Tier } from "./allowlist.js";
 export class TierResolutionError extends Error {}
 
 export class AllowCombatResolutionError extends Error {}
+
+export class AllowAllianceResolutionError extends Error {}
 
 const DEFAULT_VEYDRIFT_HOME = "~/.veydrift";
 
@@ -124,12 +129,67 @@ export function resolveTier(opts: ResolveTierOptions = {}): Tier {
   return tierValue;
 }
 
-export interface ResolveAllowCombatOptions {
+export interface ResolveActionFlagOptions {
   env?: NodeJS.ProcessEnv;
   /** Injectable so tests never touch the real filesystem. Same contract as
    *  `ResolveTierOptions.readFile`: must throw an Error with `.code === "ENOENT"` when the
    *  file is absent. */
   readFile?: (path: string) => string;
+}
+
+/** Shared by `resolveAllowCombat` and `resolveAllowAlliance` below -- both are "read one boolean
+ *  off `actions` in `policy.json`, refuse-on-malformed, default-false-on-absent, no CLI-flag/env
+ *  fallback ever" with nothing else differing but the field name and which error type gets
+ *  thrown. See `resolveAllowCombat`'s doc comment for the full rules/rationale; not repeated at
+ *  each call site so a future third flag doesn't have to re-justify the same shape again. */
+export type ResolveAllowCombatOptions = ResolveActionFlagOptions;
+export type ResolveAllowAllianceOptions = ResolveActionFlagOptions;
+
+function resolveBooleanActionFlag(
+  fieldName: string,
+  ErrorCtor: new (message: string) => Error,
+  opts: ResolveActionFlagOptions,
+): boolean {
+  const env = opts.env ?? process.env;
+  const readFile = opts.readFile ?? ((p: string) => readFileSync(p, "utf8"));
+  const path = policyPath(env);
+
+  let raw: string | undefined;
+  try {
+    raw = readFile(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw new ErrorCtor(
+        `could not read policy file at "${path}": ${(err as Error).message}. Refusing rather ` +
+          `than falling back to a permissive default on an unreadable security policy.`,
+      );
+    }
+    // No policy file at all -- the flag defaults to false. There is no --allow-* flag and no
+    // matching env var to fall back to, on purpose (see resolveAllowCombat's doc comment).
+    return false;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new ErrorCtor(
+      `policy file at "${path}" is not valid JSON: ${(err as Error).message}. Refusing rather ` +
+        `than falling back to a permissive default on a malformed security policy.`,
+    );
+  }
+
+  const actions = (parsed as { actions?: unknown } | null)?.actions;
+  const value = (actions as Record<string, unknown> | null)?.[fieldName];
+  if (typeof value !== "boolean") {
+    throw new ErrorCtor(
+      `policy file at "${path}" has no valid "actions.${fieldName}" field (got ` +
+        `${JSON.stringify(value)}; must be a boolean). Refusing rather than falling back to a ` +
+        `permissive default on an ambiguous security policy.`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -167,44 +227,23 @@ export interface ResolveAllowCombatOptions {
  * own doc comment for why that laziness matters.
  */
 export function resolveAllowCombat(opts: ResolveAllowCombatOptions = {}): boolean {
-  const env = opts.env ?? process.env;
-  const readFile = opts.readFile ?? ((p: string) => readFileSync(p, "utf8"));
-  const path = policyPath(env);
+  return resolveBooleanActionFlag("allow_combat", AllowCombatResolutionError, opts);
+}
 
-  let raw: string | undefined;
-  try {
-    raw = readFile(path);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      throw new AllowCombatResolutionError(
-        `could not read policy file at "${path}": ${(err as Error).message}. Refusing rather ` +
-          `than falling back to a permissive default on an unreadable security policy.`,
-      );
-    }
-    // No policy file at all -- combat defaults to false. There is no --allow-combat flag and
-    // no VEYDRIFT_ALLOW_COMBAT env var to fall back to, on purpose (see the doc comment above).
-    return false;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new AllowCombatResolutionError(
-      `policy file at "${path}" is not valid JSON: ${(err as Error).message}. Refusing rather ` +
-        `than falling back to a permissive default on a malformed security policy.`,
-    );
-  }
-
-  const actions = (parsed as { actions?: unknown } | null)?.actions;
-  const allowCombatValue = (actions as { allow_combat?: unknown } | null)?.allow_combat;
-  if (typeof allowCombatValue !== "boolean") {
-    throw new AllowCombatResolutionError(
-      `policy file at "${path}" has no valid "actions.allow_combat" field (got ` +
-        `${JSON.stringify(allowCombatValue)}; must be a boolean). Refusing rather than falling ` +
-        `back to a permissive default on an ambiguous security policy.`,
-    );
-  }
-  return allowCombatValue;
+/**
+ * Resolve whether alliance membership actions (`createAlliance`, `inviteMember`,
+ * `acceptInvite`, `leaveAlliance`, etc. -- the 15 functions in `allowlist.ts`'s
+ * `ALLIANCE_SIGNATURES`) are permitted. Same shape and same threat model as
+ * `resolveAllowCombat` above -- read `policy.json`'s `actions.allow_alliance`, no CLI flag or
+ * env var ever, `false` on ENOENT, throw on anything malformed/ambiguous. The one substantive
+ * difference from combat is not in this function at all: alliance actions are gated at
+ * `economy` tier, not `operator` -- that's `allowlist.ts`'s selector-check branch's concern, not
+ * this resolver's (this function only ever answers "is the flag true," never "at which tier").
+ *
+ * Callers (`allowlist.ts`'s `checkAllowlist`) invoke this lazily -- only once a decoded
+ * transaction's selector is actually one of the 15 alliance functions -- so a malformed or
+ * absent `allow_alliance` field never blocks an unrelated transaction.
+ */
+export function resolveAllowAlliance(opts: ResolveAllowAllianceOptions = {}): boolean {
+  return resolveBooleanActionFlag("allow_alliance", AllowAllianceResolutionError, opts);
 }

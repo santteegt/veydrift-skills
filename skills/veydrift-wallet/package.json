@@ -1,6 +1,6 @@
 {
   "name": "veydrift-wallet",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "Veydrift wallet engine: builds, allowlists, simulates and (only on explicit --confirm) submits Veydrift game transactions. Never used by veydrift-agent to sign directly -- this is the sole submission path.",
   "license": "MIT",

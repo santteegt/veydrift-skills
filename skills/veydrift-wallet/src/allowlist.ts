@@ -4,11 +4,18 @@
  * Veydrift. Spec: docs/SPEC.md §6.4.
  *
  * Five checks, all evaluated (never short-circuited in the report, though `ok` is AND of all):
- *   1. tx.to        in the live /runtime-config address set (never a hardcoded list)
+ *   1. tx.to        in the live /runtime-config address set (never a hardcoded list -- now
+ *      includes the alliance contract's address alongside the game contract's, see the
+ *      alliance feature's notes below)
  *   2. tx.data[0:4] (selector) in the tier's allowed set, computed from the pinned ABI --
- *      unconditionally, OR (at `operator` tier only) conditionally on
- *      `policy.actions.allow_combat` for a combat-only selector (currently only
- *      `launchInterplanetaryMissileAttack`, commit 7 -- see `COMBAT_SIGNATURES` below)
+ *      unconditionally, OR conditionally on a policy flag for two disjoint selector sets:
+ *      `policy.actions.allow_combat` at `operator` tier only (`launchInterplanetaryMissileAttack`,
+ *      commit 7 -- see `COMBAT_SIGNATURES` below), or `policy.actions.allow_alliance` at
+ *      `economy` tier **or above** (the 15 membership functions on `VeydriftAllianceSystem`,
+ *      the alliance feature -- see `ALLIANCE_SIGNATURES` below). Note the "or above": unlike
+ *      combat, alliance's tier requirement is a floor, not a ceiling -- an operator-tier wallet
+ *      with `allow_alliance=true` must not be locked out just because `economy` is the minimum,
+ *      not the maximum, tier alliance actions need.
  *   3. tx.value      == 0 (no payable action is whitelisted at any tier here)
  *   4. tx.chainId    == 8453 (Base)
  *   5. any failure -> caller must exit non-zero, log the rejection, sign nothing
@@ -19,14 +26,18 @@
  * `policy.actions.allow_combat` resolves true (launch-actions plan, commit 5 -- see
  * `COMBAT_ALLOWED_MISSION_TYPES` below). That restriction can't be expressed as a selector check
  * (the mission type is a regular argument, not part of the selector) so it's decoded from
- * calldata here. Missile (commit 7) needed no equivalent calldata decode -- it's its own,
- * brand-new selector, not a `launchFleetMission` mission-type argument, so its `allow_combat`
- * conditionality is folded directly into check 2 instead.
+ * calldata here. Missile (commit 7) and the alliance functions both needed no equivalent
+ * calldata decode -- each is its own, brand-new selector on its own function, not a
+ * `launchFleetMission` mission-type argument, so their policy-flag conditionality is folded
+ * directly into check 2 instead.
  */
 
 import { decodeFunctionData, getAddress } from "viem";
 import { fetchLiveRuntimeConfig, getSelector, resolveFunctionAbi, type RuntimeConfig } from "./abi.js";
-import { resolveAllowCombat as resolveAllowCombatFromPolicy } from "./policy.js";
+import {
+  resolveAllowAlliance as resolveAllowAllianceFromPolicy,
+  resolveAllowCombat as resolveAllowCombatFromPolicy,
+} from "./policy.js";
 import type { UnsignedTx } from "./providers/types.js";
 
 /** Injectable so tests can supply a fixture instead of hitting the real network. Defaults to the
@@ -151,6 +162,43 @@ function combatSelectorSet(): ReadonlySet<`0x${string}`> {
   return selectors;
 }
 
+/**
+ * The 15 in-scope alliance-membership functions on `VeydriftAllianceSystem` (a wholly separate
+ * pinned contract -- `abi.ts`'s `resolveFunctionAbi(sig, "alliance")` resolves against it, never
+ * the game ABI). Permitted at `economy` tier **or above**, and only when
+ * `policy.actions.allow_alliance` resolves `true` (`resolveAllowAlliance`, `policy.ts`) -- see
+ * `checkAllowlist`'s selector check below for exactly why this is an inclusive-tier check,
+ * unlike combat's single-tier one. Diplomacy (`setDiplomacy`) and ACS coordination
+ * (`openDefenseIntent`) are deliberately NOT here -- combat-adjacent, out of scope for this
+ * phase.
+ */
+const ALLIANCE_SIGNATURES = [
+  "createAlliance(string,string,string)",
+  "updateAllianceProfile(uint256,string,string,string)",
+  "inviteMember(uint256,address)",
+  "cancelInvite(uint256,address)",
+  "acceptInvite(uint256)",
+  "requestJoinAlliance(uint256)",
+  "cancelJoinRequest(uint256)",
+  "dismissJoinRequest(uint256,address)",
+  "approveJoinRequest(uint256,address)",
+  "kickMember(uint256,address)",
+  "kickMembers(uint256,address[])",
+  "leaveAlliance()",
+  "setMemberRole(uint256,address,uint8)",
+  "setMembersRole(uint256,address[],uint8)",
+  "transferAllianceOwnership(uint256,address)",
+] as const;
+
+function allianceSelectorSet(): ReadonlySet<`0x${string}`> {
+  const selectors = new Set<`0x${string}`>();
+  for (const sig of ALLIANCE_SIGNATURES) {
+    const fn = resolveFunctionAbi(sig, "alliance");
+    selectors.add(getSelector(fn));
+  }
+  return selectors;
+}
+
 /** Tier -> allowed 4-byte selectors, computed from the pinned ABI (never a hardcoded hex list).
  *  `advisor` is deliberately empty: it may build and simulate, but the empty set means the
  *  allowlist itself refuses every `send`, independent of any other guard. */
@@ -200,21 +248,27 @@ export interface AllowlistResult {
  * list is the audit artifact, matching the agent skill's `vd guard` convention). `ok` is the AND
  * of every check.
  *
- * `opts.resolveAllowCombat` (launch-actions plan, commit 5) defaults to the real
- * `resolveAllowCombat` from `policy.ts` -- injectable purely so tests never touch the real
- * filesystem, the same pattern `opts.fetchConfig` already uses toward the live network. It is
- * called **lazily**, only once a decoded `launchFleetMission` mission type is actually Attack
- * (see below) -- a malformed or absent `actions.allow_combat` field must never block an
- * unrelated, non-combat transaction, which is exactly what calling it unconditionally for every
- * `send` would do.
+ * `opts.resolveAllowCombat` (launch-actions plan, commit 5) and `opts.resolveAllowAlliance`
+ * (the alliance feature) each default to the real resolver from `policy.ts` -- injectable purely
+ * so tests never touch the real filesystem, the same pattern `opts.fetchConfig` already uses
+ * toward the live network. Both are called **lazily**: `resolveAllowCombat` only once a decoded
+ * `launchFleetMission` mission type is actually Attack (see below), `resolveAllowAlliance` only
+ * once the selector is actually one of the 15 alliance functions -- a malformed or absent policy
+ * field must never block an unrelated transaction, which is exactly what calling either
+ * unconditionally for every `send` would do.
  */
 export async function checkAllowlist(
   tx: UnsignedTx,
   tier: Tier,
-  opts: { fetchConfig?: RuntimeConfigFetcher; resolveAllowCombat?: () => boolean } = {},
+  opts: {
+    fetchConfig?: RuntimeConfigFetcher;
+    resolveAllowCombat?: () => boolean;
+    resolveAllowAlliance?: () => boolean;
+  } = {},
 ): Promise<AllowlistResult> {
   const fetchConfig = opts.fetchConfig ?? fetchLiveRuntimeConfig;
   const resolveAllowCombat = opts.resolveAllowCombat ?? resolveAllowCombatFromPolicy;
+  const resolveAllowAlliance = opts.resolveAllowAlliance ?? resolveAllowAllianceFromPolicy;
   const checks: AllowlistCheck[] = [];
   const fail = (name: string, detail: string) => checks.push({ name, ok: false, detail });
   const pass = (name: string, detail?: string) => checks.push({ name, ok: true, detail });
@@ -243,9 +297,11 @@ export async function checkAllowlist(
   if (toChecksum) {
     try {
       const config = await fetchConfig();
-      const candidates = [config.gameContractAddress, config.contractAddress].filter(
-        (a: string | undefined): a is string => typeof a === "string" && a.length > 0,
-      );
+      const candidates = [
+        config.gameContractAddress,
+        config.contractAddress,
+        config.allianceContractAddress,
+      ].filter((a: string | undefined): a is string => typeof a === "string" && a.length > 0);
       const liveAddresses = new Set(candidates.map((a) => getAddress(a)));
       if (liveAddresses.size === 0) {
         fail("address", "live /runtime-config returned no contract address to check against");
@@ -266,16 +322,22 @@ export async function checkAllowlist(
   // selector (currently only launchInterplanetaryMissileAttack, commit 7) is never in
   // this unconditional set -- it's checked separately below, lazily, the same posture
   // Attack's mission-type argument already takes (checkAllowlist's own doc comment).
+  // Alliance selectors (the 15 VeydriftAllianceSystem membership functions) follow the
+  // same lazy-conditional shape, but at an inclusive tier check (economy OR operator),
+  // not a single tier -- see the branch below.
   const selector = tx.data.slice(0, 10).toLowerCase() as `0x${string}`;
   let allowedSelectors: ReadonlySet<`0x${string}`>;
   let combatSelectors: ReadonlySet<`0x${string}`>;
+  let allianceSelectors: ReadonlySet<`0x${string}`>;
   try {
     allowedSelectors = tierSelectors(tier);
     combatSelectors = combatSelectorSet();
+    allianceSelectors = allianceSelectorSet();
   } catch (err) {
     fail("selector", `could not compute "${tier}" tier's selector set: ${(err as Error).message}`);
     allowedSelectors = new Set();
     combatSelectors = new Set();
+    allianceSelectors = new Set();
   }
   if (allowedSelectors.has(selector)) {
     pass("selector", `${selector} allowed at tier "${tier}"`);
@@ -294,6 +356,23 @@ export async function checkAllowlist(
       fail(
         "selector",
         `${selector} requires policy.actions.allow_combat, but it could not be resolved: ${(err as Error).message}`,
+      );
+    }
+  } else if (allianceSelectors.has(selector) && (tier === "economy" || tier === "operator")) {
+    // Inclusive tier check, deliberately -- economy is alliance's FLOOR, not its ceiling (unlike
+    // combat, which is only ever checked at the single top tier, operator). An operator-tier
+    // wallet with allow_alliance=true must not be locked out of alliance actions just because
+    // economy happens to be the minimum tier they need, not the maximum tier they're allowed at.
+    try {
+      if (resolveAllowAlliance()) {
+        pass("selector", `${selector} allowed at tier "${tier}" (alliance, policy.actions.allow_alliance=true)`);
+      } else {
+        fail("selector", `${selector} requires policy.actions.allow_alliance=true; it is not`);
+      }
+    } catch (err) {
+      fail(
+        "selector",
+        `${selector} requires policy.actions.allow_alliance, but it could not be resolved: ${(err as Error).message}`,
       );
     }
   } else {

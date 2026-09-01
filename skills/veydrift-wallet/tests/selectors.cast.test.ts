@@ -27,6 +27,22 @@ describe.skipIf(!castAvailable)("live `cast sig` cross-check", () => {
     "startDefenseProduction(uint256,uint8,uint32)",
     "attackProtectionStatus(address,uint256)",
     "launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)",
+    // Alliance feature (commit 2) -- VeydriftAllianceSystem's 15 in-scope membership functions.
+    "createAlliance(string,string,string)",
+    "updateAllianceProfile(uint256,string,string,string)",
+    "inviteMember(uint256,address)",
+    "cancelInvite(uint256,address)",
+    "acceptInvite(uint256)",
+    "requestJoinAlliance(uint256)",
+    "cancelJoinRequest(uint256)",
+    "dismissJoinRequest(uint256,address)",
+    "approveJoinRequest(uint256,address)",
+    "kickMember(uint256,address)",
+    "kickMembers(uint256,address[])",
+    "leaveAlliance()",
+    "setMemberRole(uint256,address,uint8)",
+    "setMembersRole(uint256,address[],uint8)",
+    "transferAllianceOwnership(uint256,address)",
   ];
 
   it.each(signatures)("%s matches `cast sig` output", (sig) => {

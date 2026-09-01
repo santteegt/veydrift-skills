@@ -155,6 +155,19 @@ like `resolveTier` -- it does not, and cannot, defend against a caller that cont
 regardless of which policy file is in play: the fixed set of five checks below, `--confirm`
 mandatory, and refusal to send a nonpayable-read function.
 
+### The same residual limit applies to `allow_alliance` (alliance feature, commit 2)
+
+`src/policy.ts`'s `resolveAllowAlliance` is the alliance feature's counterpart to
+`resolveAllowCombat` above -- same shape (in fact the same `resolveBooleanActionFlag`
+implementation underneath both), same no-CLI-flag/no-env-var rule, same `false`-on-ENOENT
+default, same throw-on-malformed refusal. Everything the two paragraphs above say about
+`resolveAllowCombat`'s residual limit applies here identically, with `allow_alliance` substituted
+for `allow_combat`: it defends against a misconfigured caller asserting a value that contradicts
+the real policy, not against a caller that controls its own `$VEYDRIFT_HOME` and writes the
+policy it wants read. The one genuine difference is which tier the resulting selector check runs
+at -- `economy` **or above**, not `operator` only -- and that difference lives entirely in
+`allowlist.ts`'s selector-check branch, not in `resolveAllowAlliance` itself.
+
 ## Defense in depth: the allowlist doesn't trust the agent skill
 
 `src/allowlist.ts`'s `checkAllowlist` is re-run unconditionally inside `sendTx` regardless of what
@@ -163,16 +176,21 @@ and reported (never short-circuited in the report, only in the final `ok`):
 
 1. `tx.to` must be in the address set from a **live** `/runtime-config` fetch — never a hardcoded
    address, so a contract migration is reflected automatically and a stale hardcoded address can't
-   silently become wrong.
+   silently become wrong. Since the alliance feature (commit 2), this set includes
+   `allianceContractAddress` alongside `gameContractAddress`/`contractAddress` — a second,
+   genuinely different contract, not another alias of the same one.
 2. `tx.data`'s 4-byte selector must be in the tier's allowed set, and that set is **computed from
    the pinned ABI** (`resolveFunctionAbi` + `toFunctionSelector`), not from a hand-typed hex
    constant — if the pinned ABI ever stops containing one of the tier's signatures, computing the
-   selector throws loudly instead of silently allowlisting nothing (or worse, misresolving). At
-   `operator` tier, one selector is conditional rather than unconditional: `launchInterplanetaryMissileAttack`
-   (`COMBAT_SIGNATURES`, launch-actions plan commit 7, 2026-08-28) is checked lazily against
-   `resolveAllowCombat` the same way item 5's mission-type argument is — it's its own brand-new
-   selector, not a `launchFleetMission` argument, so its `allow_combat` conditionality lives in
-   this check directly rather than in item 5's calldata decode. See below.
+   selector throws loudly instead of silently allowlisting nothing (or worse, misresolving). Two
+   selector sets are conditional rather than unconditional: `launchInterplanetaryMissileAttack`
+   (`COMBAT_SIGNATURES`, launch-actions plan commit 7, 2026-08-28) at `operator` tier only, checked
+   lazily against `resolveAllowCombat`; and the 15 `VeydriftAllianceSystem` membership functions
+   (`ALLIANCE_SIGNATURES`, alliance feature commit 2) at `economy` tier **or above**, checked
+   lazily against `resolveAllowAlliance` — an inclusive check, since `economy` is alliance's floor,
+   not its ceiling, unlike combat's single-tier gate. Both are their own brand-new selectors, not
+   `launchFleetMission` arguments, so their policy-flag conditionality lives in this check directly
+   rather than in item 5's calldata decode. See below.
 3. `tx.value` must be `0` — no payable action is whitelisted at any tier reachable from this
    engine, so this check can never legitimately fail for a real proposed action; if it does,
    something upstream is already wrong.
@@ -264,6 +282,37 @@ validity, owned-missile-count) — see that package's own `CHANGELOG.md`'s `1.13
 `test_tier_map_agrees_with_the_wallet_engines_allowlist` (agent-side) is extended to also assert
 `launchInterplanetaryMissileAttack`'s selector is absent from `tierSelectors`'s own return value at
 every tier and present only in `COMBAT_SIGNATURES`, mirroring the existing mission-type-set diff.
+
+### 2026-09-01 (alliance feature, commit 2): a second contract, `VeydriftAllianceSystem`
+
+Unlike Attack and Missile (both still calls to the one game contract this engine has always
+targeted), the 15 alliance membership functions are calls to a **genuinely separate deployed
+contract** at its own address (`allianceContractAddress`, exposed directly by `/runtime-config`).
+This needed changes at every layer `resolveFunctionAbi`/`buildTx`/`checkAllowlist` touch, not just
+a new signature list:
+
+- `abi.ts` (commit 1 of this feature) pinned a second ABI artifact and gave every loader/resolver
+  an optional `contract: "game" | "alliance" = "game"` parameter, so a pre-existing call site's
+  behavior is unchanged by the default.
+- `tx.ts`'s `Action` interface gained `contract?: "game" | "alliance"`; `buildTx` resolves both
+  the ABI and the destination address off it. This is an **explicit build-time discriminator, not
+  an inference** — the caller (`veydrift-agent`'s `tick.py`) always knows which contract it's
+  targeting, so there is no ambiguity to resolve at the one point where ambiguity would actually
+  matter for tx safety. (Decode-only paths like `functionsForSelector`, used purely for
+  display/logging, do search both pinned ABIs — a theoretical, vanishingly unlikely
+  cross-contract-selector-collision risk, flagged in `abi.ts`'s own doc comment rather than
+  engineered around, since nothing behavior-deciding depends on that search.)
+- `allowlist.ts`'s address check (item 1 above) widened to a three-member candidate set; a new
+  `ALLIANCE_SIGNATURES`/`allianceSelectorSet()` pair (item 2 above) is checked lazily against a
+  new `resolveAllowAlliance` (`policy.ts`) — same lazy-resolution discipline commits 5 and 7
+  established, but at an **inclusive** tier check (`economy` or `operator`), not a single tier,
+  since `economy` is alliance's floor rather than its ceiling. This is the one place a naive copy
+  of combat's branch shape would have been wrong, and the test suite has a dedicated regression
+  for it.
+
+The alliance ABI pin has no live-hash re-verification path at all (`/runtime-config` has no
+`allianceAbiHash`/`allianceDeploymentCommit` field) — see `references/abi-pinning.md`'s "Second
+contract" section for why that's a permanent limit, not a transitional gap.
 
 ## The two other traps `send` refuses outright, independent of the allowlist
 

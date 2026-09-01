@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { encodeFunctionData, getAddress } from "viem";
 import type { RuntimeConfig } from "../src/abi.js";
-import { resolveFunctionAbi } from "../src/abi.js";
+import { getSelector, resolveFunctionAbi } from "../src/abi.js";
 import { checkAllowlist, tierSelectors } from "../src/allowlist.js";
 import { ShipId, shipCountsToFleetTuple } from "../src/fleet.js";
 import type { UnsignedTx } from "../src/providers/types.js";
@@ -9,6 +9,8 @@ import type { UnsignedTx } from "../src/providers/types.js";
 // The live gameContractAddress from a real /runtime-config fetch (2026-08-12), used here only as
 // a fixture value -- the allowlist itself always re-fetches live in production code.
 const GAME_ADDRESS = getAddress("0xf397910F005151b09644228573a4353818D3755d");
+// The live allianceContractAddress from a real /runtime-config fetch (2026-09-01), same posture.
+const ALLIANCE_ADDRESS = getAddress("0x0E5a6210482B15780cf5Ec036107031dcA702001");
 const NON_VEYDRIFT_ADDRESS = getAddress("0x000000000000000000000000000000000000dead" as `0x${string}`);
 
 function fixtureConfig(): RuntimeConfig {
@@ -16,6 +18,7 @@ function fixtureConfig(): RuntimeConfig {
     chainId: 8453,
     contractAddress: GAME_ADDRESS,
     gameContractAddress: GAME_ADDRESS,
+    allianceContractAddress: ALLIANCE_ADDRESS,
     backend: { build: { deploymentAbiHash: "sha256:fixture", deploymentCommit: "fixture" } },
   };
 }
@@ -44,6 +47,12 @@ function missileTx(): UnsignedTx {
   const fn = resolveFunctionAbi("launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)");
   const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, 665n, 0, 5] });
   return { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 };
+}
+
+function leaveAllianceTx(): UnsignedTx {
+  const fn = resolveFunctionAbi("leaveAlliance()", "alliance");
+  const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [] });
+  return { to: ALLIANCE_ADDRESS, data, value: 0n, chainId: 8453 };
 }
 
 describe("checkAllowlist", () => {
@@ -276,6 +285,129 @@ describe("checkAllowlist", () => {
         10,
       ) as `0x${string}`);
       expect(tierSelectors("operator").has(selector)).toBe(false);
+    });
+  });
+
+  describe("alliance membership functions -- their own selectors on a second contract, conditional on policy.actions.allow_alliance at economy tier or above (alliance feature, commit 2)", () => {
+    it("rejects at advisor tier regardless of allow_alliance", async () => {
+      const result = await checkAllowlist(leaveAllianceTx(), "advisor", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+    });
+
+    it("rejects at economy tier when allow_alliance resolves false", async () => {
+      const result = await checkAllowlist(leaveAllianceTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => false,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+      expect(result.reason).toMatch(/allow_alliance=true/);
+    });
+
+    it("allows at economy tier when allow_alliance resolves true", async () => {
+      const result = await checkAllowlist(leaveAllianceTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => true,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(true);
+    });
+
+    it("ALSO allows at operator tier when allow_alliance resolves true -- economy is a floor, not a ceiling, unlike combat's single-tier check", async () => {
+      const result = await checkAllowlist(leaveAllianceTx(), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => true,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(true);
+    });
+
+    it("rejects at operator tier when allow_alliance resolves false", async () => {
+      const result = await checkAllowlist(leaveAllianceTx(), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => false,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+    });
+
+    it("rejects (never passes vacuously) when resolveAllowAlliance throws", async () => {
+      const boom = () => {
+        throw new Error("policy file is malformed");
+      };
+      const result = await checkAllowlist(leaveAllianceTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: boom,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+      expect(result.reason).toMatch(/could not be resolved/);
+    });
+
+    it("is not resolved at all outside economy/operator tier -- lazy, never called unconditionally", async () => {
+      let called = false;
+      const result = await checkAllowlist(leaveAllianceTx(), "advisor", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => {
+          called = true;
+          return true;
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(called).toBe(false);
+    });
+
+    it("is absent from tierSelectors('operator') -- never in the unconditional set", () => {
+      const fn = resolveFunctionAbi("leaveAlliance()", "alliance");
+      const selector = getSelector(fn);
+      expect(tierSelectors("operator").has(selector)).toBe(false);
+    });
+
+    it("address check passes for the alliance contract's own address, distinct from the game contract's", async () => {
+      const result = await checkAllowlist(leaveAllianceTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => true,
+      });
+      expect(result.checks.find((c) => c.name === "address")?.ok).toBe(true);
+    });
+
+    it.each([
+      "createAlliance(string,string,string)",
+      "updateAllianceProfile(uint256,string,string,string)",
+      "inviteMember(uint256,address)",
+      "cancelInvite(uint256,address)",
+      "acceptInvite(uint256)",
+      "requestJoinAlliance(uint256)",
+      "cancelJoinRequest(uint256)",
+      "dismissJoinRequest(uint256,address)",
+      "approveJoinRequest(uint256,address)",
+      "kickMember(uint256,address)",
+      "kickMembers(uint256,address[])",
+      "leaveAlliance()",
+      "setMemberRole(uint256,address,uint8)",
+      "setMembersRole(uint256,address[],uint8)",
+      "transferAllianceOwnership(uint256,address)",
+    ])("%s resolves against the alliance ABI and is allowlisted at economy tier when allow_alliance=true", async (sig) => {
+      const fn = resolveFunctionAbi(sig, "alliance");
+      const argsByType: Record<string, unknown> = {
+        string: "x",
+        uint256: 1n,
+        address: GAME_ADDRESS,
+        uint8: 1,
+        "address[]": [GAME_ADDRESS],
+      };
+      const args = fn.inputs.map((input) => argsByType[input.type]);
+      const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args });
+      const tx: UnsignedTx = { to: ALLIANCE_ADDRESS, data, value: 0n, chainId: 8453 };
+      const result = await checkAllowlist(tx, "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => true,
+      });
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(true);
     });
   });
 

@@ -11,6 +11,47 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-01
+
+Alliance feature, commit 2/6: an alliance transaction is now buildable and (conditionally)
+sendable. Minor bump, same convention as the Colonize/Attack/Missile allowlist widenings
+before it — additive and backward compatible (no existing caller's behavior changes unless
+they set `policy.actions.allow_alliance: true` themselves), but a real widening of the
+transaction allowlist's security surface.
+
+### Added
+- `resolveAllowAlliance` + `AllowAllianceResolutionError` (`src/policy.ts`) — the
+  alliance-feature counterpart to `resolveAllowCombat`, refactored alongside it into a
+  shared `resolveBooleanActionFlag` helper (both are "read one boolean off `actions` in
+  `policy.json`, refuse-on-malformed, default-false-on-absent, no CLI-flag/env fallback
+  ever" with only the field name and error type differing).
+- `ALLIANCE_SIGNATURES`/`allianceSelectorSet()` (`src/allowlist.ts`) — the 15 in-scope
+  `VeydriftAllianceSystem` membership functions, resolved against the alliance ABI pinned
+  last commit.
+
+### Changed (breaking — allowlist widening)
+- `Action` (`src/tx.ts`) gained `contract?: "game" | "alliance"`, defaulting to `"game"` —
+  every action JSON written before this feature (including hand-written manual-override
+  files) keeps building the exact same transaction it always did. `buildTx` resolves both
+  the ABI and the destination address off this field.
+- `checkAllowlist`'s address check (item 1) widened to a three-member candidate set
+  (`gameContractAddress`/`contractAddress`/`allianceContractAddress`). Its selector check
+  (item 2) gained a new branch: `allianceSelectors.has(selector) && (tier === "economy" ||
+  tier === "operator")`, calling `resolveAllowAlliance` lazily exactly like Attack's/
+  Missile's `allow_combat` checks — but **inclusive of both tiers**, not a single tier,
+  since `economy` is alliance's floor, not its ceiling. `checkAllowlist`/`sendTx` gained an
+  injectable `resolveAllowAlliance` option, mirroring `resolveAllowCombat`'s.
+
+52 new tests (`tests/policy.test.ts`'s `resolveAllowAlliance` quintet plus an
+independence-from-`allow_combat` check, `tests/allowlist.test.ts`'s alliance describe
+block, `tests/tx.test.ts`'s `contract` field tests, 15 new `tests/selectors.cast.test.ts`
+entries). 216 passed + 2 fork-only skipped = 218 total (164 baseline from `0.8.0` + 52
+new); typecheck clean.
+
+Docs: `references/tx-safety.md`'s "Five checks" list (items 1 and 2, now three-way/dual-
+conditional) and a new "2026-09-01" section; `references/abi-pinning.md` unchanged this
+commit (already covered last commit).
+
 ## [0.8.0] - 2026-09-01
 
 ### Added

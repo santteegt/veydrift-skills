@@ -25,6 +25,7 @@ import {
   functionsForSelector,
   isNonpayableRead,
   resolveFunctionAbi,
+  type Contract,
   type RuntimeConfig,
 } from "./abi.js";
 import { checkAllowlist, type Tier } from "./allowlist.js";
@@ -66,6 +67,15 @@ export function getPublicClient(): VeydriftPublicClient {
 export interface Action {
   function: string;
   args: unknown[];
+  /** Which pinned contract `function` resolves against, and which live address `buildTx` sends
+   *  the call to. Defaults to `"game"` -- every action JSON written before the alliance feature
+   *  (including any hand-written manual-override file already in the wild) keeps building
+   *  exactly the same transaction it always did, unchanged. The caller (`tick.py`'s
+   *  `_action_to_walletctl_json`) always knows which contract it's targeting, so this is an
+   *  explicit field here rather than something `buildTx` infers from the function name -- a
+   *  same-named function on both ABIs (none exist today) would otherwise be ambiguous at the
+   *  one point where ambiguity actually matters for tx safety. */
+  contract?: Contract;
   /** wei, decimal string. Defaults to "0". Every reachable action here is non-payable. */
   value?: string;
   /** Human-readable rationale, carried through to the built tx and printed by `send`. */
@@ -154,7 +164,8 @@ async function fetchMaxFeePerGas(
 }
 
 export async function buildTx(action: Action, opts: BuildOptions = {}): Promise<BuiltTx> {
-  const fn = resolveFunctionAbi(action.function);
+  const contract: Contract = action.contract ?? "game";
+  const fn = resolveFunctionAbi(action.function, contract);
   const coercedArgs = fn.inputs.map((input, i) =>
     coerceAbiValue(input.type, action.args[i], (input as AbiParameter & { components?: AbiParameter[] }).components),
   );
@@ -162,8 +173,17 @@ export async function buildTx(action: Action, opts: BuildOptions = {}): Promise<
 
   const fetchConfig = opts.fetchConfig ?? fetchLiveRuntimeConfig;
   const config = await fetchConfig();
-  const toRaw = config.gameContractAddress ?? config.contractAddress;
-  if (!toRaw) throw new Error("live /runtime-config has no gameContractAddress/contractAddress");
+  const toRaw =
+    contract === "alliance"
+      ? config.allianceContractAddress
+      : (config.gameContractAddress ?? config.contractAddress);
+  if (!toRaw) {
+    throw new Error(
+      contract === "alliance"
+        ? "live /runtime-config has no allianceContractAddress"
+        : "live /runtime-config has no gameContractAddress/contractAddress",
+    );
+  }
   const to = getAddress(toRaw);
   const chainId = config.chainId ?? 8453;
   const value = action.value ? BigInt(action.value) : 0n;
@@ -359,6 +379,9 @@ export interface SendOptions {
   /** Injectable for tests; forwarded to `checkAllowlist`'s own option of the same name. See
    *  `allowlist.ts`'s doc comment for why this is resolved lazily rather than eagerly. */
   resolveAllowCombat?: () => boolean;
+  /** Injectable for tests; forwarded to `checkAllowlist`'s own option of the same name -- the
+   *  alliance-feature counterpart to `resolveAllowCombat` above, same lazy-resolution rationale. */
+  resolveAllowAlliance?: () => boolean;
 }
 
 export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${string}`> {
@@ -381,6 +404,7 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
   const allow = await checkAllowlist(tx, opts.tier, {
     fetchConfig: opts.fetchConfig,
     resolveAllowCombat: opts.resolveAllowCombat,
+    resolveAllowAlliance: opts.resolveAllowAlliance,
   });
   if (!allow.ok) {
     throw new SendRefusedError(`allowlist rejected this transaction: ${allow.reason}`);
