@@ -11,6 +11,19 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.15.2] - 2026-09-01
+
+### Fixed
+- **`guard.idempotency_key` collided every alliance action of one kind onto a single
+  key.** `planet_id`/`entity_id` are both always `None` for all 15 alliance functions
+  (there is no on-chain planet/entity involved), so e.g. every `kickMember` call would
+  have shared one key/revert-streak counter regardless of alliance or target -- the
+  exact same collision class `FLEET_MISSION`/`RESOLVE_MISSION`/`MISSILE_ATTACK` were each
+  fixed for previously. Caught during this feature's own docs review, before it ever went
+  live (no generator/override had exercised two distinct alliance actions back to back
+  yet). Fixed by folding in `alliance_id`, `target_player`, `target_players`, and `role`
+  -- every field that actually varies across calls of the same function.
+
 ## [1.15.1] - 2026-09-01
 
 Alliance feature, commit 5/6: policy plumbing. Small, isolated commit so the

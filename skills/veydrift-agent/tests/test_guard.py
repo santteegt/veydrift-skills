@@ -2035,6 +2035,30 @@ def test_idempotency_key_unaffected_for_non_fleet_non_resolve_actions():
     assert guard.idempotency_key(action) == f"{action.planet_id}:{action.function}:{action.entity_id}"
 
 
+def test_idempotency_key_distinguishes_alliance_actions_by_target_and_alliance_id():
+    """Caught during the alliance feature's own docs review, before this ever went live:
+    `planet_id`/`entity_id` are both always `None` for every one of the 15 alliance
+    functions, so the base triple alone would collapse every `kickMember` call
+    (regardless of alliance or target) onto one key/revert-streak counter -- the exact
+    same collision class FLEET_MISSION/RESOLVE_MISSION/MISSILE_ATTACK were each fixed for
+    above."""
+    kick_target_a = make_alliance_action(function="kickMember", alliance_id=1, target_player="0xa")
+    kick_target_b = make_alliance_action(function="kickMember", alliance_id=1, target_player="0xb")
+    assert guard.idempotency_key(kick_target_a) != guard.idempotency_key(kick_target_b)
+
+    kick_alliance_1 = make_alliance_action(function="kickMember", alliance_id=1, target_player="0xa")
+    kick_alliance_2 = make_alliance_action(function="kickMember", alliance_id=2, target_player="0xa")
+    assert guard.idempotency_key(kick_alliance_1) != guard.idempotency_key(kick_alliance_2)
+
+    batch_a = make_alliance_action(function="kickMembers", alliance_id=1, target_players=["0xa", "0xb"])
+    batch_b = make_alliance_action(function="kickMembers", alliance_id=1, target_players=["0xa", "0xc"])
+    assert guard.idempotency_key(batch_a) != guard.idempotency_key(batch_b)
+
+    role_officer = make_alliance_action(function="setMemberRole", alliance_id=1, target_player="0xa", role=alliance_ids.AllianceRole.OFFICER)
+    role_member = make_alliance_action(function="setMemberRole", alliance_id=1, target_player="0xa", role=alliance_ids.AllianceRole.MEMBER)
+    assert guard.idempotency_key(role_officer) != guard.idempotency_key(role_member)
+
+
 # --------------------------------------------------------------------------------------
 # revert_streak
 # --------------------------------------------------------------------------------------

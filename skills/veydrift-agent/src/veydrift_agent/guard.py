@@ -302,6 +302,21 @@ def idempotency_key(action: Action) -> str:
         # Fixed the same way, before this action family could ever actually be proposed
         # (no generator existed for it until this same commit).
         key = f"{key}:{action.target_planet_id}:{action.primary_target}"
+    elif action.kind is ActionKind.ALLIANCE:
+        # Alliance feature. The exact same collision, caught here before it ever went
+        # live: `planet_id`/`entity_id` are both always `None` for every one of the 15
+        # alliance functions (there is no on-chain planet/entity involved at all), so
+        # every alliance action of one kind -- e.g. every `kickMember` call, regardless
+        # of which alliance or which target -- would otherwise share one key/revert-
+        # streak counter. Folds in every field that actually varies across calls of the
+        # same function: `alliance_id` (all 15), `target_player` (most of them),
+        # `target_players` (the two batch functions) joined into one string so the key
+        # stays a plain string, and `role` (the two role-setting functions, since the
+        # same target could legitimately be re-targeted at a different role).
+        key = (
+            f"{key}:{action.alliance_id}:{action.target_player}:"
+            f"{','.join(action.target_players)}:{action.role}"
+        )
     return key
 
 
