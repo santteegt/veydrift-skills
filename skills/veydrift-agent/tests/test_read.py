@@ -32,8 +32,10 @@ from veydrift_agent.read import (
     _randomness_readiness,
     app,
     fetch_activity,
+    fetch_alliance_by_id,
     fetch_alliance_state,
     fetch_fleet_visibility,
+    fetch_missions,
 )
 
 BASE = http.API_BASE_URL
@@ -709,6 +711,60 @@ def test_fetch_alliance_state_raises_on_http_error_rather_than_exiting():
 
     with pytest.raises(http.VeydriftHTTPError):
         fetch_alliance_state(WALLET)
+
+
+@respx.mock
+def test_fetch_alliance_by_id_returns_the_raw_dict_with_no_query_params():
+    route = respx.get(f"{BASE}/alliance/29").mock(
+        return_value=httpx.Response(200, json={"alliance": {"allianceId": "29", "members": []}})
+    )
+
+    data = fetch_alliance_by_id(29)
+
+    assert data["alliance"]["allianceId"] == "29"
+    assert dict(route.calls.last.request.url.params) == {}
+
+
+@respx.mock
+def test_fetch_alliance_by_id_raises_on_http_error_rather_than_exiting():
+    """Confirmed live during this feature's planning: /alliance/{id} 404s
+    ({"error": "alliance_not_found"}) for an id the indexer has never seen."""
+    respx.get(f"{BASE}/alliance/999999").mock(
+        return_value=httpx.Response(404, json={"error": "alliance_not_found"})
+    )
+
+    with pytest.raises(http.VeydriftHTTPError):
+        fetch_alliance_by_id(999999)
+
+
+@respx.mock
+def test_fetch_missions_default_params():
+    route = respx.get(f"{BASE}/wallet/{WALLET}/missions").mock(
+        return_value=httpx.Response(200, json={"wallet": WALLET, "rows": []})
+    )
+
+    data = fetch_missions(WALLET)
+
+    assert data["rows"] == []
+    assert dict(route.calls.last.request.url.params) == {"page": "1", "pageSize": "25"}
+
+
+@respx.mock
+def test_fetch_missions_passes_optional_planet_id_and_status():
+    route = respx.get(f"{BASE}/wallet/{WALLET}/missions").mock(return_value=httpx.Response(200, json={"rows": []}))
+
+    fetch_missions(WALLET, planet_id=664, status="resolved", page=2, page_size=10)
+
+    params = dict(route.calls.last.request.url.params)
+    assert params == {"planetId": "664", "status": "resolved", "page": "2", "pageSize": "10"}
+
+
+@respx.mock
+def test_fetch_missions_raises_on_http_error_rather_than_exiting():
+    respx.get(f"{BASE}/wallet/{WALLET}/missions").mock(return_value=httpx.Response(404, text="not found"))
+
+    with pytest.raises(http.VeydriftHTTPError):
+        fetch_missions(WALLET)
 
 
 # --------------------------------------------------------------------------------------

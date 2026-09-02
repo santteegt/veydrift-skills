@@ -237,6 +237,62 @@ def test_record_revert_increments_per_key():
 
 
 # --------------------------------------------------------------------------------------
+# radar-state.json
+# --------------------------------------------------------------------------------------
+
+
+def test_load_radar_state_defaults_when_missing(isolated_home):
+    loaded = state.load_radar_state()
+    assert loaded.wallets == {}
+
+
+def test_load_radar_state_defaults_on_empty_file(isolated_home):
+    state.radar_state_path().write_text("")
+    loaded = state.load_radar_state()
+    assert loaded.wallets == {}
+
+
+def test_save_and_load_radar_state_round_trips(isolated_home):
+    s = state.RadarState()
+    s.wallets["0xabc"] = state.WalletRadarState(last_seen_mission_id="61740")
+    state.save_radar_state(s)
+
+    reloaded = state.load_radar_state()
+    assert reloaded.wallets["0xabc"].last_seen_mission_id == "61740"
+
+
+def test_radar_state_file_is_valid_json_on_disk(isolated_home):
+    s = state.RadarState()
+    s.wallets["0xabc"] = state.WalletRadarState(last_seen_mission_id="1")
+    state.save_radar_state(s)
+    raw = json.loads(state.radar_state_path().read_text())
+    assert raw["wallets"]["0xabc"]["last_seen_mission_id"] == "1"
+
+
+def test_radar_state_supports_multiple_wallets_independently(isolated_home):
+    """Not folded into AgentState (implicitly single-wallet) precisely because a
+    standalone `vd radar check --alliance-id` run can watch many wallets that are not
+    policy.wallet at all -- see radar.py's module docstring."""
+    s = state.RadarState()
+    s.wallets["0xaaa"] = state.WalletRadarState(last_seen_mission_id="1")
+    s.wallets["0xbbb"] = state.WalletRadarState(last_seen_mission_id="2")
+    state.save_radar_state(s)
+
+    reloaded = state.load_radar_state()
+    assert reloaded.wallets["0xaaa"].last_seen_mission_id == "1"
+    assert reloaded.wallets["0xbbb"].last_seen_mission_id == "2"
+
+
+def test_radar_state_missing_wallets_field_loads_with_default(isolated_home):
+    """A radar-state.json written before a given wallet was ever checked must still
+    load with that wallet simply absent -- additive convention, same as AgentState's
+    own missing-field tests above."""
+    state.radar_state_path().write_text(json.dumps({"version": 1}))
+    loaded = state.load_radar_state()
+    assert loaded.wallets == {}
+
+
+# --------------------------------------------------------------------------------------
 # Tick lockfile
 # --------------------------------------------------------------------------------------
 

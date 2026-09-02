@@ -711,6 +711,52 @@ def fetch_alliance_state(wallet: str, *, max_age: float | None = None) -> dict[s
     return http.fetch(f"/wallet/{wallet}/alliance", max_age=max_age)
 
 
+def fetch_alliance_by_id(alliance_id: int | str, *, max_age: float | None = None) -> dict[str, Any]:
+    """GET /alliance/{id} -- single-alliance detail BY ID, not wallet-scoped. Unlike
+    `fetch_alliance_state` (the CALLER's own alliance only), this resolves an arbitrary
+    alliance's full roster, radar.py's `resolve_targets_for_alliance` needs to expand
+    "alliance id N" into every member's planets regardless of whether the caller is a
+    member. Confirmed live for real, mainnet-indexed alliances (`{"alliance": {allianceId,
+    active, tag, name, owner, memberCount, members: [{address, role, joinedAt,
+    totalScore}, ...], ...}}`); 404s (`{"error": "alliance_not_found"}`) for an id the
+    indexer has never seen -- observed for an alliance that only ever existed on a local
+    Anvil fork, never for a real one, so this is a scope limit (unknown/unreal id), not a
+    general reliability caveat. Does NOT catch `http.VeydriftAPIError` -- same contract
+    as `fetch_alliance_state`; the caller decides how to degrade."""
+    return http.fetch(f"/alliance/{alliance_id}", max_age=max_age)
+
+
+def fetch_missions(
+    wallet: str,
+    *,
+    planet_id: int | None = None,
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 25,
+    max_age: float | None = None,
+) -> dict[str, Any]:
+    """GET /wallet/{addr}/missions, bypassing the CLI/`_emit` layer -- same posture as
+    `fetch_alliance_state`. `rows[]` is a tagged union (`references/api-routes.md`
+    §3.14): `{kind: "mission", mission, report?}` or `{kind: "battleReport", report}` --
+    but confirmed live that a resolved Attack actually arrives as `kind: "mission"` with
+    a top-level `report` attached; the `kind: "battleReport"` half of the union has
+    never been observed. radar.py's resolved-attack signal keys off `report` truthiness
+    for exactly this reason, not `kind` -- this is what catches an attack that has
+    already resolved and fallen out of `snapshot.incoming_fleets` (which lists future
+    arrivals only), see references/radar.md for the full rationale. Deliberately
+    not the global `/battle-reports` route (§3.17): that one has no wallet filter, is a
+    bare unfiltered array with no way to bound how far back to look, and would need
+    per-row filtering against every tracked planet on every call. Does NOT catch
+    `http.VeydriftAPIError` -- same contract as `fetch_alliance_state`; the caller
+    decides how to degrade."""
+    params: dict[str, Any] = {"page": page, "pageSize": page_size}
+    if planet_id is not None:
+        params["planetId"] = planet_id
+    if status is not None:
+        params["status"] = status
+    return http.fetch(f"/wallet/{wallet}/missions", params, max_age=max_age)
+
+
 def fetch_highscores(
     *,
     category: str,

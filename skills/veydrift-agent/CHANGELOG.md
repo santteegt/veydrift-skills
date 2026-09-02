@@ -11,6 +11,51 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-09-02
+
+Attack/resolved-battle/debris radar tracker — new `radar.py` module, fully self-contained
+(no `veydrift-wallet`/guard-layer changes at all: radar never constructs an on-chain
+`Action`). Built because `snapshot.incoming_fleets` alone cannot show a resolved attack —
+it only ever lists future arrivals, never resolved ones.
+
+### Added
+- Three independent signals in `radar.check_targets`: `incoming_fleet` (future arrivals,
+  every mission type reported, not filtered to the hardcoded `hostile` flag),
+  `resolved_attack` (past combat, new — this is the signal `incoming_fleet` structurally
+  cannot provide), `debris` (a tracked planet's own slot).
+- Two entry points sharing that one core: `vd tick` (`policy.radar.enabled`, new
+  `RadarCfg`, default `true`, scoped to `policy.planets`) and standalone
+  `vd radar check --wallet ADDR [--planets N] | --alliance-id N` — no `policy.json`
+  required, scheduler-facing, exit code `0`/`1`/`2` (clean/findings/could-not-complete)
+  as the actual notification contract (no notification mechanism exists anywhere in this
+  codebase).
+- New `read.fetch_alliance_by_id` (`GET /alliance/{id}`, previously unwired) and
+  `read.fetch_missions` (`GET /wallet/{addr}/missions`).
+- New `radar-state.json` (`state.RadarState`/`WalletRadarState`) — the resolved-attack
+  de-duplication cursor, keyed by wallet (not folded into `agent-state.json`, which is
+  implicitly single-wallet-shaped; `--alliance-id` mode watches many wallets at once).
+- New models: `WatchTarget`, `RadarFinding`, `RadarReport`, `RadarCfg`; `Policy.radar`.
+- `assets/policy.example.json` gained `"radar": {"enabled": true}`; schemas regenerated.
+- Tick report/`strategy.md` gained an unconditional "Radar" line when findings exist.
+
+### Fixed
+- `_resolved_attack_findings` initially filtered `/wallet/{addr}/missions` rows on
+  `kind == "battleReport"`, per `references/api-routes.md` §3.14's documented (but, it
+  turns out, unobserved) tagged union. A live check against real account data showed the
+  real shape is `kind: "mission"` with a top-level `report` object attached; the
+  `kind: "battleReport"` half has never actually appeared on live data. The bug meant the
+  first implementation would have silently found nothing for a resolved attack it was
+  specifically built to catch. Fixed by keying off `report` truthiness instead of `kind`.
+  Pinned by a real, unedited fixture (`tests/fixtures/wallet_missions_resolved_attack.json`)
+  and a dedicated regression test.
+
+### Docs
+- New `references/radar.md`: the full design, the incoming-vs-resolved-attack rationale,
+  the real row shape and the bug it caught, both entry points, the exit-code contract.
+- `SKILL.md`: routing-table row. `references/scheduling.md`: new "A fifth, narrower thing
+  to schedule" section with a worked cron wrapper. `docs/COVERAGE.md`: new Part 2 row.
+  `AGENTS.md` §11: pointer.
+
 ## [1.15.3] - 2026-09-01
 
 Alliance feature, commit 6/6 (final): docs sweep. No code changes — closes out the

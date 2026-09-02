@@ -493,6 +493,14 @@ enough to call out here specifically, not a duplicate of that ledger.
   transfer, kick, leave — using three fresh, alliance-free accounts, every step confirmed
   against real on-chain state (`allianceOf`/`allianceMembers`/`allianceProfile`/
   `allianceInvite`/`allianceJoinRequests` reads), not just emitted events.
+- `skills/veydrift-agent/references/radar.md` — the attack/resolved-battle/debris radar
+  (new module, `radar.py`, read-only, no `veydrift-wallet` involvement): why
+  `incoming_fleets` alone missed a real live attack during this feature's own planning,
+  the three independent signals, the two entry points (`vd tick`'s `policy.radar.enabled`
+  and standalone `vd radar check --wallet | --alliance-id`), and a real bug this same
+  live-verification discipline caught before shipping — `/wallet/{addr}/missions`'
+  resolved-attack rows arrive as `kind: "mission"` with a `report` attached, not the
+  `kind: "battleReport"` shape the initial implementation assumed.
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.

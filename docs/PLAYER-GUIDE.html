@@ -822,6 +822,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
     <span class="c-key">"allow_alliance"</span>: false                   <span class="c-comment">// gates 15 alliance actions — economy tier or above, override-only, see §16</span>
   },
   <span class="c-key">"wallet_engine"</span>: { <span class="c-key">"provider"</span>: <span class="c-str">"keystore"</span>, <span class="c-key">"require_confirmation"</span>: true },
+  <span class="c-key">"radar"</span>: { <span class="c-key">"enabled"</span>: true },              <span class="c-comment">// incoming-attack/resolved-battle/debris check, every tick — see §10, §11a</span>
   <span class="c-key">"strategy"</span>: {
     <span class="c-key">"resource_weights"</span>: { <span class="c-key">"metal"</span>: 1, <span class="c-key">"crystal"</span>: 1, <span class="c-key">"deuterium"</span>: 1 },   <span class="c-comment">// used to tie-break, not to pick a family -- see below</span>
     <span class="c-key">"max_alternatives"</span>: 5,            <span class="c-comment">// caps how many runner-up options each proposal lists</span>
@@ -968,6 +969,16 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
       <tbody>
         <tr><td><code>provider</code></td><td>string enum</td><td>exactly <code>"keystore"</code> or <code>"envkey"</code> — no other value is legal</td><td><code>"keystore"</code></td></tr>
         <tr><td><code>require_confirmation</code></td><td>bool</td><td><code>true</code>/<code>false</code></td><td><code>true</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong><code>radar</code></strong></p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Legal values / range</th><th>Default</th></tr></thead>
+      <tbody>
+        <tr><td><code>enabled</code></td><td>bool</td><td><code>true</code>/<code>false</code> — runs the incoming-attack/resolved-battle/debris check every tick, scoped to <code>policy.planets</code> (empty = every owned planet). <strong>Defaults <code>true</code></strong>, unlike almost every other flag on this page — deliberate: radar is read-only and finds things a tick would otherwise miss silently. See §10 and §11a.</td><td><code>true</code></td></tr>
       </tbody>
     </table>
   </div>
@@ -1190,6 +1201,7 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
     <li><strong>The "why" states real numbers</strong>, not a canned explanation — a live comparison against your planet's current state, computed fresh every tick.</li>
     <li><strong>The build order is derived from your planet's actual traits</strong> — temperature, multipliers, current levels — never a generic order copy-pasted for every planet. A cold planet leans toward Deuterium Synthesizer earlier; a hot one gets offered a different energy source (Fusion Reactor or a Solar Satellite) a cold planet never would.</li>
     <li><strong>The transaction shown is real and complete</strong>, not a mockup. That's what makes a later promotion decision evidence-based rather than a guess (§13).</li>
+    <li><strong>A <code>radar:</code> line, when it appears, is never routine narration</strong> — it only shows up when the radar check (<code>policy.radar.enabled</code>, on by default) found something: an incoming mission of any type, a resolved attack, or debris on your own planet. This exists because the field that lists <em>upcoming</em> arrivals cannot show an attack that already happened — it simply falls off that list once resolved. If you ask "was I attacked?", check the <code>radar:</code> line (or run <code>vd radar check</code>, §11a) — not just <code>incoming: none</code>.</li>
   </ul>
 </section>
 <section class="chapter" id="s11" data-num="11" data-label="Running on a schedule">
@@ -1210,6 +1222,26 @@ capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   <h3>Or just ask, one tick at a time</h3>
   <p>You don't need a schedule to use the agent through a session — §5 already showed this for setup, and the same thing works for ongoing use. In any Claude Code or Hermes session with both skills installed, plain language like <em>"run a Veydrift tick,"</em> <em>"check my queues,"</em> or <em>"is my planet under attack"</em> is enough to trigger <code>veydrift-agent</code> on its own — it's listed directly in the skill's own trigger phrases. This is the same <code>vd tick</code> underneath, just invoked conversationally instead of from a schedule; useful for a one-off check without setting up any of the harnesses above.</p>
   <p><code>$VEYDRIFT_HOME</code> is shared across every invocation on a machine — point it at a scratch directory for any testing you don't want mixed into real history.</p>
+
+  <h3 id="s11a">11a. <code>vd radar check</code> — a standing watch without the full tick loop</h3>
+  <p><code>vd tick</code> already runs the radar every time (§10), but sometimes you want a notification watch without a full policy file at all — for example, watching an alliance's every member's planets, not just your own.</p>
+  <div class="codeblock">
+    <div class="codeblock-head"><span>shell</span></div>
+    <div class="codeblock-body"><pre>vd radar check --wallet 0xYourAddress
+vd radar check --alliance-id 29          <span class="c-comment"># every planet of every member of that alliance</span></pre></div>
+  </div>
+  <p>No <code>policy.json</code> required for either form — just an address or an alliance id. Point it at a cron job or a <code>launchd</code> schedule (same recipe as §11's bare-OS row) and act on its <strong>exit code</strong> — that's the actual signal, since this codebase has no email/Discord/push integration of its own to hand off to:</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Exit code</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>0</code></td><td>Clean — nothing found.</td></tr>
+        <tr><td><code>1</code></td><td>Something was found — an incoming mission, a resolved attack, or debris.</td></tr>
+        <tr><td><code>2</code></td><td>The check itself failed (couldn't reach the API for one or more wallets) — treat this differently from <code>0</code>; it is <em>not</em> a clean bill of health.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Add <code>--json</code> alongside the human-readable report for a script to parse. <code>--wallet</code>/<code>--alliance-id</code> are mutually exclusive; <code>--planets 664,701</code> narrows <code>--wallet</code> mode to specific planets (default: every planet that wallet owns). Same de-duplication as <code>vd tick</code>'s own radar check — a resolved attack surfaced once via either command won't be reported again by the other.</p>
 </section>
 <section class="chapter" id="s12" data-num="12" data-label="Reading the logs">
   <div class="chapter-head"><span class="chapter-num">12</span><h2 class="chapter-title">Reading the logs</h2></div>
@@ -1364,6 +1396,7 @@ mine target), fall back to the cadence default.</pre></div>
         <tr><td><code>verify-abi</code> shows a mismatch</td><td>The deployed contract's ABI changed. Every write is blocked until resolved — deliberate</td></tr>
         <tr><td>Guards read 17/20 at tier 1</td><td>Correct and expected — see §10</td></tr>
         <tr><td><code>policy.json</code> edits rejected</td><td>Schema validated strictly — the error names the exact field</td></tr>
+        <tr><td><code>incoming: none</code> but you were attacked</td><td>Expected — that field only ever lists <em>future</em> arrivals; it can't show an attack that already resolved. Check the <code>radar:</code> line (§10) or run <code>vd radar check</code> (§11a) directly.</td></tr>
       </tbody>
     </table>
   </div>

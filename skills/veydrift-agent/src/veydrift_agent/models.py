@@ -423,6 +423,56 @@ class AllianceState(Base):
 
 
 # --------------------------------------------------------------------------------------
+# Radar — one wallet+planet a `radar.check_targets` run watches, and what it found.
+# Sourced/produced by `radar.py`; never touches guard.py (radar never constructs an
+# on-chain Action). See references/radar.md.
+# --------------------------------------------------------------------------------------
+
+
+class WatchTarget(Base):
+    """One planet, on one wallet, radar.py should check. `galaxy`/`system`/`position`
+    are the coordinate components needed for the debris signal
+    (`fetch_universe_system(galaxy, system)`, then matching the returned slot by
+    `position` -- the universe route's slots carry no planet id of their own, only
+    `position`, per `references/api-routes.md` §3.16). `None` when unresolved (e.g. a
+    planet with no parseable coordinates string), in which case `check_targets` simply
+    skips the debris check for that one target rather than failing the whole run."""
+
+    wallet: str
+    planet_id: int
+    galaxy: int | None = None
+    system: int | None = None
+    position: int | None = None
+
+
+class RadarFinding(Base):
+    """One thing radar.py's `check_targets` found worth reporting. `kind` distinguishes
+    the three independent signal sources (see references/radar.md for why all three are
+    needed -- notably, `incoming_fleet` alone cannot see a resolved attack)."""
+
+    kind: Literal["incoming_fleet", "resolved_attack", "debris"]
+    wallet: str
+    planet_id: int
+    #: Human-readable detail, e.g. "Attack from 8:34:5 arriving in 2h14m" or
+    #: "battleReport 12345: AttackerWin, 5000 looted". Deliberately free text rather
+    #: than a dozen structured sub-fields -- the three `kind`s have genuinely different
+    #: shapes and this is reporting-only, never a Decision input.
+    detail: str
+    occurred_at: datetime | None = None
+
+
+class RadarReport(Base):
+    """Output of one `radar.check_targets` run. `errors` is populated, not raised,
+    for a per-wallet/per-system fetch failure -- same best-effort posture as
+    `tick._own_planet_debris`/`_resolvable_mission_ids` -- so a report with findings AND
+    errors is possible and both must be surfaced, never one silently dropped for the
+    other."""
+
+    findings: list[RadarFinding] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------------------
 # Policy — parsed from $VEYDRIFT_HOME/policy.json. Invalid policy is a hard stop.
 # --------------------------------------------------------------------------------------
 
@@ -496,6 +546,23 @@ class EscalationCfg(Base):
 class WalletEngineCfg(Base):
     provider: Literal["keystore", "envkey"] = "keystore"
     require_confirmation: bool = True
+
+
+class RadarCfg(Base):
+    """Gates the `vd tick` integration of radar.py's incoming-fleet / resolved-attack /
+    debris check, scoped to `policy.planets` (empty == every owned planet, same
+    convention `Policy.planets` already uses for the snapshot itself).
+
+    Default `True` -- a deliberate departure from this codebase's usual "empty/off ==
+    old behaviour" convention every other `ActionsCfg`/`StrategyCfg` flag follows. Every
+    one of those flags gates something that can spend gas, move resources, or reach
+    combat; radar is read-only and finds things a tick would otherwise miss silently --
+    see references/radar.md's incident writeup: `snapshot.incoming_fleets` alone missed
+    a real attack because it only ever lists future arrivals, not resolved ones. Do not
+    "fix" this default to `False` by pattern-matching the other flags in this file; that
+    would reproduce the exact gap this field exists to close."""
+
+    enabled: bool = True
 
 
 class EntityTarget(Base):
@@ -599,6 +666,7 @@ class Policy(Base):
     escalation: EscalationCfg = Field(default_factory=EscalationCfg)
     wallet_engine: WalletEngineCfg = Field(default_factory=WalletEngineCfg)
     strategy: StrategyCfg = Field(default_factory=StrategyCfg)
+    radar: RadarCfg = Field(default_factory=RadarCfg)
 
 
 # --------------------------------------------------------------------------------------

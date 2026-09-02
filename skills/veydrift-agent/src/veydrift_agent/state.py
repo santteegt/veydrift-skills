@@ -91,6 +91,10 @@ def agent_state_path() -> Path:
     return veydrift_home() / "agent-state.json"
 
 
+def radar_state_path() -> Path:
+    return veydrift_home() / "radar-state.json"
+
+
 def killswitch_path() -> Path:
     return veydrift_home() / "KILLSWITCH"
 
@@ -304,6 +308,57 @@ def save_agent_state(state: AgentState) -> None:
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(state.model_dump_json(indent=2))
     tmp.replace(path)  # atomic on POSIX -- never leaves a half-written agent-state.json
+
+
+# --------------------------------------------------------------------------------------
+# radar-state.json — resolved-attack de-duplication cursor for radar.py.
+#
+# Deliberately a separate file from agent-state.json, not a new field on AgentState:
+# AgentState is implicitly single-wallet-shaped (policy.wallet), but radar.py's
+# standalone `vd radar check --alliance-id` entry point can watch many wallets that are
+# not policy.wallet at all (every alliance member). Keying by wallet address here is
+# what lets both radar entry points (the policy-scoped `vd tick` integration and the
+# standalone scheduler-facing command) share one cursor file without collision. Same
+# local-model, additive-fields-only convention as AgentState above (not part of the
+# frozen models.py on-disk contract -- AGENTS.md §4).
+# --------------------------------------------------------------------------------------
+
+
+class WalletRadarState(_Base):
+    #: The most recent resolved-attack `missionId` (from a `/wallet/{addr}/missions` row
+    #: with `kind == "battleReport"`) already surfaced as a RadarFinding for this wallet.
+    #: `None` until the first check ever completes for this wallet -- radar.py treats
+    #: `None` as "report every battleReport row seen this run", never as "nothing to
+    #: report", the same fail-closed-toward-reporting posture AGENTS.md §5 asks of every
+    #: gate that depends on optional data (this isn't a guard gate, but the same
+    #: vacuous-pass-on-absent-data failure mode applies to a monitoring feature too: an
+    #: unset cursor must not silently suppress the very first report).
+    last_seen_mission_id: str | None = None
+    last_checked_at: datetime | None = None
+
+
+class RadarState(_Base):
+    version: int = 1
+    wallets: dict[str, WalletRadarState] = Field(default_factory=dict)
+
+
+def load_radar_state() -> RadarState:
+    """Same never-raises-on-missing, never-swallows-corruption contract as
+    `load_agent_state`."""
+    path = radar_state_path()
+    if not path.exists():
+        return RadarState()
+    raw = path.read_text()
+    if not raw.strip():
+        return RadarState()
+    return RadarState.model_validate(json.loads(raw))
+
+
+def save_radar_state(state: RadarState) -> None:
+    path = radar_state_path()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(state.model_dump_json(indent=2))
+    tmp.replace(path)  # atomic on POSIX -- never leaves a half-written radar-state.json
 
 
 # --------------------------------------------------------------------------------------

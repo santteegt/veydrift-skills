@@ -90,6 +90,7 @@ from rich.console import Console
 from veydrift_agent import alliance_ids, guard as guard_mod
 from veydrift_agent import http, ids, log, read
 from veydrift_agent import plan as plan_mod
+from veydrift_agent import radar as radar_mod
 from veydrift_agent.models import (
     Action,
     ActionKind,
@@ -107,6 +108,7 @@ from veydrift_agent.models import (
     GuardVerdict,
     PlanetSnapshot,
     Policy,
+    RadarReport,
     RandomnessReadiness,
     Resources,
     Snapshot,
@@ -119,8 +121,10 @@ from veydrift_agent.state import (
     TickLockedError,
     UnresolvedProposal,
     load_agent_state,
+    load_radar_state,
     policy_path,
     save_agent_state,
+    save_radar_state,
     tick_lock,
 )
 from veydrift_agent.state import (
@@ -1797,6 +1801,27 @@ def _alliance_summary_line(state: AllianceState | None) -> str | None:
     return ", ".join(parts)
 
 
+def _radar_summary_line(report: RadarReport | None) -> str | None:
+    """One-line summary of `radar_report` for the tick report -- `None` when the
+    feature is off (`report` itself is `None` in that case) or when the check ran and
+    found nothing at all (a clean, error-free report is deliberately silent here, same
+    "no line for a routine nothing-to-report tick" convention `_alliance_summary_line`
+    already follows for an empty alliance state)."""
+    if report is None:
+        return None
+    if not report.findings and not report.errors:
+        return None
+    parts = []
+    if report.findings:
+        by_kind: dict[str, int] = {}
+        for f in report.findings:
+            by_kind[f.kind] = by_kind.get(f.kind, 0) + 1
+        parts.append(", ".join(f"{count} {kind}" for kind, count in by_kind.items()))
+    if report.errors:
+        parts.append(f"{len(report.errors)} check error(s)")
+    return "; ".join(parts)
+
+
 def _await_indexed(*, wallet: str, policy_planets: list[int], target_block: int, max_wait_s: int) -> bool:
     """The mandatory post-receipt wait (docs/SPEC.md §5.7): polls a fresh snapshot's
     `latest_indexed_block` until it covers `target_block`, or `max_wait_s` elapses.
@@ -2048,6 +2073,22 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # actions are manual-override-only, the planner has no rung that reads this.
     alliance_state = _alliance_state(policy_model.wallet) if policy_model.actions.allow_alliance else None
 
+    # radar.py: gated on policy.radar.enabled (default True -- see RadarCfg's docstring
+    # for why this default departs from every other ActionsCfg/StrategyCfg flag's
+    # "empty/off == old behaviour" convention). Scoped to policy.planets (empty ==
+    # every owned planet, same convention _fetch_snapshot itself already applies) via
+    # radar.targets_from_planet_snapshots against the Snapshot already fetched above --
+    # no extra /wallet/{addr}/planets call. Best-effort: a fetch failure inside
+    # radar.check_targets becomes a RadarReport.errors entry, never an aborted tick.
+    radar_report: RadarReport | None = None
+    if policy_model.radar.enabled:
+        radar_targets = radar_mod.targets_from_planet_snapshots(
+            policy_model.wallet, snapshot.planets, policy_model.planets
+        )
+        radar_state = load_radar_state()
+        radar_report = radar_mod.check_targets(radar_targets, radar_state)
+        save_radar_state(radar_state)
+
     # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
@@ -2203,6 +2244,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         override_record=override_record,
         override_line=override_line,
         alliance_state=alliance_state,
+        radar_report=radar_report,
     )
 
 
@@ -2419,6 +2461,7 @@ def _finish_tick(
     override_record: dict[str, Any] | None = None,
     override_line: str | None = None,
     alliance_state: AllianceState | None = None,
+    radar_report: RadarReport | None = None,
 ) -> None:
     proposal_record = {
         "ts": now.isoformat(),
@@ -2447,6 +2490,7 @@ def _finish_tick(
         "human_activity_check": human_activity_record,
         "override": override_record,
         "alliance": alliance_state.model_dump() if alliance_state is not None else None,
+        "radar": radar_report.model_dump() if radar_report is not None else None,
     }
 
     # Dedup: a content-identical repeat of the immediately-previous logged proposal (e.g.
@@ -2510,6 +2554,7 @@ def _finish_tick(
         duplicate_of=duplicate_note,
         human_activity_line=human_activity_line,
         alliance_line=_alliance_summary_line(alliance_state),
+        radar_line=_radar_summary_line(radar_report),
     )
 
     if not is_duplicate:
@@ -2521,6 +2566,15 @@ def _finish_tick(
     # references/manual-action-override.md).
     if override_line is not None:
         log.append_strategy(f"tick {agent_state.tick_count}: {override_line}", now=now)
+
+    # Radar findings are never routine enough to suppress -- unlike the guard-verdict
+    # narration below (deliberately quiet on a structural tier block or a duplicate
+    # tick), a hostile incoming fleet, a newly resolved attack, or debris on an owned
+    # planet is worth a strategy.md line every time it's found, regardless of whether
+    # this tick also happens to be a content-duplicate of the last proposal.
+    if radar_report is not None and radar_report.findings:
+        summary = _radar_summary_line(radar_report)
+        log.append_strategy(f"tick {agent_state.tick_count}: radar -- {summary}", now=now)
 
     # Fix 5: a *structural* tier block (the ONLY reason decision != ALLOW is the `tier`
     # gate itself) is expected at every tick until the policy is promoted and carries no

@@ -23,6 +23,7 @@ account-specific (your wallet, your planet), that's called out.
 9. [Manual action override — `vd tick --action`](#9-manual-action-override-vd-tick---action)
 10. [Reading what the agent tells you](#10-reading-what-the-agent-tells-you)
 11. [Running on a schedule](#11-running-on-a-schedule)
+    - [11a. `vd radar check` — a standing watch without the full tick loop](#11a-vd-radar-check-a-standing-watch-without-the-full-tick-loop)
 12. [Reading the logs](#12-reading-the-logs)
 13. [Evolving through the tiers](#13-evolving-through-the-tiers)
 14. [Example prompt and looping for tier>=1 agent operators](#14-example-prompt-and-looping-for-tier1-agent-operators)
@@ -273,6 +274,7 @@ change called out:
     "on_health_unhealthy_minutes": 30, "on_revert_count": 2
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },
+  "radar": { "enabled": true },     // incoming-attack/resolved-battle/debris check, every tick -- see §10 and §11a
   "strategy": {
     "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },   // used to tie-break, not to pick a family -- see below
     "max_alternatives": 5,            // caps how many runner-up options each proposal lists
@@ -473,6 +475,12 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | --- | --- | --- | --- |
 | `provider` | string enum | exactly `"keystore"` or `"envkey"` — no other value is legal | `"keystore"` |
 | `require_confirmation` | bool | `true`/`false` | `true` |
+
+**`radar`**
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `enabled` | bool | `true`/`false` — runs the incoming-attack/resolved-battle/debris check every tick, scoped to `policy.planets` (empty = every owned planet). **Defaults `true`**, unlike almost every other flag in this file — this is deliberate: radar is read-only and finds things a tick would otherwise miss silently. See §10 and §11a. | `true` |
 
 **`strategy`**
 
@@ -818,6 +826,17 @@ A few things worth understanding about that block before you trust it:
   exactly what would be submitted if you were at a tier that could submit it. That's
   deliberate: it's what makes a later promotion decision evidence-based rather than a
   guess (§13).
+- **A `radar:` line, when it appears, means something worth reading — it's never routine
+  narration.** It only shows up when the radar check (`policy.radar.enabled`, on by
+  default) actually found something: an incoming mission (any type, not just ones flagged
+  hostile — see the callout below), a resolved attack, or debris on your own planet. A
+  clean check is silent, same as a routine tick with nothing else to report. This exists
+  because of a real gap: the field that lists *upcoming* fleet arrivals cannot show an
+  attack that has already happened — it simply falls off that list once it resolves. The
+  radar's second signal (checking your mission archive for resolved battles) is what
+  catches that case. If you ever ask "was I attacked?" and only look at the top-level
+  "incoming: none" line, you're looking at the wrong field for a *past* attack — check the
+  `radar:` line, or run `vd radar check` (§11a) directly.
 
 ## 11. Running on a schedule
 
@@ -848,6 +867,41 @@ without setting up any of the harnesses above.
 Whichever you pick, `$VEYDRIFT_HOME` is shared across every invocation on the same
 machine — if you're testing something and don't want it mixed into your real history, set
 `VEYDRIFT_HOME` to a scratch directory for that session.
+
+### 11a. `vd radar check` — a standing watch without the full tick loop
+
+`vd tick` already runs the radar every time (§10), but sometimes you want a notification
+watch without a full policy file at all — for example, watching an alliance's every
+member's planets, not just your own. `vd radar check` is that standalone command:
+
+```
+vd radar check --wallet 0xYourAddress
+vd radar check --alliance-id 29          # every planet of every member of that alliance
+```
+
+No `policy.json` required for either form — just an address or an alliance id. Point it at
+a cron job or a `launchd` schedule (same recipe as §11's bare-OS row) and act on its **exit
+code** — that's the actual signal, since this codebase has no email/Discord/push
+integration of its own to hand off to:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Clean — nothing found. |
+| `1` | Something was found — an incoming mission, a resolved attack, or debris. |
+| `2` | The check itself failed (couldn't reach the API for one or more wallets) — treat this differently from `0`; it is *not* a clean bill of health. |
+
+Add `--json` alongside the human-readable report for a script to parse. A minimal wrapper:
+
+```bash
+if ! vd radar check --alliance-id 29 --json > /tmp/radar-last.json; then
+  [ $? -eq 1 ] && your-notify-command "Veydrift radar found something"
+fi
+```
+
+`--wallet`/`--alliance-id` are mutually exclusive; `--planets 664,701` narrows `--wallet`
+mode to specific planets (default: every planet that wallet owns). Same de-duplication as
+`vd tick`'s own radar check — a resolved attack surfaced once via either command won't be
+reported again by the other.
 
 ## 12. Reading the logs
 
@@ -1051,6 +1105,7 @@ asks it to invent numbers it doesn't have.
 | Guards read `17/20 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
+| `incoming: none` but you were attacked | Expected — that field only ever lists *future* arrivals; it can't show an attack that has already resolved. Check the `radar:` line instead (§10), or run `vd radar check` (§11a) directly — its second signal reads your mission archive specifically to catch this case. |
 
 ## 16. Safety reminders, one more time
 

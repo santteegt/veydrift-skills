@@ -44,6 +44,8 @@ from veydrift_agent.models import (
     Limits,
     PlanetSnapshot,
     Policy,
+    RadarFinding,
+    RadarReport,
     Resources,
     Snapshot,
     Tier,
@@ -280,6 +282,13 @@ def _patch_common(monkeypatch, *, snapshot=None, action=None, live_addresses=Non
     # `_resolvable_mission_ids` above.
     monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    # radar.py (default policy.radar.enabled=True) makes its own independent
+    # /wallet/{addr}/fleet-visibility + /wallet/{addr}/missions + universe-system calls
+    # inside `_run_tick`'s normal path -- stubbed here for the same hermeticity reason
+    # as `_resolvable_mission_ids`/`_own_planet_debris` above. `check_targets` itself
+    # (not `targets_from_planet_snapshots`) is stubbed so this also covers a test that
+    # overrides `snapshot` with planets lacking parseable coordinates.
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: action or _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: live_addresses)
     monkeypatch.setattr(
@@ -355,6 +364,7 @@ def test_noop_action_produces_no_tx_and_no_extra_network_calls(isolated_home, mo
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: noop)
     monkeypatch.setattr(tick, "_live_addresses", lambda: live_addr_calls.append(1) or None)
 
@@ -1413,6 +1423,7 @@ def test_run_tick_wires_foreign_debris_targets_into_the_planner(isolated_home, m
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: targets)
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
 
     captured = {}
@@ -1437,6 +1448,7 @@ def test_run_tick_wires_resolvable_mission_ids_into_the_planner(isolated_home, m
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [999])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
 
     captured = {}
@@ -1462,6 +1474,7 @@ def test_run_tick_wires_own_planet_debris_into_the_planner(isolated_home, monkey
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: debris)
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
 
     captured = {}
@@ -1618,6 +1631,7 @@ def test_run_tick_wires_colonize_targets_into_the_planner(isolated_home, monkeyp
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_colonize_targets", lambda snapshot: fetch_calls.append(1) or targets)
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
 
@@ -1645,6 +1659,7 @@ def test_run_tick_never_fetches_colonize_targets_when_not_declared(isolated_home
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_colonize_targets", _boom)
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x"))
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
@@ -1674,6 +1689,7 @@ def test_run_tick_wires_outgoing_colonize_count_into_the_guard(isolated_home, mo
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_colonize_targets", lambda snapshot: [])
     monkeypatch.setattr(tick, "_outgoing_colonize_count", lambda wallet: 1)
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: colonize_action)
@@ -1703,6 +1719,7 @@ def test_run_tick_never_fetches_outgoing_colonize_count_for_a_non_colonize_actio
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_colonize_targets", lambda snapshot: [])
     monkeypatch.setattr(tick, "_outgoing_colonize_count", _boom)
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
@@ -1977,6 +1994,7 @@ def test_run_tick_wires_attack_targets_into_the_planner(isolated_home, monkeypat
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_attack_targets", lambda wallet: fetch_calls.append(1) or targets)
     monkeypatch.setattr(tick, "_missile_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
@@ -2005,6 +2023,7 @@ def test_run_tick_never_fetches_attack_targets_when_combat_is_disabled(isolated_
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_attack_targets", _boom)
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x"))
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
@@ -2024,6 +2043,7 @@ def test_run_tick_wires_missile_targets_into_the_planner(isolated_home, monkeypa
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_attack_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_missile_targets", lambda wallet: fetch_calls.append(1) or targets)
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
@@ -2052,6 +2072,7 @@ def test_run_tick_never_fetches_missile_targets_when_combat_is_disabled(isolated
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_missile_targets", _boom)
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: Action(kind=ActionKind.NOOP, rule="9:no-match", rationale="x"))
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
@@ -2071,6 +2092,7 @@ def test_run_tick_wires_attack_protection_allowed_into_the_guard(isolated_home, 
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_attack_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_missile_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_attack_protection_allowed", lambda wallet, action, snapshot: (True, None))
@@ -2101,6 +2123,7 @@ def test_run_tick_wires_attack_protection_allowed_into_the_guard_for_a_missile(i
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_attack_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_missile_targets", lambda wallet: {})
     monkeypatch.setattr(tick, "_attack_protection_allowed", lambda wallet, action, snapshot: (False, "bashing"))
@@ -2132,6 +2155,7 @@ def test_run_tick_never_fetches_attack_protection_allowed_for_a_non_attack_actio
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_attack_protection_allowed", _boom)
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
@@ -2246,6 +2270,7 @@ def test_run_tick_wires_alliance_state_into_the_guard(isolated_home, monkeypatch
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_alliance_state", lambda wallet: state)
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
     monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
@@ -2273,6 +2298,7 @@ def test_run_tick_never_fetches_alliance_state_when_the_flag_is_off(isolated_hom
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(tick, "_alliance_state", _boom)
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: None)
@@ -2302,6 +2328,114 @@ def test_alliance_summary_line_reports_membership_and_pending_counts():
 
 def test_alliance_summary_line_is_none_when_the_feature_is_off():
     assert tick._alliance_summary_line(None) is None
+
+
+# --------------------------------------------------------------------------------------
+# radar.py wiring — the "Radar" tick-report section, `policy.radar.enabled` (default
+# True; see RadarCfg's docstring for why), and the regression discipline the feature's
+# plan required: `radar.enabled=false` must reproduce pre-radar tick output.
+# --------------------------------------------------------------------------------------
+
+
+def test_radar_summary_line_is_none_when_the_feature_is_off():
+    assert tick._radar_summary_line(None) is None
+
+
+def test_radar_summary_line_is_none_for_a_clean_report():
+    """A radar check that ran and found nothing at all is deliberately silent -- same
+    "no line for a routine nothing-to-report tick" convention `_alliance_summary_line`
+    already follows for an empty alliance state."""
+    assert tick._radar_summary_line(RadarReport()) is None
+
+
+def test_radar_summary_line_summarises_findings_by_kind():
+    report = RadarReport(
+        findings=[
+            RadarFinding(kind="incoming_fleet", wallet=WALLET, planet_id=664, detail="x"),
+            RadarFinding(kind="debris", wallet=WALLET, planet_id=664, detail="y"),
+            RadarFinding(kind="debris", wallet=WALLET, planet_id=665, detail="z"),
+        ]
+    )
+    line = tick._radar_summary_line(report)
+    assert "1 incoming_fleet" in line
+    assert "2 debris" in line
+
+
+def test_radar_summary_line_reports_errors_alongside_findings():
+    report = RadarReport(errors=["0xabc: fleet-visibility fetch failed: boom"])
+    line = tick._radar_summary_line(report)
+    assert "1 check error(s)" in line
+
+
+def test_run_tick_wires_radar_targets_from_the_snapshot_scoped_to_policy_planets(isolated_home, monkeypatch):
+    """End-to-end: `_run_tick` must build radar targets from the Snapshot it already
+    fetched (no extra /wallet/{addr}/planets call), scoped to `policy.planets`."""
+    _write_policy(planets=[664])
+    captured = {}
+
+    def _capture_check_targets(targets, state):
+        captured["targets"] = targets
+        return RadarReport()
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", _capture_check_targets)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert [t.planet_id for t in captured["targets"]] == [664]
+    assert captured["targets"][0].wallet == WALLET
+
+
+def test_run_tick_radar_report_appears_in_the_report_and_strategy_log(isolated_home, monkeypatch):
+    report = RadarReport(findings=[RadarFinding(kind="resolved_attack", wallet=WALLET, planet_id=664, detail="battleReport 61740: AttackerWin")])
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: report)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    _write_policy()
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "radar" in result.output.lower()
+    assert "resolved_attack" in result.output
+
+    strategy_text = log.strategy_path().read_text()
+    assert "radar" in strategy_text and "resolved_attack" in strategy_text
+
+
+def test_run_tick_radar_disabled_never_calls_check_targets_and_omits_the_report_line(isolated_home, monkeypatch):
+    """The mandated regression: `radar.enabled=false` must reproduce pre-radar tick
+    behaviour exactly -- no radar network call at all, and no "radar:" line in the
+    printed report (the same mechanism that keeps a clean, enabled report silent above
+    also keeps a disabled one silent, but this test additionally asserts the function
+    is never even called, which a silent report alone wouldn't prove)."""
+
+    def _boom(*a, **kw):
+        raise AssertionError("must not call radar.check_targets when policy.radar.enabled is false")
+
+    _write_policy(radar={"enabled": False})
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", _boom)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "radar:" not in result.output
+    proposals = log.read_proposals()
+    assert proposals[0]["radar"] is None
 
 
 # --------------------------------------------------------------------------------------
@@ -2884,6 +3018,7 @@ def test_full_tick_sequence_is_build_then_simulate_then_send(isolated_home, monk
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: {_LIVE_ADDR})
     monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, _LIVE_ADDR))
@@ -2926,6 +3061,7 @@ def test_full_tick_simulation_failure_surfaces_in_report_and_proposal(isolated_h
     monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
     monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
     monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
     monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
     monkeypatch.setattr(tick, "_live_addresses", lambda: {_LIVE_ADDR})
     monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, _LIVE_ADDR))

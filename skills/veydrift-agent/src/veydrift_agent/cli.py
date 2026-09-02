@@ -29,6 +29,7 @@ _SUBAPPS: list[tuple[str, str, str]] = [
     ("veydrift_agent.guard", "guard", "Evaluate guardrails against a proposed action"),
     ("veydrift_agent.tick", "tick", "Run one loop iteration"),
     ("veydrift_agent.log", "log", "Read and summarise the action and strategy logs"),
+    ("veydrift_agent.radar", "radar", "Monitor tracked planets for incoming attacks, resolved battles, and debris"),
 ]
 
 _MISSING: list[str] = []

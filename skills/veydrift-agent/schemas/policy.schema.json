@@ -172,6 +172,18 @@
       "title": "Limits",
       "type": "object"
     },
+    "RadarCfg": {
+      "description": "Gates the `vd tick` integration of radar.py's incoming-fleet / resolved-attack /\ndebris check, scoped to `policy.planets` (empty == every owned planet, same\nconvention `Policy.planets` already uses for the snapshot itself).\n\nDefault `True` -- a deliberate departure from this codebase's usual \"empty/off ==\nold behaviour\" convention every other `ActionsCfg`/`StrategyCfg` flag follows. Every\none of those flags gates something that can spend gas, move resources, or reach\ncombat; radar is read-only and finds things a tick would otherwise miss silently --\nsee references/radar.md's incident writeup: `snapshot.incoming_fleets` alone missed\na real attack because it only ever lists future arrivals, not resolved ones. Do not\n\"fix\" this default to `False` by pattern-matching the other flags in this file; that\nwould reproduce the exact gap this field exists to close.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "RadarCfg",
+      "type": "object"
+    },
     "Resources": {
       "description": "A metal/crystal/deuterium triple. Used for holdings, costs, caps and reserves.",
       "properties": {
@@ -330,6 +342,9 @@
       },
       "title": "Planets",
       "type": "array"
+    },
+    "radar": {
+      "$ref": "#/$defs/RadarCfg"
     },
     "reserves": {
       "$ref": "#/$defs/Resources"

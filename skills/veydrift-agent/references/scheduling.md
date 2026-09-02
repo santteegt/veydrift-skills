@@ -132,3 +132,39 @@ A reasonable `__INTERVAL_SECONDS__` is `policy.cadence.economy_minutes * 60` (th
 policy's default of 10 minutes → 600 seconds), but nothing enforces that — the plist and
 `policy.json` are two independent files a human keeps in sync by hand, the same way the
 interactive `/loop` cadence is chosen independently of the policy file.
+
+## A fifth, narrower thing to schedule: `vd radar check`
+
+`vd tick` already runs the radar as part of every normal tick (`policy.radar.enabled`,
+default `true` — see `references/radar.md`), scoped to `policy.planets`. `vd radar check`
+is a separate, lighter-weight command for the case where a human wants a standing
+notification watch **without** running the full tick loop — no `policy.json` required at
+all, just `--wallet` or `--alliance-id`:
+
+```
+vd radar check --alliance-id 29
+```
+
+Same "this package owns *what*, the harness owns *cadence and delivery*" split as `vd
+tick` above — there is no notification/webhook mechanism anywhere in this codebase, so the
+exit code (`0` clean, `1` findings, `2` could not complete the check — see
+`references/radar.md`) is the actual contract a wrapper acts on. A minimal cron entry:
+
+```bash
+#!/usr/bin/env bash
+# radar-watch.sh — run this from cron/launchd at whatever interval is reasonable for the
+# alliance's size and activity; the disk cache (60s default TTL) makes a re-run within
+# that window nearly free either way.
+if ! vd radar check --alliance-id 29 --json > /tmp/radar-last.json; then
+  case $? in
+    1) osascript -e 'display notification "Radar found something" with title "Veydrift"' ;;
+    2) echo "veydrift radar: check could not complete" | mail -s "radar degraded" you@example.com ;;
+  esac
+fi
+```
+
+`osascript`/`mail` above are illustrative, not this package's concern — swap in whatever
+notification path the harness actually has (a Slack webhook, `terminal-notifier`, Hermes'
+own alerting). The one thing worth keeping regardless of the notifier: branch on the exit
+code, not on parsing the human `rich` report — `--json`'s output is what's meant to be
+parsed.
