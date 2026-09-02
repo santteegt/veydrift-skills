@@ -38,6 +38,10 @@
   - [11.5 Missile — Missile Silo and Impulse Drive raised via storage write, an Interplanetary Missile produced live](#115-missile--missile-silo-and-impulse-drive-raised-via-storage-write-an-interplanetary-missile-produced-live)
   - [11.6 Missile launched live — fully deterministic, and the event confirms the exact arithmetic](#116-missile-launched-live--fully-deterministic-and-the-event-confirms-the-exact-arithmetic)
   - [11.7 What this closes, precisely](#117-what-this-closes-precisely)
+- [12. Round 5 (2026-09-02) — Alliances, 13 of 15 membership functions live on a pinned fork](#12-round-5-2026-09-02--alliances-13-of-15-membership-functions-live-on-a-pinned-fork)
+  - [12.1 Setup — three fresh, alliance-free accounts](#121-setup--three-fresh-alliance-free-accounts)
+  - [12.2 The full lifecycle, each step confirmed against real on-chain state, not just events](#122-the-full-lifecycle-each-step-confirmed-against-real-on-chain-state-not-just-events)
+  - [12.3 What this closes, precisely](#123-what-this-closes-precisely)
 
 ---
 
@@ -959,3 +963,136 @@ before/after state independently, not merely trusted from the event.
   only against `test_guard.py`'s unit test of the same boundary.
 - **Mainnet**: still untouched by this fork-testing effort specifically — same as every round
   before this one.
+
+## 12. Round 5 (2026-09-02) — Alliances, 13 of 15 membership functions live on a pinned fork
+
+Everything below ran against a local Anvil fork of Base pinned at block `50797468`, against
+the real deployed `VeydriftAllianceSystem` at `0x0E5a6210482B15780cf5Ec036107031dcA702001`.
+Every number is real, not illustrative — same standard as every prior round.
+
+### 12.1 Setup — three fresh, alliance-free accounts
+
+Unlike every prior round's reused single/dual-account cast (the project's own account and the
+10-planet impersonated account), this round needed genuinely fresh accounts: `createAlliance`/
+`requestJoinAlliance` both revert `AlreadyInAlliance` if the caller already has a membership,
+and by this point in the project's history the two accounts every prior round reused are
+themselves both real members of real alliances (confirmed live: the project's own account is a
+`Member` of alliance 29, the 10-planet account is `Owner` of alliance 1 "Cerberus"). Scanned
+`/highscores`' `economy` rows for wallets with no `alliance` field, cross-checked each candidate
+directly against `GET /wallet/{addr}/alliance` (`membership.allianceId == "0"`, the real
+sentinel confirmed in `docs/RESEARCH-ADDENDUM.md` §7.4) and `GET /wallet/{addr}/planets` (a
+real `homePlanetId`, satisfying `createAlliance`/`requestJoinAlliance`'s `NoPlanet` check).
+Three such accounts, all confirmed live before use, none previously touched by this project:
+
+- **A** — `0x71ce5605ab649d97446ef179bc2983b18ddc9a48` (home planet 25)
+- **B** — `0xe60473f538d9bab0936e13842885c31951d23007` (home planet 39)
+- **C** — `0x231394bbb30ade6ae85a61b24ee22b5f25bd8431` (home planet 36)
+
+All three impersonated via `fork-impersonate` (no real key touched, same sanctioned technique
+every prior round used), each topped up to 100 ETH via `anvil_setBalance` for gas headroom.
+`$VEYDRIFT_HOME/policy.json` set `tier: "operator"` and `actions.allow_alliance: true` — a real
+requirement, not incidental: `resolveAllowAlliance` (`policy.ts`) has no CLI/env fallback at
+all, so an empty `VEYDRIFT_HOME` (this runbook's usual `/tmp/empty` pattern) would have
+`checkAllowlist` refuse every alliance selector regardless of tier.
+
+### 12.2 The full lifecycle, each step confirmed against real on-chain state, not just events
+
+Every send below went through the exact production path (`walletctl build --action ...
+--provider fork-impersonate` → `simulate --from ...` → `send --confirm --provider
+fork-impersonate --tier operator`), and every one resolved `to` to the alliance contract's own
+address (`0x0E5a6210...`) via `Action.contract: "alliance"` — confirmed directly in each `send`
+command's own printed `to (checksummed):` line before broadcasting, not assumed. `status:
+"success"` on all 16 transactions (13 distinct functions, 3 of them exercised a second time to
+set up their own negative-path sibling — see below).
+
+1. **`createAlliance("FORK", "Fork Test Alliance", "Anvil fork verification round")`** (A) — tx
+   `0xb611747536de8accbc6385a5933e52a0193525d7d51ac0edb83608eb0136f358`. Return data decoded to
+   allianceId **35**. Three events fired in one transaction, each independently confirmed by
+   computing its own topic0 hash and matching against the live log, not assumed from the ABI
+   alone: `AllianceCreated(35, A, "FORK", "Fork Test Alliance")`, `AllianceJoined(35, A, role=3
+   Owner)` (the creator auto-joins as Owner), `AllianceProfileUpdated(35, ...)`. Confirmed via
+   `allianceOf(A)` → `(35, 3, <timestamp>)` and `allianceProfile(35)` → `(true, "FORK", "Fork
+   Test Alliance", "Anvil fork verification round", A, <timestamp>, 1)` — before/after reads
+   against the live contract, not just the emitted events.
+2. **`updateAllianceProfile(35, "FORK2", "Fork Test Alliance v2", "Updated during Anvil fork
+   verification")`** (A, Owner) — tx
+   `0x8b93b5b91e69f854e59c5ba6a52a7b7065c28949af9ddc078ad1530dfcafebc9`. `allianceProfile(35)`
+   re-read afterward: tag/name/description all updated, `memberCount` unchanged at 1.
+3. **`inviteMember(35, B)`** (A) — tx
+   `0xe61187b730f8759d922407c6f34d72339a3e52a95aa0b614ddf325872f7eef09`. `allianceInvite(B, 35)`
+   → `(true, 35, A, <timestamp>)`.
+4. **`acceptInvite(35)`** (B) — tx
+   `0x187e44dcd39dd637a0968ecea565f11b47d45f753ef5ecc057281d267ffda22d`. `allianceOf(B)` → `(35,
+   1 Member, <timestamp>)`; `allianceMembers(35)` → `[A, B]`; `allianceProfile(35).memberCount`
+   `1 → 2`.
+5. **`setMemberRole(35, B, 2 Officer)`** (A, Owner) — tx
+   `0xc43dc31b684c9569cc9520eefb128cf2bffc9ef45eff3561833cd343a6d646c7`. `allianceOf(B)` role `1
+   → 2`.
+6. **`requestJoinAlliance(35)`** (C) — tx
+   `0x4ff6073d010dcc600d2fd8840ece2d1d8f1a157084592e50df6cca25fe6c0a12`. `allianceJoinRequests(35)`
+   → `[C]`.
+7. **`approveJoinRequest(35, C)`** (B, **Officer, not Owner** — confirms the contract's
+   Officer-or-above bar, not an Owner-only one, matches `guard._gate_alliance_action`'s own
+   `meets_min_role(role, OFFICER)` check exactly) — tx
+   `0x0939218cdeb11a0db75611c4eba5b67cc247148f06db686d9909956a79a1d162`. `allianceOf(C)` → `(35,
+   1 Member, ...)`; `allianceMembers(35)` → `[A, B, C]`; `allianceJoinRequests(35)` → `[]`
+   (consumed).
+8. **`kickMember(35, C)`** (B, Officer kicking an ordinary Member — the one restriction is
+   Officer-cannot-kick-Officer, which this deliberately does not trigger) — tx
+   `0xc79ab601f3c60d882f3aa2b7cb5e7ce52ac4b0bf08d9c7f44ea03f55fee3045e`. `allianceOf(C)` reset to
+   `(0, 0, 0)`; `allianceMembers(35)` → `[A, B]`.
+9. **`transferAllianceOwnership(35, B)`** (A, Owner, transferring to B, an Officer — satisfies
+   `NewOwnerMustBeOfficer`) — tx
+   `0x90d1e8de7bc86b3b932ee831d98b5b543e9e4495351c39eca81b1efde623a54c`. `allianceOf(A)` → role
+   `3 → 2` (demoted to Officer); `allianceOf(B)` → role `2 → 3` (promoted to Owner);
+   `allianceProfile(35).owner` field itself flips from A's address to B's.
+10. **`leaveAlliance()`** (A, now an ordinary Officer, not the sole member — the
+    unconditional-leave path, not the sole-Owner path §12's own guard test suite also covers) —
+    tx `0x2cee6421346b598046e018596721a00241b224eaa131dc619a3f5b0dcc662d5d`. `allianceOf(A)`
+    reset to `(0, 0, 0)`; `allianceMembers(35)` → `[B]`.
+11. **`inviteMember(35, C)`** (B, now Owner) — tx
+    `0x11d4584183c5cba1885d10c2218560e1f3abeecb6e9d1e29e7bc8e0f26c41b58` — set up for the next
+    step.
+12. **`cancelInvite(35, C)`** (B) — tx
+    `0x471147d6820bdda3347a0e39ceaa72ec9eb77d6b81321b56ff75b97833a8c710`. `allianceInvite(C, 35)`
+    → `(false, 0, 0x0, 0)` — cleared.
+13. **`requestJoinAlliance(35)`** (C, again) — tx
+    `0xd18b1b23e351c0b42ec34403e6d10df0efdac4b2c7239249052c862ce15d1bad` — set up for the next
+    step.
+14. **`dismissJoinRequest(35, C)`** (B, Owner) — tx
+    `0x88ef244d2983c1a2e3b53d29fb6df194f39c417ca826b88c93c996d8a96694b7`.
+    `allianceJoinRequests(35)` → `[]`.
+15. **`requestJoinAlliance(35)`** (C, a third time) — tx
+    `0xda553c303160ad495ac90a6fbe0a8e198f19490563316ea2954066002f285f08` — set up for the last
+    step.
+16. **`cancelJoinRequest(35)`** (C, cancelling their own request) — tx
+    `0xb564543d2d98274fa0b8b7e9f824857708d1d5fec0a19d3b99f675eff9ffeab9`.
+    `allianceJoinRequest(C, 35)` → `(false, 0, 0x0, 0)` — cleared.
+
+Final state, confirmed live: `allianceMembers(35)` → `[B]` (sole Owner);
+`allianceProfile(35)` → `(true, "FORK2", "Fork Test Alliance v2", "Updated during Anvil fork
+verification", B, <original createdAt>, 1)`. A and C both fully clean — `allianceOf` reports
+`(0, 0, 0)` for both, exactly the state this round found them in.
+
+### 12.3 What this closes, precisely
+
+**13 of the 15 in-scope membership functions are now live-sent and confirmed against real
+on-chain state**, not just fixture-tested: `createAlliance`, `updateAllianceProfile`,
+`inviteMember`, `cancelInvite`, `acceptInvite`, `requestJoinAlliance`, `cancelJoinRequest`,
+`dismissJoinRequest`, `approveJoinRequest`, `kickMember`, `leaveAlliance`,
+`setMemberRole`, `transferAllianceOwnership`.
+
+**Not live-sent this round: `kickMembers`/`setMembersRole` (the two batch variants).** Both are
+structurally identical to their already-verified singular siblings (`kickMember`/
+`setMemberRole`) — same per-element on-chain logic, the array is simply iterated — and this
+codebase's own `tests/test_tick.py` covers the array-construction half (`_action_to_walletctl_json`'s
+`kickMembers`/`setMembersRole` branches) directly. Not sending them live is a scope choice, not
+an unresolved risk: nothing about a batch call exercises a code path the 13 singular sends above
+didn't already exercise once each.
+
+Also confirmed, incidentally, along the way: `guard._gate_alliance_action`'s Officer-or-above
+bar for `approveJoinRequest` matches the real contract exactly (step 7, sent by an Officer, not
+the Owner) — this had only ever been unit-tested against a fixture before this round.
+
+Mainnet: still untouched by this fork-testing effort specifically — same as every round before
+this one.

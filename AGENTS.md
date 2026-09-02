@@ -486,6 +486,13 @@ enough to call out here specifically, not a duplicate of that ledger.
   origin and target planets, the strongest verification any selector in this runbook has
   received). That round also surfaced a previously-undocumented contract mechanic: an unresolved
   Attack mission locks *both* the origin and the target planet, not just the attacker's side.
+  **Round 5 (§12, 2026-09-02)** live-sent 13 of the 15 alliance-membership functions
+  (`kickMembers`/`setMembersRole`, the two batch variants, are the only ones not sent —
+  structurally identical to their already-verified singular siblings) across a full lifecycle —
+  create, invite/cancel, accept, request/cancel/dismiss/approve, role change, ownership
+  transfer, kick, leave — using three fresh, alliance-free accounts, every step confirmed
+  against real on-chain state (`allianceOf`/`allianceMembers`/`allianceProfile`/
+  `allianceInvite`/`allianceJoinRequests` reads), not just emitted events.
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.

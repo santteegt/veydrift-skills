@@ -11,6 +11,22 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-09-02
+
+### Docs
+- `references/fork-testing.md` gained §12 (round 5) — 13 of the 15 alliance-membership
+  functions live-sent on a local Anvil fork, across a full lifecycle (create/invite/
+  cancel/accept/request/dismiss/approve/role-change/ownership-transfer/kick/leave) using
+  three fresh, alliance-free accounts. Every step confirmed against real on-chain state
+  (`allianceOf`/`allianceMembers`/`allianceProfile`/`allianceInvite`/
+  `allianceJoinRequests` reads), not just emitted events — including confirming
+  `guard._gate_alliance_action`'s Officer-or-above bar for `approveJoinRequest` matches
+  the real contract exactly. Only `kickMembers`/`setMembersRole` (the two batch variants)
+  weren't sent, being structurally identical to their already-verified singular
+  siblings. No code changed; every function behaved exactly as designed.
+  `docs/COVERAGE.md`'s Alliances row and `AGENTS.md`'s fork-testing pointer updated to
+  match.
+
 ## [0.9.1] - 2026-09-01
 
 ### Docs
