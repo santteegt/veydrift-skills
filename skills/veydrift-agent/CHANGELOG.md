@@ -11,6 +11,39 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.15.3] - 2026-09-01
+
+Alliance feature, commit 6/6 (final): docs sweep. No code changes — closes out the
+6-commit plan that added membership actions on `VeydriftAllianceSystem`, a wholly
+separate deployed contract, reachable via `vd tick --action` only and gated on a new
+`policy.actions.allow_alliance` flag at `economy` tier or above.
+
+### Docs
+- `docs/SPEC.md`: new correction 73 (the full commit-by-commit writeup, mirroring
+  corrections 70-72's depth for Attack/Missile); non-goals paragraph and the T2 tier-table
+  row updated; §5.5's gate table gained the `alliance_action` row (23rd gate).
+- `docs/COVERAGE.md`: Part 2's "Alliances" row rewritten from "out of scope" to describe
+  what shipped.
+- `docs/RESEARCH-ADDENDUM.md`: new §7 — the `AllianceRole` enum, the 15 functions, the
+  no-live-hash-verification finding, and the real live-response shapes confirmed
+  (the `membership` sentinel, string-vs-int field types).
+- `references/guardrails.md`: renumbered gate table (23 gates), new `alliance_action` row
+  and a full explanatory section (per-function precondition list, the two documented
+  gaps, the `abi_hash` alliance branch).
+- `references/entity-ids.md`: new §5a for `alliance_ids.AllianceRole` — a seventh enum,
+  in a deliberate sibling module, from a second contract.
+- `references/api-routes.md`: new §3.22 for `/wallet/{addr}/alliance`, moved out of the
+  "undocumented-but-live" list now that `fetch_alliance_state` is a live caller.
+- `references/manual-action-override.md`: worked `acceptInvite` example.
+- `SKILL.md`: tier table gained the alliance row.
+- `docs/PLAYER-GUIDE.md`/`.html`, `docs/TECHNICAL-WALKTHROUGH.md`/`.html`, `README.md`:
+  policy example, field-reference table, safety reminders, non-goals paragraph, module
+  table rows, tier tables, and test counts (825 Python + 218 TypeScript = 1043) updated.
+  Also closed two small pre-existing drift gaps found along the way: the walkthrough's
+  `.html` mirror's non-goals paragraph had never been updated for Missile (commit 7), and
+  `ActionKind`'s own docstring said "only the first six map to a contract call" when it
+  had been seven since commit 7.
+
 ## [1.15.2] - 2026-09-01
 
 ### Fixed

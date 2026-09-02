@@ -39,6 +39,7 @@ happened.
   - [3.19 `/chain/events` — not exposed, and why](#319-chainevents--not-exposed-and-why)
   - [3.20 `/raid-finder/debris`](#320-raid-finderdebris)
   - [3.21 `/wallet/{addr}/attack-protection`](#321-walletaddrattack-protection)
+  - [3.22 `/wallet/{addr}/alliance`](#322-walletaddralliance)
 - [4. Queue parsing (`QueueState`) — typed from source, not from a live sample](#4-queue-parsing-queuestate--typed-from-source-not-from-a-live-sample)
 - [5. Incoming-fleet parsing (`FleetMissionSummary`) — same caveat](#5-incoming-fleet-parsing-fleetmissionsummary--same-caveat)
 - [6. Entity ID → name tables](#6-entity-id--name-tables)
@@ -619,6 +620,32 @@ feeding `guard._gate_attack_protection`), the same "bypass the CLI/`_emit` layer
 dict" posture `fetch_raid_finder_debris`/`fetch_highscores` already take — not wired
 into `vd read`'s own CLI target list, same as those two.
 
+### 3.22 `/wallet/{addr}/alliance`
+
+Wallet-scoped, no query parameters. A denormalized indexer view, confirmed live
+2026-09-01: `membership` ({allianceId, role, joinedAt}), `profile`, `directory` (every
+alliance the indexer knows about, each with a `members[]` array), `pendingInvites`,
+`pendingJoinRequests`, `allianceJoinRequests` (incoming requests to the CALLER's own
+alliance — only populated when the caller is Officer/Owner of it), `members` (the
+caller's own alliance roster).
+
+**A wallet with no alliance reports a real sentinel object, never JSON `null`**:
+`"membership": {"allianceId": "0", "role": "none", "joinedAt": "0"}`. `tick.
+_alliance_state` folds `allianceId == 0` (equivalently `role == "none"`) into
+`AllianceState.membership = None` — a naive truthiness check on the raw dict would
+otherwise treat every wallet as a member of a nonexistent alliance 0.
+
+**Every numeric-looking field is a decimal STRING, not a JSON number, except
+`directory[].memberCount`** — confirmed by direct inspection of a live response, not
+assumed uniform across the payload. `role` serializes lowercase
+(`"owner"`/`"officer"`/`"member"`/`"none"`).
+
+Moved out of §11 below 2026-09-01 (alliance feature, commit 4): `read.
+fetch_alliance_state()` is a live caller now (`tick._alliance_state`, feeding
+`guard._gate_alliance_action` and the tick report's "alliance:" line), the same
+"bypass the CLI/`_emit` layer, raw dict" posture every other route in this section
+takes — not wired into `vd read`'s own CLI target list.
+
 ---
 
 ## 4. Queue parsing (`QueueState`) — typed from source, not from a live sample
@@ -828,7 +855,7 @@ this work package, listed here so the next pass doesn't have to re-discover them
 | --- | --- |
 | `/wallet/{addr}/missile-attacks` | Paginated missile-attack archive |
 | `/wallet/{addr}/referrals/history` | Referral history; write-adjacent, out of this skill's mandate |
-| `/wallet/{addr}/alliance`, `/alliance/{id}` | Alliance state |
+| `/alliance/{id}` | Single-alliance detail by id, not wallet-scoped — `/wallet/{addr}/alliance` (§3.22, a live caller since the alliance feature) already carries the wallet's own alliance plus a `directory` of every other alliance the indexer knows about, so this route has had no need to be called yet |
 | `/wallet/{addr}/rift` | Rift Stabilizer balances (building id 15; mechanics unpublished) |
 | `/wallet/{addr}/watched-planets` | Player-configured planet watchlist (GET/POST/DELETE) |
 | `/wallet/{addr}/profile`, `/profile/display-name` | Player profile (GET/POST) |

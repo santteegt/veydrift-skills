@@ -131,9 +131,16 @@ change is everything downstream of that:
   for a future colonisation-target generator, the same "capacity exists, planner
   doesn't reach for it yet" shape `resolveFleetMission` had before the prior pass of
   this phase revived it.
-- **Revised non-goals, restated**: alliances, ACS, migration, referrals, NFT
-  burns, and the ERC-20 market bridge remain fully out of scope, unconditionally
-  (unchanged from the original list above). Combat is **almost** entirely out of scope,
+- **Revised non-goals, restated**: ACS, migration, referrals, NFT burns, and the ERC-20
+  market bridge remain fully out of scope, unconditionally (unchanged from the original
+  list above). **Alliances are no longer entirely a non-goal, per the alliance feature
+  (2026-09-01, correction 73, §9)**: the 15 membership functions on
+  `VeydriftAllianceSystem` — `createAlliance`, `inviteMember`, `acceptInvite`,
+  `leaveAlliance`, and 11 more — are reachable via `vd tick --action` only (never
+  planner-proposed), gated on a new `policy.actions.allow_alliance` flag at `economy`
+  tier or above. Diplomacy (`setDiplomacy`: Ally/NAP/War) and ACS coordination
+  (`openDefenseIntent`) remain fully out of scope, unconditionally — combat-adjacent,
+  deferred. Combat is **almost** entirely out of scope,
   unconditionally, still — the `FleetMissionType` enum's `AcsDefend`/`Intercept`/
   `MissileAttack`/`AcsAttack`/`DefenseHold` values (as `launchFleetMission` mission
   types — a distinct thing from the separate `launchInterplanetaryMissileAttack`
@@ -284,7 +291,7 @@ Tier is one field in `policy.json`. **No code path advances it** — only a huma
 | Tier | Name | May propose | May submit | Gate to enter |
 | --- | --- | --- | --- | --- |
 | 1 | `advisor` | everything in scope | **nothing** | default |
-| 2 | `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24 h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
+| 2 | `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction`, plus the 15 `VeydriftAllianceSystem` membership functions (via `--action` only — never planner-proposed) when `policy.actions.allow_alliance=true` (§9 correction 73) | ≥24 h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
 | 3 | `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0) / Deploy(1) / Colonize(2) / Harvest(4) unconditionally, plus Attack(3) when `policy.actions.allow_combat=true` (§9 correction 70), plus `launchInterplanetaryMissileAttack` under the same flag (§9 correction 72) | ≥7 days clean T2, human edit |
 
 > **Correction, 2026-08-17 (judge review of the general-strategy-engine program).** The T2 row
@@ -691,9 +698,10 @@ reported**, never short-circuited — the full verdict list is the audit artifac
 | `mission_type` | (Phase 5c, 2026-08-17) for `launchFleetMission` only: `Action.mission_type` ∈ the allowed set {Transport, Deploy, Colonize, Harvest} unconditionally, **plus Attack when `policy.actions.allow_combat=true`** (commit 5, correction 70) — default-deny, `mission_type is None` **BLOCK**s (never "nothing to check"); mirrors `veydrift-wallet`'s `OPERATOR_ALLOWED_MISSION_TYPES`/`COMBAT_ALLOWED_MISSION_TYPES` exactly, independent of and in addition to `tier` |
 | `attack_protection` | (commit 6, correction 71; extended to Missile, commit 7, correction 72) for an Attack `launchFleetMission` or a `launchInterplanetaryMissileAttack` action: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — `None`/unknown **BLOCK**s, `true` **PASS**es, `false` **BLOCK**s unless this is a Missile action AND `blockedReason == "bashing"` exactly (missiles ignore the bashing-limit dimension server-side) |
 | `missile_target` | (commit 7, correction 72) for `launchInterplanetaryMissileAttack` only: `policy.actions.allow_combat` is true, `primaryTarget <= Defense.LargeShieldDome`(7), same galaxy and in range (`calc.missile_range`/`missile_system_distance`), origin owns >= `quantity` Interplanetary Missiles — independently re-derived from `Snapshot` alone, no live data needed |
+| `alliance_action` | (alliance feature, correction 73) for one of the 15 `VeydriftAllianceSystem` membership functions only: `policy.actions.allow_alliance` is true, a live `/wallet/{addr}/alliance` fetch succeeded (`None` **BLOCK**s), then a per-function precondition (caller role floor, membership/invite/request-row lookup, batch-fails-closed for `kickMembers`/`setMembersRole`) — independently re-derived from a live indexer read, since this contract has no `Snapshot` equivalent |
 | `prerequisites` | proposed entity's on-chain requirements (`techtree.py`) are met on the target planet — a level the snapshot didn't report is treated as unmet, never assumed high enough; also enforces shield-dome/missile-slot caps |
-| `address` | destination ∈ **live** `/runtime-config` address set |
-| `abi_hash` | live `deploymentAbiHash` == pinned → else **BLOCK all writes** |
+| `address` | destination ∈ **live** `/runtime-config` address set (includes `allianceContractAddress` since the alliance feature) |
+| `abi_hash` | live `deploymentAbiHash` == pinned → else **BLOCK all writes** (an alliance action PASSes here unconditionally — no live-hash verification path exists for that contract) |
 | `health` | `ok && readiness.ready` |
 | `index_lag` | receipt indexed within `max_index_wait_s`, else halt rather than act on stale state |
 | `affordability` | `resourcesAsOfNow` ≥ the API's live `cost` |
@@ -1995,6 +2003,78 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     "launchInterplanetaryMissileAttack" block (7 tests) plus a live `cast sig`
     cross-check entry. 714 Python tests passed (652 baseline + 62 new); 141 TypeScript
     tests passed + 2 fork-only skipped = 143 total (135 baseline + 8 new).
+
+**Correction 73 (2026-09-01): the alliance feature — 15 membership functions on a wholly
+separate contract, `VeydriftAllianceSystem`, manual-override-only.** Unlike every prior
+correction in this section, nothing here touches `plan.py`'s decision ladder at all — no
+new candidate generator, no new rung. Alliance actions (create/invite/accept/leave/kick/
+roles/ownership-transfer — the 15 functions listed at `docs/COVERAGE.md`'s Part 2
+"Alliances" row) are reachable exclusively via `vd tick --action` +
+`policy.strategy.allow_agent_action_override`, gated additionally on a new
+`policy.actions.allow_alliance` flag at `economy` tier **or above** (not `operator` —
+membership actions carry no fund/combat risk, unlike Attack/Missile). `vd tick` reports
+current membership and pending invites/join-requests on every tick when the flag is set,
+independent of what action that tick resolves to (a new "alliance:" line, `tick.
+_alliance_summary_line`).
+
+This is the first feature requiring a genuinely **second pinned contract**, not just a
+new selector on the existing one. `/runtime-config` exposes `allianceContractAddress`
+directly, but has no `allianceAbiHash`/`allianceDeploymentCommit` field anywhere — so
+unlike the game contract's ABI pin (`verify-abi`, re-checked live on every call), the
+alliance ABI pin was verified exactly once, by construction (exact commit checkout, exact
+`forge build` settings matching the game contract's own pin from the same build), and can
+never be automatically re-verified against a live hash. This is a permanent limit of the
+upstream API, stated plainly rather than papered over — see `skills/veydrift-wallet/
+references/abi-pinning.md`'s "Second contract" section.
+
+`veydrift-wallet`'s `Action` interface (`tx.ts`) gained an explicit `contract?: "game" |
+"alliance"` field, defaulting to `"game"` so every pre-existing action JSON (hand-written
+or planner-produced) keeps building the exact same transaction unchanged. `buildTx`
+resolves both the ABI and the destination address off this field — an explicit
+build-time discriminator, not an inference, since the caller (`tick.
+_action_to_walletctl_json`) always knows which contract it's targeting.
+`checkAllowlist`'s address check widened to a three-member candidate set; a new
+`ALLIANCE_SIGNATURES`/`allianceSelectorSet()` pair is checked lazily against a new
+`resolveAllowAlliance` (`policy.ts`, structurally identical to `resolveAllowCombat`) —
+**inclusive of both `economy` and `operator` tier**, not a single tier like combat's
+check, since `economy` is alliance's floor, not its ceiling.
+
+**New, 23rd guard gate: `guard._gate_alliance_action`.** One precondition branch per
+function — caller role floor (Officer/Owner, re-derived via a new `alliance_ids.
+AllianceRole` enum and `meets_min_role()`), membership/invite/join-request-row lookups,
+batch-fails-closed for `kickMembers`/`setMembersRole` (one bad target blocks the whole
+batch), a sole-member check for `leaveAlliance`, an Officer-and-not-self check for
+`transferAllianceOwnership` — sourced from a new `AllianceState` model group
+(`tick._alliance_state`, a fresh `GET /wallet/{addr}/alliance` fetch each tick),
+deliberately never added to the frozen `Snapshot`. `_gate_abi_hash` gained an alliance
+branch that PASSes with an explicit no-live-verification detail, decoupled from the game
+contract's own hash comparison. `guard.idempotency_key` gained a fourth special case
+(after `FLEET_MISSION`/`RESOLVE_MISSION`/`MISSILE_ATTACK`) — the identical
+`planet_id`/`entity_id`-always-`None` collision, caught during this feature's own docs
+review and fixed before it ever went live, folding in `alliance_id`/`target_player`/
+`target_players`/`role`.
+
+Two gaps documented rather than papered over: a third party's own preconditions (an
+invitee's home-planet/membership status, a join requester's alliance) cannot be
+independently verified from a wallet-scoped `/wallet/{addr}/alliance` read — the same
+category of gap `_gate_missile_target` already accepts for a foreign planet's pending-
+mission state, with `walletctl simulate` as the real pre-flight backstop; and "caller has
+a home planet" is approximated via `snapshot.owned_planet_count > 0`, not a direct
+`game.homePlanetOf(player)` read (no existing `read.py` wrapper exposes that view).
+
+Verified live against the real API and a real account (0x224aba..., 2026-09-01): a
+routine dry-run tick correctly reported "alliance 29 (Member), 1 incoming join
+request(s) to review", and a hand-written `leaveAlliance` override correctly built
+against the real alliance contract address (`0x0E5a6210...`) with the correct selector,
+guards evaluating 23/23 as expected. New tests: `tests/test_guard.py`'s
+`alliance_action` block (~35 tests, one per precondition branch plus the mandatory
+`alliance_state is None` missing-data test) and a dedicated `idempotency_key` collision
+test; `tests/test_tick.py`'s `_alliance_state`/`_live_addresses`/`_action_to_walletctl_
+json`-alliance-branches/`_run_tick`-wiring/`_alliance_summary_line` blocks (~35 tests);
+`tests/test_read.py`'s `fetch_alliance_state` pair.
+`skills/veydrift-wallet/tests/abi.test.ts`'s alliance-ABI block, `allowlist.test.ts`'s
+alliance describe block, `tx.test.ts`'s `contract` field tests, `policy.test.ts`'s
+`resolveAllowAlliance` quintet, and 15 new `selectors.cast.test.ts` entries.
 
 ---
 

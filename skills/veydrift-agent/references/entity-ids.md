@@ -1,4 +1,4 @@
-# Entity IDs — the six canonical enums
+# Entity IDs — the six canonical enums, plus one from a second contract
 
 **Source of truth:** the *deployed* contract, read directly at commit
 `701bed3578cff4d134657c714c599dbdb55a4b6a` — not `docs.md` (Veydrift's own published docs,
@@ -24,6 +24,7 @@ builds the wrong thing.
 - [3. `Ship`](#3-ship) — the Deathstar/Dreadstar naming trap
 - [4. `Defense`](#4-defense) — not OGame order
 - [5. `FleetMissionType`](#5-fleetmissiontype)
+- [5a. `AllianceRole` — a seventh enum, in a sibling module, from a second contract](#5a-alliancerole--a-seventh-enum-in-a-sibling-module-from-a-second-contract)
 - [6. `Resource`](#6-resource)
 - [7. The 14-slot fleet-mission tuple is a *different* ordering from `Ship`](#7-the-14-slot-fleet-mission-tuple-is-a-different-ordering-from-ship)
 - [8. How to use these from Python](#8-how-to-use-these-from-python)
@@ -198,6 +199,35 @@ local or foreign debris field — live as of 2026-08-28, commits 1 and 3), and
 `/universe/galaxies/{g}/systems/{s}` for free slots in the wallet's own systems).
 `resolveFleetMission` (ladder rung 3) remains the only *permissionless* fleet-adjacent
 function.
+
+## 5a. `AllianceRole` — a seventh enum, in a sibling module, from a second contract
+
+Source: [`packages/contracts/src/VeydriftAllianceSystem.sol:37`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftAllianceSystem.sol#L37)
+(commit `701bed35`) — a genuinely different deployed contract from the six enums above,
+with its own pinned ABI.
+
+| id | Role |
+| --: | --- |
+| 0 | None |
+| 1 | Member |
+| 2 | Officer |
+| 3 | Owner |
+
+Lives in `alliance_ids.py`, a deliberate **sibling** module to `ids.py`, not an addition
+to it: `ids.py`'s own module docstring scopes itself explicitly to "Veydrift's six
+on-chain enums" from the *game* contract at the pinned commit — widening that to
+"sometimes the game contract, sometimes not" would be a real regression to the contract
+that module makes about itself, not a convenience. Same citation/lookup conventions
+(`ALLIANCE_ROLE_NAMES`, `role_name()`, `role_id()`), plus a small `meets_min_role(role,
+minimum)` helper `guard._gate_alliance_action` uses for every "Officer or above"/
+"Owner only" precondition, since role values are already ordinal on-chain.
+
+The 15 membership functions this codebase implements on `VeydriftAllianceSystem`
+(`createAlliance`, `inviteMember`, `acceptInvite`, `leaveAlliance`, and 11 more) are
+reachable via `vd tick --action` only, gated on `policy.actions.allow_alliance` at
+`economy` tier or above — never planner-proposed. `setDiplomacy` (Ally/NAP/War) and
+`openDefenseIntent` (ACS coordination) exist on the same contract but remain out of
+scope, combat-adjacent, deferred.
 
 ## 6. `Resource`
 

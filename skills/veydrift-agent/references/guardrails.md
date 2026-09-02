@@ -1,4 +1,4 @@
-# Guardrails — `vd guard`, the 22 gates
+# Guardrails — `vd guard`, the 23 gates
 
 Source of truth for *what* each gate checks, *why*, what data it needs, what it does when
 that data is missing, and how to configure it. `guard.py` is the frozen contract this
@@ -28,11 +28,11 @@ rest of this codebase is shaped:
   below).
 
 Every gate is evaluated on every tick, regardless of what earlier gates decided —
-`GuardReport.verdicts` is a fixed-length list of exactly 22 entries every time (17
+`GuardReport.verdicts` is a fixed-length list of exactly 23 entries every time (17
 through Phase 4; Phase 5c, 2026-08-17, added `mission_type`; a later change, 2026-08-20,
 added `game_paused`; the launch-actions plan, 2026-08-28, added `fleet_slots` (commit 2),
-`attack_protection` (commit 6), and `missile_target` (commit 7) — see their own rows
-below). A blocked
+`attack_protection` (commit 6), and `missile_target` (commit 7); the alliance feature,
+2026-09-01, added `alliance_action` — see their own rows below). A blocked
 proposal is exactly as informative as an allowed one, which is the entire point of never
 short-circuiting: `logs/proposals.jsonl` is the audit trail, not just the last mile. (A
 content-identical repeat of the immediately-previous proposal is not re-persisted to
@@ -55,6 +55,7 @@ explicit keyword parameter:
 | `eth_balance_wei` | `tick.py`'s `_walletctl_eth_balance_wei()` — best-effort-parses `walletctl status`'s plain-text `balance: X ETH` line | `eth_floor` |
 | `outgoing_colonize_count` | `tick.py`'s `_outgoing_colonize_count()` (commit 4 of the launch-actions plan) — a live `GET /wallet/{addr}/fleet-visibility`, counting `outgoing` entries whose `missionType` is `"Colonize"` and `status` is still `"Outbound"`. Only fetched for an actual Colonize proposal; `None` on any fetch failure. | `mission_type` (via `_colony_cap_violation`) |
 | `attack_protection_allowed` / `attack_protection_blocked_reason` | `tick.py`'s `_attack_protection_allowed()` (commit 6, extended to return both in commit 7) — a live `GET /wallet/{addr}/attack-protection?targetPlanetId=N` for the action's specific resolved target. Only fetched for an actual Attack or Missile proposal; both `None` on any fetch failure. | `attack_protection` |
+| `alliance_state` | `tick.py`'s `_alliance_state()` (alliance feature) — a live `GET /wallet/{addr}/alliance` fetch, parsed into `models.AllianceState`. Fetched once per tick whenever `policy.actions.allow_alliance` is true, independent of what action that tick resolves to (also drives the tick report's "alliance:" line); `None` on any fetch/parse failure. | `alliance_action` |
 | `now` | defaults to `datetime.now(UTC)`; a test-supplied override for `index_lag` | `index_lag`, `gas` |
 
 This mirrors the same posture `plan.py` takes with `killswitch_active` /
@@ -62,7 +63,7 @@ This mirrors the same posture `plan.py` takes with `killswitch_active` /
 the one module that's allowed to touch the network/subprocess (`tick.py`) gather the
 facts.
 
-## The 22 gates
+## The 23 gates
 
 | # | Gate | What it checks | Data it needs | On missing data |
 | - | --- | --- | --- | --- |
@@ -72,22 +73,23 @@ facts.
 | 4 | `prerequisites` | the proposed entity's on-chain requirements (`techtree.py`, transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`) are met on the target planet, plus shield-dome/missile-slot caps; for a `launchFleetMission` action, dispatches instead to a check that the origin planet actually owns every ship committed | target planet's building levels, account technology levels (or, for a fleet mission, the origin planet's ship counts) | any unmet requirement, or any level the snapshot didn't report → BLOCK; a shield-dome/missile-slot count the snapshot didn't report → BLOCK; a fleet mission's ship count the snapshot didn't report → BLOCK |
 | 5 | `fleet_slots` | **(commit 2 of the launch-actions plan, 2026-08-28)** for `launchFleetMission` only: `fleet_slots_active < fleet_slots_limit` — the contract reverts `FleetSlotLimitReached(1 + ComputerTechnology)` otherwise | `Snapshot.fleet_slots_active`/`.fleet_slots_limit` (only checked for `ActionKind.FLEET_MISSION`) | not a fleet mission → PASS trivially; either field `None` → BLOCK (never "assume a slot is free") |
 | 6 | `missile_target` | **(commit 7 of the launch-actions plan, 2026-08-28)** for `launchInterplanetaryMissileAttack` only: `policy.actions.allow_combat` is true (this function has no shared non-combat sibling the way `launchFleetMission`/Attack does, so this check lives here rather than in `mission_type`); `primary_target ≤ Defense.LargeShieldDome`(7); same galaxy and `calc.missile_system_distance(...) ≤ calc.missile_range(impulse_drive_level)`; origin owns ≥ `quantity` Interplanetary Missiles | `Action.primary_target`/`.quantity`/`.origin_planet_id`/`.target_coordinates`, `Snapshot` (origin coordinates, Impulse Drive level, Interplanetary Missile count) — no live data needed | not the missile function → PASS trivially; `primary_target is None` → BLOCK; out of range/galaxy → BLOCK; IPM count not reported → BLOCK (never "assume 0 built") |
-| 7 | `attack_protection` | **(commit 6 of the launch-actions plan, 2026-08-28; extended to Missile in commit 7)** for an Attack `launchFleetMission` or a `launchInterplanetaryMissileAttack` action: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — never trusted from either generator's own, earlier, coarser generation-time read | `attack_protection_allowed` (bool \| None) and, since commit 7, `attack_protection_blocked_reason` (str \| None), both from `tick._attack_protection_allowed` | not an Attack/Missile action → PASS trivially; `None` (fetch failure, unresolvable target, non-boolean response) → BLOCK; `False` → BLOCK, UNLESS the action is Missile and `blocked_reason == "bashing"` exactly (see its own section below) |
-| 8 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
-| 9 | `abi_hash` | live `deploymentAbiHash` == pinned | `Snapshot.deployment_abi_hash` | missing or mismatched → BLOCK **all** writes |
-| 10 | `health` | `/health` reported `ok && readiness.ready`, **or** (2026-08-22) a positively confirmed combat-only degradation — `Snapshot.combat_only_degradation()` — **except for an Attack action specifically, where commit 6 of the launch-actions plan withdraws that exception** (Attack requests VRF at launch and cannot resolve while randomness is degraded). **Deliberately NOT withdrawn for Missile** (commit 7) — `launchInterplanetaryMissileAttack` never requests randomness at all (interception is deterministic arithmetic, confirmed by reading `VeydriftPlanetManagementModule.sol` directly), so the exception genuinely still applies to it | `Action` (to know whether this is specifically an Attack action), `Snapshot.health_ok`, `.readiness_ready`, `.degradation_reasons`, `.game_maintenance`, `.randomness_readiness` | n/a — `combat_only_degradation()` is itself fail-closed (see below); the commit-6 correction is a BLOCK, not a missing-data case |
-| 11 | `game_paused` | **(added 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
-| 12 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
-| 13 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
-| 14 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
-| 15 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
-| 16 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
-| 17 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
-| 18 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
-| 19 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
-| 20 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
-| 21 | `idempotency` | no pending tx for the same idempotency key (`(planet, function, entity)`, extended with `mission_type`/target for a fleet mission, `mission_id` for a resolve action, or `target_planet_id`/`primary_target` for a missile — see `guard.idempotency_key`'s own docstring) | `AgentState.pending` | n/a — presence/absence is always knowable |
-| 22 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
+| 7 | `alliance_action` | **(alliance feature, 2026-09-01)** for one of the 15 `VeydriftAllianceSystem` membership functions only: `policy.actions.allow_alliance` is true; then a per-function precondition (caller role floor, membership/invite/join-request-row lookup, batch-fails-closed for `kickMembers`/`setMembersRole`, sole-member check for `leaveAlliance`, Officer-and-not-self check for `transferAllianceOwnership`) — see its own section below | `Action`'s alliance fields (`alliance_id`, `target_player(s)`, `role`, `alliance_tag`/`name`/`description`), `Policy.actions.allow_alliance`, `Policy.wallet`, `alliance_state` (live) | not an alliance function → PASS trivially; `allow_alliance` false → BLOCK; `alliance_state is None` → BLOCK (never "no alliance involvement") |
+| 8 | `attack_protection` | **(commit 6 of the launch-actions plan, 2026-08-28; extended to Missile in commit 7)** for an Attack `launchFleetMission` or a `launchInterplanetaryMissileAttack` action: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — never trusted from either generator's own, earlier, coarser generation-time read | `attack_protection_allowed` (bool \| None) and, since commit 7, `attack_protection_blocked_reason` (str \| None), both from `tick._attack_protection_allowed` | not an Attack/Missile action → PASS trivially; `None` (fetch failure, unresolvable target, non-boolean response) → BLOCK; `False` → BLOCK, UNLESS the action is Missile and `blocked_reason == "bashing"` exactly (see its own section below) |
+| 9 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set (since the alliance feature, includes `allianceContractAddress` alongside `gameContractAddress`/`contractAddress`) | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
+| 10 | `abi_hash` | live `deploymentAbiHash` == pinned. **For an alliance action, PASSes unconditionally instead** — there is no live `allianceAbiHash`/`allianceDeploymentCommit` field anywhere in `/runtime-config` to compare against; that pin was verified once, by construction, at commit time (`skills/veydrift-wallet/references/abi-pinning.md`'s "Second contract" section) | `Snapshot.deployment_abi_hash` (game actions only) | missing or mismatched (game action) → BLOCK **all** writes; alliance action → always PASS, with an explicit detail string naming the reason |
+| 11 | `health` | `/health` reported `ok && readiness.ready`, **or** (2026-08-22) a positively confirmed combat-only degradation — `Snapshot.combat_only_degradation()` — **except for an Attack action specifically, where commit 6 of the launch-actions plan withdraws that exception** (Attack requests VRF at launch and cannot resolve while randomness is degraded). **Deliberately NOT withdrawn for Missile** (commit 7) — `launchInterplanetaryMissileAttack` never requests randomness at all (interception is deterministic arithmetic, confirmed by reading `VeydriftPlanetManagementModule.sol` directly), so the exception genuinely still applies to it | `Action` (to know whether this is specifically an Attack action), `Snapshot.health_ok`, `.readiness_ready`, `.degradation_reasons`, `.game_maintenance`, `.randomness_readiness` | n/a — `combat_only_degradation()` is itself fail-closed (see below); the commit-6 correction is a BLOCK, not a missing-data case |
+| 12 | `game_paused` | **(added 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
+| 13 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
+| 14 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
+| 15 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
+| 16 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
+| 17 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
+| 18 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
+| 19 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
+| 20 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
+| 21 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
+| 22 | `idempotency` | no pending tx for the same idempotency key (`(planet, function, entity)`, extended with `mission_type`/target for a fleet mission, `mission_id` for a resolve action, `target_planet_id`/`primary_target` for a missile, or `alliance_id`/`target_player(s)`/`role` for an alliance action — see `guard.idempotency_key`'s own docstring) | `AgentState.pending` | n/a — presence/absence is always knowable |
+| 23 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
 
 **`health`'s exception for a combat-only degradation (2026-08-22).** Live, during this
 fix's own planning: `/health` returned HTTP 503 (persistently, not a one-off), with a
@@ -197,6 +199,63 @@ Also independently re-checks `policy.actions.allow_combat` — `launchInterplane
 has no shared non-combat sibling function the way `launchFleetMission`/Attack does, so
 this flag can't live in `mission_type`'s calldata-argument-decode shape; it lives here
 instead.
+
+**`alliance_action` (alliance feature, 2026-09-01) is the analogous independent-re-check
+gate for the 15 `VeydriftAllianceSystem` membership functions — but unlike
+`missile_target`, this contract has no `Snapshot` equivalent, so every precondition comes
+from a fresh live fetch (`tick._alliance_state`, `GET /wallet/{addr}/alliance`), never
+from `Snapshot` alone.** One precondition branch per function:
+
+- `createAlliance`: tag/name/description all non-empty (`EmptyAllianceProfile`); caller
+  not already a member (`AlreadyInAlliance`); caller has an owned planet, approximated via
+  `Snapshot.owned_planet_count > 0` (a documented proxy for `game.homePlanetOf(player)` —
+  no existing `read.py` wrapper exposes that view).
+- `updateAllianceProfile`: same non-empty check; caller is Owner of the named alliance.
+- `inviteMember`/`cancelInvite`: caller is Officer or Owner of the named alliance.
+- `acceptInvite`: a matching pending invite exists (`alliance_state.pending_invites`);
+  caller not already a member.
+- `requestJoinAlliance`: caller not already a member; caller has an owned planet (same
+  proxy as `createAlliance`); the target alliance exists and is active
+  (`alliance_state.directory`).
+- `cancelJoinRequest`: a matching pending request exists
+  (`alliance_state.pending_join_requests`).
+- `dismissJoinRequest`/`approveJoinRequest`: caller is Officer/Owner; a matching
+  `(alliance_id, requester)` row exists in `alliance_state.alliance_join_requests` — only
+  populated when the caller IS Officer/Owner of that alliance, since it's an incoming
+  request against the caller's own alliance.
+- `kickMember`/`kickMembers`: caller is Officer/Owner; target(s) verified against
+  `alliance_state.members`; the Owner can never be kicked; an Officer cannot kick a
+  fellow Officer. The batch form fails the WHOLE batch if any one target fails any check
+  — fail-closed, never partial-allow.
+- `leaveAlliance`: caller has a membership; if Owner, must be the sole member (otherwise
+  must `transferAllianceOwnership` first).
+- `setMemberRole`/`setMembersRole`: caller is Owner; `role` in range [0, 3]
+  (`InvalidRole` otherwise); target(s) verified against `alliance_state.members`. Batch
+  form fails closed like `kickMembers`.
+- `transferAllianceOwnership`: caller is Owner; `newOwner` is not the caller itself
+  (compared against `Policy.wallet`); `newOwner` verified as a real Officer of the named
+  alliance (`NewOwnerMustBeOfficer`).
+
+**Two gaps this gate cannot close, documented rather than papered over.** First, a third
+party's OWN preconditions — an invitee's home-planet/membership status
+(`inviteMember`/`requestJoinAlliance`), a join requester's alliance
+(`approveJoinRequest`) — cannot be independently verified at all: the wallet-scoped
+`/wallet/{addr}/alliance` route only ever describes the CALLING wallet's own state. Same
+category of gap `missile_target` already accepts for a foreign planet's pending-mission
+state; `walletctl simulate` remains the real pre-flight backstop, at the cost of a wasted
+tick rather than wasted gas. Second, the "caller has a home planet" proxy above
+(`owned_planet_count > 0`) is an approximation, not a direct read of the real contract
+precondition — small, isolated, deferrable if the proxy is ever found to diverge in
+practice.
+
+**`abi_hash`'s alliance branch.** `/runtime-config` exposes `allianceContractAddress` but
+has no `allianceAbiHash`/`allianceDeploymentCommit` field anywhere — there is nothing for
+this gate to compare an alliance action's ABI hash against, ever. Rather than silently
+reusing the game contract's hash (which would be comparing the wrong thing entirely, or
+coincidentally passing/failing for unrelated reasons), this gate PASSes an alliance
+action unconditionally, with an explicit detail string naming why. See
+`skills/veydrift-wallet/references/abi-pinning.md`'s "Second contract" section for the
+full explanation of why this is a permanent limit, not a transitional gap.
 
 **`prerequisites` is new (this work package) and independently re-derives its inputs from
 `Snapshot`, never trusts `plan.py`'s own filtering** — the same posture `_gate_energy`

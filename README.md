@@ -33,7 +33,7 @@ path in this codebase advances the tier on its own; only a human editing
 | Tier | May propose | May submit | Gate to enter |
 | --- | --- | --- | --- |
 | 1 `advisor` | everything in scope | **nothing** | default |
-| 2 `economy` (current) | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
+| 2 `economy` (current) | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction`, plus 15 alliance-membership functions (via `--action` only) under `policy.actions.allow_alliance=true` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
 | 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) unconditionally, plus Attack(3) with `policy.actions.allow_combat=true`, plus `launchInterplanetaryMissileAttack` under the same flag | ≥7 days clean T2, human edit |
 
 The `FleetMissionType` enum's `AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/
@@ -293,11 +293,15 @@ Read before trusting a claim about this project — it's the single easiest thin
   ladder's two most conservative rungs (`8e:attack`, then `8f:missile`, each gated on
   `policy.actions.allow_combat`, each reached only once every earlier rung finds nothing
   at all) and are defended by a shared, live, guard-time attack-protection re-check, not
-  just a generation-time filter. Moons, alliances, expeditions, and referrals/migration
-  remain untouched — some by deliberate policy (the `FleetMissionType` enum's five
-  remaining combat values stay unreachable in code, by design), some because nobody has
-  built that planner path yet. `docs/COVERAGE.md` is the full, function-by-function
-  ledger of what's covered, planned, or out of scope, and why.
+  just a generation-time filter. Alliance membership (create/invite/accept/leave/kick/
+  roles/ownership-transfer, a wholly separate deployed contract — `VeydriftAllianceSystem`)
+  is reachable too, but manual-override-only: no planner rung ever proposes one, only
+  `vd tick --action` under `policy.actions.allow_alliance`. Moons, expeditions,
+  alliance diplomacy/ACS coordination, and referrals/migration remain untouched — some by
+  deliberate policy (the `FleetMissionType` enum's five remaining combat values stay
+  unreachable in code, by design), some because nobody has built that planner path yet.
+  `docs/COVERAGE.md` is the full, function-by-function ledger of what's covered, planned,
+  or out of scope, and why.
 
 ## Contributing / development
 

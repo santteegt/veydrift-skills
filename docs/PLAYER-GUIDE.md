@@ -265,7 +265,8 @@ change called out:
     "allow_defense": false,           // flip to true once you want defense proposals
     "allow_ships": false,             // flip to true once you want ship proposals
     "allow_fleet_noncombat": false,   // gates Transport/Deploy/Harvest proposals -- operator tier, see §13
-    "allow_combat": false             // gates Attack + Missile -- operator tier, see §16
+    "allow_combat": false,            // gates Attack + Missile -- operator tier, see §16
+    "allow_alliance": false           // gates 15 alliance actions -- economy tier or above, override-only, see §16
   },
   "escalation": {
     "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,
@@ -454,6 +455,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `allow_ships` | bool | `true`/`false` | `false` |
 | `allow_fleet_noncombat` | bool | `true`/`false` | `false` |
 | `allow_combat` | bool | `true`/`false` — gates BOTH combat actions this codebase supports: Attack (`launchFleetMission` mission type 3) and Missile (`launchInterplanetaryMissileAttack`, a separate contract entrypoint), at `operator` tier (`allow_fleet_noncombat` is irrelevant to either — both are checked independently of it). Every other `FleetMissionType` combat value (`AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`) is still **read and unconditionally ignored by every code path**; enabling any of those requires an actual source change, not a config edit. Setting this true makes both launch-encodable/allowlist-permitted AND lets the ladder's two most conservative rungs propose one: `8e:attack` attacks the highest-raidable reachable target via `/highscores`, using every combat-capable ship built on the origin planet, only once every other rung (including Colonize) has found nothing at all; `8f:missile`, reached only once Attack itself has found nothing, fires every owned Interplanetary Missile at the target's most-numerous eligible defense type. See §16. | `false` |
+| `allow_alliance` | bool | `true`/`false` — gates 15 alliance-membership actions on `VeydriftAllianceSystem` (create/invite/accept/leave/kick/roles/ownership-transfer — a wholly separate deployed contract, its own address, its own pinned ABI), at `economy` tier **or above** (unlike combat, not `operator`-only — membership carries no fund/combat risk). **Never planner-proposed** — no ladder rung emits one; reachable only via `vd tick --action`, additionally gated on `policy.strategy.allow_agent_action_override`. `vd tick` reports current membership and pending invites/join-requests on every tick whenever this is `true`, regardless of what action that tick proposes. Diplomacy (Ally/NAP/War) and ACS coordination remain out of scope, unconditionally. See §16. | `false` |
 
 **`escalation`**
 
@@ -1075,6 +1077,16 @@ asks it to invent numbers it doesn't have.
     to interception by the target's own Anti-Ballistic Missiles.
 
   Do not set this flag unless you actually want either of those to happen on their own.
+- **`allow_alliance` is different from `allow_combat` in one important way: it never lets
+  the agent act on its own, even when set.** No ladder rung ever proposes an alliance
+  action — creating/joining/leaving an alliance, inviting or kicking a member, changing
+  someone's role, transferring ownership — these are all reachable *exclusively* through
+  `vd tick --action` (see §13's manual-override section), which itself needs
+  `policy.strategy.allow_agent_action_override` set too. Setting `allow_alliance: true`
+  alone only turns on the read side: `vd tick`'s normal output starts reporting your
+  current membership and any pending invites/join-requests on every tick. It floors at
+  `economy` tier, not `operator` — membership carries no fund/combat risk the way sending
+  a fleet or a missile does.
 - **Real transactions have already been submitted to Veydrift on mainnet from this
   codebase** — at tier 2 (`economy`) and tier 3 (`operator`), through the real
   `build → simulate → send` path, not a fixture or a fork. See `README.md`'s Status

@@ -422,3 +422,53 @@ Combat is a 6-round loop with `no loss if effectiveAttack <= effectiveShield / 1
 4. Everything in `NOTES.md` §12.9 about single-account/zero-state observation still stands. The
    account has taken **no actions**: all queues `null`, all levels 0, 1,000 M / 1,000 C / 0 D,
    unchanged since settlement at block 49666196.
+
+## 7. `VeydriftAllianceSystem` — a second deployed contract, read directly (2026-09-01)
+
+Read in full (1064 lines) at the same pinned commit `701bed3578cff4d134657c714c599dbdb55a4b6a`,
+not inferred from the game contract's own references to it.
+
+### 7.1 `AllianceRole` — the one new enum
+
+`enum AllianceRole { None, Member, Officer, Owner }` (`VeydriftAllianceSystem.sol:37`) — member
+order is the on-chain value, same convention every enum in `ids.py` already uses. Lives in a new
+sibling module, `alliance_ids.py`, not folded into `ids.py` (whose own docstring scopes it to the
+*game* contract's six enums specifically).
+
+### 7.2 The 15 membership functions this codebase implements
+
+`createAlliance`, `updateAllianceProfile`, `inviteMember`, `cancelInvite`, `acceptInvite`,
+`requestJoinAlliance`, `cancelJoinRequest`, `dismissJoinRequest`, `approveJoinRequest`,
+`kickMember`, `kickMembers`, `leaveAlliance`, `setMemberRole`, `setMembersRole`,
+`transferAllianceOwnership` — all `nonpayable`, none `payable` (confirmed: zero `payable` hits
+in the file's own player-callable surface; the one `payable` function in the compiled ABI,
+`upgradeToAndCall(address,bytes)`, is the inherited UUPS upgrade entrypoint, owner-only,
+irrelevant to this codebase). `setDiplomacy` (Ally/NAP/War) and `openDefenseIntent` (ACS
+coordination) exist on the same contract but are deliberately out of scope — combat-adjacent,
+deferred.
+
+### 7.3 No live-hash verification path for this contract's ABI, ever
+
+`/runtime-config` exposes `allianceContractAddress` directly (confirmed live 2026-09-01:
+`0x0E5a6210482B15780cf5Ec036107031dcA702001`) but has **no** `allianceAbiHash`/
+`allianceDeploymentCommit` field anywhere — only the single `backend.build.deploymentAbiHash`/
+`deploymentCommit` pair, which is for the game contract. Unlike the game contract's pin
+(`verify-abi`, re-checked live on every call), the alliance ABI pin
+(`abi/VeydriftAllianceSystem.701bed3.json` + `abi/PINNED.alliance.json`) was verified exactly
+once, by construction (exact commit checkout + exact `forge build` settings, matching the game
+contract's own pinned settings from the same build) — a permanent limit of the upstream API, not
+a gap this codebase can close from its own data sources.
+
+### 7.4 The live `/wallet/{addr}/alliance` response — real shapes, not assumed
+
+Confirmed live against four real wallets (2026-09-01). A wallet with no alliance reports a real
+sentinel object, **never JSON `null`**: `"membership": {"allianceId": "0", "role": "none",
+"joinedAt": "0"}`. Every numeric-looking field is a decimal STRING (`"allianceId"`, `"joinedAt"`,
+`"totalScore"`, `"createdAt"`), except `directory[].memberCount`, which is a genuine JSON int —
+confirmed by direct inspection, not assumed uniform. `role` serializes lowercase
+(`"owner"`/`"officer"`/`"member"`/`"none"`). `allianceJoinRequests` (incoming requests to the
+caller's OWN alliance, populated only when the caller is Officer/Owner) and `directory` (every
+alliance the indexer knows about, each with a `members[]` array) were both observed non-empty
+live; `pendingInvites`/`pendingJoinRequests` were empty on every wallet checked, so their
+per-entry shape (bare int vs. `{allianceId: ...}` object) is inferred by consistency with every
+other list in this same response, not independently confirmed.

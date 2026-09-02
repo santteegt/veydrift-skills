@@ -168,8 +168,23 @@ touching related code, re-run the check named alongside each one.
   conservative still) — each reached only once every earlier rung has found nothing at
   all, targeting the highest-value reachable `/highscores` result whose attack-protection
   is confirmed allowed by a fresh, guard-time re-check (`guard._gate_attack_protection`,
-  a 22nd gate shared by both action types — never trusting either generator's earlier,
+  a gate shared by both action types — never trusting either generator's earlier,
   generation-time read).
+- **Alliance membership actions require `policy.actions.allow_alliance` at both layers
+  independently, floor `economy` not `operator`.** Unlike combat, this is a real
+  config-unlockable feature, not a code-friction-gated one: membership actions on
+  `VeydriftAllianceSystem` (a wholly separate deployed contract, its own pinned ABI, its
+  own address) carry no fund/combat risk, so the bar is deliberately lower. Checked
+  independently by `guard.py`'s `_gate_alliance_action` (agent side, the 23rd gate) and
+  `veydrift-wallet`'s `checkAllowlist` (`allowlist.ts`'s `ALLIANCE_SIGNATURES`, checked at
+  an inclusive `economy`-or-`operator` tier, unlike combat's single-tier check — `economy`
+  is a floor here, not a ceiling). Never planner-proposed — reachable only via
+  `vd tick --action`, gated additionally on `policy.strategy.allow_agent_action_override`
+  (two independent requirements stack, per `skills/veydrift-agent/references/
+  manual-action-override.md`). `_gate_abi_hash` PASSes an alliance action
+  unconditionally: `/runtime-config` has no live hash/commit field for this contract to
+  compare against, ever, a permanent limit stated in `skills/veydrift-wallet/references/
+  abi-pinning.md`'s "Second contract" section, not papered over.
 - **Secrets never reach a log or a tracked file.** `log.py` scrubs any
   `0x[0-9a-fA-F]{64}` that isn't a known tx hash, and refuses to write a value matching a
   configured secret env var. Before committing, `git diff --cached` anything touching
@@ -200,6 +215,16 @@ reproducibility (`solc 0.8.28`, `optimizer_runs 1`, `via_ir true`, `cbor_metadat
 are in `skills/veydrift-wallet/references/abi-pinning.md`. If the contract has genuinely
 been redeployed, re-pin deliberately — don't let a mismatch silently pass by relaxing the
 comparison.
+
+**A second, independent pin exists since the alliance feature (2026-09-01)**:
+`abi/PINNED.alliance.json` + `abi/VeydriftAllianceSystem.701bed3.json`, same commit, same
+`forge build` settings — but with a narrower guarantee than the pin above. `/runtime-
+config` exposes `allianceContractAddress` directly but has no `allianceAbiHash`/
+`allianceDeploymentCommit` field anywhere, so this pin was verified exactly once, by
+construction, and can never be automatically re-checked against a live hash the way
+`verify-abi` re-checks the game contract's pin on every call. See `references/
+abi-pinning.md`'s "Second contract" section — this is a permanent limit of the upstream
+API, not something to work around by inventing a substitute check.
 
 ## 7. Two silent-corruption traps in the write path
 

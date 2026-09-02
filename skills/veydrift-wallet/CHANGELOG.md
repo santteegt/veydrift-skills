@@ -11,6 +11,14 @@ lockstep.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-01
+
+### Docs
+- `SKILL.md`'s "five checks" summary updated to mention the alliance contract's address
+  (item 1) and the 15 `ALLIANCE_SIGNATURES` functions' inclusive economy-or-operator
+  tier check (item 2), alongside the alliance feature's own doc sweep in
+  `veydrift-agent`'s `CHANGELOG.md` `1.15.3` entry.
+
 ## [0.9.0] - 2026-09-01
 
 Alliance feature, commit 2/6: an alliance transaction is now buildable and (conditionally)
