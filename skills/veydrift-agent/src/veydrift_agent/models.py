@@ -473,6 +473,37 @@ class RadarReport(Base):
 
 
 # --------------------------------------------------------------------------------------
+# Opportunities — attack/missile/colonize/foreign-harvest candidates surfaced
+# independent of `plan.py`'s ladder outcome (see references/opportunities.md). Sourced
+# from `candidates.py`'s existing generators, unchanged; never touches guard.py, never
+# sent, never persisted (an opportunity is a current-state fact, re-reported every tick
+# it's still true, not a one-time event needing de-duplication like a radar finding).
+# --------------------------------------------------------------------------------------
+
+
+class OpportunityFinding(Base):
+    """One candidate `opportunities.scan_opportunities` found for a single launch
+    planet, regardless of whether `plan.py`'s ladder ever reached that band this tick.
+    `target_planet_id`/`target_coordinates` mirror `Action`'s own fields of the same
+    name (`candidate.action.target_planet_id`/`.target_coordinates`) -- `None` when the
+    underlying `Action` doesn't resolve a numeric target id (mirrors `Action`'s own
+    optionality here, not a new ambiguity)."""
+
+    family: Literal["attack", "missile", "colonize", "foreign_harvest"]
+    origin_planet_id: int
+    target_planet_id: int | None = None
+    target_coordinates: str | None = None
+    #: `candidate.action.rationale`, falling back to `candidate.score_basis` on the rare
+    #: chance rationale is empty -- both are already-written human explanations from
+    #: `candidates.py`, never re-derived here.
+    detail: str
+
+
+class OpportunityReport(Base):
+    findings: list[OpportunityFinding] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------------------
 # Policy — parsed from $VEYDRIFT_HOME/policy.json. Invalid policy is a hard stop.
 # --------------------------------------------------------------------------------------
 

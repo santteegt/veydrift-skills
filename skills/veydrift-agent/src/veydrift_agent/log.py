@@ -232,6 +232,7 @@ def format_tick_block(
     human_activity_line: str | None = None,
     alliance_line: str | None = None,
     radar_line: str | None = None,
+    opportunities_line: str | None = None,
 ) -> str:
     lines = [
         f"[{taken_at.strftime('%Y-%m-%dT%H:%M:%SZ')}] TICK #{tick_number}  tier={tier}  {planet_line}",
@@ -241,6 +242,7 @@ def format_tick_block(
         *([f"  activity: {human_activity_line}"] if human_activity_line else []),
         *([f"  alliance: {alliance_line}"] if alliance_line else []),
         *([f"  radar:    {radar_line}"] if radar_line else []),
+        *([f"  opportunities: {opportunities_line}"] if opportunities_line else []),
         *[f"  {line}" for line in proposal_lines],
     ]
     if duplicate_of:

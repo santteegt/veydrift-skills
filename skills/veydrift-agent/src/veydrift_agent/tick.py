@@ -89,6 +89,7 @@ from rich.console import Console
 
 from veydrift_agent import alliance_ids, guard as guard_mod
 from veydrift_agent import http, ids, log, read
+from veydrift_agent import opportunities as opportunities_mod
 from veydrift_agent import plan as plan_mod
 from veydrift_agent import radar as radar_mod
 from veydrift_agent.models import (
@@ -106,6 +107,7 @@ from veydrift_agent.models import (
     GuardReport,
     GuardStatus,
     GuardVerdict,
+    OpportunityReport,
     PlanetSnapshot,
     Policy,
     RadarReport,
@@ -1822,6 +1824,20 @@ def _radar_summary_line(report: RadarReport | None) -> str | None:
     return "; ".join(parts)
 
 
+def _opportunity_summary_line(report: OpportunityReport | None) -> str | None:
+    """One-line summary of `opportunity_report` for the tick report -- `None` when there
+    is nothing to report (unlike `_radar_summary_line`, `report` itself is never `None`
+    here, since opportunities.py has no enable flag of its own; `report.findings` empty
+    is the only "nothing to say" case). Same by-family count-and-join style as
+    `_radar_summary_line`'s `by_kind` grouping."""
+    if report is None or not report.findings:
+        return None
+    by_family: dict[str, int] = {}
+    for f in report.findings:
+        by_family[f.family] = by_family.get(f.family, 0) + 1
+    return ", ".join(f"{count} {family}" for family, count in by_family.items())
+
+
 def _await_indexed(*, wallet: str, policy_planets: list[int], target_block: int, max_wait_s: int) -> bool:
     """The mandatory post-receipt wait (docs/SPEC.md §5.7): polls a fresh snapshot's
     `latest_indexed_block` until it covers `target_block`, or `max_wait_s` elapses.
@@ -2089,6 +2105,25 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         radar_report = radar_mod.check_targets(radar_targets, radar_state)
         save_radar_state(radar_state)
 
+    # opportunities.py: unconditional, no policy flag of its own -- `plan.py`'s ladder is
+    # a straight early-return chain, so a lower-priority band's candidate (attack,
+    # missile, colonize, foreign harvest) is never even generated once a higher band
+    # wins that tick, regardless of tier or how long the relevant policy.actions/
+    # strategy flag has been on. This surfaces those candidates independent of ladder
+    # outcome. Every one of the four generators it calls already self-gates on its own
+    # flag internally (allow_combat / allow_fleet_noncombat / strategy.colonize), so a
+    # policy with all three off produces an empty OpportunityReport at negligible cost
+    # -- no extra network call, pure computation over attack_targets/missile_targets/
+    # foreign_debris_targets/colonize_targets already fetched above for the ladder.
+    opportunity_report = opportunities_mod.scan_opportunities(
+        snapshot,
+        policy_model,
+        attack_targets=attack_targets,
+        missile_targets=missile_targets,
+        foreign_debris_targets=foreign_debris_targets,
+        colonize_targets=colonize_targets,
+    )
+
     # Step 5: plan. `override_action` (vd tick --action) substitutes for the planner's own
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
@@ -2245,6 +2280,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         override_line=override_line,
         alliance_state=alliance_state,
         radar_report=radar_report,
+        opportunity_report=opportunity_report,
     )
 
 
@@ -2462,6 +2498,7 @@ def _finish_tick(
     override_line: str | None = None,
     alliance_state: AllianceState | None = None,
     radar_report: RadarReport | None = None,
+    opportunity_report: OpportunityReport | None = None,
 ) -> None:
     proposal_record = {
         "ts": now.isoformat(),
@@ -2491,6 +2528,7 @@ def _finish_tick(
         "override": override_record,
         "alliance": alliance_state.model_dump() if alliance_state is not None else None,
         "radar": radar_report.model_dump() if radar_report is not None else None,
+        "opportunities": opportunity_report.model_dump() if opportunity_report is not None else None,
     }
 
     # Dedup: a content-identical repeat of the immediately-previous logged proposal (e.g.
@@ -2555,6 +2593,7 @@ def _finish_tick(
         human_activity_line=human_activity_line,
         alliance_line=_alliance_summary_line(alliance_state),
         radar_line=_radar_summary_line(radar_report),
+        opportunities_line=_opportunity_summary_line(opportunity_report),
     )
 
     if not is_duplicate:
@@ -2575,6 +2614,17 @@ def _finish_tick(
     if radar_report is not None and radar_report.findings:
         summary = _radar_summary_line(radar_report)
         log.append_strategy(f"tick {agent_state.tick_count}: radar -- {summary}", now=now)
+
+    # Opportunities deliberately do NOT get radar's unconditional strategy.md treatment.
+    # Radar's findings are naturally transient (an incoming fleet arrives once, a
+    # resolved attack is de-duplicated by radar-state.json, debris eventually gets
+    # cleared) so writing one every tick it's found is rare in practice. An opportunity
+    # is a standing-state fact -- the same reachable raid target or open colonize slot
+    # can stay true for many ticks in a row -- so giving it the same unconditional
+    # per-tick append would spam strategy.md every cadence interval for something that
+    # hasn't changed. It still appears in every tick's own report/proposals.jsonl above
+    # (via opportunities_line/proposal_record) regardless; only the strategy.md log
+    # narration is intentionally left to the existing suppression-aware path below.
 
     # Fix 5: a *structural* tier block (the ONLY reason decision != ALLOW is the `tier`
     # gate itself) is expected at every tick until the policy is promoted and carries no

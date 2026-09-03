@@ -11,6 +11,40 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-09-03
+
+Attack/missile/colonize/foreign-harvest opportunities, surfaced independent of the
+ladder — new `opportunities.py` module. `plan_next_action` is a straight-line
+early-return chain: once an earlier band's candidate wins, every later band's generator
+(logistics, colonize, attack, missile) is never even called that tick. The underlying
+target data was already fetched tier-independently, gated only by its own policy flag —
+but the opportunity derived from it (a raid target, an open colonize slot, a foreign
+debris field) was invisible on any tick where a higher-priority band won, which in
+practice is most ticks.
+
+### Added
+- `opportunities.scan_opportunities` calls the same four `candidates.py` generators
+  (`generate_attack_candidates`/`generate_missile_candidates`/
+  `generate_colonize_candidates`/`generate_foreign_harvest_candidates`) a second time,
+  once per owned planet, independent of the ladder. Zero changes to
+  `plan.py`/`candidates.py`/`guard.py`.
+- No new policy flag: every generator already self-gates on its own existing flag
+  internally (`allow_combat`, `allow_fleet_noncombat`, `strategy.colonize`), so this
+  needed no gating logic of its own — a policy with every flag off produces an empty
+  report automatically.
+- No persisted state: unlike a radar finding (a one-time event), an opportunity is a
+  current-state fact, correctly re-reported every tick it's still true.
+- New models `OpportunityFinding`/`OpportunityReport`. Tick report gains an
+  `opportunities:` line (silent when empty); `proposals.jsonl` gains an
+  `"opportunities"` key. Deliberately does **not** get radar's unconditional
+  `strategy.md` append — an opportunity can stay true for many ticks in a row, so that
+  treatment would spam the log for something that hasn't changed.
+- `vd tick` only — no standalone CLI, no new `assets/policy.example.json`/schema changes.
+
+### Docs
+- New `references/opportunities.md`. `SKILL.md` routing-table row. `docs/COVERAGE.md`
+  new Part 2 row. `AGENTS.md` §11 pointer.
+
 ## [1.16.0] - 2026-09-02
 
 Attack/resolved-battle/debris radar tracker — new `radar.py` module, fully self-contained

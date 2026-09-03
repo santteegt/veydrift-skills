@@ -501,6 +501,13 @@ enough to call out here specifically, not a duplicate of that ledger.
   live-verification discipline caught before shipping — `/wallet/{addr}/missions`'
   resolved-attack rows arrive as `kind: "mission"` with a `report` attached, not the
   `kind: "battleReport"` shape the initial implementation assumed.
+- `skills/veydrift-agent/references/opportunities.md` — attack/missile/colonize/
+  foreign-harvest candidates surfaced independent of `plan.py`'s ladder (new module,
+  `opportunities.py`): the ladder is a straight early-return chain, so a lower-priority
+  band's candidate is never even generated once a higher band wins that tick; this
+  module calls the same `candidates.py` generators a second time, unchanged, to surface
+  them anyway. Zero changes to `plan.py`/`candidates.py`/`guard.py`, no new policy flag,
+  no persisted state, `vd tick` only.
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.

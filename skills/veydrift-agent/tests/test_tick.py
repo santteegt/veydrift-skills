@@ -42,10 +42,13 @@ from veydrift_agent.models import (
     GuardReport,
     GuardStatus,
     Limits,
+    OpportunityFinding,
+    OpportunityReport,
     PlanetSnapshot,
     Policy,
     RadarFinding,
     RadarReport,
+    RandomnessReadiness,
     Resources,
     Snapshot,
     Tier,
@@ -2436,6 +2439,143 @@ def test_run_tick_radar_disabled_never_calls_check_targets_and_omits_the_report_
     assert "radar:" not in result.output
     proposals = log.read_proposals()
     assert proposals[0]["radar"] is None
+
+
+# --------------------------------------------------------------------------------------
+# opportunities.py wiring -- surfaces attack/missile/colonize/foreign-harvest candidates
+# independent of plan.py's ladder outcome. No enable flag of its own (see
+# opportunities.py's module docstring for why); unconditional every tick, gated only by
+# each generator's own existing policy flag.
+# --------------------------------------------------------------------------------------
+
+
+def test_opportunity_summary_line_is_none_for_an_empty_report():
+    assert tick._opportunity_summary_line(OpportunityReport()) is None
+    assert tick._opportunity_summary_line(None) is None
+
+
+def test_opportunity_summary_line_summarises_findings_by_family():
+    report = OpportunityReport(
+        findings=[
+            OpportunityFinding(family="attack", origin_planet_id=664, detail="x"),
+            OpportunityFinding(family="colonize", origin_planet_id=664, detail="y"),
+            OpportunityFinding(family="colonize", origin_planet_id=665, detail="z"),
+        ]
+    )
+    line = tick._opportunity_summary_line(report)
+    assert "1 attack" in line
+    assert "2 colonize" in line
+
+
+def test_run_tick_surfaces_an_attack_opportunity_at_advisor_tier_even_when_the_ladder_picks_something_else(
+    isolated_home, monkeypatch
+):
+    """The direct regression test for the concern that started this feature: an
+    advisor-tier policy with allow_combat=true must see a live, reachable attack
+    opportunity in its report even on a tick whose planner-chosen action is something
+    else entirely (mocked to NOOP here) -- proving visibility is independent of both
+    tier and ladder outcome, not just present when Attack happens to win."""
+    from veydrift_agent import ids
+
+    _write_policy_with_combat()  # tier stays advisor (the example policy's default)
+    attack_planet = PlanetSnapshot(
+        planet_id=664,
+        coordinates="7:181:14",
+        resources_as_of_now=Resources(),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        ships=[Entity(id=ids.Ship.LIGHT_FIGHTER, name="Light Fighter", count=10, cost=Resources(metal=3_000, crystal=1_000))],
+    )
+    snapshot = _healthy_snapshot(planets=[attack_planet], randomness_readiness=RandomnessReadiness(ready=True))
+    target = {23: ("7:181:20", Resources(metal=5_000, crystal=2_000, deuterium=1_000), True)}
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: snapshot)
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_attack_targets", lambda wallet: target)
+    monkeypatch.setattr(tick, "_missile_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
+    # The ladder picks something unrelated -- proves the opportunity surfaces
+    # regardless of what the planner actually chose this tick.
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "opportunities:" in result.output
+    assert "attack" in result.output
+    proposals = log.read_proposals()
+    assert proposals[0]["opportunities"]["findings"][0]["family"] == "attack"
+    # tier stayed advisor and the ladder's own pick was BUILD (Solar Plant), not Attack --
+    # the opportunity line is not an artifact of Attack having won.
+    assert proposals[0]["kind"] == "build"
+
+
+def test_run_tick_opportunities_report_appears_but_no_unconditional_strategy_md_entry(isolated_home, monkeypatch):
+    """Unlike radar findings, an opportunity is a standing-state fact, not a one-time
+    event -- it must not force its own unconditional strategy.md append (that would
+    spam the log every tick a static opportunity remains true). It still reaches the
+    tick's own report/proposals.jsonl regardless."""
+    from veydrift_agent import ids
+
+    _write_policy_with_combat()
+    attack_planet = PlanetSnapshot(
+        planet_id=664,
+        coordinates="7:181:14",
+        resources_as_of_now=Resources(),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        production_per_hour=Resources(),
+        ships=[Entity(id=ids.Ship.LIGHT_FIGHTER, name="Light Fighter", count=10, cost=Resources(metal=3_000, crystal=1_000))],
+    )
+    snapshot = _healthy_snapshot(planets=[attack_planet], randomness_readiness=RandomnessReadiness(ready=True))
+    target = {23: ("7:181:20", Resources(metal=5_000, crystal=2_000, deuterium=1_000), True)}
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: snapshot)
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_attack_targets", lambda wallet: target)
+    monkeypatch.setattr(tick, "_missile_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "opportunities:" in result.output
+    # Whatever the ladder's own BUILD proposal does or doesn't write to strategy.md
+    # (a separate concern, exercised elsewhere), opportunities must never add a line of
+    # its own there -- unlike radar_report, no "opportunities --" text should ever
+    # appear in strategy.md.
+    if log.strategy_path().exists():
+        assert "opportunities" not in log.strategy_path().read_text()
+
+
+def test_run_tick_default_policy_produces_no_opportunities_line(isolated_home, monkeypatch):
+    """Regression: a policy with every gating flag at its default (off) must reproduce
+    pre-opportunities tick output -- no 'opportunities:' line, no findings recorded."""
+
+    def _boom(*a, **kw):
+        raise AssertionError("candidates.generate_attack_candidates must not fire without allow_combat")
+
+    _write_policy()
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "opportunities:" not in result.output
+    proposals = log.read_proposals()
+    assert proposals[0]["opportunities"] == {"findings": []}
 
 
 # --------------------------------------------------------------------------------------

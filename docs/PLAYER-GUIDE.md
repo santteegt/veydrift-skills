@@ -455,8 +455,8 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `allow_research` | bool | `true`/`false` | `true` |
 | `allow_defense` | bool | `true`/`false` | `false` |
 | `allow_ships` | bool | `true`/`false` | `false` |
-| `allow_fleet_noncombat` | bool | `true`/`false` | `false` |
-| `allow_combat` | bool | `true`/`false` — gates BOTH combat actions this codebase supports: Attack (`launchFleetMission` mission type 3) and Missile (`launchInterplanetaryMissileAttack`, a separate contract entrypoint), at `operator` tier (`allow_fleet_noncombat` is irrelevant to either — both are checked independently of it). Every other `FleetMissionType` combat value (`AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`) is still **read and unconditionally ignored by every code path**; enabling any of those requires an actual source change, not a config edit. Setting this true makes both launch-encodable/allowlist-permitted AND lets the ladder's two most conservative rungs propose one: `8e:attack` attacks the highest-raidable reachable target via `/highscores`, using every combat-capable ship built on the origin planet, only once every other rung (including Colonize) has found nothing at all; `8f:missile`, reached only once Attack itself has found nothing, fires every owned Interplanetary Missile at the target's most-numerous eligible defense type. See §16. | `false` |
+| `allow_fleet_noncombat` | bool | `true`/`false` — also unlocks the foreign-harvest `opportunities:` signal (§10) regardless of whether the ladder's own logistics rung ever wins with it. | `false` |
+| `allow_combat` | bool | `true`/`false` — gates BOTH combat actions this codebase supports: Attack (`launchFleetMission` mission type 3) and Missile (`launchInterplanetaryMissileAttack`, a separate contract entrypoint), at `operator` tier (`allow_fleet_noncombat` is irrelevant to either — both are checked independently of it). Every other `FleetMissionType` combat value (`AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`) is still **read and unconditionally ignored by every code path**; enabling any of those requires an actual source change, not a config edit. Setting this true makes both launch-encodable/allowlist-permitted AND lets the ladder's two most conservative rungs propose one: `8e:attack` attacks the highest-raidable reachable target via `/highscores`, using every combat-capable ship built on the origin planet, only once every other rung (including Colonize) has found nothing at all; `8f:missile`, reached only once Attack itself has found nothing, fires every owned Interplanetary Missile at the target's most-numerous eligible defense type. Also unlocks the attack/missile `opportunities:` signal (§10) at every tier, including `advisor` — you'll see a raid target even on a tick that proposed something else. See §16. | `false` |
 | `allow_alliance` | bool | `true`/`false` — gates 15 alliance-membership actions on `VeydriftAllianceSystem` (create/invite/accept/leave/kick/roles/ownership-transfer — a wholly separate deployed contract, its own address, its own pinned ABI), at `economy` tier **or above** (unlike combat, not `operator`-only — membership carries no fund/combat risk). **Never planner-proposed** — no ladder rung emits one; reachable only via `vd tick --action`, additionally gated on `policy.strategy.allow_agent_action_override`. `vd tick` reports current membership and pending invites/join-requests on every tick whenever this is `true`, regardless of what action that tick proposes. Diplomacy (Ally/NAP/War) and ACS coordination remain out of scope, unconditionally. See §16. | `false` |
 
 **`escalation`**
@@ -496,7 +496,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `building_priority` | list of string | ordered Building names — **asymmetric with the three fields above; see callout below**. **Empty: the infrastructure family never fires** — rung 6 falls through to its ordinary value-density mine/energy walk, which payback scoring does not drive except to break an exact tie between two mines. **Does not round-robin either — same callout.** | `[]` |
 | `enable_crawler` | bool | `true`/`false` | `false` |
 | `allow_agent_action_override` | bool | `true`/`false` — gates `vd tick --action <file>`. See §9. | `false` |
-| `colonize` | bool | `true`/`false` — opt-in for Colonize proposals, the most conservative rung in the ladder (fires only once nothing else has anything to propose). Also requires a built Colony Ship; target selection needs no other declared field. See §13. | `false` |
+| `colonize` | bool | `true`/`false` — opt-in for Colonize proposals, the most conservative rung in the ladder (fires only once nothing else has anything to propose). Also requires a built Colony Ship; target selection needs no other declared field. Also unlocks the colonize `opportunities:` signal (§10) even on ticks where something else wins the ladder. See §13. | `false` |
 | `fleet_home_planet_id` | int or `null` | a planet id you own — opt-in for Deploy proposals (permanently repositioning a whole flyable fleet home). Also requires `actions.allow_fleet_noncombat: true`; this field alone does not enable it. See §13. | `null` |
 
 > **`resource_weights` is used to tie-break, not to pick a family — it only ever changes
@@ -837,6 +837,18 @@ A few things worth understanding about that block before you trust it:
   catches that case. If you ever ask "was I attacked?" and only look at the top-level
   "incoming: none" line, you're looking at the wrong field for a *past* attack — check the
   `radar:` line, or run `vd radar check` (§11a) directly.
+- **An `opportunities:` line means a raid target, colonize slot, or foreign debris field
+  was found — even on a tick that proposed something else entirely.** This exists because
+  of a different real gap: the agent's decision ladder picks exactly one thing to propose
+  per tick, in a fixed priority order, and it stops looking the moment something earlier
+  in that order (a mine upgrade, say) wins — so a live raid target from `allow_combat`,
+  an open colonize slot from `strategy.colonize`, or a foreign debris field from
+  `allow_fleet_noncombat` can go completely unmentioned on a tick where something else
+  won, even though the underlying flag has been on the whole time. `opportunities:`
+  checks for these independently every tick, so turning one of those three flags on now
+  means you'll actually see what it found, not just what it happened to win with. Like
+  radar, this works at every tier, including `advisor` — enabling `allow_combat` at
+  `advisor` tier still submits nothing, but you'll see the opportunity in the report.
 
 ## 11. Running on a schedule
 
