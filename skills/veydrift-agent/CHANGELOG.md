@@ -11,6 +11,60 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-09-07
+
+Agent-side follow-through for the on-chain contract upgrade that redeployed the Veydrift
+game contract (see `skills/veydrift-wallet/CHANGELOG.md` `1.0.0`). No CLI or schema change;
+minor bump because `guard.py`'s pinned-hash constant moved and behaviour against the live
+chain is restored.
+
+### Changed
+- **`guard.py`'s `PINNED_ABI_HASH`** moved from
+  `sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99` (commit
+  `701bed3`) to `sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4`
+  (commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`), mirroring
+  `skills/veydrift-wallet/abi/PINNED.json` byte-for-byte as its comment requires. Between
+  the redeploy and this bump, `_gate_abi_hash` correctly returned `BLOCK` for every
+  on-chain action (`live deploymentAbiHash != pinned` → "contract upgraded, blocking all
+  writes") — the fail-closed guardrail working as designed. This restores `PASS` against
+  the upgraded contract.
+- **`tests/test_coverage_doc.py`** now reads `abi/VeydriftGame.202d1ac.json` (the old
+  filename was deleted on the re-pin, which had been silently `pytest.skip`-ing the
+  coverage-ledger guard).
+
+### Verified unchanged across the upgrade (no code change needed)
+- Every enum `ids.py`/`alliance_ids.py` encodes: `VeydriftTypes.sol` has zero diff
+  between the two commits (`Building`/`Defense`/`Ship`/`Technology`/`Resource`/
+  `MoonBuilding`), and `FleetMissionType` keeps its 10 members in the same order.
+- Every formula in `calc.py`: `VeydriftFormulas.sol` and `VeydriftFleetFuel.sol` have
+  zero diff.
+- The whole `techtree.py` dependency table: `VeydriftDependencies.sol` has zero diff.
+- `guard.py`'s `_MIN_TIER_FOR_FUNCTION` and mission-type sets still agree with
+  `veydrift-wallet`'s `allowlist.ts`
+  (`test_tier_map_agrees_with_the_wallet_engines_allowlist` passes) — no allowlisted
+  function's signature changed.
+- The live `/runtime-config` / `/health` shape: new fields (`paidAllianceInviteAddress`,
+  `featureSupport.moonAttackParity`, …) are tolerated by `models.py`'s `extra="ignore"`.
+
+### Docs
+- `docs/COVERAGE.md` regenerated against the new ABI: +10 writable functions
+  (`playerScore` is now a real on-chain view; `settleProductionUntil`,
+  `settleAllianceMembershipBoundary`, `depositPaidAllianceInviteFee`,
+  `startPlanetWithAllianceInvite`, the moon-attack-parity surface, `migratePlanetTemperatures`,
+  `initializeMoonAttackParity`), −2 removed (`settleDuePlayerColonizeArrivals`,
+  `untrackResolvedFleetMission`). Section counts, the row-count check and the regeneration
+  command updated; the `701bed3` → `202d1ac` note added to the preamble.
+- `docs/RESEARCH-ADDENDUM.md` §1/§1.1/§7: dated correction boxes — the main-vs-deployed
+  divergence table is *inverted* by the upgrade (`playerScore` now deployed,
+  `firstPlanetOf`/`hasFirstPlanet`/`previewFirstPlanet` removed).
+- `docs/SPEC.md` §6.6 and acceptance criteria 6/21: dated correction for the new pinned
+  hash and the `playerScore` reversal.
+- `docs/PLAYER-GUIDE.md` / `.html`: the `walletctl status` transcript shows the new hash.
+- Contract source citations in `references/*.md` and `src/*.py` docstrings re-pointed to
+  `202d1ac`, with shifted line anchors corrected against the redeployed source
+  (`VeydriftTypes.sol`/`VeydriftFormulas.sol`/`VeydriftDependencies.sol` anchors were
+  already correct — those files didn't move).
+
 ## [1.17.0] - 2026-09-03
 
 Attack/missile/colonize/foreign-harvest opportunities, surfaced independent of the

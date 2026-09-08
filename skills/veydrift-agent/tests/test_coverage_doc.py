@@ -1,7 +1,7 @@
 """Staleness guard for `docs/COVERAGE.md` — the write-entrypoint coverage ledger.
 
 `docs/COVERAGE.md` Part 1 is meant to have one row for every write entrypoint in the pinned
-ABI (`skills/veydrift-wallet/abi/VeydriftGame.701bed3.json`), whether it's implemented,
+ABI (`skills/veydrift-wallet/abi/VeydriftGame.202d1ac.json`), whether it's implemented,
 planned, deferred, or explicitly out of scope. Nothing enforces that the document is kept in
 sync with the ABI when a function is added, renamed, or removed on a re-pin — this test is
 that enforcement, in the same spirit as
@@ -42,7 +42,7 @@ import pytest
 
 # tests/ -> veydrift-agent/ -> skills/ -> repo root.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_ABI_PATH = _REPO_ROOT / "skills" / "veydrift-wallet" / "abi" / "VeydriftGame.701bed3.json"
+_ABI_PATH = _REPO_ROOT / "skills" / "veydrift-wallet" / "abi" / "VeydriftGame.202d1ac.json"
 _COVERAGE_DOC = _REPO_ROOT / "docs" / "COVERAGE.md"
 
 

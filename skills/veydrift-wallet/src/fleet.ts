@@ -9,8 +9,10 @@
  *
  * Source: VeydriftFleetFuel.sol:73-87 (cited in RESEARCH-ADDENDUM.md §3), and confirmed directly
  * against the pinned ABI's `MissionShips` tuple component names at commit
- * 701bed3578cff4d134657c714c599dbdb55a4b6a (packages/contracts/src/libraries/VeydriftTypes.sol:43-60
- * for the Ship enum order).
+ * 202d1acd9e35d815bd66cb9bae744341b1b1cf9e (packages/contracts/src/libraries/VeydriftTypes.sol:43-61
+ * for the Ship enum order -- unchanged from the pre-2026-09-07-upgrade commit 701bed3, re-checked
+ * at re-pin time: still a 16-member enum, SolarSatellite at 9 and Crawler at 15, tuple still
+ * `uint32 x 14`).
  *
  * Because SolarSatellite sits at id 9 -- squarely in the middle of the enum -- every flyable ship
  * id greater than 9 is shifted down by exactly one tuple slot. A Destroyer (Ship id 10) lands at

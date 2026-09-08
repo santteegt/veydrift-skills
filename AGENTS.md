@@ -194,15 +194,20 @@ touching related code, re-run the check named alongside each one.
 ## 6. The ABI pin — how to re-verify or re-pin it
 
 `skills/veydrift-wallet/abi/PINNED.json` records the ABI hash from the **deployed**
-contract at commit `701bed3578cff4d134657c714c599dbdb55a4b6a`
-(`sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99`). **`main` on
-the Veydrift contracts repo has already drifted from this** — building from `main` gives a
-different, wrong ABI (confirmed: it's missing `firstPlanetOf`/`hasFirstPlanet` and adds
-functions like `playerScore` that revert on the deployed contract). Always check out the
-pinned commit, never `main`, before rebuilding:
+contract at commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
+(`sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4`). This is the
+**second** pin — the contract was upgraded on-chain on 2026-09-07 and the pin was moved
+from `701bed3578cff4d134657c714c599dbdb55a4b6a`
+(`sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99`); see
+`skills/veydrift-wallet/CHANGELOG.md`'s `1.0.0` entry for the full ABI diff (allowlisted
+surface and both silent-corruption traps unchanged; `playerScore`/`firstPlanetOf` swapped
+presence). **`main` on the Veydrift contracts repo is still not the deployed contract** —
+building from `main` (or from the backend's `gitSha`, a different thing again) gives a
+different, wrong ABI. Always check out the commit `/runtime-config` reports as
+`deploymentCommit`, never `main`, before rebuilding:
 
 ```bash
-git -C /Users/santteegt/GitRepositories/clones/veydrift checkout 701bed3578cff4d134657c714c599dbdb55a4b6a
+git -C /Users/santteegt/GitRepositories/clones/veydrift checkout 202d1acd9e35d815bd66cb9bae744341b1b1cf9e
 git -C /Users/santteegt/GitRepositories/clones/veydrift submodule update --init --recursive --depth 1
 cd /Users/santteegt/GitRepositories/clones/veydrift/packages/contracts
 rm -rf out && forge build --skip test --skip script
@@ -217,14 +222,17 @@ been redeployed, re-pin deliberately — don't let a mismatch silently pass by r
 comparison.
 
 **A second, independent pin exists since the alliance feature (2026-09-01)**:
-`abi/PINNED.alliance.json` + `abi/VeydriftAllianceSystem.701bed3.json`, same commit, same
+`abi/PINNED.alliance.json` + `abi/VeydriftAllianceSystem.202d1ac.json`, same commit, same
 `forge build` settings — but with a narrower guarantee than the pin above. `/runtime-
 config` exposes `allianceContractAddress` directly but has no `allianceAbiHash`/
 `allianceDeploymentCommit` field anywhere, so this pin was verified exactly once, by
 construction, and can never be automatically re-checked against a live hash the way
-`verify-abi` re-checks the game contract's pin on every call. See `references/
-abi-pinning.md`'s "Second contract" section — this is a permanent limit of the upstream
-API, not something to work around by inventing a substitute check.
+`verify-abi` re-checks the game contract's pin on every call. It was re-pinned to
+`202d1ac` alongside the game contract on 2026-09-07 (from the same `forge build`, for
+source-tree coherence); the alliance contract's on-chain address is unchanged and its 15
+in-scope membership selectors are byte-identical across the two commits. See `references/
+abi-pinning.md`'s "Second contract" section — the no-live-recheck limit is a permanent
+limit of the upstream API, not something to work around by inventing a substitute check.
 
 ## 7. Two silent-corruption traps in the write path
 

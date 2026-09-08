@@ -642,9 +642,9 @@ address:         0x7Cd117B9a5e8E5e9E11a5Db0C1e489dF899eda9A
 rpcUrl:          https://mainnet.base.org
 chainId:         8453 (Base)
 balance:         0 ETH
-pinned ABI hash: sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99
-pinned commit:   701bed3578cff4d134657c714c599dbdb55a4b6a
-live ABI hash:   sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99
+pinned ABI hash: sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4
+pinned commit:   202d1acd9e35d815bd66cb9bae744341b1b1cf9e
+live ABI hash:   sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4
 ABI pin match:   MATCH
 game contract:   0xf397910F005151b09644228573a4353818D3755d
 capabilities:    canSign=true canSimulate=false remotePolicy=false

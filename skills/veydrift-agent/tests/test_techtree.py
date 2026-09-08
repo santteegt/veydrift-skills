@@ -2,7 +2,7 @@
 
 Table-driven spot-checks transcribed verbatim from
 `packages/contracts/src/libraries/VeydriftDependencies.sol` and
-`VeydriftCatalog.sol` at the pinned commit `701bed3578cff4d134657c714c599dbdb55a4b6a`
+`VeydriftCatalog.sol` at the pinned commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
 (see `techtree.py`'s own module docstring for exact line citations). The most important
 tests are the absent-data ones: `unmet()` must never resolve "the snapshot didn't report
 this level" to "the requirement is satisfied," and must never return `()` just because the

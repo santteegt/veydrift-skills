@@ -204,7 +204,7 @@ change is everything downstream of that:
 │   └── veydrift-wallet/
 │       ├── SKILL.md
 │       ├── references/providers.md · abi-pinning.md · tx-safety.md
-│       ├── abi/VeydriftGame.701bed3.json · abi/PINNED.json
+│       ├── abi/VeydriftGame.202d1ac.json · abi/PINNED.json   (was .701bed3 before the 2026-09-07 upgrade)
 │       ├── package.json · tsconfig.json
 │       ├── src/
 │       │   ├── cli.ts · abi.ts · allowlist.ts · tx.ts · fleet.ts
@@ -1127,6 +1127,18 @@ A document, not code. Deliverable of this pass; the decision comes later.
   divergent functions (`RESEARCH-ADDENDUM.md` §1.1) — `playerScore` foremost, since prior notes
   recommend it and it reverts.
 
+> **Correction (2026-09-07 — on-chain contract upgrade).** The contract was redeployed. The pin
+> moved to commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`, expected hash
+> `sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4` — this is now what
+> `verify-abi` compares against live, and what `guard.py`'s `PINNED_ABI_HASH` mirrors. The
+> drift-handling behaviour (`_gate_abi_hash` → BLOCK all writes on mismatch) is exactly what
+> fired between the redeploy and the re-pin, as designed. The `RESEARCH-ADDENDUM.md` §1.1
+> divergence list is *inverted* by the upgrade: `playerScore` is now on the deployed contract
+> and `firstPlanetOf`/`hasFirstPlanet`/`previewFirstPlanet` were removed — see that section's
+> own correction box, `docs/COVERAGE.md`'s 2026-09-07 note, and
+> `skills/veydrift-wallet/CHANGELOG.md` `1.0.0`. `abi-pinning.md` was updated to match. The
+> "`main` is not the deployed contract" principle is unchanged.
+
 ### 6.7 Two traps the encoder must handle
 
 Silent-corruption bugs, not crashes. Each gets a dedicated function and a dedicated test.
@@ -1198,7 +1210,8 @@ silent-failure risks, guardrail bypasses and spec defects. Triage, fix, repeat u
    Satellite; the same planner on a hot-planet fixture **does** propose satellites.
 5. `vd tick --dry-run` completes end-to-end, writes a pretty report, `proposals.jsonl` and
    `strategy.md`, and writes **nothing** to `actions.jsonl`.
-6. `walletctl verify-abi` prints `sha256:62cdedb7…6bc99` and matches live.
+6. `walletctl verify-abi` prints the pinned hash and matches live. (Was `sha256:62cdedb7…6bc99`;
+   `sha256:986ea81b…1ec4` since the 2026-09-07 on-chain upgrade — see §6.6's correction box.)
 7. `walletctl send` without `--confirm` exits non-zero.
 8. `walletctl` rejects a tx to a non-Veydrift address, and a selector outside the tier set.
 9. `shipCountsToFleetTuple` places Destroyer at index 9; throws on SolarSatellite and Crawler.
@@ -1219,8 +1232,12 @@ silent-failure risks, guardrail bypasses and spec defects. Triage, fix, repeat u
 18. `AGENTS.md` documents the promotion procedure and required evidence per gate.
 19. `CHANGELOG.md` exists with an initial entry.
 20. Every reference file cites provenance per claim (docs.md / contract `file:line` / live probe date).
-21. Nothing in `references/` contradicts `RESEARCH-ADDENDUM.md`: no `playerScore`, defense route is
-    `/defenses`, Defense and FleetMissionType enums match the contract.
+21. Nothing in `references/` contradicts `RESEARCH-ADDENDUM.md`: defense route is
+    `/defenses`, Defense and FleetMissionType enums match the contract. (The original "no
+    `playerScore`" clause was correct against commit `701bed3`; the 2026-09-07 upgrade re-added
+    `playerScore(address) view` to the deployed contract — `references/` may now mention it as
+    an on-chain view, provided the mention is dated and notes this codebase still uses the
+    backend highscore route. Defense/FleetMissionType enums are unchanged by the upgrade.)
 22. `wallet-provider-research.md` leads with the address-binding constraint (§6.1) and states plainly
     that Cobo and CDP are hosted, not open source.
 23. `vd tick`'s printed report and `proposals.jsonl` carry the winning `Action`'s ranked

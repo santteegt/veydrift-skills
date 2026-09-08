@@ -223,8 +223,8 @@ No params. Confirmed live 2026-08-12:
   "chainId": 8453, "network": "Base",
   "contractAddress": "0xf397910F005151b09644228573a4353818D3755d",
   "backend": { "build": {
-    "deploymentAbiHash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
-    "deploymentCommit": "701bed3578cff4d134657c714c599dbdb55a4b6a"
+    "deploymentAbiHash": "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4",
+    "deploymentCommit": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e"
   }},
   "featureSupport": { "researchEndpoint": true, "highscoresEndpoint": true, "...": "..." }
 }
@@ -724,7 +724,7 @@ The live API **never sends entity display names** — confirmed across all four 
 `infrastructure`/`research`/`shipyard`/`defenses`: every entity is `{id, level|count,
 cost, durationSeconds}`, bare integer id only. `read.py` imports
 `BUILDING_NAMES`/`TECHNOLOGY_NAMES`/`SHIP_NAMES`/`DEFENSE_NAMES` from `ids.py`, built by
-reading the deployed contract source directly at commit `701bed35` — the single
+reading the deployed contract source directly at commit `202d1ac` — the single
 authoritative source for these names. It corrects "Dreadstar" (used throughout
 `docs.md`'s rapidfire tables and prior notes) to "Deathstar," the contract's actual enum
 member name.

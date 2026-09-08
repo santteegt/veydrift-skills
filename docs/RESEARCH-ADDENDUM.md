@@ -5,7 +5,9 @@ and `veydrift-briefing.html`, derived from the **contract source** and the **bac
 from probing.
 
 Repo clone: `/Users/santteegt/GitRepositories/clones/veydrift`
-Deployed commit: `701bed3578cff4d134657c714c599dbdb55a4b6a` · main HEAD at clone time: `84e468f`
+Deployed commit *at research time*: `701bed3578cff4d134657c714c599dbdb55a4b6a` · main HEAD at clone time: `84e468f`
+**Superseded 2026-09-07** by the on-chain contract upgrade — deployed commit is now
+`202d1acd9e35d815bd66cb9bae744341b1b1cf9e` (see §1's correction box).
 
 ---
 
@@ -24,7 +26,7 @@ i.e. compact JSON, no whitespace, key order as emitted by `forge build`.
 
 | Build | ABI hash | Matches live? |
 | --- | --- | --- |
-| `701bed3` (deployment commit) | `sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99` | **yes** |
+| `701bed3` (deployment commit) | `sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99` | ~~yes~~ (superseded, see below) |
 | `84e468f` (main HEAD) | `sha256:361b1c94bf532b97b9971ad41c5be1b4d952710f7c56f046f3999b520179d2a8` | no |
 
 **Consequence: building the ABI from `main` gives you the wrong ABI.** Pin to the
@@ -32,9 +34,37 @@ i.e. compact JSON, no whitespace, key order as emitted by `forge build`.
 Foundry settings that matter for reproducibility: `solc 0.8.28`, `optimizer_runs = 1`, `via_ir = true`,
 `cbor_metadata = false`, `bytecode_hash = "none"` (`packages/contracts/foundry.toml`).
 
+> **Correction (2026-09-07 — on-chain contract upgrade).** The contract was redeployed.
+> `/runtime-config` now reports `deploymentCommit` `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
+> and `deploymentAbiHash` `sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4`,
+> reproduced locally at that commit with the same foundry settings. The pin was moved
+> accordingly (`skills/veydrift-wallet/abi/PINNED.json`, `guard.py`'s `PINNED_ABI_HASH`).
+> The rest of this document's `701bed3` source citations were not each re-verified against
+> `202d1ac`; where the upgrade changed a fact, it is corrected inline and dated. Verified
+> unchanged across the upgrade: `VeydriftTypes.sol` (every enum — `Building`/`Defense`/`Ship`/
+> `Technology`/`Resource`/`MoonBuilding`), `FleetMissionType` (10 members, same order),
+> `VeydriftFormulas.sol`, `VeydriftFleetFuel.sol`, `VeydriftDependencies.sol`. Changed:
+> `VeydriftCatalog.sol`'s rapidfire tables (combat sim, unused here) and a large additive
+> function surface — see `docs/COVERAGE.md`'s 2026-09-07 note and
+> `skills/veydrift-wallet/CHANGELOG.md` `1.0.0` for the full ABI diff.
+
 ### 1.1 main has already drifted from the deployed contract
 
-| Only on `main` (does **not** exist on the deployed contract) | Only on deployed (deleted on main) |
+> **Correction (2026-09-07 — on-chain contract upgrade).** This table is **inverted** by the
+> upgrade. `playerScore(address)`, `settleProductionUntil`, `settleAllianceMembershipBoundary`,
+> `depositPaidAllianceInviteFee` and `startPlanetWithAllianceInvite` — listed below as
+> `main`-only and *not* on the deployed contract — **are now on the deployed contract** (commit
+> `202d1ac`). Conversely `firstPlanetOf`, `hasFirstPlanet` and `previewFirstPlanet` — listed
+> below as deployed-only — **were removed** from the deployed contract. The `NOTES.md` §13.5
+> correction below is therefore itself reversed: `playerScore(address) view` is now a real,
+> callable view on the deployed game proxy (`VeydriftGame.sol:133` at `202d1ac`). The
+> section's *principle* still holds — `main` (and the backend's `gitSha`) is still not the
+> deployed contract, and `main` HEAD at re-pin time (`094f2277`) still hashes differently —
+> only the specific function list flipped.
+
+The point-in-time table as researched 2026-08-11:
+
+| Only on `main` (did **not** exist on the deployed contract, as of `701bed3`) | Only on deployed `701bed3` (deleted on main) |
 | --- | --- |
 | `playerScore(address)` | `firstPlanetOf(address)` |
 | `settleProductionUntil(uint256,uint64)` | `hasFirstPlanet(address)` |
@@ -43,9 +73,12 @@ Foundry settings that matter for reproducibility: `solc 0.8.28`, `optimizer_runs
 | `startPlanetWithAllianceInvite(bytes32,uint64,uint8,bytes32,bytes32)` | 3 × `SafeCast*` errors |
 | event `AllianceBonusCreditedToPlanet(...)` | |
 
-> **Correction to `NOTES.md` §13.5.** It lists `playerScore` among "useful read functions for an
-> agent (all public views on the game proxy)". `playerScore` is **not on the deployed
-> implementation**. A call to it reverts. Use `GET /wallet/{addr}/highscore` instead.
+> **Correction to `NOTES.md` §13.5** (as of `701bed3`; itself reversed 2026-09-07 — see the
+> box above). It lists `playerScore` among "useful read functions for an agent (all public
+> views on the game proxy)". At `701bed3`, `playerScore` was **not on the deployed
+> implementation** and a call to it reverted; `GET /wallet/{addr}/highscore` was the
+> workaround. Since the 2026-09-07 upgrade `playerScore` is on-chain again, though this
+> codebase still uses the backend route.
 
 ---
 
@@ -425,13 +458,26 @@ Combat is a 6-round loop with `no loss if effectiveAttack <= effectiveShield / 1
 
 ## 7. `VeydriftAllianceSystem` — a second deployed contract, read directly (2026-09-01)
 
-Read in full (1064 lines) at the same pinned commit `701bed3578cff4d134657c714c599dbdb55a4b6a`,
-not inferred from the game contract's own references to it.
+Read in full at the pinned commit `701bed3578cff4d134657c714c599dbdb55a4b6a`, not inferred
+from the game contract's own references to it.
+
+> **Correction (2026-09-07 — on-chain contract upgrade).** The alliance pin was moved to
+> commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e` alongside the game contract's re-pin
+> (`abi/VeydriftAllianceSystem.202d1ac.json`, abiHash
+> `sha256:393335c106ecf203eb63d93d21c27b51e10fb4a217a5fd6de5feb63132999535`). The alliance
+> contract's on-chain address is **unchanged** (`0x0E5a6210482B15780cf5Ec036107031dcA702001`),
+> so whether it was itself redeployed cannot be confirmed from the API — the re-pin tracks
+> the game deployment commit for source-tree coherence. `AllianceRole` (below) and all 15
+> membership-function selectors are byte-identical between the two commits. Source-side the
+> file grew a paid-invite bridge and directional war-protection surface and dropped
+> `migrateLegacyWarMetadata` (see `skills/veydrift-wallet/CHANGELOG.md` `1.0.0`), none of it
+> in this codebase's in-scope 15.
 
 ### 7.1 `AllianceRole` — the one new enum
 
-`enum AllianceRole { None, Member, Officer, Owner }` (`VeydriftAllianceSystem.sol:37`) — member
-order is the on-chain value, same convention every enum in `ids.py` already uses. Lives in a new
+`enum AllianceRole { None, Member, Officer, Owner }` (`VeydriftAllianceSystem.sol:59` at
+`202d1ac`; was `:37` at `701bed3`) — member order is the on-chain value, unchanged across the
+upgrade, same convention every enum in `ids.py` already uses. Lives in a new
 sibling module, `alliance_ids.py`, not folded into `ids.py` (whose own docstring scopes it to the
 *game* contract's six enums specifically).
 
@@ -454,10 +500,11 @@ deferred.
 `allianceDeploymentCommit` field anywhere — only the single `backend.build.deploymentAbiHash`/
 `deploymentCommit` pair, which is for the game contract. Unlike the game contract's pin
 (`verify-abi`, re-checked live on every call), the alliance ABI pin
-(`abi/VeydriftAllianceSystem.701bed3.json` + `abi/PINNED.alliance.json`) was verified exactly
+(`abi/VeydriftAllianceSystem.202d1ac.json` + `abi/PINNED.alliance.json`) was verified exactly
 once, by construction (exact commit checkout + exact `forge build` settings, matching the game
 contract's own pinned settings from the same build) — a permanent limit of the upstream API, not
-a gap this codebase can close from its own data sources.
+a gap this codebase can close from its own data sources. This did not change on the 2026-09-07
+re-pin: `/runtime-config` still exposes no alliance hash/commit field.
 
 ### 7.4 The live `/wallet/{addr}/alliance` response — real shapes, not assumed
 

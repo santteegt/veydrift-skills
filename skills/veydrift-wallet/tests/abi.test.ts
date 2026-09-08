@@ -11,10 +11,13 @@ import {
   resolveFunctionAbi,
 } from "../src/abi.js";
 
-// From RESEARCH-ADDENDUM.md §1 and the live /runtime-config probe done for this work package
-// (2026-08-12): backend.build.deploymentAbiHash at commit 701bed3578cff4d134657c714c599dbdb55a4b6a.
-const EXPECTED_HASH = "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99";
-const EXPECTED_COMMIT = "701bed3578cff4d134657c714c599dbdb55a4b6a";
+// Live /runtime-config `backend.build.deploymentAbiHash` / `deploymentCommit`, re-probed
+// 2026-09-07 after the on-chain contract upgrade. Reproduced locally by `forge build` at the
+// reported deploymentCommit (see references/abi-pinning.md). Prior pin was
+// sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99 at commit
+// 701bed3578cff4d134657c714c599dbdb55a4b6a.
+const EXPECTED_HASH = "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4";
+const EXPECTED_COMMIT = "202d1acd9e35d815bd66cb9bae744341b1b1cf9e";
 
 describe("pinned ABI", () => {
   it("hashes to the spec-pinned value", () => {
@@ -27,12 +30,16 @@ describe("pinned ABI", () => {
     expect(meta.commit).toBe(EXPECTED_COMMIT);
   });
 
-  it("does NOT contain playerScore -- main-only, reverts on the deployed contract (RESEARCH-ADDENDUM §1.1)", () => {
-    expect(findFunctionsByName("playerScore")).toHaveLength(0);
+  // The 2026-09-07 on-chain upgrade (commit 202d1ac) reversed the pre-upgrade main-vs-deployed
+  // divergence for these two: `playerScore` is now ON the deployed contract, and
+  // `firstPlanetOf`/`hasFirstPlanet`/`previewFirstPlanet` were removed from it. These
+  // assertions pin that reversal so a careless rebuild against an older commit is caught.
+  it("DOES contain playerScore -- added to the deployed contract in the 2026-09-07 upgrade", () => {
+    expect(findFunctionsByName("playerScore").length).toBeGreaterThan(0);
   });
 
-  it("DOES contain firstPlanetOf -- deployed-only, deleted on main (RESEARCH-ADDENDUM §1.1)", () => {
-    expect(findFunctionsByName("firstPlanetOf").length).toBeGreaterThan(0);
+  it("does NOT contain firstPlanetOf -- removed from the deployed contract in the 2026-09-07 upgrade", () => {
+    expect(findFunctionsByName("firstPlanetOf")).toHaveLength(0);
   });
 
   it("getPinnedAbi returns a non-empty ABI", () => {
@@ -160,9 +167,9 @@ describe("pinned alliance ABI (VeydriftAllianceSystem)", () => {
     const meta = loadPinnedMeta("alliance");
     expect(computePinnedAbiHash("alliance")).toBe(meta.abiHash);
     expect(meta.abiHash).toBe(
-      "sha256:3992c8215c0f1f6bb01dd8afdbc39514a79a1f3fd9b2f7be07056b131cd4de8f",
+      "sha256:393335c106ecf203eb63d93d21c27b51e10fb4a217a5fd6de5feb63132999535",
     );
-    expect(meta.commit).toBe("701bed3578cff4d134657c714c599dbdb55a4b6a");
+    expect(meta.commit).toBe("202d1acd9e35d815bd66cb9bae744341b1b1cf9e");
   });
 
   it("getPinnedAbi('alliance') returns a non-empty ABI, distinct from the game ABI", () => {

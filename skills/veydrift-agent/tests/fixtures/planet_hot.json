@@ -5,7 +5,7 @@
   "indexed_state": "healthy",
   "safe_to_serve_indexed_state": true,
   "latest_indexed_block": 1,
-  "deployment_abi_hash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
+  "deployment_abi_hash": "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4",
   "eth_balance_wei": null,
   "technologies": [
     {

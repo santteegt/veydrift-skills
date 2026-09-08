@@ -1,7 +1,7 @@
 """Deterministic Veydrift game calculators. No network calls except `verify`.
 
 Every function's docstring cites its source: a contract `file:line` at the deployed
-commit `701bed3578cff4d134657c714c599dbdb55a4b6a`
+commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
 (`/Users/santteegt/GitRepositories/clones/veydrift`), `docs/RESEARCH-ADDENDUM.md`, or a
 dated live probe. Where a contract function exists, it wins over `docs.md` prose — this
 module was written by reading `packages/contracts/src/libraries/VeydriftFormulas.sol`,
@@ -503,7 +503,7 @@ def _parse_coordinates(coordinates: Coordinates) -> tuple[int, int, int]:
 
 
 def distance(a: Coordinates, b: Coordinates) -> int:
-    """packages/contracts/src/VeydriftGameplayModule.sol:814-829 (`_planetDistance` /
+    """packages/contracts/src/VeydriftGameplayModule.sol:844-859 (`_planetDistance` /
     `_absoluteDifference`).
 
     Accepts either a ``(galaxy, system, position)`` tuple or a ``"G:S:P"`` string (the
@@ -513,7 +513,7 @@ def distance(a: Coordinates, b: Coordinates) -> int:
     ``2_700 + 95 * |system diff|``; same system, different position =
     ``1_000 + 5 * |position diff|``; same planet = ``0``. Local Harvest missions use a
     fixed distance of 5 instead (`LOCAL_HARVEST_DISTANCE`,
-    `VeydriftGameStorage.sol:52`) — not reproduced here since it is not a function of two
+    `VeydriftGameStorage.sol:54`) — not reproduced here since it is not a function of two
     coordinates.
     """
     a_galaxy, a_system, a_position = _parse_coordinates(a)
@@ -652,7 +652,7 @@ def max_planets(astrophysics_level: int) -> int:
 
 def missile_range(impulse_drive_level: int) -> int:
     """`VeydriftPlanetManagementModule.sol`'s private `_interplanetaryMissileRange`
-    (pinned commit 701bed35, read directly from source for commit 7 of the launch-actions
+    (pinned commit 202d1ac, read directly from source for commit 7 of the launch-actions
     plan): ``impulse_drive_level == 0 ? 0 : impulse_drive_level * 5 - 1``. Impulse Drive 0
     means a range of exactly `0` (not "no data" -- a genuinely narrow but real range,
     same-galaxy-same-system only, `missile_system_distance(...) <= 0` is satisfiable by a
@@ -671,7 +671,7 @@ def missile_range(impulse_drive_level: int) -> int:
 
 def missile_system_distance(a: Coordinates, b: Coordinates) -> int:
     """`VeydriftPlanetManagementModule.sol`'s private `_systemDistanceForMissiles`
-    (pinned commit 701bed35): the plain absolute difference between two systems' numbers
+    (pinned commit 202d1ac): the plain absolute difference between two systems' numbers
     -- ``abs(a.system - b.system)`` -- with **no galaxy term and no position term**,
     unlike `distance()` above (a fleet-mission travel-distance formula). A missile launch
     additionally requires the SAME galaxy (`origin.galaxy == target.galaxy`) as a
@@ -687,14 +687,14 @@ def missile_system_distance(a: Coordinates, b: Coordinates) -> int:
 
 # --------------------------------------------------------------------------------------
 # Ship movement stats (Phase 5c, docs/SPEC.md §5.4) — fixed lookup tables straight from
-# `packages/contracts/src/libraries/VeydriftCatalog.sol` (pinned commit 701bed35). This is
+# `packages/contracts/src/libraries/VeydriftCatalog.sol` (pinned commit 202d1ac). This is
 # NOT the banned "cost-scaling function" category above: that ban is specifically about
 # per-building/tech/ship/defense *cost* factors, which really are unpublished rationals
 # (`buildingCostFactor`, `VeydriftCatalog.sol:34-45`) that must be read live, never
 # recomputed. Cargo capacity, fuel consumption and speed are a different kind of number —
 # a small, fully-published, `pure` lookup table with no live/per-account state at all
 # (`shipCargoCapacity`/`_shipFuelConsumption`/`_shipSpeed`/`_driveSpeed`,
-# `VeydriftCatalog.sol:146-227,497-503`) — reading it once from source is exactly what
+# `VeydriftCatalog.sol:146-227,531-537`) — reading it once from source is exactly what
 # this module already does for every other formula it carries (see module docstring).
 # No live API route ever reports these (`/shipyard` gives only `cost`/`durationSeconds`/
 # `count`, references/api-routes.md §3.9), so there is no "prefer the live value" option
@@ -743,7 +743,7 @@ _SHIP_FUEL_CONSUMPTION_FLAT: dict[int, int] = {
 
 
 def ship_fuel_consumption(ship_id: int, impulse_drive_level: int) -> int:
-    """`VeydriftCatalog.sol:176-193` (`_shipFuelConsumption`). Only Small Cargo's
+    """`VeydriftCatalog.sol:177-198` (`_shipFuelConsumption`). Only Small Cargo's
     consumption depends on drive tech (Impulse Drive >= 5 switches it from 10 to 20 — the
     contract's own note is that this reflects the faster Impulse-Drive route, not a
     scaling formula). Raises `ValueError` for a non-flyable ship id (SolarSatellite,
@@ -757,7 +757,7 @@ def ship_fuel_consumption(ship_id: int, impulse_drive_level: int) -> int:
 
 
 def _drive_speed(base_speed: int, drive_level: int, percent_per_level: int) -> int:
-    """`VeydriftCatalog.sol:497-503` (`_driveSpeed`): ``base * (100 + level *
+    """`VeydriftCatalog.sol:531-537` (`_driveSpeed`): ``base * (100 + level *
     percent_per_level) / 100``, integer division matching Solidity's toward-zero `/` for
     these always-non-negative inputs."""
     return (base_speed * (100 + drive_level * percent_per_level)) // 100
@@ -769,7 +769,7 @@ def ship_speed(
     impulse_drive_level: int,
     hyperspace_drive_level: int,
 ) -> int:
-    """`VeydriftCatalog.sol:194-227` (`_shipSpeed`). Each flyable ship's base speed scales
+    """`VeydriftCatalog.sol:200-227` (`_shipSpeed`). Each flyable ship's base speed scales
     with exactly one drive technology (Small Cargo and Bomber each have a tech-level
     threshold that switches which drive applies — reproduced exactly, not approximated).
     Raises `ValueError` for a non-flyable or unknown ship id, matching the contract's

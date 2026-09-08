@@ -36,8 +36,9 @@ walletctl receipt --hash 0x...
 **Planet 664 — or any Veydrift planet — is permanently bound to the EOA that settled it.**
 Ownership (`_planets[planetId].owner`) is a plain struct field, not a token; there is no
 `transferPlanet` function anywhere in the deployed contract; and `abandonPlanet` reverts
-with `CannotAbandonHomePlanet` for a wallet's home planet ([VeydriftPlanetManagementModule.sol:150](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftPlanetManagementModule.sol#L150),
-verified directly against the deployed commit). If the `veydrift-agent` skill is also
+with `CannotAbandonHomePlanet` for a wallet's home planet ([VeydriftPlanetManagementModule.sol:108](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftPlanetManagementModule.sol#L108),
+verified directly against the deployed commit; unchanged in substance across the 2026-09-07
+upgrade, only the line moved). If the `veydrift-agent` skill is also
 installed, its `references/contract-writes.md` §7 has the full citation trail; this fact
 doesn't depend on that skill being present.
 
@@ -150,9 +151,9 @@ Every write is gated on the pinned ABI's hash matching the live backend's
 produces a different, wrong hash. `walletctl verify-abi` is the check; run it before any
 `send` session, not just once at setup (`checkAllowlist` trusts the on-disk pin per
 transaction, it does not re-fetch and re-hash every time). Full rebuild recipe, the exact
-pinned hash, and the `main`-vs-deployed function-list divergence (most notably
-`playerScore`, which reverts on the deployed contract despite appearing in older docs as
-a recommended read): `references/abi-pinning.md`.
+pinned hash, and what the 2026-09-07 on-chain contract upgrade changed (allowlisted surface
+unchanged; `playerScore` is now on the deployed contract, `firstPlanetOf` was removed):
+`references/abi-pinning.md`.
 
 ## Routing table
 

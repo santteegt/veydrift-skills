@@ -8,18 +8,21 @@ function anywhere in the deployed contract, and planets are not NFTs, so there i
 `transferFrom` escape hatch either.
 
 Abandoning doesn't help either: `abandonPlanet` explicitly reverts for a wallet's home planet.
-Verified directly against the pinned deployment commit (`701bed3578cff4d134657c714c599dbdb55a4b6a`,
-not `main`) via `git show <commit>:<path>`, independent of any other claim:
+Verified directly against the pinned deployment commit (`202d1acd9e35d815bd66cb9bae744341b1b1cf9e`,
+not `main`) via `git show <commit>:<path>`, independent of any other claim — this behavior is
+unchanged across the 2026-09-07 on-chain upgrade; only the line numbers moved (they were
+`VeydriftPlanetManagementModule.sol:146-150` / `VeydriftGameStorage.sol:432` at the prior pin
+`701bed3`):
 
 ```solidity
-// packages/contracts/src/VeydriftPlanetManagementModule.sol:146-150 (at 701bed357...)
+// packages/contracts/src/VeydriftPlanetManagementModule.sol:103-108 (at 202d1ac...)
 function abandonPlanet(uint256 planetId) external {
     ...
     if (homePlanetOf[msg.sender] == planetId) revert CannotAbandonHomePlanet();
 ```
 
 ```solidity
-// packages/contracts/src/VeydriftGameStorage.sol:432 (at 701bed357...)
+// packages/contracts/src/VeydriftGameStorage.sol:530 (at 202d1ac...)
 error CannotAbandonHomePlanet();
 ```
 

@@ -2,9 +2,9 @@
 
 **Source of truth**: the deployed contract, not `docs.md`, not the OGame convention.
 Repo `/Users/santteegt/GitRepositories/clones/veydrift`, commit
-`701bed3578cff4d134657c714c599dbdb55a4b6a` (the *deployed* commit; `main` has drifted —
+`202d1acd9e35d815bd66cb9bae744341b1b1cf9e` (the *deployed* commit; `main` has drifted —
 see `docs/RESEARCH-ADDENDUM.md` §1.1). Every enum below was read with
-``git show 701bed35…:<path>`` against that exact commit, not inferred or probed.
+``git show 202d1ac…:<path>`` against that exact commit, not inferred or probed.
 
 Two things prior docs (`docs/NOTES.md`, `veydrift-agent-resources.md`) get wrong that this
 module must not reproduce:
@@ -28,7 +28,7 @@ from enum import IntEnum
 
 
 class Building(IntEnum):
-    """packages/contracts/src/libraries/VeydriftTypes.sol:4-21 (commit 701bed35)."""
+    """packages/contracts/src/libraries/VeydriftTypes.sol:4-21 (commit 202d1ac)."""
 
     METAL_MINE = 0
     CRYSTAL_MINE = 1
@@ -51,7 +51,7 @@ class Building(IntEnum):
 
 
 class Technology(IntEnum):
-    """packages/contracts/src/libraries/VeydriftTypes.sol:62-78 (commit 701bed35).
+    """packages/contracts/src/libraries/VeydriftTypes.sol:62-78 (commit 202d1ac).
 
     Not the docs' table order — Impulse Drive is id 9, after the combat techs
     (docs/NOTES.md §2).
@@ -75,7 +75,7 @@ class Technology(IntEnum):
 
 
 class Ship(IntEnum):
-    """packages/contracts/src/libraries/VeydriftTypes.sol:43-60 (commit 701bed35).
+    """packages/contracts/src/libraries/VeydriftTypes.sol:43-60 (commit 202d1ac).
 
     Id 11 is `Deathstar` in the enum. Rapidfire tables in `docs.md` and prior notes call
     the same unit "Dreadstar" — both names resolve to 11 via :data:`SHIP_IDS`.
@@ -106,7 +106,7 @@ class Ship(IntEnum):
 
 
 class Defense(IntEnum):
-    """packages/contracts/src/libraries/VeydriftTypes.sol:30-41 (commit 701bed35).
+    """packages/contracts/src/libraries/VeydriftTypes.sol:30-41 (commit 202d1ac).
 
     **Not OGame order.** ``SmallShieldDome`` (3) sorts before ``GaussCannon`` (4), and
     ``IonCannon`` is 5 — docs/RESEARCH-ADDENDUM.md §3 flags this explicitly as a place
@@ -126,7 +126,7 @@ class Defense(IntEnum):
 
 
 class FleetMissionType(IntEnum):
-    """packages/contracts/src/VeydriftGameStorage.sol:166-177 (commit 701bed35).
+    """packages/contracts/src/VeydriftGameStorage.sol:197-208 (commit 202d1ac).
 
     `Intercept` and `DefenseHold` appear in neither `docs.md` nor the prior notes
     (docs/RESEARCH-ADDENDUM.md §3). Combat mission types (Attack=3, AcsAttack=8,
@@ -147,7 +147,7 @@ class FleetMissionType(IntEnum):
 
 
 class Resource(IntEnum):
-    """packages/contracts/src/libraries/VeydriftTypes.sol:80-85 (commit 701bed35).
+    """packages/contracts/src/libraries/VeydriftTypes.sol:80-85 (commit 202d1ac).
 
     The `uint8` used by `depositMarketResource`, `requestMarketResourceWithdrawal`,
     `finishMarketResourceWithdrawal` (docs/RESEARCH-ADDENDUM.md §3).

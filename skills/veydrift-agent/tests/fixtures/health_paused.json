@@ -4,8 +4,8 @@
   "configured": true,
   "backend": {
     "build": {
-      "deploymentAbiHash": "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99",
-      "deploymentCommit": "701bed3578cff4d134657c714c599dbdb55a4b6a",
+      "deploymentAbiHash": "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4",
+      "deploymentCommit": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e",
       "deploymentTimestamp": "2026-07-28T17:56:35.000Z",
       "gitSha": "b5ae8b8eb6022536df2134cc878164679426ad4b",
       "gitShaSource": "VEYDRIFT_BUILD_ARTIFACT"

@@ -66,13 +66,16 @@ app = typer.Typer(no_args_is_help=True, help="Evaluate guardrails against a prop
 # skills/veydrift-wallet, a separate TypeScript project this package must never import
 # from -- SPEC.md §5.5/§9 acceptance criterion 15) but sourced from the exact same pin:
 # skills/veydrift-wallet/abi/PINNED.json, verified against the deployed commit
-# 701bed3578cff4d134657c714c599dbdb55a4b6a (docs/SPEC.md §6.6).
+# 202d1acd9e35d815bd66cb9bae744341b1b1cf9e (docs/SPEC.md §6.6). Re-pinned 2026-09-07 after
+# the on-chain contract upgrade; prior commit 701bed3578cff4d134657c714c599dbdb55a4b6a.
 # --------------------------------------------------------------------------------------
 
 #: sha256(JSON.stringify(pinned.abi)) at the deployed commit. Mirrors
 #: skills/veydrift-wallet/abi/PINNED.json's `abiHash` byte-for-byte; if that file is ever
-#: re-pinned, update this constant in the same change.
-PINNED_ABI_HASH = "sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99"
+#: re-pinned, update this constant in the same change. Was
+#: sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99 at commit 701bed3,
+#: before the 2026-09-07 on-chain upgrade.
+PINNED_ABI_HASH = "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4"
 
 #: Contract function name -> the lowest tier allowed to *submit* it. Mirrors
 #: skills/veydrift-wallet/src/allowlist.ts's ECONOMY_SIGNATURES /
@@ -397,7 +400,7 @@ def _gate_tier(action: Action, policy: Policy) -> GuardVerdict:
 
 
 #: Field widths `_decodeColonyTarget` masks against
-#: (`VeydriftColonizationModule.sol:42-46,482-492`, pinned commit 701bed35):
+#: (`VeydriftColonizationModule.sol:42-46,482-492`, pinned commit 202d1ac):
 #: ``COLONIZATION_COORDINATE_MASK = 0xffff`` for both galaxy and system (each packed as
 #: a `uint16`), ``COLONIZATION_POSITION_MASK = 0xff`` for position (packed as a `uint8`
 #: occupying the low byte directly, not shifted). Verified directly against the pinned
@@ -1355,7 +1358,7 @@ def _drive_tech_levels(snapshot: Snapshot) -> tuple[int, int, int]:
 def _derive_fleet_mission_spend(action: Action, snapshot: Snapshot) -> Resources | None:
     """Independently re-derive a `FLEET_MISSION` action's true launch spend -- cargo plus
     fuel, fuel counted as deuterium (`VeydriftGameplayModule.sol:246-260`, pinned commit
-    701bed35: ``_spend(origin, {..., deuterium: cargo.deuterium + fuelCost})``) -- from
+    202d1ac: ``_spend(origin, {..., deuterium: cargo.deuterium + fuelCost})``) -- from
     `action.ships` / `action.origin_planet_id` / `action.target_coordinates` alone,
     **never** from `action.cost`.
 

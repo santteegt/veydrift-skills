@@ -2,8 +2,8 @@
  * Pinned-ABI loading, hashing and live verification.
  *
  * The wallet engine never trusts a freshly-`forge build`-ed ABI at runtime; it trusts only the
- * committed `abi/VeydriftGame.701bed3.json` (and, since the alliance feature, the committed
- * `abi/VeydriftAllianceSystem.701bed3.json` sibling), and cross-checks the game contract's hash
+ * committed `abi/VeydriftGame.202d1ac.json` (and, since the alliance feature, the committed
+ * `abi/VeydriftAllianceSystem.202d1ac.json` sibling), and cross-checks the game contract's hash
  * against the live `/runtime-config` before any write path is used. See
  * references/abi-pinning.md for the full derivation, the main-vs-deployed divergence this
  * guards against, and -- new -- why the alliance contract's pin has no equivalent live-hash
@@ -51,8 +51,8 @@ export interface PinnedMeta {
 }
 
 const ARTIFACT_FILENAMES: Record<Contract, string> = {
-  game: "VeydriftGame.701bed3.json",
-  alliance: "VeydriftAllianceSystem.701bed3.json",
+  game: "VeydriftGame.202d1ac.json",
+  alliance: "VeydriftAllianceSystem.202d1ac.json",
 };
 
 const META_FILENAMES: Record<Contract, string> = {

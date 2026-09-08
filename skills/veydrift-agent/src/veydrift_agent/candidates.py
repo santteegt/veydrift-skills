@@ -1883,7 +1883,7 @@ def generate_ship_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetS
 # --------------------------------------------------------------------------------------
 # Defense targets + caps (Phase 3). `_queued_defense_quantity`/`_defense_capacity_reason`
 # independently re-derive `_requireDefenseCapacity`
-# (`VeydriftDefenseProductionModule.sol:352-380`) from `candidates.py`'s own side --
+# (`VeydriftDefenseProductionModule.sol:373-401`) from `candidates.py`'s own side --
 # deliberately NOT shared code with `guard.py`'s `_defense_cap_violation`, the same
 # defense-in-depth posture `guard.py`'s `_gate_energy` already takes toward `plan.py`'s
 # energy invariant (two independent implementations of the same contract rule, so a bug
@@ -2150,8 +2150,8 @@ def _flyable_ships(planet: PlanetSnapshot) -> list[tuple[int, int]]:
 
 def _fleet_mission_cost(cargo: Resources, fuel: int) -> Resources:
     """The true on-chain launch spend for a `launchFleetMission` action: cargo plus fuel,
-    fuel counted as deuterium -- `VeydriftGameplayModule.sol:246-260` (pinned commit
-    701bed35): `_spend(origin, {..., deuterium: cargo.deuterium + fuelCost})`. Judge
+    fuel counted as deuterium -- `VeydriftGameplayModule.sol:295-306` (pinned commit
+    202d1ac): `_spend(origin, {..., deuterium: cargo.deuterium + fuelCost})`. Judge
     finding 1: `generate_transport_candidates`/`generate_harvest_candidates` built an
     `Action` without ever setting `Action.cost`, so `guard.py`'s `affordability`/
     `reserve`/`value_ceiling` gates all evaluated a fleet mission's true resource spend
@@ -2507,7 +2507,7 @@ def generate_deploy_candidates(
     ]
 
 
-#: VeydriftGameStorage.sol:52 (`LOCAL_HARVEST_DISTANCE`). A same-planet Harvest
+#: VeydriftGameStorage.sol:54 (`LOCAL_HARVEST_DISTANCE`). A same-planet Harvest
 #: (`originPlanetId == targetPlanetId`) uses this fixed distance instead of
 #: `calc.distance`, which is undefined for two identical coordinates in the sense the
 #: contract means here (`VeydriftGameplayModule.sol`'s `_launchFleetMission`: `distance =

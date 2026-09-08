@@ -42,6 +42,11 @@
           "name": "stateMigrationModule",
           "type": "address",
           "internalType": "address"
+        },
+        {
+          "name": "acsAttackModule",
+          "type": "address",
+          "internalType": "address"
         }
       ],
       "stateMutability": "nonpayable"
@@ -111,19 +116,6 @@
           "name": "",
           "type": "bytes32",
           "internalType": "bytes32"
-        }
-      ],
-      "stateMutability": "view"
-    },
-    {
-      "type": "function",
-      "name": "FLEET_RECALL_COST_BPS",
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "",
-          "type": "uint16",
-          "internalType": "uint16"
         }
       ],
       "stateMutability": "view"
@@ -472,6 +464,45 @@
     },
     {
       "type": "function",
+      "name": "attackBodyProtectionStatus",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "enum VeydriftGameStorage.AttackBlockReason"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
       "name": "attackProtectionStatus",
       "inputs": [
         {
@@ -503,6 +534,30 @@
         }
       ],
       "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "battleResolutionProgress",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "roundsCompleted",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "totalRounds",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
     },
     {
       "type": "function",
@@ -1002,6 +1057,13 @@
     },
     {
       "type": "function",
+      "name": "depositPaidAllianceInviteFee",
+      "inputs": [],
+      "outputs": [],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
       "name": "depositResourceReserves",
       "inputs": [
         {
@@ -1120,62 +1182,6 @@
     },
     {
       "type": "function",
-      "name": "firstPlanetOf",
-      "inputs": [
-        {
-          "name": "player",
-          "type": "address",
-          "internalType": "address"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "settledPlanet",
-          "type": "tuple",
-          "internalType": "struct VeydriftGameStorage.FirstPlanet",
-          "components": [
-            {
-              "name": "galaxy",
-              "type": "uint16",
-              "internalType": "uint16"
-            },
-            {
-              "name": "system",
-              "type": "uint16",
-              "internalType": "uint16"
-            },
-            {
-              "name": "position",
-              "type": "uint8",
-              "internalType": "uint8"
-            },
-            {
-              "name": "fields",
-              "type": "uint16",
-              "internalType": "uint16"
-            },
-            {
-              "name": "temperature",
-              "type": "int16",
-              "internalType": "int16"
-            },
-            {
-              "name": "settledAt",
-              "type": "uint64",
-              "internalType": "uint64"
-            },
-            {
-              "name": "settledBlock",
-              "type": "uint64",
-              "internalType": "uint64"
-            }
-          ]
-        }
-      ],
-      "stateMutability": "view"
-    },
-    {
-      "type": "function",
       "name": "fleetMission",
       "inputs": [
         {
@@ -1262,6 +1268,19 @@
     },
     {
       "type": "function",
+      "name": "gamePaused",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
       "name": "grantMoonResources",
       "inputs": [
         {
@@ -1294,25 +1313,6 @@
       ],
       "outputs": [],
       "stateMutability": "nonpayable"
-    },
-    {
-      "type": "function",
-      "name": "hasFirstPlanet",
-      "inputs": [
-        {
-          "name": "player",
-          "type": "address",
-          "internalType": "address"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "",
-          "type": "bool",
-          "internalType": "bool"
-        }
-      ],
-      "stateMutability": "view"
     },
     {
       "type": "function",
@@ -1356,7 +1356,7 @@
       "name": "importMigratedStateWithReferral",
       "inputs": [
         {
-          "name": "",
+          "name": "player",
           "type": "address",
           "internalType": "address"
         },
@@ -1399,6 +1399,13 @@
           "internalType": "address"
         }
       ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "initializeMoonAttackParity",
+      "inputs": [],
       "outputs": [],
       "stateMutability": "nonpayable"
     },
@@ -1561,6 +1568,139 @@
     },
     {
       "type": "function",
+      "name": "joinBodyAttackMission",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
       "name": "launchAttackMission",
       "inputs": [
         {
@@ -1681,6 +1821,166 @@
           "name": "",
           "type": "uint256",
           "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.LootRatio",
+          "components": [
+            {
+              "name": "metalBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "crystalBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            },
+            {
+              "name": "deuteriumBps",
+              "type": "uint16",
+              "internalType": "uint16"
+            }
+          ]
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "launchBodyAttackMission",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.MissionShips",
+          "components": [
+            {
+              "name": "smallCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "lightFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "recycler",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "colonyShip",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "largeCargo",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "heavyFighter",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "cruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battleship",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "bomber",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "destroyer",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "deathstar",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "battlecruiser",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "reaper",
+              "type": "uint32",
+              "internalType": "uint32"
+            },
+            {
+              "name": "pathfinder",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        },
+        {
+          "name": "",
+          "type": "uint16",
+          "internalType": "uint16"
+        },
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        },
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
         },
         {
           "name": "",
@@ -2286,7 +2586,13 @@
           "internalType": "uint32"
         }
       ],
-      "outputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
       "stateMutability": "nonpayable"
     },
     {
@@ -2378,6 +2684,32 @@
         }
       ],
       "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "migratePlanetTemperatures",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "moonAttackParityActivatedAt",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "view"
     },
     {
       "type": "function",
@@ -2759,7 +3091,20 @@
     },
     {
       "type": "function",
-      "name": "previewFirstPlanet",
+      "name": "planetTemperatureGenerationVersion",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "playerScore",
       "inputs": [
         {
           "name": "player",
@@ -2769,46 +3114,9 @@
       ],
       "outputs": [
         {
-          "name": "planetPreview",
-          "type": "tuple",
-          "internalType": "struct VeydriftGameStorage.FirstPlanet",
-          "components": [
-            {
-              "name": "galaxy",
-              "type": "uint16",
-              "internalType": "uint16"
-            },
-            {
-              "name": "system",
-              "type": "uint16",
-              "internalType": "uint16"
-            },
-            {
-              "name": "position",
-              "type": "uint8",
-              "internalType": "uint8"
-            },
-            {
-              "name": "fields",
-              "type": "uint16",
-              "internalType": "uint16"
-            },
-            {
-              "name": "temperature",
-              "type": "int16",
-              "internalType": "int16"
-            },
-            {
-              "name": "settledAt",
-              "type": "uint64",
-              "internalType": "uint64"
-            },
-            {
-              "name": "settledBlock",
-              "type": "uint64",
-              "internalType": "uint64"
-            }
-          ]
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
         }
       ],
       "stateMutability": "view"
@@ -2825,7 +3133,7 @@
       ],
       "outputs": [
         {
-          "name": "resources",
+          "name": "",
           "type": "tuple",
           "internalType": "struct VeydriftGameStorage.Resources",
           "components": [
@@ -3285,6 +3593,25 @@
     },
     {
       "type": "function",
+      "name": "resolveFleetMissionCombatRound",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
       "name": "resourceReserveAvailable",
       "inputs": [],
       "outputs": [
@@ -3505,7 +3832,7 @@
       "name": "setGamePaused",
       "inputs": [
         {
-          "name": "paused",
+          "name": "",
           "type": "bool",
           "internalType": "bool"
         }
@@ -3518,7 +3845,7 @@
       "name": "setMigrationSettlement",
       "inputs": [
         {
-          "name": "nextMigrationSettlement",
+          "name": "",
           "type": "address",
           "internalType": "address"
         }
@@ -3567,7 +3894,7 @@
       "name": "setRandomnessEngine",
       "inputs": [
         {
-          "name": "nextRandomnessEngine",
+          "name": "",
           "type": "address",
           "internalType": "address"
         }
@@ -3644,10 +3971,10 @@
     },
     {
       "type": "function",
-      "name": "settleDuePlayerColonizeArrivals",
+      "name": "settleAllianceMembershipBoundary",
       "inputs": [
         {
-          "name": "",
+          "name": "player",
           "type": "address",
           "internalType": "address"
         }
@@ -3797,6 +4124,24 @@
           "name": "planetId",
           "type": "uint256",
           "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "settleProductionUntil",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "uint64",
+          "internalType": "uint64"
         }
       ],
       "outputs": [],
@@ -4135,6 +4480,45 @@
     },
     {
       "type": "function",
+      "name": "startPlanetWithAllianceInvite",
+      "inputs": [
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "payable"
+    },
+    {
+      "type": "function",
       "name": "startPlanetWithReferral",
       "inputs": [
         {
@@ -4319,19 +4703,6 @@
     },
     {
       "type": "function",
-      "name": "untrackResolvedFleetMission",
-      "inputs": [
-        {
-          "name": "",
-          "type": "uint256",
-          "internalType": "uint256"
-        }
-      ],
-      "outputs": [],
-      "stateMutability": "nonpayable"
-    },
-    {
-      "type": "function",
       "name": "withdrawFees",
       "inputs": [
         {
@@ -4342,6 +4713,43 @@
       ],
       "outputs": [],
       "stateMutability": "nonpayable"
+    },
+    {
+      "type": "event",
+      "name": "AllianceBonusCreditedToPlanet",
+      "inputs": [
+        {
+          "name": "manager",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "indexed": false,
+          "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
     },
     {
       "type": "event",
@@ -5654,6 +6062,50 @@
     },
     {
       "type": "event",
+      "name": "InterplanetaryMissileLaunched",
+      "inputs": [
+        {
+          "name": "missionId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "primaryTarget",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "enum Defense"
+        },
+        {
+          "name": "quantity",
+          "type": "uint32",
+          "indexed": false,
+          "internalType": "uint32"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "InviteeProductionBoostActivated",
+      "inputs": [
+        {
+          "name": "player",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "expiresAt",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
       "name": "MarketResourceDeposited",
       "inputs": [
         {
@@ -6020,6 +6472,44 @@
           "type": "int16",
           "indexed": false,
           "internalType": "int16"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PlanetTemperatureChanged",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "indexed": true,
+          "internalType": "uint256"
+        },
+        {
+          "name": "previousTemperature",
+          "type": "int16",
+          "indexed": false,
+          "internalType": "int16"
+        },
+        {
+          "name": "newTemperature",
+          "type": "int16",
+          "indexed": false,
+          "internalType": "int16"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PlanetTemperatureGenerationMigrated",
+      "inputs": [
+        {
+          "name": "planetCount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
         }
       ],
       "anonymous": false
@@ -6812,6 +7302,11 @@
     },
     {
       "type": "error",
+      "name": "GameMustBePaused",
+      "inputs": []
+    },
+    {
+      "type": "error",
       "name": "InsufficientExcessResourceReserve",
       "inputs": [
         {
@@ -7100,6 +7595,16 @@
     },
     {
       "type": "error",
+      "name": "PlanetTemperatureMigrationCompleted",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "PlanetTemperatureMigrationPending",
+      "inputs": []
+    },
+    {
+      "type": "error",
       "name": "QueueActive",
       "inputs": []
     },
@@ -7318,33 +7823,6 @@
     },
     {
       "type": "error",
-      "name": "SafeCastOverflowedIntDowncast",
-      "inputs": [
-        {
-          "name": "bits",
-          "type": "uint8",
-          "internalType": "uint8"
-        },
-        {
-          "name": "value",
-          "type": "int256",
-          "internalType": "int256"
-        }
-      ]
-    },
-    {
-      "type": "error",
-      "name": "SafeCastOverflowedIntToUint",
-      "inputs": [
-        {
-          "name": "value",
-          "type": "int256",
-          "internalType": "int256"
-        }
-      ]
-    },
-    {
-      "type": "error",
       "name": "SafeCastOverflowedUintDowncast",
       "inputs": [
         {
@@ -7352,17 +7830,6 @@
           "type": "uint8",
           "internalType": "uint8"
         },
-        {
-          "name": "value",
-          "type": "uint256",
-          "internalType": "uint256"
-        }
-      ]
-    },
-    {
-      "type": "error",
-      "name": "SafeCastOverflowedUintToInt",
-      "inputs": [
         {
           "name": "value",
           "type": "uint256",
@@ -7451,7 +7918,6 @@
     "BPS()": "249d39e9",
     "DEFAULT_START_PRICE()": "0ddd89b2",
     "FIRST_PLANET_DOMAIN()": "c9967a4e",
-    "FLEET_RECALL_COST_BPS()": "b31d6b2c",
     "FLEET_RECALL_CUTOFF_SECONDS()": "5e6f5748",
     "FLEET_UNIVERSE_SPEED()": "1a2a7f4b",
     "MARKET_WITHDRAWAL_DELAY()": "cefafda7",
@@ -7474,7 +7940,9 @@
     "abandonPlanet(uint256)": "fa16dddc",
     "activeBuildingConstruction(uint256)": "9074c206",
     "activeFleetMissionCount(address)": "423f9f10",
+    "attackBodyProtectionStatus(address,uint256,bool)": "dca08aaf",
     "attackProtectionStatus(address,uint256)": "8a6b2246",
+    "battleResolutionProgress(uint256)": "a5edcf21",
     "buildingConstructions(uint256)": "b8e835ab",
     "buildingLevel(uint256,uint8)": "d9b24865",
     "buildingUpgradeCost(uint256,uint8)": "291ee1b5",
@@ -7490,6 +7958,7 @@
     "defenseQueueBacklog(uint256)": "4f5ed437",
     "defenseQueues(uint256)": "5758361d",
     "depositMarketResource(uint256,uint8,uint128)": "25819e15",
+    "depositPaidAllianceInviteFee()": "027f9791",
     "depositResourceReserves((uint128,uint128,uint128))": "00190a90",
     "energyBalance(uint256)": "7938100c",
     "finishBuildingUpgrade(uint256)": "6ab2f9d4",
@@ -7497,17 +7966,19 @@
     "finishMarketResourceWithdrawal(uint8)": "de0f208c",
     "finishResearch()": "ba2fbdc8",
     "finishShipProduction(uint256)": "7bd93154",
-    "firstPlanetOf(address)": "29147f24",
     "fleetMission(uint256)": "f158c946",
+    "gamePaused()": "c3de1ab9",
     "grantMoonResources(uint256,(uint128,uint128,uint128))": "c83b9b6b",
-    "hasFirstPlanet(address)": "1d750846",
     "homePlanetOf(address)": "0ff79fa5",
     "importMigratedState(address,bytes)": "f789025b",
     "importMigratedStateWithReferral(address,bytes,bytes32,uint8,bytes32,bytes32)": "d97910a4",
     "initialize(address)": "c4d66de8",
+    "initializeMoonAttackParity()": "b7a5fac8",
     "isCoordinateAvailable(uint16,uint16,uint8)": "183e8268",
     "joinAttackMission(uint256,uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128))": "28260eb6",
+    "joinBodyAttackMission(uint256,uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),bool)": "dd3e1279",
     "launchAttackMission(uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256,(uint16,uint16,uint16))": "19fec22b",
+    "launchBodyAttackMission(uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,bool,bool,(uint16,uint16,uint16))": "a2baf848",
     "launchBodyFleetMission(uint256,uint256,uint8,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,bool,bool)": "0d0a9b08",
     "launchDefenseHold(uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256)": "d3ad415f",
     "launchFleetMission(uint256,uint256,uint8,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256)": "60eac16f",
@@ -7516,6 +7987,8 @@
     "lockedWithdrawalResources()": "ca086b98",
     "maxPlanets(address)": "406975ff",
     "maxRaidLoot(uint256,uint256)": "a2fbd1c6",
+    "migratePlanetTemperatures()": "b93c3c61",
+    "moonAttackParityActivatedAt()": "79ff28fd",
     "moonResources(uint256)": "1f20b321",
     "moonShipCount(uint256,uint8)": "dc02fa88",
     "moveMoonGateShips(uint256,uint256,address,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32))": "c79cca11",
@@ -7527,7 +8000,8 @@
     "planetCountOf(address)": "02b30546",
     "planetNames(uint256)": "ec16d865",
     "planetSeed(uint16,uint16,uint8)": "e3d54574",
-    "previewFirstPlanet(address)": "729b082f",
+    "planetTemperatureGenerationVersion()": "54a81556",
+    "playerScore(address)": "82b813dc",
     "previewResources(uint256)": "0adbf924",
     "productionPerHour(uint256)": "9ec5e0d5",
     "protectedResources(uint256)": "222a58f5",
@@ -7543,6 +8017,7 @@
     "researchQueues(address)": "2b98afc7",
     "reserveMigrationCoordinates(uint16[],uint16[],uint8[])": "d957845c",
     "resolveFleetMission(uint256)": "de09e7cf",
+    "resolveFleetMissionCombatRound(uint256)": "6d641302",
     "resourceReserveAvailable()": "90117fd3",
     "resourceReserveBalance(uint8)": "c72ba7ae",
     "resourceReserveRequirement()": "a69df5f2",
@@ -7560,11 +8035,12 @@
     "setResourceTokens(address,address,address)": "be6df313",
     "setSpaceDockSystem(address)": "5942ff32",
     "setStartPrice(uint256)": "17d86154",
-    "settleDuePlayerColonizeArrivals(address)": "dd3aff23",
+    "settleAllianceMembershipBoundary(address)": "73e3691c",
     "settleDuePlayerCombatArrivals(address)": "5e0eed79",
     "settleFirstPlanet()": "59268393",
     "settleFirstPlanetWithReferral(bytes32,uint8,bytes32,bytes32)": "2f7a1ec2",
     "settlePlanet(uint256)": "921609d9",
+    "settleProductionUntil(uint256,uint64)": "0a64d74b",
     "shipCost(uint8)": "c4222030",
     "shipCount(uint256,uint8)": "57686701",
     "shipQueue(uint256)": "c6c8cf96",
@@ -7574,6 +8050,7 @@
     "startBuildingUpgrade(uint256,uint8)": "165715e3",
     "startDefenseProduction(uint256,uint8,uint32)": "fec06283",
     "startPlanet()": "f45f1f18",
+    "startPlanetWithAllianceInvite(bytes32,uint64,uint8,bytes32,bytes32)": "042fec83",
     "startPlanetWithReferral(bytes32,uint8,bytes32,bytes32)": "dad57ff9",
     "startPrice()": "f1a9af89",
     "startResearch(uint256,uint8)": "7f314b93",
@@ -7582,7 +8059,6 @@
     "technologyLevel(address,uint8)": "e512884c",
     "totalInternalResources()": "86252f4f",
     "transferOwnership(address)": "f2fde38b",
-    "untrackResolvedFleetMission(uint256)": "8bd85c0e",
     "withdrawFees(address)": "164e68de"
   }
 }

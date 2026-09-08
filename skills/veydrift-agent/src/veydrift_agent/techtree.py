@@ -13,10 +13,10 @@ Launcher on a planet with no Shipyard (`requireDefense`'s unconditional
 (never propose a locked entity) and `guard.py` (independently re-check one) use.
 
 **Source of truth**: the deployed contract, commit
-`701bed3578cff4d134657c714c599dbdb55a4b6a`
+`202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
 (`/Users/santteegt/GitRepositories/clones/veydrift`; `main` has drifted — see
 `docs/RESEARCH-ADDENDUM.md` §1.1). Every table below was read with
-``git show 701bed35…:<path>`` against that exact commit, not inferred, not probed, and not
+``git show 202d1ac…:<path>`` against that exact commit, not inferred, not probed, and not
 transcribed from `docs.md` (which does not publish this table at all).
 
 Five things verified directly against source while transcribing (see the module test file
@@ -24,8 +24,8 @@ for the specific spot-checks pinned against each):
 
 1. **The 9-argument `requireBuilding` overload is the one actually called.**
    `VeydriftDependencies.sol` declares two overloads (5-arg at :11-36, 9-arg at :38-89);
-   `VeydriftGame.sol:799-811`'s `_requireBuildingDependencies` — the only call site reached
-   from `startBuildingUpgrade` (`VeydriftGame.sol:150`) — calls the 9-arg one. The 5-arg
+   `VeydriftGame.sol:855-867`'s `_requireBuildingDependencies` — the only call site reached
+   from `startBuildingUpgrade` (`VeydriftGame.sol:147`) — calls the 9-arg one. The 5-arg
    overload is missing Fusion Reactor, Terraformer and Missile Silo entirely; transcribing
    it instead would silently under-constrain the table for exactly those three buildings.
 2. **Every requirement in the source is a conjunction, never a disjunction.** The contract
@@ -51,7 +51,7 @@ for the specific spot-checks pinned against each):
 5. **Graviton's only gate is a Research Lab level in this module.** Its *other* real
    requirement — `VeydriftCatalog.researchEnergyRequirement`, `300_000 * 3^currentLevel`,
    checked against the planet's live *produced* energy at
-   `VeydriftPlanetManagementModule.sol:566-573` — is not a level comparison against any
+   `VeydriftPlanetManagementModule.sol:535-541` — is not a level comparison against any
    building/technology, so it cannot be a `Requirement` tuple entry. It is modelled
    separately below as :data:`GRAVITON_ENERGY_REQUIREMENT_BASE` /
    :data:`GRAVITON_ENERGY_REQUIREMENT_MULTIPLIER` and
@@ -98,7 +98,7 @@ class ReqSource(str, Enum):
     level, or a per-*player* technology level. (Note: even though `startResearch` is a
     per-player action, its Research Lab prerequisite is read from the *specific planet*
     the transaction is submitted through — `_buildingLevels[planetId][ResearchLab]` in
-    `VeydriftPlanetManagementModule.sol:558` — so `BUILDING` requirements are always
+    `VeydriftPlanetManagementModule.sol:454` — so `BUILDING` requirements are always
     planet-scoped, never account-wide, including inside `RESEARCH_REQUIREMENTS`.)"""
 
     BUILDING = "building"
@@ -150,7 +150,7 @@ class UnlockStep(NamedTuple):
 # --------------------------------------------------------------------------------------
 
 #: `VeydriftDependencies.sol:38-89` (the 9-arg `requireBuilding` overload — see module
-#: docstring point 1), called from `VeydriftGame.sol:799-811`.
+#: docstring point 1), called from `VeydriftGame.sol:855-867`.
 BUILDING_REQUIREMENTS: dict[int, tuple[Requirement, ...]] = {
     ids.Building.SHIPYARD: (
         Requirement(ReqSource.BUILDING, ids.Building.ROBOTICS_FACTORY, 2),
@@ -182,7 +182,7 @@ BUILDING_REQUIREMENTS: dict[int, tuple[Requirement, ...]] = {
 }
 
 #: `VeydriftDependencies.sol:184-329` (`requireShip`), called from
-#: `VeydriftShipProductionModule.sol:159` (`_validateShipProduction`).
+#: `VeydriftShipProductionModule.sol:156` (`_validateShipProduction`).
 SHIP_REQUIREMENTS: dict[int, tuple[Requirement, ...]] = {
     ids.Ship.SMALL_CARGO: (
         Requirement(ReqSource.BUILDING, ids.Building.SHIPYARD, 2),
@@ -265,7 +265,7 @@ SHIP_REQUIREMENTS: dict[int, tuple[Requirement, ...]] = {
 }
 
 #: `VeydriftDependencies.sol:90-166` (`requireDefense`), called from
-#: `VeydriftDefenseProductionModule.sol:336-350` (`_requireDefenseDependencies`). Every
+#: `VeydriftDefenseProductionModule.sol:357-371` (`_requireDefenseDependencies`). Every
 #: entry starts with the unconditional `Shipyard >= 1` at :97-99 (module docstring point 3).
 DEFENSE_REQUIREMENTS: dict[int, tuple[Requirement, ...]] = {
     ids.Defense.ROCKET_LAUNCHER: (
@@ -321,9 +321,9 @@ DEFENSE_REQUIREMENTS: dict[int, tuple[Requirement, ...]] = {
 }
 
 #: `VeydriftDependencies.sol:331-388` (`requireResearch`), called from
-#: `VeydriftPlanetManagementModule.sol:550-575` (`_requireResearchDependencies`). Each
+#: `VeydriftPlanetManagementModule.sol:516-542` (`_requireResearchDependencies`). Each
 #: entry's first `Requirement` is `VeydriftCatalog.researchLabRequirement(tech)`
-#: (`VeydriftCatalog.sol:442-458`); any further entries are the per-technology extra
+#: (`VeydriftCatalog.sol:476-492`); any further entries are the per-technology extra
 #: conjuncts declared inline in `requireResearch` (module docstring point 4). Graviton's
 #: additional energy-based gate is *not* here — see :func:`graviton_energy_requirement`.
 RESEARCH_REQUIREMENTS: dict[int, tuple[Requirement, ...]] = {
@@ -398,8 +398,8 @@ _TABLES: dict[EntityFamily, dict[int, tuple[Requirement, ...]]] = {
 
 # --------------------------------------------------------------------------------------
 # Graviton's energy-based research gate. Not a `Requirement` (see module docstring
-# point 5) -- `VeydriftCatalog.sol:429-441` (`researchEnergyRequirement`), enforced at
-# `VeydriftPlanetManagementModule.sol:566-573` against the planet's live *produced*
+# point 5) -- `VeydriftCatalog.sol:463-475` (`researchEnergyRequirement`), enforced at
+# `VeydriftPlanetManagementModule.sol:535-541` against the planet's live *produced*
 # energy, not a building/technology level.
 # --------------------------------------------------------------------------------------
 
@@ -408,7 +408,7 @@ GRAVITON_ENERGY_REQUIREMENT_MULTIPLIER = 3
 
 
 def graviton_energy_requirement(current_level: int) -> int:
-    """`300_000 * 3^currentLevel` (`VeydriftCatalog.sol:429-441`). Zero for every other
+    """`300_000 * 3^currentLevel` (`VeydriftCatalog.sol:463-475`). Zero for every other
     technology -- Graviton is the only one with a nonzero
     `researchEnergyRequirement`, confirmed by reading the whole function. Compare the
     result against the planet's live *produced* energy (`PlanetSnapshot.energy.produced`),
@@ -421,7 +421,7 @@ def graviton_energy_requirement(current_level: int) -> int:
 # Hard caps -- also "the contract will revert" territory, but a *count* ceiling rather
 # than a level prerequisite. `VeydriftCatalog.sol:239-241` (`maxDefensePerPlanet`),
 # `:229-233` (`missileSlots`), `:235-237` (`missileSiloCapacity`); enforced at
-# `VeydriftDefenseProductionModule.sol:352-380` (`_requireDefenseCapacity`).
+# `VeydriftDefenseProductionModule.sol:373-401` (`_requireDefenseCapacity`).
 #
 # **The contract counts *queued* quantity toward both caps, not just already-built
 # count** (`_queuedDefenseQuantity` / `_queuedMissileSiloSlots`, same file, :380-410) --

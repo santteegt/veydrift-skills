@@ -12,11 +12,11 @@ comes straight from the pinned ABI, not from memory:
 
 ```bash
 jq -r '.abi[] | select(.type=="function" and (.stateMutability=="nonpayable" or .stateMutability=="payable")) | .name' \
-  skills/veydrift-wallet/abi/VeydriftGame.701bed3.json | sort -u | wc -l
+  skills/veydrift-wallet/abi/VeydriftGame.202d1ac.json | sort -u | wc -l
 ```
 
-Run 2026-08-16 against `skills/veydrift-wallet/abi/VeydriftGame.701bed3.json`: **61 ABI
-entries, 60 unique function names.** The gap is `launchFleetMission`, which is overloaded on
+Run 2026-09-07 against `skills/veydrift-wallet/abi/VeydriftGame.202d1ac.json`: **69 ABI
+entries, 68 unique function names.** The gap is `launchFleetMission`, which is overloaded on
 the deployed ABI (a 7-arg and a 6-arg form — see `AGENTS.md` §7, trap #2); both forms are
 listed as separate rows below. Every claim in Part 1 traces to one of: `guard.py`'s
 `_MIN_TIER_FOR_FUNCTION` (`guard.py:83-103`, re-verified 2026-08-17), `allowlist.ts`'s
@@ -24,8 +24,20 @@ listed as separate rows below. Every claim in Part 1 traces to one of: `guard.py
 (`allowlist.ts:65-68`), a grep of `plan.py` and (as of
 Phase 2, 2026-08-16) `candidates.py` for `Action(function=...)`, `tick.py`'s
 `_action_to_walletctl_json` (`tick.py:449-482`, re-verified 2026-08-17), or the
-deployed contract source at commit `701bed3578cff4d134657c714c599dbdb55a4b6a`
+deployed contract source at commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
 (`/Users/santteegt/GitRepositories/clones/veydrift`).
+
+**2026-09-07 on-chain contract upgrade.** The pinned ABI moved from commit `701bed3` to
+`202d1ac` (see `skills/veydrift-wallet/CHANGELOG.md` `1.0.0` and `references/abi-pinning.md`).
+Net effect on this ledger: **+10 writable functions, −2** (60 → 68 unique names). The 10
+added are classified into their sections below with `202d1ac` line refs; the 2 removed
+(`settleDuePlayerColonizeArrivals`, `untrackResolvedFleetMission`, both formerly §1.8) are
+marked struck-through in §1.8. **No function this codebase plans, guards, or allowlists
+changed** — every §1.1 row is byte-identical across the upgrade. Existing rows in §1.3–§1.9
+keep their `701bed3` line citations: the function is confirmed still present via the ABI
+diff, but the individual `VeydriftGame.sol:NNN` / module line numbers were not each
+re-verified against `202d1ac` (many shifted by the upgrade's added structs/functions) —
+rows touched in this pass say `202d1ac` explicitly.
 
 **Correction to an earlier estimate**: this ledger was scoped assuming 5 payable functions.
 The pinned ABI actually has **6** (§1.5 below) — verified directly, not assumed.
@@ -91,12 +103,14 @@ held) moved to §1.1 once `models.py` was unfrozen and `guard.py`'s `mission_typ
 | --- | --- | --- | --- | --- | --- |
 | `settlePlanet` | No — grepped `plan.py` and `candidates.py`, no rung/generator emits it | ~~ECONOMY~~ — **removed 2026-08-17** (was `guard.py:76`) | ~~ECONOMY~~ — **removed 2026-08-17** (was `allowlist.ts:42`) | **removed, Phase 5 (docs/SPEC.md §5.4/§9) — `veydrift-wallet` v0.2.0, breaking** | Was: body identical to `collectResources` at the pinned commit — `VeydriftGame.sol:120-128`: both are exactly `_touchPlayer(msg.sender); _collectPlanetResources(planetId);`. `collectResources` is correctly refused as a disguised read (`abi.ts`'s `NONPAYABLE_READ_FUNCTIONS`, §1.4 below); `settlePlanet` was the same operation but allowlisted at ECONOMY on both sides with a live `tick.py` encoder branch despite no planner rung ever proposing it. Removed from `guard.py`'s `_MIN_TIER_FOR_FUNCTION`, `allowlist.ts`'s `ECONOMY_SIGNATURES`, and `tick.py`'s `_action_to_walletctl_json` together, in the same change — `test_tier_map_agrees_with_the_wallet_engines_allowlist` (agent-side) verifies the first two still agree. Real colonisation — what a human might have expected `settlePlanet` to be — is `launchFleetMission` mission type `Colonize` (2), live and allowlisted since 2026-08-17 (§1.1's `launchFleetMission` rows). |
 
-### 1.4 Correctly excluded — disguised reads (6 rows)
+### 1.4 Correctly excluded — disguised reads (7 rows — `attackBodyProtectionStatus` added on the 2026-09-07 re-pin)
 
 `abi.ts`'s `NONPAYABLE_READ_FUNCTIONS` (`abi.ts:204-211`) — `nonpayable` in the ABI (confirmed
-in the jq dump: none of these six are `view`/`pure`) because each lazily settles state before
+in the jq dump: none of these are `view`/`pure`) because each lazily settles state before
 returning, but semantically a read. `isNonpayableRead()` makes `sendTx` refuse every one of
-them outright (`AGENTS.md` §7).
+the six it lists outright (`AGENTS.md` §7). `attackBodyProtectionStatus` (new 2026-09-07) is
+the moon-body counterpart of `attackProtectionStatus` and is semantically a read the same
+way, but is **not yet in `NONPAYABLE_READ_FUNCTIONS`** — see the note under its row.
 
 | Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
 | --- | --- | --- | --- | --- | --- |
@@ -106,12 +120,13 @@ them outright (`AGENTS.md` §7).
 | `maxRaidLoot` | No | not present | not present | correctly excluded — route via `simulate` | N/A |
 | `protectedResources` | No | not present | not present | correctly excluded — route via `simulate` | N/A |
 | `raidableResources` | No | not present | not present | correctly excluded — route via `simulate` | N/A |
+| `attackBodyProtectionStatus` | No | not present | not present | **new 2026-09-07 (contract upgrade).** Moon-body variant of `attackProtectionStatus` — `nonpayable` in the ABI, delegates to `VeydriftAttackProtectionModule` (`VeydriftGame.sol:538` at `202d1ac`), returns `(AttackBlockReason, uint8, uint16)`; semantically a read that lazily settles. Excluded from every layer, same as its sibling. | Add it to `abi.ts`'s `NONPAYABLE_READ_FUNCTIONS` so `sendTx` refuses it explicitly (today it is refused only implicitly, by not being allowlisted) — a one-line hardening, worth doing if/when moon combat is ever in scope |
 
-### 1.5 Excluded — payable (6 rows, corrected from an earlier estimate of 5)
+### 1.5 Excluded — payable (8 rows — `depositPaidAllianceInviteFee` + `startPlanetWithAllianceInvite` added on the 2026-09-07 re-pin; was 6, corrected from an earlier estimate of 5)
 
 `allowlist.ts:164-169` checks `tx.value !== 0n` unconditionally, before the selector check, at
-every tier — structurally excludes all six regardless of any selector list ever added to
-`ECONOMY_SIGNATURES`/`LAUNCH_FLEET_MISSION_SIGNATURES`.
+every tier — structurally excludes all eight regardless of any selector list ever added to
+`ECONOMY_SIGNATURES`/`LAUNCH_FLEET_MISSION_SIGNATURES`/`ALLIANCE_SIGNATURES`.
 
 | Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
 | --- | --- | --- | --- | --- | --- |
@@ -121,8 +136,10 @@ every tier — structurally excludes all six regardless of any selector list eve
 | `settleFirstPlanetWithReferral` | No | not present | not present | out of scope — payable + referrals | Same, plus referral-code handling |
 | `startPlanet` | No | not present | not present | out of scope — payable | **Not the real colonisation path** (a naming trap worth flagging explicitly): verified 2026-08-17 against `VeydriftGame.sol`'s facade — real player colonisation is `launchFleetMission` mission type `Colonize` (2), which dispatches to `VeydriftColonizationModule` (see §1.2 above); `startPlanet` is a separate, `payable` entrypoint, structurally excluded here by `allowlist.ts`'s unconditional `value == 0` check regardless of what this codebase ever builds. Also depends on `maxPlanets` (`calc.max_planets`, §3). |
 | `startPlanetWithReferral` | No | not present | not present | out of scope — payable + referrals | Same, plus referral-code handling |
+| `depositPaidAllianceInviteFee` | No | not present | not present | **new 2026-09-07 (contract upgrade).** out of scope — `payable` (`VeydriftGame.sol:33` at `202d1ac`, an empty-body `payable` deposit surface for the paid-alliance-invite treasury) + alliances (SPEC.md §1 non-goal). Structurally excluded by the `value == 0` check. | Would require a paid-alliance-invite model + relaxing the value check; both out of scope |
+| `startPlanetWithAllianceInvite` | No | not present | not present | **new 2026-09-07 (contract upgrade).** out of scope — `payable` (`VeydriftGame.sol:122` at `202d1ac`) + first-planet bootstrap + alliances. Same structural exclusion as `startPlanet`/`settleFirstPlanet`. | Same as `startPlanet`, plus alliance-invite handling |
 
-### 1.6 Out of scope — combat entrypoints other than `launchFleetMission` (5 rows)
+### 1.6 Out of scope — combat entrypoints other than `launchFleetMission` (7 rows — `launchBodyAttackMission` + `joinBodyAttackMission` added on the 2026-09-07 re-pin)
 
 `docs/SPEC.md` §1 non-goal, narrowed by the launch-actions plan's commit 5 (2026-08-28) to
 exclude one specific case (Attack, via `launchFleetMission`'s own mission-type argument)
@@ -158,7 +175,9 @@ these four remaining selectors.
 | `joinAttackMission` | declared `VeydriftGame.sol:394`, impl `VeydriftGameplayModule.sol:127` | out of scope — combat | Same |
 | `launchDefenseHold` | declared `VeydriftGame.sol:404`, impl `VeydriftDefenseHoldModule.sol:58` | out of scope — combat | Same |
 | `completeAttackTargetSnapshotQueues` | `VeydriftColonizationModule.sol:94` | out of scope — combat | Settlement/bookkeeping helper tied to attack-target queues; same friction applies since it only has meaning once combat is reachable |
-| `settleDuePlayerCombatArrivals` | `VeydriftGame.sol:210` | out of scope — combat | Settles arrivals of already-launched combat missions; same reasoning as above — meaningless without combat itself being reachable |
+| `settleDuePlayerCombatArrivals` | `VeydriftGame.sol:241` (`202d1ac`) | out of scope — combat | Settles arrivals of already-launched combat missions; same reasoning as above — meaningless without combat itself being reachable |
+| `launchBodyAttackMission` | declared `VeydriftGame.sol:388`, impl `VeydriftGameplayModule.sol:155` (`202d1ac`) | **new 2026-09-07 (contract upgrade).** out of scope — combat | Moon-body-aware Attack mission with a player-selected loot ratio (part of the upgrade's "moon attack parity" surface). Not a `launchFleetMission` mission type — its own selector. Same deliberate friction as `launchAttackMission`: source change across `plan.py`/`guard.py`/`allowlist.ts` + docs + the cross-layer test |
+| `joinBodyAttackMission` | declared `VeydriftGame.sol:446`, impl `VeydriftAcsAttackModule.sol:42` (`202d1ac`) | **new 2026-09-07 (contract upgrade).** out of scope — combat | ACS join for a body attack mission — the moon-body counterpart of `joinAttackMission`. Same friction |
 
 **Combat is a policy exclusion, not a technical one.** `packages/contracts/src/libraries/VeydriftCatalog.sol`
 at the pinned commit has the battle-resolution formulas extractable the same way the tech
@@ -167,10 +186,12 @@ tree already is elsewhere in this codebase: `shipBattleAttack` (line 261), `ship
 `shipRapidfireAgainstDefense` (line 357) — all `public pure`. Nothing here is unpublished; it
 is simply not read.
 
-### 1.7 Owner-only (13 rows)
+### 1.7 Owner-only or otherwise not player-callable (17 rows — 4 added on the 2026-09-07 re-pin)
 
-Not player-callable at any tier — `onlyOwner` or an OZ `initializer`/`Initializable` guard at
-the pinned commit, spot-verified directly against source (not assumed from naming):
+Not player-callable at any tier — `onlyOwner`, an OZ `initializer`/`Initializable` guard, or
+an internal caller check (`msg.sender != address(this)` / `!= _allianceSystem`), spot-verified
+directly against source (not assumed from naming). Rows marked `202d1ac` were verified against
+the post-upgrade commit; the rest carry their original `701bed3` citations.
 
 | Function | Modifier / contract location (pinned commit) |
 | --- | --- |
@@ -187,21 +208,28 @@ the pinned commit, spot-verified directly against source (not assumed from namin
 | `setAttackProtectionExemption` | `onlyOwner` — `VeydriftGameStorage.sol:820-823` |
 | `withdrawFees` | `onlyOwner` — `VeydriftGameStorage.sol:1157` |
 | `depositResourceReserves` | `onlyOwner` — `VeydriftResourceReserves.sol:250` |
+| `migratePlanetTemperatures` | **new 2026-09-07.** `onlyOwner` — facade `VeydriftGame.sol:272` delegates to `VeydriftFirstPlanetSettlementModule.sol:63` (`function migratePlanetTemperatures() external onlyOwner`); `202d1ac`. One-time temperature-regeneration migration. |
+| `settleProductionUntil` | **new 2026-09-07.** Self-call only — `VeydriftGame.sol:221` (`202d1ac`) opens `if (msg.sender != address(this)) revert Unauthorized(msg.sender)`. Internal settlement primitive, not reachable by any external caller. |
+| `settleAllianceMembershipBoundary` | **new 2026-09-07.** Alliance-system only — `VeydriftGame.sol:229` (`202d1ac`) opens `if (msg.sender != _allianceSystem) revert Unauthorized(msg.sender)`. Called by `VeydriftAllianceSystem` around a roster transition so paid-invite bonuses track real membership time. |
+| `resolveFleetMissionCombatRound` | **new 2026-09-07.** Self-call only — `VeydriftGame.sol:504` (`202d1ac`) opens `if (msg.sender != address(this)) revert Unauthorized(msg.sender)`. The gas-bounded per-round combat-resolution surface the play module self-calls; not a player entrypoint (contrast `resolveFleetMission`, §1.1). |
 
 `depositResourceReserves` was found during verification and added here — not itself named in
 the original scoping pass, but it is `onlyOwner` at the cited line, so it belongs here rather
-than in "deferred — other" below.
+than in "deferred — other" below. The four 2026-09-07 additions are not `onlyOwner` but are
+equally unreachable by a player: two are `msg.sender == address(this)` self-calls, one is
+`msg.sender == _allianceSystem`, and `migratePlanetTemperatures`'s facade delegates into an
+`onlyOwner` module function.
 
-### 1.8 Deferred — other (19 rows)
+### 1.8 Deferred — other (18 rows — `initializeMoonAttackParity` added, `settleDuePlayerColonizeArrivals` + `untrackResolvedFleetMission` removed, on the 2026-09-07 re-pin)
 
 Player-callable (no `onlyOwner`), not payable, not a disguised read, not combat — genuinely
 untouched by every layer of this codebase, mostly because they belong to a game surface this
 project hasn't built a planner/guard/wallet path for yet. See Part 2 for the surface each one
-belongs to.
+belongs to. Line refs are `701bed3` unless marked `202d1ac`.
 
 | Function | Contract location (pinned commit) | Belongs to (Part 2 surface) |
 | --- | --- | --- |
-| `abandonPlanet` | `VeydriftGame.sol:320` | planet lifecycle — reverts for a home planet per `README.md`'s key-custody section; a single-planet account can never call this meaningfully |
+| `abandonPlanet` | `VeydriftGame.sol:349` (`202d1ac`) | planet lifecycle — reverts for a home planet per `README.md`'s key-custody section; a single-planet account can never call this meaningfully |
 | `clearMoonState` | `VeydriftColonizationModule.sol:74` | moon acquisition & jump gates |
 | `completeFleetMissionReturn` | `VeydriftGame.sol:442` | fleet/mission bookkeeping (adjacent to §1.1's dormant `resolveFleetMission`) |
 | `finishBuildingUpgrade` | `VeydriftGame.sol:170` | queue-completion helper — the contract-side "finish" call for a construction whose `readyAt` has elapsed; not modelled as a distinct planner action anywhere |
@@ -216,10 +244,11 @@ belongs to.
 | `renamePlanet` | `VeydriftGame.sol:315` | cosmetic player action, no planner/guard reason to exclude it beyond nobody having built it |
 | `reserveMigrationCoordinates` | `VeydriftGame.sol:248` | referrals & migration |
 | `setMoonShipCount` | `VeydriftColonizationModule.sol:66` | moon acquisition & jump gates — plain `external`, **not** `onlyOwner` despite the "set" naming (verified directly; do not assume owner-only from the name alone) |
-| `setSpaceDockSystem` | `VeydriftGame.sol:287` | space dock repair — plain `external`, **not** `onlyOwner`. The contract's own doc-comment at `VeydriftGame.sol:283-286` reads verbatim: *"UNUSED / DORMANT: SpaceDock is never set on the live deployment, so `_spaceDockSystem` stays `address(0)` and combat wreckage recording no-ops."* This function is dormant on the live deployment itself, upstream of anything this repo does. |
-| `settleDuePlayerColonizeArrivals` | `VeydriftColonizationModule.sol:112` | moon acquisition & jump gates / colonization arrival settlement |
+| `setSpaceDockSystem` | `VeydriftGame.sol:316` (`202d1ac`) | space dock repair — plain `external`, **not** `onlyOwner`. The contract's own doc-comment reads verbatim: *"UNUSED / DORMANT: SpaceDock is never set on the live deployment, so `_spaceDockSystem` stays `address(0)` and combat wreckage recording no-ops."* This function is dormant on the live deployment itself, upstream of anything this repo does. |
 | `spendMoonResources` | `VeydriftColonizationModule.sol:58` | moon acquisition & jump gates |
-| `untrackResolvedFleetMission` | `VeydriftColonizationModule.sol:78` | fleet/mission bookkeeping |
+| `initializeMoonAttackParity` | `VeydriftGame.sol:70` (`202d1ac`) | **new 2026-09-07 (contract upgrade).** planet/moon lifecycle — an idempotent upgrade hook with no auth guard: sets a one-time `_moonAttackParityActivatedAt` marker if unset, no-ops thereafter. Permissionless but inert to call; belongs to the "moon attack parity" surface introduced by the upgrade. Nothing in this codebase needs to call it. |
+| ~~`settleDuePlayerColonizeArrivals`~~ | ~~`VeydriftColonizationModule.sol:112`~~ | **removed from the ABI on the 2026-09-07 re-pin** — kept struck-through per this ledger's "reconstructed once" convention. |
+| ~~`untrackResolvedFleetMission`~~ | ~~`VeydriftColonizationModule.sol:78`~~ | **removed from the ABI on the 2026-09-07 re-pin.** |
 
 ### 1.9 Out of scope — ERC-20 market bridge (3 rows)
 
@@ -231,13 +260,15 @@ belongs to.
 | `requestMarketResourceWithdrawal` | `VeydriftGame.sol:464` |
 | `finishMarketResourceWithdrawal` | `VeydriftGame.sol:469` |
 
-**Row count check** (updated 2026-08-17, Phase 5c/5b — `launchFleetMission` moved from §1.2 to
-§1.1): 6 (§1.1, unique names — `launchFleetMission` counted once despite its 2 overload rows) + 0
-(§1.2, now empty) + 1 (§1.3) + 6 (§1.4) + 6 (§1.5) + 6 (§1.6) + 13 (§1.7) + 19 (§1.8) + 3 (§1.9)
-= **60 unique function names**, matching the `jq -u` count above. Counting table *rows* instead
-(§1.1 contributing 7 rows — 5 single-row functions plus `launchFleetMission`'s 2 overloads) gives
-6 - 1 + 2 = 7 for §1.1, so 7 + 0 + 1 + 6 + 6 + 6 + 13 + 19 + 3 = **61**, matching the raw ABI
-entry count.
+**Row count check** (updated 2026-09-07 for the on-chain contract upgrade; previously updated
+2026-08-17 Phase 5c/5b and 2026-08-28 for `launchInterplanetaryMissileAttack`):
+7 (§1.1, unique names — `launchFleetMission` counted once despite its 2 overload rows) + 0
+(§1.2, empty) + 1 (§1.3, `settlePlanet` — removed from our allowlist but still in the ABI) +
+7 (§1.4) + 8 (§1.5) + 7 (§1.6) + 17 (§1.7) + 18 (§1.8, present-in-ABI rows only — the 2
+struck-through removed functions don't count) + 3 (§1.9) = **68 unique function names**,
+matching the `jq -u` count above. Counting table *rows* instead (§1.1 contributing 8 rows —
+6 single-row functions plus `launchFleetMission`'s 2 overloads) gives
+8 + 0 + 1 + 7 + 8 + 7 + 17 + 18 + 3 = **69**, matching the raw ABI entry count.
 
 ---
 
@@ -262,8 +293,8 @@ Surfaces not reducible to a single ABI entrypoint. Same status/what-it-would-tak
 | Interdimensional Rift Stabilizer | mechanics unpublished, hard-capped at level 1 | `Building.InterdimensionalRiftStabilizer` exists in the catalog (id 15, cost tuple `(8_000, 8_000, 4_000)` at `VeydriftCatalog.sol:30`); the level-1 hard cap is documented at `docs/NOTES.md:540`, not independently re-derived from a level-cap function in this pass — no such function was found by name in `VeydriftCatalog.sol` during this ledger's research. |
 | Terraformer field gain | deferred | `Building.Terraformer` exists in the catalog with a cost tuple `(0, 50_000, 100_000)` at `VeydriftCatalog.sol:27`; the fields-gained-per-level formula was not traced in this pass. |
 | Expeditions | not found | No expedition-related entrypoint or type found in the pinned contract source during this pass (searched `VeydriftTypes.sol`/`VeydriftGame.sol`/module contracts for "expedition", no matches). Recorded as "not found," same posture as espionage above. |
-| Alliances | **membership implemented and fork-verified (2026-09-01/02) — diplomacy/ACS coordination remain out of scope** | `VeydriftAllianceSystem.sol` is its own deployed contract, its own pinned ABI (`abi/VeydriftAllianceSystem.701bed3.json` + `abi/PINNED.alliance.json`, `skills/veydrift-wallet`), its own address (`allianceContractAddress`, live in `/runtime-config`). 15 membership functions (`createAlliance`, `updateAllianceProfile`, `inviteMember`, `cancelInvite`, `acceptInvite`, `requestJoinAlliance`, `cancelJoinRequest`, `dismissJoinRequest`, `approveJoinRequest`, `kickMember`, `kickMembers`, `leaveAlliance`, `setMemberRole`, `setMembersRole`, `transferAllianceOwnership`) are reachable via `vd tick --action` only — no `candidates.py` generator, no `plan.py` rung — gated on `policy.actions.allow_alliance` at `economy` tier or above (`guard._gate_alliance_action`, the 23rd guard gate; `veydrift-wallet`'s `ALLIANCE_SIGNATURES` in `allowlist.ts`). `setDiplomacy` (Ally/NAP/War) and `openDefenseIntent` (ACS coordination) remain fully out of scope, unconditionally — combat-adjacent, deferred. **Live-sent on a local Anvil fork (round 5, 2026-09-02)**: 13 of the 15 functions, across a full lifecycle (create/invite/cancel/accept/request/dismiss/approve/role-change/ownership-transfer/kick/leave) using three fresh, alliance-free accounts, every step confirmed against real on-chain state, not just emitted events — `kickMembers`/`setMembersRole` (the two batch variants) are the only ones not live-sent, structurally identical to their already-verified singular siblings. See `docs/SPEC.md` correction 73 and `skills/veydrift-wallet/references/fork-testing.md` §12. |
-| Highscore/score model | API-only, no contract entrypoint | `/highscores` is a backend API route (`skills/veydrift-agent/references/api-routes.md:123`, `read.py`'s `highscores` command at `read.py:713-729`) — 1-2+ MB, `--out`-mandatory, never composed into `Snapshot`. No `playerScore`/highscore function was found in the pinned `VeydriftGame` ABI or contract source. |
+| Alliances | **membership implemented and fork-verified (2026-09-01/02) — diplomacy/ACS coordination remain out of scope** | `VeydriftAllianceSystem.sol` is its own deployed contract, its own pinned ABI (`abi/VeydriftAllianceSystem.202d1ac.json` + `abi/PINNED.alliance.json`, `skills/veydrift-wallet`; re-pinned to `202d1ac` on the 2026-09-07 game-contract upgrade — the alliance address is unchanged and the 15 membership selectors are byte-identical across the re-pin), its own address (`allianceContractAddress`, live in `/runtime-config`). 15 membership functions (`createAlliance`, `updateAllianceProfile`, `inviteMember`, `cancelInvite`, `acceptInvite`, `requestJoinAlliance`, `cancelJoinRequest`, `dismissJoinRequest`, `approveJoinRequest`, `kickMember`, `kickMembers`, `leaveAlliance`, `setMemberRole`, `setMembersRole`, `transferAllianceOwnership`) are reachable via `vd tick --action` only — no `candidates.py` generator, no `plan.py` rung — gated on `policy.actions.allow_alliance` at `economy` tier or above (`guard._gate_alliance_action`, the 23rd guard gate; `veydrift-wallet`'s `ALLIANCE_SIGNATURES` in `allowlist.ts`). `setDiplomacy` (Ally/NAP/War) and `openDefenseIntent` (ACS coordination) remain fully out of scope, unconditionally — combat-adjacent, deferred. **Live-sent on a local Anvil fork (round 5, 2026-09-02)**: 13 of the 15 functions, across a full lifecycle (create/invite/cancel/accept/request/dismiss/approve/role-change/ownership-transfer/kick/leave) using three fresh, alliance-free accounts, every step confirmed against real on-chain state, not just emitted events — `kickMembers`/`setMembersRole` (the two batch variants) are the only ones not live-sent, structurally identical to their already-verified singular siblings. See `docs/SPEC.md` correction 73 and `skills/veydrift-wallet/references/fork-testing.md` §12. |
+| Highscore/score model | API-only for planning; a `playerScore` view exists on-chain since the 2026-09-07 upgrade but is unused | `/highscores` is a backend API route (`skills/veydrift-agent/references/api-routes.md:123`, `read.py`'s `highscores` command at `read.py:713-729`) — 1-2+ MB, `--out`-mandatory, never composed into `Snapshot`. **The 2026-09-07 contract upgrade added `playerScore(address) view` to `VeydriftGame`** (`VeydriftGame.sol:133` at `202d1ac`) — before the upgrade it was a `main`-only function that reverted on the deployed contract (`references/abi-pinning.md`), and this row previously recorded that. It is now callable, but nothing in this codebase reads it: it's a `view` (not a write entrypoint, so not in Part 1), and planning still uses the backend `/highscores`/`/wallet/{addr}/highscore` routes. |
 | Referrals & migration | out of scope — explicit non-goal | `docs/SPEC.md` §1: "migration, referrals" listed by name. Covers `reserveMigrationCoordinates`, `releaseExcessResourceReserves` (§1.8), `importMigratedState(WithReferral)`, `settleFirstPlanetWithReferral`, `startPlanetWithReferral` (§1.5). |
 
 ### Data surfaces `read.py` fetches and then discards

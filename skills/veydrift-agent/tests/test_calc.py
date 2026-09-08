@@ -1,6 +1,6 @@
 """Tests for veydrift_agent.calc — pure functions checked against contract source
 (packages/contracts/src/libraries/VeydriftFormulas.sol, VeydriftAntiRaidPrimitives.sol,
-VeydriftGameplayModule.sol at commit 701bed3578cff4d134657c714c599dbdb55a4b6a) and, where
+VeydriftGameplayModule.sol at commit 202d1acd9e35d815bd66cb9bae744341b1b1cf9e) and, where
 available, the live API (docs/NOTES.md §12.4, docs/RESEARCH-ADDENDUM.md §5).
 """
 

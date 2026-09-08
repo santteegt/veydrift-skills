@@ -11,6 +11,71 @@ lockstep.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-07
+
+The Veydrift game contract was upgraded on-chain (deployed 2026-09-07T02:02:59Z). The pinned
+ABI is re-pinned to the new deployment; the prior pin now fails `walletctl verify-abi` against
+live `/runtime-config`. Major bump per this file's convention — a breaking change to the ABI
+pin — even though **no allowlisted selector and neither silent-corruption trap changed**: a
+consumer who does not take this release has a wallet whose every write path is blocked by the
+ABI-hash gate.
+
+### Changed (breaking — ABI pin)
+- **Game contract re-pinned** from commit `701bed3578cff4d134657c714c599dbdb55a4b6a` (abiHash
+  `sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99`) to
+  `202d1acd9e35d815bd66cb9bae744341b1b1cf9e` (abiHash
+  `sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4`). The new hash was
+  reproduced locally by `forge build` at the reported `deploymentCommit` (same foundry settings
+  as before: `solc 0.8.28`, `optimizer_runs 1`, `via_ir true`, `cbor_metadata false`,
+  `bytecode_hash none`) and matched against live `/runtime-config` exactly. Artifact file
+  `abi/VeydriftGame.701bed3.json` → `abi/VeydriftGame.202d1ac.json`; `src/abi.ts`'s
+  `ARTIFACT_FILENAMES` and `tests/abi.test.ts`'s `EXPECTED_HASH`/`EXPECTED_COMMIT` updated to
+  match.
+- **Alliance contract re-pinned** from the same old commit (abiHash `sha256:3992c821…`) to
+  `202d1ac` (abiHash `sha256:393335c106ecf203eb63d93d21c27b51e10fb4a217a5fd6de5feb63132999535`),
+  rebuilt from the same `forge build`, so both pinned artifacts come from one coherent source
+  tree. `abi/VeydriftAllianceSystem.701bed3.json` → `abi/VeydriftAllianceSystem.202d1ac.json`.
+  Its on-chain address is unchanged (`0x0E5a6210482B15780cf5Ec036107031dcA702001`) and
+  `/runtime-config` still exposes no `allianceAbiHash`/`allianceDeploymentCommit`, so this pin
+  still has no live re-verification path and is still verified only once, by construction — see
+  `references/abi-pinning.md`'s "Second contract" section. The 15 in-scope membership functions'
+  selectors are byte-identical between the two commits, independently checked at re-pin time.
+
+### Unchanged (verified against the new ABI)
+- All allowlisted selectors: the five `ECONOMY_SIGNATURES`, both `launchFleetMission` overloads
+  (`0x60eac16f` / `0x28247df8`), `launchInterplanetaryMissileAttack` (`0xa72cd29a`),
+  `resolveFleetMission` (`0xde09e7cf`), and every one of the 15 `ALLIANCE_SIGNATURES`.
+- Both silent-corruption traps: the 14-slot `uint32` fleet tuple and the `launchFleetMission`
+  overload pair. The `Ship` enum is still 16 members with `SolarSatellite` at 9 and `Crawler`
+  at 15.
+- All six `NONPAYABLE_READ_FUNCTIONS` are still ABI-`nonpayable` (not `view`).
+
+### ABI diff (game contract, `701bed3` → `202d1ac`; 289 → 303 entries, 138 → 147 methodIds)
+- **Added, not allowlisted** (default-deny — unreachable through `walletctl` without a source
+  change): `playerScore(address)`, `settleProductionUntil`, `settleAllianceMembershipBoundary`,
+  `depositPaidAllianceInviteFee`, `startPlanetWithAllianceInvite`, a moon-attack-parity surface
+  (`launchBodyAttackMission`, `joinBodyAttackMission`, `resolveFleetMissionCombatRound`,
+  `battleResolutionProgress`, `attackBodyProtectionStatus`, …), a temperature-migration surface
+  (`migratePlanetTemperatures`, `planetTemperatureGenerationVersion`), and `gamePaused()`.
+- **Removed**: `firstPlanetOf`, `hasFirstPlanet`, `previewFirstPlanet`, `FLEET_RECALL_COST_BPS`,
+  `settleDuePlayerColonizeArrivals`, `untrackResolvedFleetMission`. None were used by `src/`.
+- **`playerScore` / `firstPlanetOf` reversed.** Pre-upgrade, `playerScore` was a `main`-only
+  function that reverted on-chain and `firstPlanetOf` was deployed-only; `tests/abi.test.ts`
+  asserted exactly that. Post-upgrade it is the other way round, and the two assertions are
+  flipped to match. `src/` never called either.
+
+### Docs
+- `references/abi-pinning.md`: "Why this exists" / "The pin, as shipped" / rebuild recipe now
+  point at `202d1ac`; the old "main-vs-deployed divergence" section replaced with "What the
+  2026-09-07 on-chain upgrade changed" (the full ABI diff above); "Second contract" and
+  "Provenance" sections updated; foundry-settings note unchanged (settings are identical).
+- `SKILL.md`: the `playerScore` aside and the `abandonPlanet` source-line citation (line 150 →
+  108, commit updated); behavior unchanged, only the line moved.
+- `references/providers.md`: the `abandonPlanet` / `CannotAbandonHomePlanet` source citations
+  re-pinned to `202d1ac` with updated line numbers (behavior unchanged).
+- `src/fleet.ts`: the `Ship`-enum source citation re-pinned to `202d1ac` (enum unchanged).
+- Repo-level `AGENTS.md` §6 updated out-of-band alongside this release.
+
 ## [0.9.2] - 2026-09-02
 
 ### Docs

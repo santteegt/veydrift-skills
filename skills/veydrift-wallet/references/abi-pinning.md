@@ -3,31 +3,43 @@
 ## Why this exists
 
 `veydrift-wallet` never trusts a freshly-`forge build`-ed ABI at runtime. It trusts only the
-committed `abi/VeydriftGame.701bed3.json`, and every write path is gated on that pinned ABI's hash
+committed `abi/VeydriftGame.202d1ac.json`, and every write path is gated on that pinned ABI's hash
 matching the live backend's `deploymentAbiHash` (`walletctl verify-abi`, and `checkAllowlist` in
 `src/allowlist.ts`). This document records how the pin was produced, how to reproduce it, and why
 building from `main` gives you the wrong answer.
 
-**`main` is not the deployed contract.** As of 2026-08-11, `main` HEAD
-(`84e468f6371ef844b4aa8293921737d569d0486a` at that time) has already drifted from what's
-actually running in production. Building the ABI
-from whatever `main` happens to be at any given moment produces a *different, wrong* hash. The
-only correct source is the specific commit the live backend reports as `deploymentCommit`.
+**The contract was upgraded on-chain on 2026-09-07.** The pin was moved from commit
+`701bed3578cff4d134657c714c599dbdb55a4b6a`
+(abiHash `sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99`) to
+`202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
+(abiHash `sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4`), the latter
+reproduced locally and matched against live `/runtime-config` exactly. All allowlisted selectors
+(the economy five, both `launchFleetMission` overloads, `launchInterplanetaryMissileAttack`, the
+15 alliance-membership functions) and both silent-corruption traps (the 14-slot fleet tuple, the
+`launchFleetMission` overload pair) are unchanged across the upgrade. See the changelog's `1.0.0`
+entry for the full diff.
+
+**`main` is not the deployed contract.** At re-pin time (2026-09-07) `main` HEAD was
+`094f22776d0ef38dd025971bf0e27fc1e0ea28ab` — which is the backend's own reported `gitSha`, but
+**not** its `deploymentCommit`; building the ABI from it produces a *different, wrong* hash. The
+only correct source is the specific commit the live backend reports as `deploymentCommit`. (The
+prior pin recorded the same lesson against `main` HEAD `84e468f6…` on 2026-08-11.)
 
 ## The pin, as shipped
 
 | Field | Value |
 | --- | --- |
-| Deployment commit | `701bed3578cff4d134657c714c599dbdb55a4b6a` |
-| ABI hash | `sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99` |
-| Verified against live `/runtime-config` | yes, `backend.build.deploymentAbiHash` matched exactly, same date |
-| `main` HEAD's ABI hash (for contrast — DO NOT USE) | `sha256:361b1c94bf532b97b9971ad41c5be1b4d952710f7c56f046f3999b520179d2a8` |
+| Deployment commit | `202d1acd9e35d815bd66cb9bae744341b1b1cf9e` |
+| ABI hash | `sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4` |
+| Verified against live `/runtime-config` | yes, `backend.build.deploymentAbiHash` matched exactly, 2026-09-07 |
+| Prior pin (pre-2026-09-07 on-chain upgrade) | commit `701bed3578cff4d134657c714c599dbdb55a4b6a`, abiHash `sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99` |
 
 `abi/PINNED.json` records this plus the foundry settings and the full provenance chain
 (local clone path, commit, artifact path, build command, and the live-verification timestamp).
-`abi/VeydriftGame.701bed3.json` holds `{ abi, methodIdentifiers }` extracted from the forge
+`abi/VeydriftGame.202d1ac.json` holds `{ abi, methodIdentifiers }` extracted from the forge
 artifact — no bytecode, no metadata, since neither is needed (or wanted) here: this engine
-encodes/decodes calldata and never deploys or verifies bytecode.
+encodes/decodes calldata and never deploys or verifies bytecode. (The basename tracks the
+short deployment commit; it was `VeydriftGame.701bed3.json` before the 2026-09-07 re-pin.)
 
 ## Hash derivation
 
@@ -65,7 +77,7 @@ anything; always `git checkout` the exact commit below before building.
 
 ```bash
 REPO=/Users/santteegt/GitRepositories/clones/veydrift
-DEPLOY_COMMIT=701bed3578cff4d134657c714c599dbdb55a4b6a   # from live /runtime-config, not memorized
+DEPLOY_COMMIT=202d1acd9e35d815bd66cb9bae744341b1b1cf9e   # from live /runtime-config, not memorized
 
 git -C "$REPO" status --short                 # confirm clean before touching it
 git -C "$REPO" checkout "$DEPLOY_COMMIT"
@@ -101,27 +113,39 @@ node -e '
 ```
 
 ...and update `abi/PINNED.json`'s `commit`, `abiHash`, `fetchedAt`, and `source` fields to match.
-Update the filename references in `src/abi.ts` (`ABI_DIR`/pinned-file basename) if the short-commit
-suffix changes.
+Update the filename references in `src/abi.ts` (`ARTIFACT_FILENAMES`, both `game` and `alliance`
+basenames) and `tests/abi.test.ts` (`EXPECTED_HASH`, `EXPECTED_COMMIT`, and the alliance
+hash/commit) if the short-commit suffix changes.
 
-## The main-vs-deployed divergence
+## What the 2026-09-07 on-chain upgrade changed
 
-| Only on `main` (does **not** exist on the deployed contract) | Only on deployed (deleted on `main`) |
+Diff of the pinned game ABI, commit `701bed3` → `202d1ac` (289 → 303 ABI entries, 138 → 147
+`methodIdentifiers`). **Nothing in the reachable write surface changed** — every allowlisted
+selector and both silent-corruption traps are byte-identical. The changes are elsewhere:
+
+| Added to the deployed contract | Removed from the deployed contract |
 | --- | --- |
-| `playerScore(address)` | `firstPlanetOf(address)` |
+| `playerScore(address)` — see note below | `firstPlanetOf(address)` |
 | `settleProductionUntil(uint256,uint64)` | `hasFirstPlanet(address)` |
 | `settleAllianceMembershipBoundary(address)` | `previewFirstPlanet(address)` |
-| `depositPaidAllianceInviteFee()` | `FLEET_RECALL_COST_BPS()` |
-| `startPlanetWithAllianceInvite(bytes32,uint64,uint8,bytes32,bytes32)` | 3 × `SafeCast*` errors |
-| event `AllianceBonusCreditedToPlanet(...)` | |
+| `depositPaidAllianceInviteFee()`, `startPlanetWithAllianceInvite(...)` | `FLEET_RECALL_COST_BPS()` |
+| moon-attack-parity surface (`launchBodyAttackMission`, `joinBodyAttackMission`, `resolveFleetMissionCombatRound`, `battleResolutionProgress`, `attackBodyProtectionStatus`, `moonAttackParityActivatedAt`, `initializeMoonAttackParity`) | `settleDuePlayerColonizeArrivals(address)`, `untrackResolvedFleetMission(uint256)` |
+| temperature-migration surface (`migratePlanetTemperatures`, `planetTemperatureGenerationVersion`, `migratePlanetTemperatures`), `gamePaused()` | |
 
-**`playerScore` foremost.** Prior project research listed `playerScore` among "useful
-read functions for an agent (all public views on the game proxy)". It is **not on the deployed
-implementation** — a call to it reverts. This is exactly the kind of mistake pinning the ABI to
-`main` would reproduce silently: the encoder would happily build a call to a function that doesn't
-exist on-chain, and you'd only find out at `eth_call` time. Use `GET /wallet/{addr}/highscore`
-instead (`tests/abi.test.ts` asserts `playerScore` is absent from the pinned ABI and `firstPlanetOf`
-is present, so this stays caught if the pin is ever rebuilt carelessly).
+None of the added combat/moon functions are allowlisted — the allowlist is default-deny, so they
+are unreachable through `walletctl` without an explicit source change to `src/allowlist.ts`, the
+same as every other unlisted selector.
+
+**`playerScore` reversed.** Before the upgrade it was a `main`-only function that reverted on the
+deployed contract, and this doc warned against calling it. As of commit `202d1ac` it **is** on the
+deployed contract. `tests/abi.test.ts` now asserts `playerScore` is present and `firstPlanetOf` is
+absent — the exact opposite of the pre-upgrade assertions — so a careless rebuild against an older
+commit is still caught. This codebase's own `src/` never called either function; the change is
+docs-and-tests only here.
+
+**`main` still diverges from the deployed contract.** The lesson is unchanged even though the
+specific function list flipped: always build from the commit `/runtime-config` reports as
+`deploymentCommit`, never from `main` (nor from its `gitSha`, which is a different thing again).
 
 `src/abi.ts`'s `verifyAbi()` is the runtime guard: on any hash mismatch against live
 `/runtime-config`, every write path must be treated as unsafe. `walletctl verify-abi` surfaces this
@@ -131,36 +155,51 @@ pinned ABI file on disk for selector computation), so **run `walletctl verify-ab
 
 ## Second contract: `VeydriftAllianceSystem`
 
-The alliance feature added a second pinned contract — `abi/VeydriftAllianceSystem.701bed3.json`
+The alliance feature added a second pinned contract — `abi/VeydriftAllianceSystem.202d1ac.json`
 (artifact) + `abi/PINNED.alliance.json` (meta), same shape and same hash derivation
 (`sha256(JSON.stringify(abi))`, compact separators) as the game contract's pair above. Both
 built from the same local clone, same commit, same `forge build --skip test --skip script`
-invocation — the alliance artifact was already present in `out/VeydriftAllianceSystem.sol/` from
-that same build, so no separate rebuild was needed. `src/abi.ts`'s loaders/resolvers all take an
+invocation — the alliance artifact is present in `out/VeydriftAllianceSystem.sol/` from
+that same build, so no separate rebuild is needed. `src/abi.ts`'s loaders/resolvers all take an
 optional `contract: "game" | "alliance" = "game"` parameter now; every pre-existing call site
 (predating this feature) is unaffected by the default.
 
 **This pin has no live-hash re-verification path, and never will.** `/runtime-config` exposes
-`allianceContractAddress` directly (confirmed live, 2026-09-01:
-`0x0E5a6210482B15780cf5Ec036107031dcA702001`) but no `allianceAbiHash`/`allianceDeploymentCommit`
+`allianceContractAddress` directly (`0x0E5a6210482B15780cf5Ec036107031dcA702001`, unchanged across
+the 2026-09-07 game-contract upgrade) but no `allianceAbiHash`/`allianceDeploymentCommit`
 field anywhere — only the single `backend.build.deploymentAbiHash`/`deploymentCommit` pair,
 which is for the game contract. `verifyAbi()` stays game-only, deliberately, with no
 `verifyAllianceAbi()` sibling: there is nothing on the live API for it to compare against. The
-alliance ABI pin was therefore verified exactly once, by construction — exact commit checkout +
+alliance ABI pin is therefore verified exactly once, by construction — exact commit checkout +
 exact forge settings, matching the game contract's own pinned settings from the same build — and
 that is the permanent ceiling on this pin's guarantee. If the backend ever adds an equivalent
 hash/commit field for the alliance contract, `verifyAbi()` should grow a real alliance-aware
 counterpart at that point; until then, don't invent a substitute check that only looks like
 verification.
 
+**Re-pinned 2026-09-07 alongside the game contract.** When the game contract's `deploymentCommit`
+moved to `202d1ac`, the alliance artifact was rebuilt from that same commit and re-pinned
+(abiHash `sha256:3992c821…` → `sha256:393335c1…`; source added `joinFromPaidInvite` /
+`redeemPaidInvite` / `paidInviteSystem` / war-protection functions, removed
+`migrateLegacyWarMetadata`). This keeps both pinned artifacts from one coherent source tree. The
+alliance contract's on-chain address is unchanged, so whether it was itself redeployed cannot be
+confirmed from the API — but the 15 in-scope membership functions' selectors are byte-identical
+between `701bed3` and `202d1ac`, so the allowlisted surface is unaffected either way.
+
 ## Provenance
 
-- ABI hash and deployment commit re-verified live against
-  `https://api.veydrift.com/runtime-config` on 2026-08-12 (see `abi/PINNED.json.source`).
-- Foundry settings: `packages/contracts/foundry.toml` at commit `701bed3578cff4d134657c714c599dbdb55a4b6a`.
+- Game ABI hash and deployment commit re-verified live against
+  `https://api.veydrift.com/runtime-config` on 2026-09-07 (see `abi/PINNED.json.source`).
+  First pinned 2026-08-12 at commit `701bed3`; re-pinned 2026-09-07 at commit `202d1ac` after the
+  on-chain contract upgrade.
+- Foundry settings: `packages/contracts/foundry.toml` at commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
+  (identical to the prior pin's: `solc 0.8.28`, `optimizer_runs 1`, `via_ir true`,
+  `cbor_metadata false`, `bytecode_hash "none"`).
 
-Verified against this skill's source repository as of 2026-08-12; that repository's own
+Verified against this skill's source repository as of 2026-09-07; that repository's own
 docs carry the full derivation and the divergent-function-list detail behind the summary
 above.
 - `playerScore`/`firstPlanetOf` presence: independently confirmed against the pinned artifact's
-  `methodIdentifiers` (138 entries) during this work package, matching the addendum exactly.
+  `methodIdentifiers` (147 entries at commit `202d1ac`; was 138 at `701bed3`). As of the
+  2026-09-07 upgrade `playerScore` is present and `firstPlanetOf` is absent — the reverse of the
+  pre-upgrade state.

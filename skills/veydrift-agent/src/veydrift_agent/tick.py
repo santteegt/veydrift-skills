@@ -325,7 +325,7 @@ _COLONIZATION_GALAXY_SHIFT = 24
 _COLONIZATION_SYSTEM_SHIFT = 8
 
 #: Field widths `_decodeColonyTarget` masks against
-#: (`VeydriftColonizationModule.sol:42-46,482-492`, pinned commit 701bed35):
+#: (`VeydriftColonizationModule.sol:42-46,482-492`, pinned commit 202d1ac):
 #: ``COLONIZATION_COORDINATE_MASK = 0xffff`` for both galaxy and system (each packed as a
 #: `uint16`), ``COLONIZATION_POSITION_MASK = 0xff`` for position (packed as a `uint8`
 #: occupying the low byte directly, not shifted). Verified directly against the pinned

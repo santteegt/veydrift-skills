@@ -1,7 +1,9 @@
 # Contract writes — entrypoints and traps
 
 Every claim below was checked directly against the *deployed* contract source with
-`git show 701bed3578cff4d134657c714c599dbdb55a4b6a:<path>` on 2026-08-12 — not transcribed
+`git show 202d1acd9e35d815bd66cb9bae744341b1b1cf9e:<path>` (deployment commit as of the
+2026-09-07 on-chain upgrade; the enum/formula/tech-tree facts were first checked against the
+previous commit `701bed3` and re-confirmed unchanged) — not transcribed
 from an earlier draft's summary of it without re-checking. Where this file adds a nuance
 that earlier summary didn't carry, it says so explicitly (§5, §6).
 
@@ -30,22 +32,22 @@ encodes and gates it.
 
 This table is the write functions "inside a sane agent mandate" out of 61 total non-view
 functions on the deployed contract, cross-checked against
-[`packages/contracts/src/VeydriftGame.sol`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol) at the deployment commit and against which
+[`packages/contracts/src/VeydriftGame.sol`](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGame.sol) at the deployment commit and against which
 tier's wallet-allowlist selector set (`skills/veydrift-wallet/src/allowlist.ts`) actually
 includes each one:
 
-| Action | Signature | [VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol) line | Tier that may submit it |
+| Action | Signature | [VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGame.sol) line | Tier that may submit it |
 | --- | --- | --- | --- |
-| Building upgrade | `startBuildingUpgrade(uint256,uint8)` | 131 | economy, operator |
-| Research | `startResearch(uint256,uint8)` | 220 | economy, operator |
-| Defense production | `startDefenseProduction(uint256,uint8,uint32)` | 176 | economy, operator |
-| Permissionless resolve | `resolveFleetMission(uint256)` | 425 | economy, operator (permissionless — costs no allowlist-gated capability at all, but still goes through `walletctl` like everything else so it's still logged). Live since 2026-08-17 (this skill's `CHANGELOG.md`'s `1.0.0` entry): `tick.py`'s `_resolvable_mission_ids` now computes this rung's argument from `/wallet/{addr}/fleet-visibility` — previously implemented but unreachable |
-| Fleet launch (7-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` | 358 | operator only, and only for mission types Transport(0)/Deploy(1)/**Colonize(2)**/Harvest(4) — §3. Colonize added 2026-08-17 (Phase 5b) |
-| Fleet launch (6-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` | 325 | operator only, same mission-type restriction |
-| Ship production | `startShipProduction(uint256,uint8,uint32)` | 186 | `economy` — granted 2026-08-12, see §8 |
-| Fleet return | `completeFleetMissionReturn(uint256)` | 442 | **none** — not in any tier's table, and not in `allowlist.ts`'s selector sets. `plan.py` never constructs this action |
+| Building upgrade | `startBuildingUpgrade(uint256,uint8)` | 147 | economy, operator |
+| Research | `startResearch(uint256,uint8)` | 246 | economy, operator |
+| Defense production | `startDefenseProduction(uint256,uint8,uint32)` | 192 | economy, operator |
+| Permissionless resolve | `resolveFleetMission(uint256)` | 481 | economy, operator (permissionless — costs no allowlist-gated capability at all, but still goes through `walletctl` like everything else so it's still logged). Live since 2026-08-17 (this skill's `CHANGELOG.md`'s `1.0.0` entry): `tick.py`'s `_resolvable_mission_ids` now computes this rung's argument from `/wallet/{addr}/fleet-visibility` — previously implemented but unreachable |
+| Fleet launch (7-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` | 402 | operator only, and only for mission types Transport(0)/Deploy(1)/**Colonize(2)**/Harvest(4) — §3. Colonize added 2026-08-17 (Phase 5b) |
+| Fleet launch (6-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` | 354 | operator only, same mission-type restriction |
+| Ship production | `startShipProduction(uint256,uint8,uint32)` | 202 | `economy` — granted 2026-08-12, see §8 |
+| Fleet return | `completeFleetMissionReturn(uint256)` | 519 | **none** — not in any tier's table, and not in `allowlist.ts`'s selector sets. `plan.py` never constructs this action |
 
-**`settlePlanet(uint256)` (line 121) was removed from every tier's allowed set
+**`settlePlanet(uint256)` (line 137) was removed from every tier's allowed set
 2026-08-17** (breaking change — see this skill's `CHANGELOG.md`'s `1.0.0` entry and
 `veydrift-wallet`'s `CHANGELOG.md`'s `0.2.0` entry).
 Its body at the pinned commit is `_touchPlayer(msg.sender);
@@ -58,14 +60,14 @@ without also giving it a real proposer — see `guard.py`'s `_MIN_TIER_FOR_FUNCT
 
 **Real colonisation is `launchFleetMission` mission type `Colonize` (2), not
 `settlePlanet`.** Verified 2026-08-17 against
-[`VeydriftGame.sol`](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol)'s facade `launchFleetMission` (both overloads): each reads the
+[`VeydriftGame.sol`](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGame.sol)'s facade `launchFleetMission` (both overloads): each reads the
 `missionType` argument via inline assembly at calldata offset `0x44` and, when it equals
 `Colonize`, dispatches to `VeydriftColonizationModule` instead of the play module.
 `VeydriftColonizationModule._launchColonizeFleetMission` → `_validateColonyCreation` →
 `_requireShips(originPlanetId, Ship.ColonyShip, 1)` confirms this. The colonize-specific
 `targetPlanetId` argument is not a real planet id — it's `_encodeColonyTarget(galaxy,
 system, position)` = `(1 << 255) | (galaxy << 24) | (system << 8) | position`
-(`VeydriftColonizationModule.sol:472-479`), decoded again on resolution via
+(`VeydriftColonizationModule.sol:472-479`, unchanged by the upgrade), decoded again on resolution via
 `_decodeColonyTarget`. Its trailing `uint256` (both overloads) is `randomnessRequestId`,
 not a holding duration — `_launchColonizeFleetMission` reverts (`InvalidId`) unless it is
 exactly `0`.
@@ -93,8 +95,8 @@ can never submit anything.
 ## 2. Trap: the 14-slot fleet tuple index shift
 
 Every `launchFleetMission` overload takes a fixed `(uint32 × 14)` ship-count tuple, but
-`enum Ship` ([VeydriftTypes.sol:43-60](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftTypes.sol#L43-L60)) has **16** members. Two cannot fly and have no
-tuple slot at all — confirmed at [VeydriftFleetFuel.sol:73-87](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/libraries/VeydriftFleetFuel.sol#L73-L87), where both ids simply
+`enum Ship` ([VeydriftTypes.sol:43-60](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/libraries/VeydriftTypes.sol#L43-L60)) has **16** members. Two cannot fly and have no
+tuple slot at all — confirmed at [VeydriftFleetFuel.sol:73-87](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/libraries/VeydriftFleetFuel.sol#L73-L87), where both ids simply
 `return 0` for any input:
 
 - `SolarSatellite` — Ship id **9**
@@ -139,7 +141,7 @@ launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),
 launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)           // 6-arg
 ```
 
-Confirmed directly: [VeydriftGame.sol:325](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol#L325) (6-arg) and `:358` (7-arg). Selecting by bare
+Confirmed directly: [VeydriftGame.sol:354](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGame.sol#L354) (6-arg) and `:402` (7-arg). Selecting by bare
 function name is ambiguous — viem and ethers both require the full canonical signature.
 `skills/veydrift-wallet/src/abi.ts`'s `resolveFunctionAbi()` takes a full signature string,
 never a bare name, specifically because of this function; `allowlist.ts` computes the
@@ -149,10 +151,10 @@ operator tier's selector set from both full signatures independently
 ## 4. Trap: six `nonpayable` functions that are semantically reads
 
 These are declared `external` with no `view`/`pure` modifier — confirmed directly in
-[VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol) — because they lazily settle state before returning, not because
+[VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGame.sol) — because they lazily settle state before returning, not because
 they're meant to be sent as transactions:
 
-| Function | [VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol) line |
+| Function | [VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGame.sol) line |
 | --- | --- |
 | `protectedResources(uint256)` | 688 |
 | `raidableResources(uint256)` | 692 |
@@ -177,17 +179,17 @@ qualifier for the other three — worth recording precisely rather than repeatin
 summary verbatim, since "wastes gas" and "can revert" are different failure modes for
 anyone deciding whether it's safe to call one defensively.
 
-- **`finishBuildingUpgrade(uint256)`** ([VeydriftGame.sol:170-173](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol#L170-L173)) really is a harmless
+- **`finishBuildingUpgrade(uint256)`** ([VeydriftGame.sol:186-189](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGame.sol#L186-L189)) really is a harmless
   no-op in the sense that matters: its body is just `_touchPlayer` +
   `_requirePlanetOwner` + `_settleResources(planetId)`, with **no active/ready gate at
   all**. It cannot revert on "nothing to finish" — it just re-runs the same lazy-settle
   that `startBuildingUpgrade` already runs on every call. Calling it costs gas for
   nothing; it never throws.
 - **`finishResearch()`, `finishShipProduction(uint256)`, `finishDefenseProduction(uint256)`**
-  are different: [VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftGame.sol)'s versions (`:181`, `:191`, `:225`) delegatecall
-  through [VeydriftColonizationModule.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftColonizationModule.sol) into [VeydriftPlanetManagementModule.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftPlanetManagementModule.sol)
-  (research, `:368-376`), [VeydriftShipProductionModule.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftShipProductionModule.sol) (`:51-64`), and
-  [VeydriftDefenseProductionModule.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftDefenseProductionModule.sol) (`:205-`), where the *real* completion logic
+  are different: [VeydriftGame.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGame.sol)'s versions (`:251`, `:207`, `:197`) delegatecall
+  through [VeydriftColonizationModule.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftColonizationModule.sol) into [VeydriftPlanetManagementModule.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftPlanetManagementModule.sol)
+  (research, `:334-345`), [VeydriftShipProductionModule.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftShipProductionModule.sol) (`:51-64` — the `finishShipProduction` completion body), and
+  [VeydriftDefenseProductionModule.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftDefenseProductionModule.sol) (`:225-`), where the *real* completion logic
   lives — and that logic **reverts**: `QueueInactive()` if nothing is queued,
   `QueueNotReady(readyAt)` if the queue is active but not yet due. These three are
   "back-compat" in the sense that every `start*` call already settles anything that's
@@ -200,16 +202,16 @@ anyone deciding whether it's safe to call one defensively.
 ## 6. Trap: `startBuildingUpgrade` reverts with `ConstructionActive` if a build is already queued
 
 ```solidity
-// packages/contracts/src/VeydriftGameStorage.sol:365 (error declaration)
+// packages/contracts/src/VeydriftGameStorage.sol:460 (error declaration)
 error ConstructionActive();
 ```
 
 ```solidity
-// packages/contracts/src/VeydriftGame.sol:139 (the actual revert site)
+// packages/contracts/src/VeydriftGame.sol:155 (the actual revert site)
 if (buildingConstructions[planetId].active) revert ConstructionActive();
 ```
 
-Both citations independently confirmed at commit `701bed35`. `startBuildingUpgrade`
+Both citations independently confirmed at commit `202d1ac`. `startBuildingUpgrade`
 settles any *ready* construction before this check (so a completed-but-unobserved queue
 clears itself and does not falsely trip this), but a **genuinely in-progress** construction
 still reverts. The contract allows only one active `BuildingConstruction` per planet —
@@ -219,13 +221,13 @@ all, rather than proposing one that's guaranteed to revert.
 
 **Adjacent, not the cited trap but directly relevant if this file is ever extended to
 research/ships/defense:** `startResearch` gates on a *differently-named* error,
-`QueueActive()` ([VeydriftPlanetManagementModule.sol:331](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftPlanetManagementModule.sol#L331)), not `ConstructionActive` — the
+`QueueActive()` ([VeydriftPlanetManagementModule.sol:297](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftPlanetManagementModule.sol#L297)), not `ConstructionActive` — the
 two queue types have separate revert names despite the identical shape of the check. Ship
 and defense production behave differently again: `startShipProduction` and
 `startDefenseProduction` do **not** revert when a queue is already active — they push the
 new order onto a backlog (`_shipQueueBacklogs[planetId]` /
-[VeydriftShipProductionModule.sol:47-48](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftShipProductionModule.sol#L47-L48), and the equivalent in
-[VeydriftDefenseProductionModule.sol](https://github.com/Borodutch/veydrift/blob/701bed3578cff4d134657c714c599dbdb55a4b6a/packages/contracts/src/VeydriftDefenseProductionModule.sol)) instead of reverting. Only building and research
+[VeydriftShipProductionModule.sol:29-34](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftShipProductionModule.sol#L29-L34), and the equivalent in
+[VeydriftDefenseProductionModule.sol](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftDefenseProductionModule.sol)) instead of reverting. Only building and research
 queues are hard-blocking; ship and defense queues are not. This codebase's ladder does not
 currently rely on that distinction (rung 8's ship/defense proposals aren't reachable at
 default policy settings — `allow_ships`/`allow_defense` both default `false`), but it's
@@ -235,7 +237,7 @@ does.
 ## 7. Trap: `abandonPlanet` reverts with `CannotAbandonHomePlanet` for a home planet
 
 ```solidity
-// packages/contracts/src/VeydriftPlanetManagementModule.sol:146-150 (at 701bed357...)
+// packages/contracts/src/VeydriftPlanetManagementModule.sol:103-108 (at 202d1ac...)
 function abandonPlanet(uint256 planetId) external {
     _requirePlanetOwner(planetId);
     _settleDueCombatArrivals(msg.sender);
@@ -244,11 +246,11 @@ function abandonPlanet(uint256 planetId) external {
 ```
 
 ```solidity
-// packages/contracts/src/VeydriftGameStorage.sol:432
+// packages/contracts/src/VeydriftGameStorage.sol:530
 error CannotAbandonHomePlanet();
 ```
 
-Both confirmed directly at commit `701bed35`. `abandonPlanet` is not on the tier table at
+Both confirmed directly at commit `202d1ac`. `abandonPlanet` is not on the tier table at
 all — no tier this codebase implements can submit it — so this is not a live-reachable
 trap for anything `vd plan`/`walletctl` do today. It matters for a different reason: **this
 is the contract-level proof behind why a Veydrift planet is permanently bound to the EOA

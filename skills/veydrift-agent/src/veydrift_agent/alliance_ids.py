@@ -4,7 +4,7 @@
 docstring scopes itself explicitly to "Veydrift's six on-chain enums" from the *game* contract
 (`VeydriftGame.sol` and its modules) at the pinned commit. `AllianceRole` is declared in a
 genuinely different deployed contract, `VeydriftAllianceSystem.sol`, with its own separately
-pinned ABI (`skills/veydrift-wallet/abi/VeydriftAllianceSystem.701bed3.json`) — folding it into
+pinned ABI (`skills/veydrift-wallet/abi/VeydriftAllianceSystem.202d1ac.json`) — folding it into
 `ids.py` would widen that module's documented scope from "always the game contract" to
 "sometimes not," which is a real regression, not a convenience. `FLEET_TUPLE_ORDER` living in
 `ids.py` is not a counter-precedent: that's documentation of a *game*-contract calling
@@ -13,7 +13,7 @@ already owns.
 
 **Source of truth**: the deployed contract, not this docstring's memory of it. Repo
 `/Users/santteegt/GitRepositories/clones/veydrift`, commit
-`701bed3578cff4d134657c714c599dbdb55a4b6a` (the same pinned commit `ids.py` uses — both
+`202d1acd9e35d815bd66cb9bae744341b1b1cf9e` (the same pinned commit `ids.py` uses — both
 contracts were read from the same commit). `AllianceRole` is declared at
 `packages/contracts/src/VeydriftAllianceSystem.sol:37` (`enum AllianceRole { None, Member,
 Officer, Owner }`).
@@ -27,7 +27,7 @@ from enum import IntEnum
 
 
 class AllianceRole(IntEnum):
-    """packages/contracts/src/VeydriftAllianceSystem.sol:37 (commit 701bed35).
+    """packages/contracts/src/VeydriftAllianceSystem.sol:59 (commit 202d1ac).
 
     Member order is the contract's declaration order, which IS the on-chain role value —
     same convention `ids.py`'s six enums use. `NONE` is a real, meaningful value on-chain

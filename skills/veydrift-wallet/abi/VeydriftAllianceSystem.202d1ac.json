@@ -612,6 +612,97 @@
     },
     {
       "type": "function",
+      "name": "creditPaidInviteBonusToPlanet",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "manager",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "creditPaidInviteProduction",
+      "inputs": [
+        {
+          "name": "invitee",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "metal",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "crystal",
+          "type": "uint128",
+          "internalType": "uint128"
+        },
+        {
+          "name": "deuterium",
+          "type": "uint128",
+          "internalType": "uint128"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "bonus",
+          "type": "tuple",
+          "internalType": "struct VeydriftGameStorage.Resources",
+          "components": [
+            {
+              "name": "metal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "crystal",
+              "type": "uint128",
+              "internalType": "uint128"
+            },
+            {
+              "name": "deuterium",
+              "type": "uint128",
+              "internalType": "uint128"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
       "name": "defenseHoldFuelContext",
       "inputs": [
         {
@@ -805,6 +896,24 @@
         }
       ],
       "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "disableLegacyWars",
+      "inputs": [
+        {
+          "name": "legacyAllianceIds",
+          "type": "uint256[]",
+          "internalType": "uint256[]"
+        },
+        {
+          "name": "otherAllianceIds",
+          "type": "uint256[]",
+          "internalType": "uint256[]"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
     },
     {
       "type": "function",
@@ -1014,6 +1123,24 @@
     },
     {
       "type": "function",
+      "name": "joinFromPaidInvite",
+      "inputs": [
+        {
+          "name": "allianceId",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "invitee",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
       "name": "kickMember",
       "inputs": [
         {
@@ -1057,31 +1184,22 @@
     },
     {
       "type": "function",
-      "name": "migrateLegacyWarMetadata",
+      "name": "membershipEpoch",
       "inputs": [
         {
-          "name": "allianceId",
-          "type": "uint256",
-          "internalType": "uint256"
-        },
+          "name": "member",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
         {
-          "name": "otherAllianceId",
-          "type": "uint256",
-          "internalType": "uint256"
-        },
-        {
-          "name": "declarerAllianceId",
-          "type": "uint256",
-          "internalType": "uint256"
-        },
-        {
-          "name": "declaredAt",
+          "name": "",
           "type": "uint64",
           "internalType": "uint64"
         }
       ],
-      "outputs": [],
-      "stateMutability": "nonpayable"
+      "stateMutability": "view"
     },
     {
       "type": "function",
@@ -1148,6 +1266,19 @@
     },
     {
       "type": "function",
+      "name": "paidInviteSystem",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
       "name": "proxiableUUID",
       "inputs": [],
       "outputs": [
@@ -1158,6 +1289,55 @@
         }
       ],
       "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "redeemPaidInvite",
+      "inputs": [
+        {
+          "name": "invitee",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "commitment",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "expiresAt",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "v",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "r",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "s",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "purchaser",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "allianceId",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
     },
     {
       "type": "function",
@@ -1236,6 +1416,32 @@
           "name": "role",
           "type": "uint8",
           "internalType": "enum VeydriftAllianceSystem.AllianceRole"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setPaidInviteSystem",
+      "inputs": [
+        {
+          "name": "nextSystem",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setWarProtection",
+      "inputs": [
+        {
+          "name": "nextModule",
+          "type": "address",
+          "internalType": "address"
         }
       ],
       "outputs": [],
@@ -1351,6 +1557,19 @@
           "name": "",
           "type": "uint64",
           "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "warProtection",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract VeydriftAllianceWarProtection"
         }
       ],
       "stateMutability": "view"
@@ -1762,7 +1981,20 @@
     },
     {
       "type": "event",
-      "name": "AllianceWarMetadataMigrated",
+      "name": "Initialized",
+      "inputs": [
+        {
+          "name": "version",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "LegacyWarDisabled",
       "inputs": [
         {
           "name": "allianceId",
@@ -1775,31 +2007,6 @@
           "type": "uint256",
           "indexed": true,
           "internalType": "uint256"
-        },
-        {
-          "name": "declarerAllianceId",
-          "type": "uint256",
-          "indexed": true,
-          "internalType": "uint256"
-        },
-        {
-          "name": "declaredAt",
-          "type": "uint64",
-          "indexed": false,
-          "internalType": "uint64"
-        }
-      ],
-      "anonymous": false
-    },
-    {
-      "type": "event",
-      "name": "Initialized",
-      "inputs": [
-        {
-          "name": "version",
-          "type": "uint64",
-          "indexed": false,
-          "internalType": "uint64"
         }
       ],
       "anonymous": false
@@ -1825,10 +2032,48 @@
     },
     {
       "type": "event",
+      "name": "PaidInviteSystemUpdated",
+      "inputs": [
+        {
+          "name": "oldSystem",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "newSystem",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
       "name": "Upgraded",
       "inputs": [
         {
           "name": "implementation",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "WarProtectionUpdated",
+      "inputs": [
+        {
+          "name": "previousModule",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "nextModule",
           "type": "address",
           "indexed": true,
           "internalType": "address"
@@ -1961,7 +2206,18 @@
     },
     {
       "type": "error",
-      "name": "InvalidWarMigration",
+      "name": "InvalidWarProtectionModule",
+      "inputs": [
+        {
+          "name": "module",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "LegacyWarRequired",
       "inputs": [
         {
           "name": "allianceId",
@@ -1972,16 +2228,6 @@
           "name": "otherAllianceId",
           "type": "uint256",
           "internalType": "uint256"
-        },
-        {
-          "name": "declarerAllianceId",
-          "type": "uint256",
-          "internalType": "uint256"
-        },
-        {
-          "name": "declaredAt",
-          "type": "uint64",
-          "internalType": "uint64"
         }
       ]
     },
@@ -2057,6 +2303,17 @@
     },
     {
       "type": "error",
+      "name": "NotGame",
+      "inputs": [
+        {
+          "name": "caller",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
       "name": "NotInitializing",
       "inputs": []
     },
@@ -2066,6 +2323,17 @@
       "inputs": [
         {
           "name": "account",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "NotPaidInviteSystem",
+      "inputs": [
+        {
+          "name": "caller",
           "type": "address",
           "internalType": "address"
         }
@@ -2084,6 +2352,22 @@
           "name": "player",
           "type": "address",
           "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "PaidInviteSystemUnset",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "RiftStabilizerRequiredForPaidInviteWithdrawal",
+      "inputs": [
+        {
+          "name": "planetId",
+          "type": "uint256",
+          "internalType": "uint256"
         }
       ]
     },
@@ -2137,22 +2421,6 @@
     },
     {
       "type": "error",
-      "name": "WarDeclarerAlreadyRecorded",
-      "inputs": [
-        {
-          "name": "allianceId",
-          "type": "uint256",
-          "internalType": "uint256"
-        },
-        {
-          "name": "otherAllianceId",
-          "type": "uint256",
-          "internalType": "uint256"
-        }
-      ]
-    },
-    {
-      "type": "error",
       "name": "WarDeclarerUnknown",
       "inputs": [
         {
@@ -2180,6 +2448,11 @@
     },
     {
       "type": "error",
+      "name": "WarProtectionUnset",
+      "inputs": []
+    },
+    {
+      "type": "error",
       "name": "ZeroAddress",
       "inputs": []
     }
@@ -2204,9 +2477,12 @@
     "cancelJoinRequest(uint256)": "c5c4bdcc",
     "counterplayDefenseFuelContext(address,uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)": "930f28c8",
     "createAlliance(string,string,string)": "944cde0e",
+    "creditPaidInviteBonusToPlanet(uint256,address,(uint128,uint128,uint128))": "10a9c115",
+    "creditPaidInviteProduction(address,uint128,uint128,uint128)": "db6161f8",
     "defenseHoldFuelContext(address,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)": "e112bbc0",
     "defenseIntent(uint256)": "be051774",
     "diplomacyStatus(uint256,uint256)": "beddf2fb",
+    "disableLegacyWars(uint256[],uint256[])": "888cc8cd",
     "dismissJoinRequest(uint256,address)": "cd844a18",
     "game()": "c3fe3e28",
     "hostileMissionVisibilityContext(address,uint256)": "d3c3ed88",
@@ -2215,25 +2491,31 @@
     "initialize(address,address)": "485cc955",
     "initializeWarMinimumDuration()": "f207080d",
     "inviteMember(uint256,address)": "9e6d6830",
+    "joinFromPaidInvite(uint256,address)": "b92de9b9",
     "kickMember(uint256,address)": "bd0e667c",
     "kickMembers(uint256,address[])": "7c581707",
     "leaveAlliance()": "dabd761d",
-    "migrateLegacyWarMetadata(uint256,uint256,uint256,uint64)": "9c56946a",
+    "membershipEpoch(address)": "3d015709",
     "nextAllianceId()": "53768aba",
     "nextDefenseIntentId()": "32eecc1f",
     "openDefenseIntent(uint256,uint256)": "56f919e7",
     "owner()": "8da5cb5b",
+    "paidInviteSystem()": "a57d8aa0",
     "proxiableUUID()": "52d1902d",
+    "redeemPaidInvite(address,bytes32,uint64,uint8,bytes32,bytes32)": "42b4c987",
     "requestJoinAlliance(uint256)": "bc46277a",
     "setDiplomacy(uint256,uint256,uint8)": "63b9e8f8",
     "setMemberRole(uint256,address,uint8)": "bfbb73f1",
     "setMembersRole(uint256,address[],uint8)": "e0c22e19",
+    "setPaidInviteSystem(address)": "edb57114",
+    "setWarProtection(address)": "ffa94b42",
     "transferAllianceOwnership(uint256,address)": "b1d3b1e4",
     "transferOwnership(address)": "f2fde38b",
     "updateAllianceProfile(uint256,string,string,string)": "3fd0e7a5",
     "upgradeToAndCall(address,bytes)": "4f1ef286",
     "warDeclarer(uint256,uint256)": "901a1242",
     "warMinimumDurationActivatedAt()": "7450e537",
+    "warProtection()": "b1a4a472",
     "warStartedAt(uint256,uint256)": "3e6a6710"
   }
 }
