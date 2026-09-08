@@ -88,6 +88,7 @@ import typer
 from rich.console import Console
 
 from veydrift_agent import alliance_ids, guard as guard_mod
+from veydrift_agent import coordination as coordination_mod
 from veydrift_agent import http, ids, log, read
 from veydrift_agent import opportunities as opportunities_mod
 from veydrift_agent import plan as plan_mod
@@ -102,6 +103,7 @@ from veydrift_agent.models import (
     AlliancePendingInvite,
     AlliancePendingJoinRequest,
     AllianceState,
+    CoordinationReport,
     Decision,
     GameMaintenance,
     GuardReport,
@@ -437,7 +439,7 @@ def _resolve_target_planet_id(action: Action, snapshot: Snapshot) -> int:
     )
 
 
-def _fleet_mission_args(action: Action, snapshot: Snapshot) -> tuple[str, list[Any]]:
+def _fleet_mission_args(action: Action, snapshot: Snapshot | None) -> tuple[str, list[Any]]:
     """`(signature, args)` for a `launchFleetMission` `Action` -- resolves the overload
     (Trap #2) and the target-planet-id encoding (Colonize's packed-coordinate special
     case vs. every other mission type's real planet id) together, since both depend on
@@ -453,9 +455,13 @@ def _fleet_mission_args(action: Action, snapshot: Snapshot) -> tuple[str, list[A
     source (`VeydriftGameplayModule.sol`/`VeydriftColonizationModule.sol`) -- confirmed
     directly. It is only ever meaningfully set by the contract itself, for `Attack`
     (`_requestAttackBattleRandomness`) and for the two counterplay mission types
-    (AcsDefend/Intercept, neither reachable from this codebase). For every mission type
-    this codebase can produce, the contract either ignores the caller-supplied value
-    (Transport/Deploy/Harvest) or requires it to be exactly `0`
+    (AcsDefend/Intercept -- reachable since the ACS defense coordination feature, but the
+    contract overwrites its own storage field with `randomnessRequestId = hostileMissionId`
+    for its own resolution bookkeeping regardless of what this encoder sends, so the
+    caller-supplied trailing value is inert for these two either way -- see
+    `Action.randomness_request_id`'s own docstring). For every mission type this codebase
+    can produce, the contract either ignores the caller-supplied value
+    (Transport/Deploy/Harvest/AcsDefend/Intercept) or requires it to be exactly `0`
     (`VeydriftColonizationModule.sol`'s `_launchColonizeFleetMission`: `if
     (randomnessRequestId != 0) revert InvalidId();`) -- so
     `action.randomness_request_id` is encoded as-is (defaulting to `0`, never fabricated)
@@ -463,7 +469,16 @@ def _fleet_mission_args(action: Action, snapshot: Snapshot) -> tuple[str, list[A
     today. The field was briefly named `holding_seconds` on a guess about its meaning;
     it was renamed once the source was read, so that nobody sets a duration here and hits
     Colonize's revert.
-    """
+
+    **AcsDefend/Intercept, ACS defense coordination feature**: AGENTS.md §7's third
+    silent-corruption trap -- the deployed contract repurposes the `targetPlanetId`
+    calldata argument slot to mean `hostileMissionId` for these two mission types only
+    (it re-derives the real target planet internally from the referenced hostile
+    mission). `Action.mission_id` carries that id cleanly in this codebase's own model
+    (never `target_planet_id`/`target_coordinates`, both deliberately left unset for
+    these two -- see `Action.mission_type`'s docstring); this is the one place that
+    repurposing becomes an actual calldata value, kept out of the clean model on
+    purpose."""
     if action.mission_type is None:
         raise ValueError("launchFleetMission action has no mission_type")
     ships_tuple = _ship_counts_to_fleet_tuple(action.ships)
@@ -474,6 +489,10 @@ def _fleet_mission_args(action: Action, snapshot: Snapshot) -> tuple[str, list[A
         if action.target_coordinates is None:
             raise ValueError("launchFleetMission Colonize action has no target_coordinates")
         target_planet_id = _encode_colony_target(action.target_coordinates)
+    elif action.mission_type in (ids.FleetMissionType.ACS_DEFEND, ids.FleetMissionType.INTERCEPT):
+        if action.mission_id is None:
+            raise ValueError("launchFleetMission AcsDefend/Intercept action has no mission_id (hostileMissionId)")
+        target_planet_id = action.mission_id
     else:
         target_planet_id = _resolve_target_planet_id(action, snapshot)
 
@@ -581,7 +600,13 @@ def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) 
         args = [action.mission_id]
         return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
     if fn == "launchFleetMission":
-        if snapshot is None:
+        # AcsDefend/Intercept (ACS defense coordination feature) resolve their
+        # targetPlanetId slot from action.mission_id alone (see _fleet_mission_args'
+        # own docstring) -- no Snapshot lookup at all, the same snapshot-independence
+        # the 15 alliance functions below already have. Every other mission type still
+        # needs one, unchanged.
+        needs_snapshot = action.mission_type not in (ids.FleetMissionType.ACS_DEFEND, ids.FleetMissionType.INTERCEPT)
+        if snapshot is None and needs_snapshot:
             raise ValueError("tick.py needs a Snapshot to build launchFleetMission calldata")
         signature, args = _fleet_mission_args(action, snapshot)
         return {"function": signature, "args": args, "purpose": (action.rationale or "")[:200]}
@@ -601,6 +626,48 @@ def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) 
         target_planet_id = _resolve_target_planet_id(action, snapshot)
         args = [action.origin_planet_id, target_planet_id, int(action.primary_target), action.quantity or 0]
         return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
+    if fn == "launchDefenseHold":
+        # ACS defense coordination feature. A wholly separate entrypoint from
+        # launchFleetMission (not an overload -- no mission_type argument at all), but
+        # still on the GAME contract's pinned ABI (a delegatecall module of the same
+        # deployed contract, unlike the alliance functions below) -- no "contract" key
+        # needed, defaults to "game". `speed_pct` has no overload-based omission escape
+        # here (unlike launchFleetMission's dual signature) -- this function takes
+        # exactly one signature, so a caller must set it explicitly; never silently
+        # substituted, the same discipline `Action.speed_pct`'s own docstring already
+        # states for the fleet-mission case.
+        if action.origin_planet_id is None:
+            raise ValueError("launchDefenseHold action has no origin_planet_id")
+        if action.target_planet_id is None:
+            raise ValueError("launchDefenseHold action has no target_planet_id")
+        if action.speed_pct is None:
+            raise ValueError("launchDefenseHold action has no speed_pct")
+        if action.hold_seconds is None:
+            raise ValueError("launchDefenseHold action has no hold_seconds")
+        ships_tuple = _ship_counts_to_fleet_tuple(action.ships)
+        cargo_tuple = [action.cargo.metal, action.cargo.crystal, action.cargo.deuterium]
+        args = [
+            action.origin_planet_id,
+            action.target_planet_id,
+            ships_tuple,
+            cargo_tuple,
+            action.speed_pct,
+            action.hold_seconds,
+        ]
+        return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
+    if fn == "openDefenseIntent":
+        # ACS defense coordination feature's 16th VeydriftAllianceSystem function --
+        # deliberately not in _ALLIANCE_ARG_BUILDERS (see guard._ACS_ALLIANCE_FUNCTIONS's
+        # docstring for why it stays a separate carve-out at every layer). Reuses
+        # planet_id/mission_id uniformly with the AcsDefend/Intercept encoding above --
+        # both are real, non-repurposed named arguments here (defenderPlanetId,
+        # hostileMissionId), unlike launchFleetMission's calldata-slot repurposing.
+        if action.planet_id is None:
+            raise ValueError("openDefenseIntent action has no planet_id (defenderPlanetId)")
+        if action.mission_id is None:
+            raise ValueError("openDefenseIntent action has no mission_id (hostileMissionId)")
+        args = [action.planet_id, action.mission_id]
+        return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200], "contract": "alliance"}
     if fn in _ALLIANCE_ARG_BUILDERS:
         # Alliance feature, commit 4. `VeydriftAllianceSystem` -- a wholly separate
         # contract, its own address, its own pinned ABI. Every branch below sets
@@ -801,6 +868,236 @@ def _walletctl_simulate(
         detail = (result.stderr or result.stdout).strip()[:500]
         return None, None, f"walletctl simulate produced no parseable 'ok:' line: {detail or '(empty output)'}"
     return ok, revert_reason, None
+
+
+def _walletctl_simulate_probe(
+    tx_path: Path, *, address: str | None, timeout: int = 60
+) -> tuple[bool | None, dict[str, Any] | None, str | None]:
+    """`walletctl simulate --tx <file> --from <address> --json` -- the ACS defense
+    coordination feature's live pre-check for the three view functions
+    (`counterplayDefenseFuelContext`/`defenseHoldFuelContext`/`canCoordinateDefense`, all
+    resolved via the same `buildTx`/`simulateTx` pipeline every write already uses, with
+    `contract: "alliance"`; see `references/coordination.md`).
+
+    A deliberately SEPARATE function from `_walletctl_simulate` above, not a widening of
+    it: `_walletctl_simulate` is `_send_and_await`'s well-tested pre-send gate (Fix 1, the
+    free `eth_call` before a real send) and stays untouched; this probe never blocks a
+    send by itself, it only wants to READ a decoded return value, which needs the JSON
+    output channel (Phase 1's new `walletctl simulate --json` capability)
+    `_walletctl_simulate`'s own plain-text parse has no use for.
+
+    Returns `(ok, decoded, error)` -- `decoded` is the `{fieldName: value}` object
+    `walletctl simulate --json` emits when the call succeeds and the resolved function's
+    ABI has non-empty outputs (bigints already stringified); `None` on any failure
+    (unreachable, timeout, malformed JSON, `ok: false`, or no `decoded` in the output).
+    Fails closed the same way `_walletctl_simulate` does: `ok is None` and `decoded is
+    None` both mean "could not verify," never "assume canCoordinate=true/netHoldingFuelCost
+    is 0" -- a transient RPC failure here blocks a time-critical ACS defense inside the
+    5-minute join window, an accepted, stated tradeoff (`references/coordination.md`),
+    not a silent one."""
+    if not address:
+        return None, None, "no wallet address available to simulate from"
+    try:
+        result = _run_walletctl("simulate", "--tx", str(tx_path), "--from", address, "--json", timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, None, f"walletctl simulate --json could not be run: {exc}"
+    stdout = result.stdout.strip()
+    parsed: Any = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout.splitlines()[-1])
+        except json.JSONDecodeError:
+            parsed = None
+    if not isinstance(parsed, dict):
+        detail = (result.stderr or result.stdout).strip()[:500]
+        return None, None, f"walletctl simulate --json produced no parseable JSON line: {detail or '(empty output)'}"
+    ok = parsed.get("ok")
+    if not isinstance(ok, bool):
+        return None, None, "walletctl simulate --json output had no boolean 'ok' field"
+    decoded = parsed.get("decoded")
+    return ok, (decoded if isinstance(decoded, dict) else None), None
+
+
+def _walletctl_build_and_simulate_probe(
+    walletctl_json: dict[str, Any], *, provider: str, wallet_address: str | None
+) -> dict[str, Any] | None:
+    """Build + simulate --json a view-function call that has no corresponding `Action` --
+    the ACS defense coordination feature's live pre-check probes
+    (`counterplayDefenseFuelContext`/`defenseHoldFuelContext`/`canCoordinateDefense`),
+    never surfaced as the tick's own reported action. Reuses the exact same `walletctl
+    build`/`simulate --json` binaries `_walletctl_build`/`_walletctl_simulate_probe`
+    already call, just with a hand-built JSON payload instead of routing through
+    `_action_to_walletctl_json` -- these three functions have no `Action`/`ActionKind` of
+    their own, they're read-only oracle calls, not something this tick could ever itself
+    submit.
+
+    Returns the decoded `{fieldName: value}` dict on success, `None` on any failure
+    (build failure, `wallet_address` unavailable, simulate failure, `ok` not `True`, or no
+    `decoded`) -- fails closed, the same posture every other live-data fetch in this
+    module takes toward absent data."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="vd-tick-acs-probe-"))
+    action_file = tmp_dir / "action.json"
+    out_file = tmp_dir / "tx.json"
+    action_file.write_text(json.dumps(walletctl_json))
+    try:
+        result = _run_walletctl("build", "--action", str(action_file), "--out", str(out_file), "--provider", provider)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or not out_file.exists():
+        return None
+    ok, decoded, _error = _walletctl_simulate_probe(out_file, address=wallet_address)
+    if ok is not True or decoded is None:
+        return None
+    return decoded
+
+
+def _hostile_mission_fetch(mission_id: int | None) -> dict[str, Any] | None:
+    """Live `GET /mission/{id}` fetch for the hostile mission an AcsDefend/Intercept/
+    `openDefenseIntent` action references -- returns the inner `mission` object,
+    already unwrapped (`guard`'s new gates take this shape directly; see `read.
+    fetch_mission_by_id`'s docstring for the confirmed-live response shape). Best-effort:
+    `None` on any missing id, fetch failure, or unexpected shape -- the guard gates fail
+    closed on `None`, never assume "no hostile mission" (AGENTS.md §5)."""
+    if mission_id is None:
+        return None
+    try:
+        data = read.fetch_mission_by_id(mission_id)
+    except http.VeydriftAPIError:
+        return None
+    mission = data.get("mission") if isinstance(data, dict) else None
+    return mission if isinstance(mission, dict) else None
+
+
+def _acs_defend_coordination_probe(
+    hostile_mission: dict[str, Any] | None,
+    action: Action,
+    *,
+    wallet: str,
+    provider: str,
+    wallet_address: str | None,
+    now: datetime,
+) -> tuple[bool | None, int | None]:
+    """Live `counterplayDefenseFuelContext(viewer, defenderPlanetId, hostileMissionId,
+    ships, holdSeconds) -> (canCoordinate, netHoldingFuelCost, depotSupport)` pre-check
+    for an AcsDefend/Intercept action -- `guard._gate_acs_defend_target`'s
+    `coordination_allowed` input, and `evaluate_guardrails`'s `net_holding_fuel_cost`.
+
+    `defenderPlanetId`/`hostileMissionId` come from the already-fetched `hostile_mission`
+    itself (its own real `targetPlanetId`/`missionId`), never from `action.mission_id`
+    directly (Opus review finding 7: probing with the wrong id risks the alliance
+    contract's self-owned-planet short-circuit masking a bad reference).
+
+    `holdSeconds` is deliberately the FULL remaining window until the hostile mission's
+    own `arrivalAt` (`hostile.arrivalAt - now`), not `hostile.arrivalAt` minus the
+    caller's own computed arrival the way the real contract call does it -- this tick.py
+    probe does not duplicate the distance/speed formula a third time (`calc.py`/
+    `guard.py` each already have it once). The real contract computes `holdSeconds` as
+    `hostile.arrivalAt - own_arrival`, and `own_arrival` is always `>= now`
+    (a fleet cannot arrive before it departs) -- so `hostile.arrivalAt - now` this probe
+    passes is always `>=` the real value, a deliberate, safe-direction OVER-estimate that
+    can only ever over-, never under-, state `netHoldingFuelCost`: never a dangerous
+    understatement of live cost fed into the affordability gates.
+    `guard._gate_acs_defend_target`'s own independent `FleetAlreadyArrived` re-check
+    (using the real formula) is what actually gates whether this action is allowed at
+    all -- this probe exists only to surface a live cost and a coarser authorization
+    signal.
+
+    Returns `(coordination_allowed, net_holding_fuel_cost)`, both `None` on any failure
+    (unresolvable mission, RPC failure, malformed decode) -- fails closed, never assumes
+    `True`/`0`."""
+    if not isinstance(hostile_mission, dict):
+        return None, None
+    try:
+        defender_planet_id = int(hostile_mission.get("targetPlanetId"))
+        hostile_mission_id = int(hostile_mission.get("missionId"))
+        arrival_at = int(hostile_mission.get("arrivalAt"))
+    except (TypeError, ValueError):
+        return None, None
+    hold_seconds = max(0, arrival_at - int(now.timestamp()))
+    try:
+        ships_tuple = _ship_counts_to_fleet_tuple(action.ships)
+    except ValueError:
+        return None, None
+    walletctl_json = {
+        "function": "counterplayDefenseFuelContext",
+        "args": [wallet, defender_planet_id, hostile_mission_id, ships_tuple, hold_seconds],
+        "contract": "alliance",
+    }
+    decoded = _walletctl_build_and_simulate_probe(walletctl_json, provider=provider, wallet_address=wallet_address)
+    if decoded is None:
+        return None, None
+    can_coordinate = decoded.get("canCoordinate")
+    net_holding_fuel_cost_raw = decoded.get("netHoldingFuelCost")
+    if not isinstance(can_coordinate, bool):
+        return None, None
+    try:
+        net_holding_fuel_cost = int(net_holding_fuel_cost_raw) if net_holding_fuel_cost_raw is not None else None
+    except (TypeError, ValueError):
+        net_holding_fuel_cost = None
+    return can_coordinate, net_holding_fuel_cost
+
+
+def _defense_hold_coordination_probe(
+    action: Action, *, wallet: str, provider: str, wallet_address: str | None
+) -> tuple[bool | None, int | None]:
+    """Live `defenseHoldFuelContext(viewer, defenderPlanetId, ships, holdSeconds) ->
+    (canCoordinate, netHoldingFuelCost, depotSupport)` pre-check for a `launchDefenseHold`
+    action -- `guard._gate_defense_hold_target`'s `coordination_allowed` input, and
+    `evaluate_guardrails`'s `net_holding_fuel_cost`. `defenderPlanetId` is
+    `action.target_planet_id` directly (a real, non-repurposed field for DefenseHold,
+    unlike AcsDefend/Intercept's `mission_id`).
+
+    Returns `(coordination_allowed, net_holding_fuel_cost)`, both `None` on any failure --
+    fails closed, never assumes `True`/`0`."""
+    if action.target_planet_id is None or action.hold_seconds is None:
+        return None, None
+    try:
+        ships_tuple = _ship_counts_to_fleet_tuple(action.ships)
+    except ValueError:
+        return None, None
+    walletctl_json = {
+        "function": "defenseHoldFuelContext",
+        "args": [wallet, action.target_planet_id, ships_tuple, action.hold_seconds],
+        "contract": "alliance",
+    }
+    decoded = _walletctl_build_and_simulate_probe(walletctl_json, provider=provider, wallet_address=wallet_address)
+    if decoded is None:
+        return None, None
+    can_coordinate = decoded.get("canCoordinate")
+    net_holding_fuel_cost_raw = decoded.get("netHoldingFuelCost")
+    if not isinstance(can_coordinate, bool):
+        return None, None
+    try:
+        net_holding_fuel_cost = int(net_holding_fuel_cost_raw) if net_holding_fuel_cost_raw is not None else None
+    except (TypeError, ValueError):
+        net_holding_fuel_cost = None
+    return can_coordinate, net_holding_fuel_cost
+
+
+def _open_defense_intent_coordination_probe(
+    action: Action, *, wallet: str, provider: str, wallet_address: str | None
+) -> bool | None:
+    """Live `canCoordinateDefense(viewer, defenderPlanetId, hostileMissionId) -> bool`
+    pre-check for an `openDefenseIntent` action -- `guard._gate_alliance_action`'s
+    `coordination_allowed` input for this one function. Simpler than the two probes
+    above: `openDefenseIntent` moves no ships and spends no fuel, so there is no
+    `netHoldingFuelCost`/`ships`/`holdSeconds` for this one at all -- a plain bool.
+
+    Returns `None` on any failure -- fails closed, never assumes `True`."""
+    if action.planet_id is None or action.mission_id is None:
+        return None
+    walletctl_json = {
+        "function": "canCoordinateDefense",
+        "args": [wallet, action.planet_id, action.mission_id],
+        "contract": "alliance",
+    }
+    decoded = _walletctl_build_and_simulate_probe(walletctl_json, provider=provider, wallet_address=wallet_address)
+    if decoded is None:
+        return None
+    # `canCoordinateDefense`'s single unnamed bool output -- `abi.decodeSimulateReturnData`
+    # names an unnamed output `_0` (see that function's own docstring).
+    value = decoded.get("_0")
+    return value if isinstance(value, bool) else None
 
 
 def _walletctl_receipt(tx_hash: str) -> dict[str, Any] | None:
@@ -1838,6 +2135,15 @@ def _opportunity_summary_line(report: OpportunityReport | None) -> str | None:
     return ", ".join(f"{count} {family}" for family, count in by_family.items())
 
 
+def _coordination_summary_line(report: CoordinationReport | None) -> str | None:
+    """One-line summary of `coordination_report` for the tick report -- `None` when the
+    feature is off (`report` itself is `None`, mirroring `_radar_summary_line`'s own
+    `allow_alliance`-gated posture) or when there is nothing to suggest."""
+    if report is None or not report.suggestions:
+        return None
+    return f"{len(report.suggestions)} suggestion(s)"
+
+
 def _await_indexed(*, wallet: str, policy_planets: list[int], target_block: int, max_wait_s: int) -> bool:
     """The mandatory post-receipt wait (docs/SPEC.md §5.7): polls a fresh snapshot's
     `latest_indexed_block` until it covers `target_block`, or `max_wait_s` elapses.
@@ -2105,6 +2411,17 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         radar_report = radar_mod.check_targets(radar_targets, radar_state)
         save_radar_state(radar_state)
 
+    # coordination.py: ACS defense coordination feature. Gated on
+    # policy.actions.allow_alliance -- a VISIBILITY gate (seeing a suggestion shouldn't
+    # require having opted into acting on one), independent of allow_acs_defense (which
+    # instead gates whether guard.py would accept ACTING on it via --action). No extra
+    # network call -- pure computation over radar_report, already fetched above. `None`
+    # (not an empty CoordinationReport) when radar is off or the flag is off, mirroring
+    # radar_report's own None-when-disabled convention.
+    coordination_report: CoordinationReport | None = None
+    if policy_model.actions.allow_alliance and radar_report is not None:
+        coordination_report = coordination_mod.suggest_coordination(radar_report)
+
     # opportunities.py: unconditional, no policy flag of its own -- `plan.py`'s ladder is
     # a straight early-return chain, so a lower-priority band's candidate (attack,
     # missile, colonize, foreign harvest) is never even generated once a higher band
@@ -2172,6 +2489,9 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     outgoing_colonize_count: int | None = None
     attack_protection_allowed: bool | None = None
     attack_protection_blocked_reason: str | None = None
+    hostile_mission: dict[str, Any] | None = None
+    coordination_allowed: bool | None = None
+    net_holding_fuel_cost: int | None = None
     if action.is_onchain():
         unsigned_tx, gas_cost_wei, build_error, built_tx_path = _walletctl_build(
             action, provider=policy_model.wallet_engine.provider, snapshot=snapshot
@@ -2199,6 +2519,36 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             attack_protection_allowed, attack_protection_blocked_reason = _attack_protection_allowed(
                 policy_model.wallet, action, snapshot
             )
+        # ACS defense coordination feature: only fetched/probed for the exact three
+        # action shapes that need it -- an idle wallet with allow_acs_defense=false (the
+        # default) never proposes one of these (manual-override-only, per
+        # policy.actions.allow_acs_defense's own docstring), so this never runs on a
+        # routine tick, matching commit 4/6's own "opt-in-only" network-call posture.
+        is_acs_defend_action = action.function == "launchFleetMission" and action.mission_type in (
+            ids.FleetMissionType.ACS_DEFEND,
+            ids.FleetMissionType.INTERCEPT,
+        )
+        is_defense_hold_action = action.function == "launchDefenseHold"
+        is_open_defense_intent_action = action.function == "openDefenseIntent"
+        if is_acs_defend_action:
+            hostile_mission = _hostile_mission_fetch(action.mission_id)
+            coordination_allowed, net_holding_fuel_cost = _acs_defend_coordination_probe(
+                hostile_mission,
+                action,
+                wallet=policy_model.wallet,
+                provider=policy_model.wallet_engine.provider,
+                wallet_address=wallet_address,
+                now=now,
+            )
+        elif is_defense_hold_action:
+            coordination_allowed, net_holding_fuel_cost = _defense_hold_coordination_probe(
+                action, wallet=policy_model.wallet, provider=policy_model.wallet_engine.provider, wallet_address=wallet_address
+            )
+        elif is_open_defense_intent_action:
+            hostile_mission = _hostile_mission_fetch(action.mission_id)
+            coordination_allowed = _open_defense_intent_coordination_probe(
+                action, wallet=policy_model.wallet, provider=policy_model.wallet_engine.provider, wallet_address=wallet_address
+            )
 
     guard_report = guard_mod.evaluate_guardrails(
         action,
@@ -2214,6 +2564,9 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         attack_protection_allowed=attack_protection_allowed,
         attack_protection_blocked_reason=attack_protection_blocked_reason,
         alliance_state=alliance_state,
+        hostile_mission=hostile_mission,
+        coordination_allowed=coordination_allowed,
+        net_holding_fuel_cost=net_holding_fuel_cost,
         now=now,
     )
     if build_error:
@@ -2281,6 +2634,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         alliance_state=alliance_state,
         radar_report=radar_report,
         opportunity_report=opportunity_report,
+        coordination_report=coordination_report,
     )
 
 
@@ -2499,6 +2853,7 @@ def _finish_tick(
     alliance_state: AllianceState | None = None,
     radar_report: RadarReport | None = None,
     opportunity_report: OpportunityReport | None = None,
+    coordination_report: CoordinationReport | None = None,
 ) -> None:
     proposal_record = {
         "ts": now.isoformat(),
@@ -2529,6 +2884,7 @@ def _finish_tick(
         "alliance": alliance_state.model_dump() if alliance_state is not None else None,
         "radar": radar_report.model_dump() if radar_report is not None else None,
         "opportunities": opportunity_report.model_dump() if opportunity_report is not None else None,
+        "coordination": coordination_report.model_dump() if coordination_report is not None else None,
     }
 
     # Dedup: a content-identical repeat of the immediately-previous logged proposal (e.g.
@@ -2594,6 +2950,7 @@ def _finish_tick(
         alliance_line=_alliance_summary_line(alliance_state),
         radar_line=_radar_summary_line(radar_report),
         opportunities_line=_opportunity_summary_line(opportunity_report),
+        coordination_line=_coordination_summary_line(coordination_report),
     )
 
     if not is_duplicate:
@@ -2614,6 +2971,14 @@ def _finish_tick(
     if radar_report is not None and radar_report.findings:
         summary = _radar_summary_line(radar_report)
         log.append_strategy(f"tick {agent_state.tick_count}: radar -- {summary}", now=now)
+
+    # ACS defense coordination feature: same unconditional, never-suppressed treatment as
+    # radar above, for the same reason -- a live, still-joinable hostile Attack is
+    # time-bounded (the 5-minute join cutoff), not something a routine duplicate-tick
+    # suppression should ever hide.
+    if coordination_report is not None and coordination_report.suggestions:
+        for suggestion in coordination_report.suggestions:
+            log.append_strategy(f"tick {agent_state.tick_count}: coordination -- {suggestion.detail}", now=now)
 
     # Opportunities deliberately do NOT get radar's unconditional strategy.md treatment.
     # Radar's findings are naturally transient (an incoming fleet arrives once, a

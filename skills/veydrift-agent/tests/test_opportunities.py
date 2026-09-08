@@ -180,6 +180,47 @@ def test_scan_opportunities_multi_planet_produces_one_finding_per_reachable_plan
     assert all(f.family == "attack" for f in report.findings)
 
 
+def test_scan_opportunities_transport_finding():
+    """ACS defense coordination plan's scope decision: Transport moved from "deliberately
+    excluded" to a real, surfaced family -- `generate_transport_candidates` takes
+    `target_planets` as a required positional 4th argument (unlike the other four
+    generators' keyword-only shape), so this exercises `_scan_transport`'s own dedicated
+    call path, not `_scan_planet`'s dispatch dict."""
+    origin = _planet(
+        664, "7:181:14",
+        resources_as_of_now=Resources(metal=5000, crystal=0, deuterium=0),
+        storage_caps=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        ships=[Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=2, cost=Resources(metal=2000, crystal=2000))],
+    )
+    destination = _planet(665, "7:181:15")
+    snapshot = _snapshot([origin, destination])
+    policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_fleet_noncombat=True), reserves=Resources(metal=100))
+
+    report = opportunities.scan_opportunities(snapshot, policy, **_EMPTY_KWARGS)
+
+    assert len(report.findings) == 1
+    finding = report.findings[0]
+    assert finding.family == "transport"
+    assert finding.origin_planet_id == 664
+    assert finding.target_coordinates == "7:181:15"
+    assert finding.detail
+
+
+def test_scan_opportunities_transport_empty_when_flag_is_off():
+    origin = _planet(
+        664, "7:181:14",
+        resources_as_of_now=Resources(metal=5000, crystal=0, deuterium=0),
+        ships=[Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=2, cost=Resources(metal=2000, crystal=2000))],
+    )
+    destination = _planet(665, "7:181:15")
+    snapshot = _snapshot([origin, destination])
+    policy = make_policy(planets=[664, 665])  # allow_fleet_noncombat defaults False
+
+    report = opportunities.scan_opportunities(snapshot, policy, **_EMPTY_KWARGS)
+
+    assert report.findings == []
+
+
 def test_scan_opportunities_family_with_no_viable_target_contributes_nothing():
     """attack_targets empty while every other family has a viable target -- only the
     families with real data produce findings, no placeholder for the empty one."""

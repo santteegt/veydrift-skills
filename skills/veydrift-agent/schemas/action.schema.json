@@ -9,6 +9,7 @@
         "defense",
         "resolve_mission",
         "fleet_mission",
+        "defense_hold",
         "missile_attack",
         "alliance",
         "noop",
@@ -187,6 +188,18 @@
       ],
       "default": null,
       "title": "Function"
+    },
+    "hold_seconds": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Hold Seconds"
     },
     "kind": {
       "$ref": "#/$defs/ActionKind"

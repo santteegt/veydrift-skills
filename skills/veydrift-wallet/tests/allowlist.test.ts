@@ -55,6 +55,26 @@ function leaveAllianceTx(): UnsignedTx {
   return { to: ALLIANCE_ADDRESS, data, value: 0n, chainId: 8453 };
 }
 
+const LAUNCH_DEFENSE_HOLD_SIG =
+  "launchDefenseHold(uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256)";
+
+function launchDefenseHoldTx(): UnsignedTx {
+  const fn = resolveFunctionAbi(LAUNCH_DEFENSE_HOLD_SIG);
+  const fleet = shipCountsToFleetTuple({ [ShipId.SmallCargo]: 1 });
+  const data = encodeFunctionData({
+    abi: [fn],
+    functionName: fn.name,
+    args: [664n, 665n, fleet, [0n, 0n, 0n], 100, 3600n],
+  });
+  return { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 };
+}
+
+function openDefenseIntentTx(): UnsignedTx {
+  const fn = resolveFunctionAbi("openDefenseIntent(uint256,uint256)", "alliance");
+  const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, 61740n] });
+  return { to: ALLIANCE_ADDRESS, data, value: 0n, chainId: 8453 };
+}
+
 describe("checkAllowlist", () => {
   it("allows an economy-tier action against the live game address", async () => {
     const result = await checkAllowlist(startBuildingUpgradeTx(), "economy", {
@@ -143,9 +163,12 @@ describe("checkAllowlist", () => {
     // Was `it.each([2, 3, 5, 6, 7, 8, 9])` until 2026-08-17 (Phase 5b): 2 (Colonize) moved to the
     // "allows" list above. 3 (Attack) moved to its own describe block below on 2026-08-28
     // (launch-actions plan, commit 5) -- it is no longer unconditionally rejected, only rejected
-    // when policy.actions.allow_combat resolves false. The remaining five are always refused,
-    // regardless of allow_combat -- AGENTS.md §5's "combat stays unreachable by code, not by
-    // config" still governs every mission type this flag does not name.
+    // when policy.actions.allow_combat resolves false. 5/6 (AcsDefend/Intercept) moved to their
+    // own describe block below (ACS defense coordination feature) -- rejected here specifically
+    // because allow_combat is the WRONG flag for them (see that describe block for the
+    // allow_acs_defense=true case). 7/8/9 remain always refused, regardless of any policy flag --
+    // AGENTS.md §5's "combat stays unreachable by code, not by config" still governs every
+    // mission type no flag names.
     it.each([5, 6, 7, 8, 9])(
       "rejects mission type %i even with allow_combat=true -- allow_combat widens only Attack",
       async (missionType) => {
@@ -408,6 +431,160 @@ describe("checkAllowlist", () => {
         resolveAllowAlliance: () => true,
       });
       expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(true);
+    });
+  });
+
+  describe("AcsDefend/Intercept mission types (5/6) -- conditional on policy.actions.allow_acs_defense, distinct from allow_combat (ACS defense coordination feature)", () => {
+    it.each([5, 6])("rejects mission type %i when allow_acs_defense resolves false", async (missionType) => {
+      const result = await checkAllowlist(launchFleetMissionTx(missionType), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => false,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "launchFleetMission.missionType")?.ok).toBe(false);
+    });
+
+    it.each([5, 6])("allows mission type %i when allow_acs_defense resolves true", async (missionType) => {
+      const result = await checkAllowlist(launchFleetMissionTx(missionType), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => true,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.checks.find((c) => c.name === "launchFleetMission.missionType")?.ok).toBe(true);
+    });
+
+    it.each([5, 6])(
+      "rejects mission type %i even with allow_combat=true -- allow_combat is the wrong flag for these two",
+      async (missionType) => {
+        const result = await checkAllowlist(launchFleetMissionTx(missionType), "operator", {
+          fetchConfig: async () => fixtureConfig(),
+          resolveAllowCombat: () => true,
+          resolveAllowAcsDefense: () => false,
+        });
+        expect(result.ok).toBe(false);
+      },
+    );
+
+    it("rejects at economy tier regardless of allow_acs_defense -- operator only", async () => {
+      const result = await checkAllowlist(launchFleetMissionTx(5), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => true,
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects (never passes vacuously) when resolveAllowAcsDefense throws", async () => {
+      const boom = () => {
+        throw new Error("policy file is malformed");
+      };
+      const result = await checkAllowlist(launchFleetMissionTx(5), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: boom,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "launchFleetMission.missionType")?.ok).toBe(false);
+      expect(result.reason).toMatch(/could not be resolved/);
+    });
+  });
+
+  describe("launchDefenseHold -- its own selector, not a launchFleetMission overload, conditional on policy.actions.allow_acs_defense (ACS defense coordination feature)", () => {
+    it("rejects at economy tier regardless of allow_acs_defense -- operator only", async () => {
+      const result = await checkAllowlist(launchDefenseHoldTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+    });
+
+    it("rejects at advisor tier regardless of allow_acs_defense", async () => {
+      const result = await checkAllowlist(launchDefenseHoldTx(), "advisor", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => true,
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects at operator tier when allow_acs_defense resolves false", async () => {
+      const result = await checkAllowlist(launchDefenseHoldTx(), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => false,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+      expect(result.reason).toMatch(/allow_acs_defense=true/);
+    });
+
+    it("allows at operator tier when allow_acs_defense resolves true", async () => {
+      const result = await checkAllowlist(launchDefenseHoldTx(), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => true,
+      });
+      expect(result.ok).toBe(true);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(true);
+    });
+
+    it("is not resolved at all outside operator tier -- lazy, never called unconditionally", async () => {
+      let called = false;
+      const result = await checkAllowlist(launchDefenseHoldTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => {
+          called = true;
+          return true;
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(called).toBe(false);
+    });
+
+    it("is absent from tierSelectors('operator') -- never in the unconditional set, and not merged into LAUNCH_FLEET_MISSION_SIGNATURES", () => {
+      const fn = resolveFunctionAbi(LAUNCH_DEFENSE_HOLD_SIG);
+      const selector = getSelector(fn);
+      expect(tierSelectors("operator").has(selector)).toBe(false);
+    });
+  });
+
+  describe("openDefenseIntent -- its own selector on the alliance contract, conditional on policy.actions.allow_acs_defense at economy tier or above, distinct from the 15 allow_alliance-gated functions (ACS defense coordination feature)", () => {
+    it("rejects at advisor tier regardless of allow_acs_defense", async () => {
+      const result = await checkAllowlist(openDefenseIntentTx(), "advisor", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => true,
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects at economy tier when allow_acs_defense resolves false", async () => {
+      const result = await checkAllowlist(openDefenseIntentTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => false,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/allow_acs_defense=true/);
+    });
+
+    it("allows at economy tier when allow_acs_defense resolves true", async () => {
+      const result = await checkAllowlist(openDefenseIntentTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("ALSO allows at operator tier when allow_acs_defense resolves true -- economy is a floor, not a ceiling", async () => {
+      const result = await checkAllowlist(openDefenseIntentTx(), "operator", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAcsDefense: () => true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("is NOT unlocked by allow_alliance=true alone -- the exact regression a copy-paste into ALLIANCE_SIGNATURES would produce", async () => {
+      const result = await checkAllowlist(openDefenseIntentTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => true,
+        resolveAllowAcsDefense: () => false,
+      });
+      expect(result.ok).toBe(false);
     });
   });
 

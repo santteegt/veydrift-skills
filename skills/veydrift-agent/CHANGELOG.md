@@ -11,6 +11,101 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-09-08
+
+ACS defense coordination feature: AcsDefend(5)/Intercept(6) (`launchFleetMission`),
+`launchDefenseHold` (its own entrypoint), and `openDefenseIntent`
+(`VeydriftAllianceSystem`) become real, override-executable actions, plus a new
+suggestion/reasoning layer (`coordination.py`) that surfaces them from `radar.py`'s own
+incoming-fleet findings, and a new `transport` opportunity family in `opportunities.py`.
+Minor bump — purely additive: new `Policy`/`Action` fields (default `False`/`None`,
+existing behaviour unchanged when unset), a new `ActionKind`, two new guard gates, no
+existing field renamed or retyped. All four functions live-sent on a local Anvil fork
+(round 6, 2026-09-08 — `skills/veydrift-wallet/references/fork-testing.md` §13). See
+`references/coordination.md` for the full mechanics writeup and honest
+verification-status caveats.
+
+### Added
+- **`policy.actions.allow_acs_defense: bool = False`** — covers AcsDefend, Intercept,
+  `launchDefenseHold`, and `openDefenseIntent` as one feature. Tier floor splits within
+  this one flag: AcsDefend/Intercept/`launchDefenseHold` require `operator`;
+  `openDefenseIntent` requires only `economy`, matching the 15 alliance membership
+  functions' own floor. Never planner-produced — reachable only via `vd tick --action` +
+  `policy.strategy.allow_agent_action_override`, the same manual-override-only posture
+  the alliance feature already established. Added to `assets/policy.example.json`;
+  `schemas/policy.schema.json` regenerated.
+- **`ActionKind.DEFENSE_HOLD`** and `Action.hold_seconds: int | None = None` —
+  `launchDefenseHold` shares nothing with `FLEET_MISSION` (no `mission_type` argument at
+  all), the same "wholly separate entrypoint, own `ActionKind`" precedent
+  `MISSILE_ATTACK` already set. `schemas/action.schema.json` regenerated.
+- **`Action.mission_id`** gains a third meaning: for `launchFleetMission` with
+  `mission_type` AcsDefend/Intercept and for `openDefenseIntent`, it carries the
+  referenced *hostile* mission id — `target_planet_id`/`target_coordinates` stay unused
+  for AcsDefend/Intercept specifically (the on-chain `targetPlanetId` calldata slot is
+  repurposed to mean `hostileMissionId` for these two mission types, AGENTS.md §7's third
+  documented silent-corruption trap; `tick.py`'s encoder is the one place this becomes an
+  actual calldata value, kept out of the clean `Action` model on purpose).
+- **`guard.py`**: two new gates, `_gate_acs_defend_target` (AcsDefend/Intercept — exactly-
+  `Attack` hostile-mission-type check, still-`Outbound` status, target match, the 5-minute
+  join cutoff, `FleetAlreadyArrived`, origin ownership, and the live `coordination_allowed`
+  re-check) and `_gate_defense_hold_target` (`launchDefenseHold` — `hold_seconds` bounds
+  `[3600, 115200]`, same-planet rejection, origin ownership, live `coordination_allowed`).
+  `_gate_alliance_action` gains a 16th function, `openDefenseIntent`, gated on
+  `allow_acs_defense` rather than `allow_alliance` and kept out of `_ALLIANCE_FUNCTIONS`
+  (a new, separate `_ACS_ALLIANCE_FUNCTIONS` carve-out — see that constant's own docstring
+  for why the cross-layer test needs the two kept apart). `_derive_fleet_mission_spend`
+  now folds in the live `netHoldingFuelCost` for both new action shapes (never a
+  recomputed formula, per AGENTS.md §5). `idempotency_key` gains a `DEFENSE_HOLD` branch
+  and an `openDefenseIntent` sub-case, and the `FLEET_MISSION` branch now folds in
+  `mission_id` (closing a real key collision between two different AcsDefend/Intercept
+  actions targeting the same defended planet). `report.total` is now 25 (was 23).
+- **`coordination.py`** (new module): `suggest_coordination(radar_report) ->
+  CoordinationReport`, one suggestion per `incoming_fleet` finding whose
+  `mission_type_name == "Attack"`, carrying the real `hostile_mission_id`. Wired into
+  `tick.py` (gated on `policy.actions.allow_alliance` — a visibility gate, independent of
+  `allow_acs_defense`, which gates acting on it) and into `vd radar check` unconditionally.
+  States plainly that it cannot detect whether an `openDefenseIntent` has already been
+  opened for a given hostile mission (no read of `AllianceDefenseIntentOpened` in this
+  codebase).
+- **`opportunities.py`**: new `transport` family (`generate_transport_candidates`, a
+  pre-existing, already-allowlisted/guarded generator, surfaced here for the first time —
+  a scope decision, not new write capability). `OpportunityFinding.family`'s `Literal`
+  widened to include `"transport"`.
+- **`radar.py`**: `RadarFinding` gains `mission_id: int | None`/`mission_type_name: str |
+  None`, populated for `incoming_fleet` findings — previously discarded entirely, now what
+  `coordination.py` reads to build an actionable suggestion.
+- **`read.py`**: new `fetch_mission_by_id(mission_id, *, max_age=None)` — `GET
+  /mission/{id}`, confirmed live against a real (already-resolved) mission; the
+  still-`Outbound`-hostile case remains typed-from-source (no live example was found
+  during this feature's development — see `references/coordination.md`).
+- **`tick.py`**: new live pre-check probes for the three view functions
+  (`counterplayDefenseFuelContext`/`defenseHoldFuelContext`/`canCoordinateDefense`, all on
+  `VeydriftAllianceSystem`) built via `walletctl build` → the new `simulate --json`
+  capability (see `veydrift-wallet` `1.1.0`). New `_action_to_walletctl_json` branches for
+  `launchFleetMission`'s AcsDefend/Intercept repurposing, `launchDefenseHold` (GAME
+  contract, no `contract` key), and `openDefenseIntent` (`contract: "alliance"`).
+
+### Changed
+- `ids.py`'s `FleetMissionType` docstring corrected: AcsDefend(5)/Intercept(6)/
+  DefenseHold(9) are reachable now, not unreachable-by-design as previously stated.
+- AGENTS.md §5's "Most of combat stays unreachable by code" bullet rewritten — it
+  previously named AcsDefend/Intercept/DefenseHold specifically as requiring a source
+  change to become reachable; that is now false. §7 gains a third documented
+  silent-corruption trap (the `targetPlanetId`-means-`hostileMissionId` repurposing).
+
+### Fixed
+- **`guard._gate_alliance_action`'s `openDefenseIntent` branch now verifies the caller
+  owns the defended planet** (`snapshot.planet(action.planet_id) is not None`), matching
+  what the contract itself requires unconditionally
+  (`VeydriftAllianceSystem.sol:682`, `NotPlanetOwner`) — confirmed by round 6's live fork
+  testing. The gate previously verified every other precondition (flag, live alliance
+  membership, live hostile-mission validity) but not this one; a hand-written override
+  naming a planet the caller doesn't own would have PASSed here and only failed at the
+  contract itself. Not a live-risk gap (no funds/fleet ever at stake — the contract's own
+  revert was always the real backstop), but a real gap in this gate's own
+  "independently re-derive every precondition this codebase can verify" claim, closed in
+  the same round that found it.
+
 ## [1.18.0] - 2026-09-07
 
 Agent-side follow-through for the on-chain contract upgrade that redeployed the Veydrift

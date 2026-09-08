@@ -23,7 +23,7 @@ import respx
 from typer.testing import CliRunner
 
 from veydrift_agent import guard as guard_mod
-from veydrift_agent import http, log, tick
+from veydrift_agent import http, ids, log, tick
 from veydrift_agent import plan as plan_mod
 from veydrift_agent.models import (
     Action,
@@ -1077,6 +1077,148 @@ def test_non_alliance_action_still_omits_contract_key_regression():
     existing, unrelated action kind."""
     built = tick._action_to_walletctl_json(_build_action())
     assert "contract" not in built
+
+
+# --------------------------------------------------------------------------------------
+# ACS defense coordination feature -- AcsDefend(5)/Intercept(6) (launchFleetMission,
+# AGENTS.md §7's third silent-corruption trap: targetPlanetId calldata slot repurposed to
+# mean hostileMissionId), launchDefenseHold (its own entrypoint, GAME contract), and
+# openDefenseIntent (VeydriftAllianceSystem, ALLIANCE contract).
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mission_type", [ids.FleetMissionType.ACS_DEFEND, ids.FleetMissionType.INTERCEPT])
+def test_acs_defend_intercept_repurposes_target_planet_id_slot_as_hostile_mission_id(mission_type):
+    """The trap itself: `target_coordinates`/`target_planet_id` are deliberately unset
+    (see `Action.mission_type`'s docstring) -- `mission_id` alone must resolve into the
+    calldata's `targetPlanetId` argument slot, and no `Snapshot` lookup is attempted."""
+    action = _fleet_action(
+        mission_type=mission_type,
+        target_coordinates=None,
+        mission_id=99001,
+        ships={0: 1},
+        cargo=Resources(),
+        speed_pct=None,
+    )
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    origin, target_planet_id, encoded_mission_type, ships, cargo, trailing = built["args"]
+    assert origin == 664
+    assert target_planet_id == 99001  # the hostile mission id, not a real planet id
+    assert encoded_mission_type == int(mission_type)
+    assert trailing == 0
+
+
+def test_acs_defend_intercept_needs_no_snapshot():
+    """Regression, mirroring the alliance functions' own: since no planet-coordinate
+    lookup happens for these two mission types, `_action_to_walletctl_json(action)` (no
+    `snapshot` argument) must succeed -- unlike every other `launchFleetMission` mission
+    type, which requires one."""
+    action = _fleet_action(
+        mission_type=ids.FleetMissionType.ACS_DEFEND,
+        target_coordinates=None,
+        mission_id=99001,
+        ships={0: 1},
+        cargo=Resources(),
+        speed_pct=None,
+        origin_planet_id=664,
+    )
+    built = tick._action_to_walletctl_json(action)
+    assert built["args"][1] == 99001
+
+
+def test_acs_defend_intercept_raises_when_mission_id_is_missing():
+    action = _fleet_action(mission_type=ids.FleetMissionType.ACS_DEFEND, target_coordinates=None, mission_id=None)
+    with pytest.raises(ValueError, match="mission_id"):
+        tick._action_to_walletctl_json(action, _fleet_snapshot())
+
+
+def _defense_hold_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.DEFENSE_HOLD,
+        function="launchDefenseHold",
+        planet_id=664,
+        origin_planet_id=664,
+        target_planet_id=665,
+        ships={0: 2},
+        cargo=Resources(metal=10, crystal=0, deuterium=0),
+        speed_pct=100,
+        hold_seconds=3600,
+        rule="operator override",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def test_defense_hold_encodes_positional_args_and_omits_contract_key():
+    """`launchDefenseHold` is on the GAME contract (a delegatecall module of the same
+    deployed pinned ABI), not the alliance contract -- unlike `openDefenseIntent` below,
+    no `contract` key at all, same default `_action_to_walletctl_json` already uses for
+    `startBuildingUpgrade`/`launchFleetMission`."""
+    action = _defense_hold_action()
+    built = tick._action_to_walletctl_json(action)  # no Snapshot needed -- real target_planet_id, not coordinates
+    assert built["function"] == "launchDefenseHold"
+    origin, target, ships, cargo, speed_pct, hold_seconds = built["args"]
+    assert origin == 664
+    assert target == 665
+    assert cargo == [10, 0, 0]
+    assert speed_pct == 100
+    assert hold_seconds == 3600
+    assert "contract" not in built
+
+
+@pytest.mark.parametrize(
+    ("field", "match"),
+    [
+        ("origin_planet_id", "origin_planet_id"),
+        ("target_planet_id", "target_planet_id"),
+        ("speed_pct", "speed_pct"),
+        ("hold_seconds", "hold_seconds"),
+    ],
+)
+def test_defense_hold_raises_on_missing_required_field(field, match):
+    action = _defense_hold_action(**{field: None})
+    with pytest.raises(ValueError, match=match):
+        tick._action_to_walletctl_json(action)
+
+
+def test_defense_hold_ship_tuple_pins_destroyer_at_index_nine_not_ten():
+    """Mirrors the same AGENTS.md §7 trap #1 regression the FLEET_MISSION encoder above
+    already pins, for this action kind's own ship-tuple encoding."""
+    action = _defense_hold_action(ships={ids.Ship.DESTROYER: 5})
+    built = tick._action_to_walletctl_json(action)
+    ships_tuple = built["args"][2]
+    assert len(ships_tuple) == 14
+    assert ships_tuple[9] == 5
+
+
+def _open_defense_intent_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.ALLIANCE,
+        function="openDefenseIntent",
+        planet_id=664,
+        mission_id=99001,
+        rule="operator override",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def test_open_defense_intent_encodes_positional_args_and_sets_alliance_contract():
+    built = tick._action_to_walletctl_json(_open_defense_intent_action())
+    assert built["function"] == "openDefenseIntent"
+    assert built["args"] == [664, 99001]
+    assert built["contract"] == "alliance"
+
+
+@pytest.mark.parametrize(
+    ("field", "match"), [("planet_id", "planet_id"), ("mission_id", "mission_id")]
+)
+def test_open_defense_intent_raises_on_missing_required_field(field, match):
+    action = _open_defense_intent_action(**{field: None})
+    with pytest.raises(ValueError, match=match):
+        tick._action_to_walletctl_json(action)
 
 
 def test_encode_colony_target_raises_on_out_of_range_position_rather_than_corrupt_it():
@@ -2311,6 +2453,83 @@ def test_run_tick_never_fetches_alliance_state_when_the_flag_is_off(isolated_hom
     assert result.exit_code == 0, result.output
 
 
+# --------------------------------------------------------------------------------------
+# ACS defense coordination feature -- coordination_report is a VISIBILITY gate on
+# policy.actions.allow_alliance (independent of allow_acs_defense, which gates ACTING on
+# one via --action), computed with zero extra network calls over radar_report.
+# --------------------------------------------------------------------------------------
+
+
+def test_run_tick_computes_coordination_report_when_allow_alliance_is_on(isolated_home, monkeypatch):
+    _write_policy_with_alliance()
+    attack_finding = RadarFinding(
+        kind="incoming_fleet", wallet=WALLET, planet_id=664, detail="Attack incoming", mission_id=99001, mission_type_name="Attack"
+    )
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport(findings=[attack_finding]))
+    monkeypatch.setattr(tick, "_alliance_state", lambda wallet: AllianceState())
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "coordination" in result.output.lower()
+
+    strategy_path = Path(isolated_home) / "logs" / "strategy.md"
+    assert strategy_path.exists()
+    assert "coordination --" in strategy_path.read_text()
+
+
+def test_run_tick_never_computes_coordination_report_when_allow_alliance_is_off(isolated_home, monkeypatch):
+    _write_policy()  # actions.allow_alliance defaults False
+    attack_finding = RadarFinding(
+        kind="incoming_fleet", wallet=WALLET, planet_id=664, detail="Attack incoming", mission_id=99001, mission_type_name="Attack"
+    )
+
+    def _boom(radar_report):
+        raise AssertionError("must not compute a coordination report when allow_alliance is false")
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda wallet: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda snapshot: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda wallet: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport(findings=[attack_finding]))
+    monkeypatch.setattr(tick.coordination_mod, "suggest_coordination", _boom)
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: None)
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "coordination" not in result.output.lower()
+
+
+def test_coordination_summary_line_none_when_report_is_none():
+    assert tick._coordination_summary_line(None) is None
+
+
+def test_coordination_summary_line_none_when_no_suggestions():
+    from veydrift_agent.models import CoordinationReport
+
+    assert tick._coordination_summary_line(CoordinationReport()) is None
+
+
+def test_coordination_summary_line_counts_suggestions():
+    from veydrift_agent.models import CoordinationReport, CoordinationSuggestion
+
+    report = CoordinationReport(
+        suggestions=[
+            CoordinationSuggestion(wallet=WALLET, target_planet_id=664, hostile_mission_id=1, detail="x"),
+            CoordinationSuggestion(wallet=WALLET, target_planet_id=665, hostile_mission_id=2, detail="y"),
+        ]
+    )
+    assert tick._coordination_summary_line(report) == "2 suggestion(s)"
+
+
 def test_alliance_summary_line_reports_no_alliance():
     assert tick._alliance_summary_line(AllianceState()) == "not in an alliance"
 
@@ -3045,6 +3264,195 @@ def test_walletctl_simulate_unparseable_output_fails_closed(tmp_path, monkeypatc
     assert ok is None
     assert revert_reason is None
     assert error is not None
+
+
+# --------------------------------------------------------------------------------------
+# ACS defense coordination feature -- the live pre-check probes
+# (`counterplayDefenseFuelContext`/`defenseHoldFuelContext`/`canCoordinateDefense`), the
+# new `walletctl simulate --json` decode channel they're built on, and the `GET
+# /mission/{id}` fetch. All fail closed on any missing/malformed data -- `None`, never a
+# guessed `True`/`0` (AGENTS.md §5).
+# --------------------------------------------------------------------------------------
+
+
+def test_walletctl_simulate_probe_parses_ok_and_decoded(monkeypatch):
+    def _fake_run_walletctl(*args, timeout=None):
+        return subprocess.CompletedProcess(
+            args, 0, stdout='{"ok": true, "revertReason": null, "error": null, "decoded": {"canCoordinate": true, "netHoldingFuelCost": "42", "depotSupport": "0"}}\n', stderr=""
+        )
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    ok, decoded, error = tick._walletctl_simulate_probe(Path("/tmp/tx.json"), address=_LIVE_ADDR)
+
+    assert ok is True
+    assert decoded == {"canCoordinate": True, "netHoldingFuelCost": "42", "depotSupport": "0"}
+    assert error is None
+
+
+def test_walletctl_simulate_probe_missing_address_fails_closed_without_shelling_out(monkeypatch):
+    def _boom(*args, timeout=None):
+        raise AssertionError("must not shell out when no wallet address is available")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _boom)
+    ok, decoded, error = tick._walletctl_simulate_probe(Path("/tmp/tx.json"), address=None)
+    assert (ok, decoded) == (None, None)
+    assert error is not None and "address" in error.lower()
+
+
+def test_walletctl_simulate_probe_ok_false_yields_no_decoded(monkeypatch):
+    def _fake_run_walletctl(*args, timeout=None):
+        return subprocess.CompletedProcess(args, 1, stdout='{"ok": false, "revertReason": "SomeRevert", "error": null, "decoded": null}\n', stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    ok, decoded, error = tick._walletctl_simulate_probe(Path("/tmp/tx.json"), address=_LIVE_ADDR)
+    assert ok is False
+    assert decoded is None
+    assert error is None
+
+
+def test_walletctl_simulate_probe_malformed_json_fails_closed(monkeypatch):
+    def _fake_run_walletctl(*args, timeout=None):
+        return subprocess.CompletedProcess(args, 0, stdout="not json at all\n", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    ok, decoded, error = tick._walletctl_simulate_probe(Path("/tmp/tx.json"), address=_LIVE_ADDR)
+    assert (ok, decoded) == (None, None)
+    assert error is not None
+
+
+def test_walletctl_build_and_simulate_probe_fails_closed_when_build_fails(monkeypatch):
+    monkeypatch.setattr(tick, "_run_walletctl", lambda *a, **kw: subprocess.CompletedProcess(a, 1, stdout="", stderr="boom"))
+    decoded = tick._walletctl_build_and_simulate_probe({"function": "canCoordinateDefense", "args": []}, provider="keystore", wallet_address=_LIVE_ADDR)
+    assert decoded is None
+
+
+def test_walletctl_build_and_simulate_probe_fails_closed_when_simulate_reports_not_ok(monkeypatch, tmp_path):
+    def _fake_run_walletctl(*args, timeout=None):
+        # `build` writes --out; write the file so the probe proceeds to simulate.
+        out_index = args.index("--out") + 1
+        Path(args[out_index]).write_text('{"to": "0x0", "data": "0x0"}')
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    monkeypatch.setattr(tick, "_walletctl_simulate_probe", lambda *a, **kw: (False, None, None))
+    decoded = tick._walletctl_build_and_simulate_probe({"function": "canCoordinateDefense", "args": []}, provider="keystore", wallet_address=_LIVE_ADDR)
+    assert decoded is None
+
+
+def test_hostile_mission_fetch_returns_none_for_none_id():
+    assert tick._hostile_mission_fetch(None) is None
+
+
+def test_hostile_mission_fetch_unwraps_the_mission_object(monkeypatch):
+    monkeypatch.setattr(
+        tick.read, "fetch_mission_by_id", lambda mission_id, **kw: {"mission": {"missionId": mission_id, "status": "Outbound"}}
+    )
+    mission = tick._hostile_mission_fetch(99001)
+    assert mission == {"missionId": 99001, "status": "Outbound"}
+
+
+def test_hostile_mission_fetch_fails_closed_on_api_error(monkeypatch):
+    def _boom(mission_id, **kw):
+        raise http.VeydriftAPIError("boom")
+
+    monkeypatch.setattr(tick.read, "fetch_mission_by_id", _boom)
+    assert tick._hostile_mission_fetch(99001) is None
+
+
+def test_hostile_mission_fetch_fails_closed_on_unexpected_shape(monkeypatch):
+    monkeypatch.setattr(tick.read, "fetch_mission_by_id", lambda mission_id, **kw: {"mission": "not-a-dict"})
+    assert tick._hostile_mission_fetch(99001) is None
+
+
+def _acs_defend_probe_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=664,
+        mission_type=ids.FleetMissionType.ACS_DEFEND,
+        origin_planet_id=664,
+        mission_id=99001,
+        ships={0: 1},
+        rule="operator override",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def test_acs_defend_coordination_probe_extracts_can_coordinate_and_net_holding_fuel_cost(monkeypatch):
+    monkeypatch.setattr(
+        tick, "_walletctl_build_and_simulate_probe", lambda *a, **kw: {"canCoordinate": True, "netHoldingFuelCost": "42", "depotSupport": "0"}
+    )
+    hostile = {"missionId": 99001, "targetPlanetId": 664, "arrivalAt": 1786536600}
+    action = _acs_defend_probe_action()
+    allowed, cost = tick._acs_defend_coordination_probe(
+        hostile, action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR, now=datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    )
+    assert allowed is True
+    assert cost == 42
+
+
+def test_acs_defend_coordination_probe_fails_closed_on_missing_hostile_mission():
+    action = _acs_defend_probe_action()
+    allowed, cost = tick._acs_defend_coordination_probe(
+        None, action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR, now=datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    )
+    assert (allowed, cost) == (None, None)
+
+
+def test_acs_defend_coordination_probe_fails_closed_when_decoded_can_coordinate_is_not_bool(monkeypatch):
+    monkeypatch.setattr(tick, "_walletctl_build_and_simulate_probe", lambda *a, **kw: {"canCoordinate": None, "netHoldingFuelCost": "42"})
+    hostile = {"missionId": 99001, "targetPlanetId": 664, "arrivalAt": 1786536600}
+    action = _acs_defend_probe_action()
+    allowed, cost = tick._acs_defend_coordination_probe(
+        hostile, action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR, now=datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    )
+    assert (allowed, cost) == (None, None)
+
+
+def test_acs_defend_coordination_probe_fails_closed_when_probe_itself_fails(monkeypatch):
+    monkeypatch.setattr(tick, "_walletctl_build_and_simulate_probe", lambda *a, **kw: None)
+    hostile = {"missionId": 99001, "targetPlanetId": 664, "arrivalAt": 1786536600}
+    action = _acs_defend_probe_action()
+    allowed, cost = tick._acs_defend_coordination_probe(
+        hostile, action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR, now=datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    )
+    assert (allowed, cost) == (None, None)
+
+
+def test_defense_hold_coordination_probe_extracts_can_coordinate_and_net_holding_fuel_cost(monkeypatch):
+    monkeypatch.setattr(tick, "_walletctl_build_and_simulate_probe", lambda *a, **kw: {"canCoordinate": True, "netHoldingFuelCost": "7"})
+    action = _defense_hold_action()
+    allowed, cost = tick._defense_hold_coordination_probe(action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR)
+    assert allowed is True
+    assert cost == 7
+
+
+def test_defense_hold_coordination_probe_fails_closed_on_missing_fields():
+    action = _defense_hold_action(target_planet_id=None)
+    allowed, cost = tick._defense_hold_coordination_probe(action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR)
+    assert (allowed, cost) == (None, None)
+
+
+def test_open_defense_intent_coordination_probe_extracts_bool(monkeypatch):
+    monkeypatch.setattr(tick, "_walletctl_build_and_simulate_probe", lambda *a, **kw: {"_0": True})
+    action = _open_defense_intent_action()
+    allowed = tick._open_defense_intent_coordination_probe(action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR)
+    assert allowed is True
+
+
+def test_open_defense_intent_coordination_probe_fails_closed_on_non_bool(monkeypatch):
+    monkeypatch.setattr(tick, "_walletctl_build_and_simulate_probe", lambda *a, **kw: {"_0": None})
+    action = _open_defense_intent_action()
+    allowed = tick._open_defense_intent_coordination_probe(action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR)
+    assert allowed is None
+
+
+def test_open_defense_intent_coordination_probe_fails_closed_on_missing_fields():
+    action = _open_defense_intent_action(mission_id=None)
+    allowed = tick._open_defense_intent_coordination_probe(action, wallet=_LIVE_ADDR, provider="keystore", wallet_address=_LIVE_ADDR)
+    assert allowed is None
 
 
 def test_send_and_await_simulate_revert_prevents_send(isolated_home, monkeypatch):

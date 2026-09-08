@@ -1,4 +1,4 @@
-# Guardrails — `vd guard`, the 23 gates
+# Guardrails — `vd guard`, the 25 gates
 
 Source of truth for *what* each gate checks, *why*, what data it needs, what it does when
 that data is missing, and how to configure it. `guard.py` is the frozen contract this
@@ -28,11 +28,13 @@ rest of this codebase is shaped:
   below).
 
 Every gate is evaluated on every tick, regardless of what earlier gates decided —
-`GuardReport.verdicts` is a fixed-length list of exactly 23 entries every time (17
+`GuardReport.verdicts` is a fixed-length list of exactly 25 entries every time (17
 through Phase 4; Phase 5c, 2026-08-17, added `mission_type`; a later change, 2026-08-20,
 added `game_paused`; the launch-actions plan, 2026-08-28, added `fleet_slots` (commit 2),
 `attack_protection` (commit 6), and `missile_target` (commit 7); the alliance feature,
-2026-09-01, added `alliance_action` — see their own rows below). A blocked
+2026-09-01, added `alliance_action`; the ACS defense coordination feature added
+`acs_defend_target` and `defense_hold_target` (`openDefenseIntent` folds into the
+existing `alliance_action`, not a third new gate) — see their own rows below). A blocked
 proposal is exactly as informative as an allowed one, which is the entire point of never
 short-circuiting: `logs/proposals.jsonl` is the audit trail, not just the last mile. (A
 content-identical repeat of the immediately-previous proposal is not re-persisted to
@@ -56,40 +58,45 @@ explicit keyword parameter:
 | `outgoing_colonize_count` | `tick.py`'s `_outgoing_colonize_count()` (commit 4 of the launch-actions plan) — a live `GET /wallet/{addr}/fleet-visibility`, counting `outgoing` entries whose `missionType` is `"Colonize"` and `status` is still `"Outbound"`. Only fetched for an actual Colonize proposal; `None` on any fetch failure. | `mission_type` (via `_colony_cap_violation`) |
 | `attack_protection_allowed` / `attack_protection_blocked_reason` | `tick.py`'s `_attack_protection_allowed()` (commit 6, extended to return both in commit 7) — a live `GET /wallet/{addr}/attack-protection?targetPlanetId=N` for the action's specific resolved target. Only fetched for an actual Attack or Missile proposal; both `None` on any fetch failure. | `attack_protection` |
 | `alliance_state` | `tick.py`'s `_alliance_state()` (alliance feature) — a live `GET /wallet/{addr}/alliance` fetch, parsed into `models.AllianceState`. Fetched once per tick whenever `policy.actions.allow_alliance` is true, independent of what action that tick resolves to (also drives the tick report's "alliance:" line); `None` on any fetch/parse failure. | `alliance_action` |
-| `now` | defaults to `datetime.now(UTC)`; a test-supplied override for `index_lag` | `index_lag`, `gas` |
+| `hostile_mission` | `tick.py`'s `_hostile_mission_fetch()` (ACS defense coordination feature) — a live `GET /mission/{id}` fetch, already unwrapped to the inner `mission` object. Only fetched for an AcsDefend/Intercept `launchFleetMission` action or an `openDefenseIntent` action; `None` on any fetch failure or missing `mission_id`. | `acs_defend_target`, `alliance_action` (`openDefenseIntent` branch only) |
+| `coordination_allowed` | `tick.py`'s `_acs_defend_coordination_probe()`/`_defense_hold_coordination_probe()`/`_open_defense_intent_coordination_probe()` — a live `walletctl simulate --json` probe of `counterplayDefenseFuelContext`/`defenseHoldFuelContext`/`canCoordinateDefense` respectively. Only fetched for the matching action shape; `None` on any probe failure. | `acs_defend_target`, `defense_hold_target`, `alliance_action` (`openDefenseIntent` branch only) |
+| `net_holding_fuel_cost` | The same probe's `netHoldingFuelCost` result (AcsDefend/Intercept/`launchDefenseHold` only — `openDefenseIntent` has no fuel cost). `None` on any probe failure. | `affordability`, `reserve`, `value_ceiling` (via `_derive_fleet_mission_spend`) |
+| `now` | defaults to `datetime.now(UTC)`; a test-supplied override for `index_lag`, and (ACS defense coordination feature) for `acs_defend_target`'s join-cutoff/`FleetAlreadyArrived` re-checks | `index_lag`, `gas`, `acs_defend_target` |
 
 This mirrors the same posture `plan.py` takes with `killswitch_active` /
 `pending_tx_unreconciled`: keep the decision function pure and fixture-testable, and let
 the one module that's allowed to touch the network/subprocess (`tick.py`) gather the
 facts.
 
-## The 23 gates
+## The 25 gates
 
 | # | Gate | What it checks | Data it needs | On missing data |
 | - | --- | --- | --- | --- |
 | 1 | `killswitch` | `$VEYDRIFT_HOME/KILLSWITCH` absent | `killswitch_active` (bool, never missing) | n/a |
 | 2 | `tier` | `action.function` ∈ the policy tier's allowed-to-*submit* set | `Action.function`, `Policy.tier` | function absent (off-chain action) → PASS trivially; function present but unknown to any tier → BLOCK |
-| 3 | `mission_type` | **(Phase 5c, 2026-08-17; Attack added commit 5 of the launch-actions plan, 2026-08-28)** for `launchFleetMission` only: `Action.mission_type` ∈ {Transport(0), Deploy(1), Colonize(2), Harvest(4)} unconditionally, plus Attack(3) when `policy.actions.allow_combat` is `true` — default-deny, independent of `tier` | `Action.mission_type`, `Policy.actions.allow_combat` (only checked when `Action.function == "launchFleetMission"`) | not `launchFleetMission` → PASS trivially; `mission_type is None` → BLOCK (never "nothing to check" — a malformed action) |
-| 4 | `prerequisites` | the proposed entity's on-chain requirements (`techtree.py`, transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`) are met on the target planet, plus shield-dome/missile-slot caps; for a `launchFleetMission` action, dispatches instead to a check that the origin planet actually owns every ship committed | target planet's building levels, account technology levels (or, for a fleet mission, the origin planet's ship counts) | any unmet requirement, or any level the snapshot didn't report → BLOCK; a shield-dome/missile-slot count the snapshot didn't report → BLOCK; a fleet mission's ship count the snapshot didn't report → BLOCK |
-| 5 | `fleet_slots` | **(commit 2 of the launch-actions plan, 2026-08-28)** for `launchFleetMission` only: `fleet_slots_active < fleet_slots_limit` — the contract reverts `FleetSlotLimitReached(1 + ComputerTechnology)` otherwise | `Snapshot.fleet_slots_active`/`.fleet_slots_limit` (only checked for `ActionKind.FLEET_MISSION`) | not a fleet mission → PASS trivially; either field `None` → BLOCK (never "assume a slot is free") |
+| 3 | `mission_type` | **(Phase 5c, 2026-08-17; Attack added commit 5 of the launch-actions plan, 2026-08-28; AcsDefend/Intercept added by the ACS defense coordination feature)** for `launchFleetMission` only: `Action.mission_type` ∈ {Transport(0), Deploy(1), Colonize(2), Harvest(4)} unconditionally, plus Attack(3) when `policy.actions.allow_combat` is `true`, plus AcsDefend(5)/Intercept(6) when the DIFFERENT `policy.actions.allow_acs_defense` is `true` — default-deny, independent of `tier` | `Action.mission_type`, `Policy.actions.allow_combat`/`.allow_acs_defense` (only checked when `Action.function == "launchFleetMission"`) | not `launchFleetMission` → PASS trivially; `mission_type is None` → BLOCK (never "nothing to check" — a malformed action) |
+| 4 | `prerequisites` | the proposed entity's on-chain requirements (`techtree.py`, transcribed from `VeydriftDependencies.sol`/`VeydriftCatalog.sol`) are met on the target planet, plus shield-dome/missile-slot caps; for a `launchFleetMission`/`launchDefenseHold` action, dispatches instead to a check that the origin planet actually owns every ship committed | target planet's building levels, account technology levels (or, for a fleet mission/defense hold, the origin planet's ship counts) | any unmet requirement, or any level the snapshot didn't report → BLOCK; a shield-dome/missile-slot count the snapshot didn't report → BLOCK; a fleet mission's ship count the snapshot didn't report → BLOCK |
+| 5 | `fleet_slots` | **(commit 2 of the launch-actions plan, 2026-08-28; widened to `launchDefenseHold` by the ACS defense coordination feature)** for `launchFleetMission`/`launchDefenseHold` only: `fleet_slots_active < fleet_slots_limit` — the contract reverts `FleetSlotLimitReached(1 + ComputerTechnology)` otherwise | `Snapshot.fleet_slots_active`/`.fleet_slots_limit` (only checked for `ActionKind.FLEET_MISSION`/`.DEFENSE_HOLD`) | not one of those two kinds → PASS trivially; either field `None` → BLOCK (never "assume a slot is free") |
 | 6 | `missile_target` | **(commit 7 of the launch-actions plan, 2026-08-28)** for `launchInterplanetaryMissileAttack` only: `policy.actions.allow_combat` is true (this function has no shared non-combat sibling the way `launchFleetMission`/Attack does, so this check lives here rather than in `mission_type`); `primary_target ≤ Defense.LargeShieldDome`(7); same galaxy and `calc.missile_system_distance(...) ≤ calc.missile_range(impulse_drive_level)`; origin owns ≥ `quantity` Interplanetary Missiles | `Action.primary_target`/`.quantity`/`.origin_planet_id`/`.target_coordinates`, `Snapshot` (origin coordinates, Impulse Drive level, Interplanetary Missile count) — no live data needed | not the missile function → PASS trivially; `primary_target is None` → BLOCK; out of range/galaxy → BLOCK; IPM count not reported → BLOCK (never "assume 0 built") |
-| 7 | `alliance_action` | **(alliance feature, 2026-09-01)** for one of the 15 `VeydriftAllianceSystem` membership functions only: `policy.actions.allow_alliance` is true; then a per-function precondition (caller role floor, membership/invite/join-request-row lookup, batch-fails-closed for `kickMembers`/`setMembersRole`, sole-member check for `leaveAlliance`, Officer-and-not-self check for `transferAllianceOwnership`) — see its own section below | `Action`'s alliance fields (`alliance_id`, `target_player(s)`, `role`, `alliance_tag`/`name`/`description`), `Policy.actions.allow_alliance`, `Policy.wallet`, `alliance_state` (live) | not an alliance function → PASS trivially; `allow_alliance` false → BLOCK; `alliance_state is None` → BLOCK (never "no alliance involvement") |
-| 8 | `attack_protection` | **(commit 6 of the launch-actions plan, 2026-08-28; extended to Missile in commit 7)** for an Attack `launchFleetMission` or a `launchInterplanetaryMissileAttack` action: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — never trusted from either generator's own, earlier, coarser generation-time read | `attack_protection_allowed` (bool \| None) and, since commit 7, `attack_protection_blocked_reason` (str \| None), both from `tick._attack_protection_allowed` | not an Attack/Missile action → PASS trivially; `None` (fetch failure, unresolvable target, non-boolean response) → BLOCK; `False` → BLOCK, UNLESS the action is Missile and `blocked_reason == "bashing"` exactly (see its own section below) |
-| 9 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set (since the alliance feature, includes `allianceContractAddress` alongside `gameContractAddress`/`contractAddress`) | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
-| 10 | `abi_hash` | live `deploymentAbiHash` == pinned. **For an alliance action, PASSes unconditionally instead** — there is no live `allianceAbiHash`/`allianceDeploymentCommit` field anywhere in `/runtime-config` to compare against; that pin was verified once, by construction, at commit time (`skills/veydrift-wallet/references/abi-pinning.md`'s "Second contract" section) | `Snapshot.deployment_abi_hash` (game actions only) | missing or mismatched (game action) → BLOCK **all** writes; alliance action → always PASS, with an explicit detail string naming the reason |
-| 11 | `health` | `/health` reported `ok && readiness.ready`, **or** (2026-08-22) a positively confirmed combat-only degradation — `Snapshot.combat_only_degradation()` — **except for an Attack action specifically, where commit 6 of the launch-actions plan withdraws that exception** (Attack requests VRF at launch and cannot resolve while randomness is degraded). **Deliberately NOT withdrawn for Missile** (commit 7) — `launchInterplanetaryMissileAttack` never requests randomness at all (interception is deterministic arithmetic, confirmed by reading `VeydriftPlanetManagementModule.sol` directly), so the exception genuinely still applies to it | `Action` (to know whether this is specifically an Attack action), `Snapshot.health_ok`, `.readiness_ready`, `.degradation_reasons`, `.game_maintenance`, `.randomness_readiness` | n/a — `combat_only_degradation()` is itself fail-closed (see below); the commit-6 correction is a BLOCK, not a missing-data case |
-| 12 | `game_paused` | **(added 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
-| 13 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
-| 14 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` | target planet in `Snapshot.planets` | planet not found → BLOCK |
-| 15 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
-| 16 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
-| 17 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
-| 18 | `reserve` | spend preserves `policy.reserves` floors | target planet's `resources_as_of_now` | planet not found → BLOCK |
-| 19 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
-| 20 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
-| 21 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
-| 22 | `idempotency` | no pending tx for the same idempotency key (`(planet, function, entity)`, extended with `mission_type`/target for a fleet mission, `mission_id` for a resolve action, `target_planet_id`/`primary_target` for a missile, or `alliance_id`/`target_player(s)`/`role` for an alliance action — see `guard.idempotency_key`'s own docstring) | `AgentState.pending` | n/a — presence/absence is always knowable |
-| 23 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
+| 7 | `acs_defend_target` | **(ACS defense coordination feature)** for `launchFleetMission` with `mission_type` AcsDefend(5)/Intercept(6) only: `policy.actions.allow_acs_defense` is true; the referenced hostile mission is exactly-`Attack`, still-`Outbound`, target-matched, and within the 5-minute join cutoff (`_hostile_mission_coordination_defect`); `FleetAlreadyArrived` (own computed arrival ≤ hostile's `arrivalAt`); origin planet owned; live `coordination_allowed` is `True` — see its own section below for why that alone is never sufficient | `Action.mission_type`/`.mission_id`/`.ships`/`.speed_pct`/`.origin_planet_id`, `hostile_mission` (live), `coordination_allowed` (live), `now` | not AcsDefend/Intercept → PASS trivially; `allow_acs_defense` false → BLOCK; `hostile_mission`/`coordination_allowed` either `None` → BLOCK |
+| 8 | `defense_hold_target` | **(ACS defense coordination feature)** for `launchDefenseHold` only: `policy.actions.allow_acs_defense` is true; `hold_seconds` ∈ [3600, 115200]; origin ≠ target (`SamePlanet`); origin planet owned; live `coordination_allowed` is `True` (sufficient alone here, unlike `acs_defend_target` above — see its own section below for why) | `Action.hold_seconds`/`.planet_id`/`.target_planet_id`, `coordination_allowed` (live) | not `launchDefenseHold` → PASS trivially; `allow_acs_defense` false → BLOCK; out-of-range `hold_seconds`, same-planet, unowned origin, or `coordination_allowed` not `True` → BLOCK |
+| 9 | `alliance_action` | **(alliance feature, 2026-09-01; `openDefenseIntent` added by the ACS defense coordination feature)** for one of the 15 `VeydriftAllianceSystem` membership functions, or `openDefenseIntent` (its own branch, gated on `allow_acs_defense` not `allow_alliance`): a per-function precondition (caller role floor, membership/invite/join-request-row lookup, batch-fails-closed for `kickMembers`/`setMembersRole`, sole-member check for `leaveAlliance`, Officer-and-not-self check for `transferAllianceOwnership`; for `openDefenseIntent`, the same `_hostile_mission_coordination_defect` re-check `acs_defend_target` performs plus live `coordination_allowed`) — see its own section below | `Action`'s alliance fields, `Policy.actions.allow_alliance`/`.allow_acs_defense`, `Policy.wallet`, `alliance_state` (live), and for `openDefenseIntent` also `hostile_mission`/`coordination_allowed` (live) | not an alliance function or `openDefenseIntent` → PASS trivially; the relevant flag false → BLOCK; `alliance_state`/`hostile_mission`/`coordination_allowed` (as applicable) `None` → BLOCK |
+| 10 | `attack_protection` | **(commit 6 of the launch-actions plan, 2026-08-28; extended to Missile in commit 7)** for an Attack `launchFleetMission` or a `launchInterplanetaryMissileAttack` action: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — never trusted from either generator's own, earlier, coarser generation-time read | `attack_protection_allowed` (bool \| None) and, since commit 7, `attack_protection_blocked_reason` (str \| None), both from `tick._attack_protection_allowed` | not an Attack/Missile action → PASS trivially; `None` (fetch failure, unresolvable target, non-boolean response) → BLOCK; `False` → BLOCK, UNLESS the action is Missile and `blocked_reason == "bashing"` exactly (see its own section below) |
+| 11 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set (since the alliance feature, includes `allianceContractAddress` alongside `gameContractAddress`/`contractAddress`) | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
+| 12 | `abi_hash` | live `deploymentAbiHash` == pinned. **For an alliance action or `openDefenseIntent`, PASSes unconditionally instead** — there is no live `allianceAbiHash`/`allianceDeploymentCommit` field anywhere in `/runtime-config` to compare against; that pin was verified once, by construction, at commit time (`skills/veydrift-wallet/references/abi-pinning.md`'s "Second contract" section). AcsDefend/Intercept/`launchDefenseHold` are on the GAME contract and take the normal live-hash path unchanged | `Snapshot.deployment_abi_hash` (game actions only) | missing or mismatched (game action) → BLOCK **all** writes; alliance action/`openDefenseIntent` → always PASS, with an explicit detail string naming the reason |
+| 13 | `health` | `/health` reported `ok && readiness.ready`, **or** (2026-08-22) a positively confirmed combat-only degradation — `Snapshot.combat_only_degradation()` — **except for an Attack action specifically, where commit 6 of the launch-actions plan withdraws that exception** (Attack requests VRF at launch and cannot resolve while randomness is degraded). **Deliberately NOT withdrawn for Missile** (commit 7) — `launchInterplanetaryMissileAttack` never requests randomness at all (interception is deterministic arithmetic, confirmed by reading `VeydriftPlanetManagementModule.sol` directly), so the exception genuinely still applies to it | `Action` (to know whether this is specifically an Attack action), `Snapshot.health_ok`, `.readiness_ready`, `.degradation_reasons`, `.game_maintenance`, `.randomness_readiness` | n/a — `combat_only_degradation()` is itself fail-closed (see below); the commit-6 correction is a BLOCK, not a missing-data case |
+| 14 | `game_paused` | **(added 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
+| 15 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
+| 16 | `affordability` | `resourcesAsOfNow` ≥ live `Action.cost` (for AcsDefend/Intercept/`launchDefenseHold`, the independently-re-derived spend including live `net_holding_fuel_cost` — never `Action.cost` itself; see `_derive_fleet_mission_spend`) | target planet in `Snapshot.planets` | planet not found → BLOCK; for the three fleet-mission-shaped kinds, an unverifiable spend (including `net_holding_fuel_cost is None` for AcsDefend/Intercept/`launchDefenseHold`) → BLOCK, never zero |
+| 17 | `energy` | post-action `produced ≥ required` | `PlanetSnapshot.energy` | `None` → BLOCK (**the flagship case** — see above) |
+| 18 | `storage_overflow` | no resource hits cap before the next tick, unaddressed | `resources_as_of_now` / `production_per_hour` / `storage_caps` | see "Documented limitation" below — this one gate cannot fully honour the no-vacuous-pass rule given the frozen `models.py` |
+| 19 | `fields` | `fields_used / fields_total` < 100%, warn at `field_warn_pct` | `PlanetSnapshot.fields_used`/`fields_total` | either `None`, or `fields_total == 0` → BLOCK |
+| 20 | `reserve` | spend preserves `policy.reserves` floors (same `net_holding_fuel_cost`-aware spend as `affordability`) | target planet's `resources_as_of_now` | planet not found → BLOCK |
+| 21 | `gas` | `gas_cost_wei` ≤ `gas_per_tx_wei`, and today's cumulative + this tx ≤ `gas_per_day_wei` — **wei throughout, never gas units** | `gas_cost_wei`, `AgentState.cumulative_gas_wei_today` | no estimate → ESCALATE (this is normal and expected at tier 1 — see below) |
+| 22 | `eth_floor` | wallet ETH ≥ `eth_gas_floor_wei` | `eth_balance_wei` (**never** `Snapshot.eth_balance_wei`) | `None` → ESCALATE (**the other flagship case**) |
+| 23 | `value_ceiling` | `cost / holdings` > `escalate_above_pct_of_resources` → ESCALATE (same `net_holding_fuel_cost`-aware spend as `affordability`) | target planet's `resources_as_of_now` | planet not found (with nonzero cost) → BLOCK; zero holdings with nonzero cost → ESCALATE (can't compute a %, not "0% so fine") |
+| 24 | `idempotency` | no pending tx for the same idempotency key (`(planet, function, entity)`, extended with `mission_type`/target/`mission_id` for a fleet mission, `mission_id` for a resolve action, `target_planet_id`/`primary_target` for a missile, `target_planet_id` for a defense hold, `mission_id` for `openDefenseIntent`, or `alliance_id`/`target_player(s)`/`role` for every other alliance action — see `guard.idempotency_key`'s own docstring) | `AgentState.pending` | n/a — presence/absence is always knowable |
+| 25 | `revert_streak` | same action reverted < `policy.escalation.on_revert_count` times | `AgentState.revert_counts` | n/a — a missing key means zero reverts, which is a real fact, not missing data |
 
 **`health`'s exception for a combat-only degradation (2026-08-22).** Live, during this
 fix's own planning: `/health` returned HTTP 503 (persistently, not a one-off), with a
@@ -235,6 +242,62 @@ from `Snapshot` alone.** One precondition branch per function:
 - `transferAllianceOwnership`: caller is Owner; `newOwner` is not the caller itself
   (compared against `Policy.wallet`); `newOwner` verified as a real Officer of the named
   alliance (`NewOwnerMustBeOfficer`).
+- `openDefenseIntent` (ACS defense coordination feature, its own 16th branch, gated on
+  `allow_acs_defense` not `allow_alliance`): caller is a member of an alliance
+  (`alliance_state.membership is not None`); `action.planet_id`/`.mission_id` both set;
+  **`action.planet_id` is one of the caller's own owned planets** (`snapshot.
+  planet(action.planet_id) is not None` — added after round 6's live fork testing found
+  this gate verified every other precondition but not this one, while the contract itself
+  requires `target.owner == msg.sender` unconditionally, `NotPlanetOwner` otherwise); the
+  same `_hostile_mission_coordination_defect` re-check `acs_defend_target` performs
+  (exactly-`Attack`, still-`Outbound`, target-matched against `action.planet_id`, within
+  the 5-minute join cutoff); live `coordination_allowed` (`canCoordinateDefense`) is
+  `True`. See `acs_defend_target`'s own section below for why `coordination_allowed`
+  alone is never sufficient.
+
+**`acs_defend_target`/`defense_hold_target` (ACS defense coordination feature) are the
+independent re-check gates for `launchFleetMission`'s AcsDefend(5)/Intercept(6) counterplay
+branch and `launchDefenseHold`'s own entrypoint respectively — see
+`skills/veydrift-agent/references/coordination.md` for the full contract mechanics this
+section summarizes.**
+
+`acs_defend_target` checks, in order: `policy.actions.allow_acs_defense` is `true`
+(re-checked independently of `mission_type`'s own check, never assuming gate-ordering
+carries the guarantee forward); the referenced hostile mission (`hostile_mission`, live)
+is exactly-`Attack` (not the broader Attack/Intercept/MissileAttack triple
+`openDefenseIntent`'s own authorization uses), still-`Outbound`, and within
+`VeydriftAntiRaidPrimitives.ACS_DEFEND_JOIN_CUTOFF_SECONDS` (5 minutes) of arriving;
+`FleetAlreadyArrived` — the caller's own computed arrival (independently re-derived from
+`action.ships`/`.speed_pct` and the real target's coordinates, read from
+`hostile_mission["targetPlanet"]["coordinates"]` since `action.target_coordinates` is
+unset for these two mission types) must be `<=` the hostile mission's `arrivalAt`;
+`action.origin_planet_id` is one of the caller's own owned planets; and live
+`coordination_allowed` is `True`. **`coordination_allowed=True` is never sufficient
+alone** — `VeydriftAllianceSystem._canCoordinateDefense` short-circuits `true` for a
+self-owned defended planet before checking any of status/hostility/target-match/cutoff,
+so the independent `hostile_mission` re-check above stays load-bearing even when
+`coordination_allowed` is trivially `true`. Fails closed on `hostile_mission is None`,
+`coordination_allowed is None`, unparseable/foreign target coordinates, or unverifiable
+ship speed.
+
+`defense_hold_target` checks: `policy.actions.allow_acs_defense` is `true`;
+`action.hold_seconds` ∈ `[3600, 115200]` inclusive (`InvalidHoldWindow` otherwise, a bound
+`defenseHoldFuelContext` cannot itself enforce — the contract's own `launchDefenseHold`
+checks it directly, before ever calling that view); `action.planet_id != action.
+target_planet_id` (`SamePlanet` — the other thing that view cannot check, since it takes
+no `originPlanetId` argument); `action.planet_id` is one of the caller's own owned
+planets; and live `coordination_allowed` is `True`. Unlike `acs_defend_target` above,
+`coordination_allowed=True` **is** sufficient here for the target-planet authorization
+question — `defenseHoldFuelContext` isn't tied to any specific hostile mission (any
+same-alliance planet, any chosen window), so there is no separate mission-validity
+question to ask independently; same-planet and origin-ownership are the two things it
+structurally cannot check, both covered above.
+
+Both gates' spend feeds `affordability`/`reserve`/`value_ceiling` via `net_holding_fuel_
+cost` (live, from the same probe) rather than a recomputed formula — see this file's
+"Documented limitation" note under `storage_overflow` for the general shape of this
+codebase's "never recompute what the API already tells you" rule, and AGENTS.md §5's "no
+cost-scaling function" invariant specifically.
 
 **Two gaps this gate cannot close, documented rather than papered over.** First, a third
 party's OWN preconditions — an invitee's home-planet/membership status

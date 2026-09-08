@@ -43,6 +43,13 @@ describe.skipIf(!castAvailable)("live `cast sig` cross-check", () => {
     "setMemberRole(uint256,address,uint8)",
     "setMembersRole(uint256,address[],uint8)",
     "transferAllianceOwnership(uint256,address)",
+    // ACS defense coordination feature -- AcsDefend/Intercept reuse the existing
+    // launchFleetMission overloads (already covered above via the alliance-feature
+    // additions, no new selector), launchDefenseHold and openDefenseIntent are new.
+    "launchDefenseHold(uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256)",
+    "openDefenseIntent(uint256,uint256)",
+    "counterplayDefenseFuelContext(address,uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)",
+    "defenseHoldFuelContext(address,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)",
   ];
 
   it.each(signatures)("%s matches `cast sig` output", (sig) => {

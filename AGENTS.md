@@ -145,10 +145,16 @@ touching related code, re-run the check named alongside each one.
   optional. `policy.wallet_engine.require_confirmation` gates whether `tick` sends
   automatically at all — it does not weaken the CLI-level `--confirm` requirement, ever.
 - **Most of combat stays unreachable by code, not by config.** The `FleetMissionType`
-  enum's `AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold` values require
-  an actual source change to both `guard.py`'s `_ALLOWED_MISSION_TYPES`/
-  `_COMBAT_MISSION_TYPES` and `allowlist.ts`'s matching pair — that friction is
-  deliberate; don't lower it in passing while fixing something else. **`Attack` (via
+  enum's `MissileAttack`/`AcsAttack` values (as `launchFleetMission` mission-type
+  arguments — the separate `launchInterplanetaryMissileAttack` entrypoint is a different
+  thing entirely, see below) require an actual source change to both `guard.py`'s
+  `_ALLOWED_MISSION_TYPES`/`_COMBAT_MISSION_TYPES` and `allowlist.ts`'s matching pair —
+  that friction is deliberate; don't lower it in passing while fixing something else.
+  `DefenseHold` is dead enum space for `launchFleetMission` specifically, structurally
+  impossible via that function regardless of policy (confirmed against
+  `VeydriftGameplayModule.sol`'s own `uint8(missionType) > uint8(Intercept)` revert) —
+  it's reachable only via its own dedicated `launchDefenseHold` entrypoint, see the ACS
+  defense coordination bullet below. **`Attack` (via
   `launchFleetMission` mission type 3) and `Missile` (via the wholly separate
   `launchInterplanetaryMissileAttack` entrypoint) are the two exceptions**, since the
   launch-actions plan's commits 5-7 (2026-08-28): `policy.json`'s `allow_combat` key is a
@@ -185,6 +191,22 @@ touching related code, re-run the check named alongside each one.
   unconditionally: `/runtime-config` has no live hash/commit field for this contract to
   compare against, ever, a permanent limit stated in `skills/veydrift-wallet/references/
   abi-pinning.md`'s "Second contract" section, not papered over.
+- **ACS defense coordination (AcsDefend/Intercept/`launchDefenseHold`/
+  `openDefenseIntent`) is real, override-executable, gated on
+  `policy.actions.allow_acs_defense` at both layers independently.** Reopens what the
+  bullet above once called permanently unreachable-by-code, on deliberate instruction —
+  same manual-override-only reachability as the 15 alliance functions (no
+  `candidates.py` generator, no `plan.py` ladder rung). Tier floor splits within the one
+  flag: AcsDefend/Intercept/`launchDefenseHold` require `operator` (real fleet/loss
+  risk); `openDefenseIntent` requires only `economy` (moves nothing, same floor the 15
+  membership functions use) — checked independently by `guard.py`'s two new gates
+  (`_gate_acs_defend_target`/`_gate_defense_hold_target`) plus a 16th function on
+  `_gate_alliance_action`, and by `veydrift-wallet`'s `allowlist.ts`
+  (`ACS_MISSION_TYPES`/`DEFENSE_HOLD_SIGNATURES`/`ACS_ALLIANCE_SIGNATURES`). See
+  `skills/veydrift-agent/references/coordination.md` for the full contract mechanics
+  (the `targetPlanetId`-means-`hostileMissionId` repurposing, the exactly-`Attack`
+  requirement, the `_canCoordinateDefense` self-owned-planet short-circuit, the honest
+  verification-status caveats).
 - **Secrets never reach a log or a tracked file.** `log.py` scrubs any
   `0x[0-9a-fA-F]{64}` that isn't a known tx hash, and refuses to write a value matching a
   configured secret env var. Before committing, `git diff --cached` anything touching
@@ -234,9 +256,9 @@ in-scope membership selectors are byte-identical across the two commits. See `re
 abi-pinning.md`'s "Second contract" section — the no-live-recheck limit is a permanent
 limit of the upstream API, not something to work around by inventing a substitute check.
 
-## 7. Two silent-corruption traps in the write path
+## 7. Three silent-corruption traps in the write path
 
-Neither produces an error; both produce a wrong transaction. If you touch fleet-mission
+None produces an error; all three produce a wrong transaction. If you touch fleet-mission
 encoding, re-read `docs/RESEARCH-ADDENDUM.md` §3–§4 in full, not just this summary:
 
 1. **The 14-slot fleet tuple is not the 16-entry Ship enum.** SolarSatellite (id 9) and
@@ -245,6 +267,14 @@ encoding, re-read `docs/RESEARCH-ADDENDUM.md` §3–§4 in full, not just this s
    a raw Ship id. `fleet.test.ts` pins a Destroyer at tuple index 9, not 10.
 2. **`launchFleetMission` is overloaded** — a 7-arg and a 6-arg form both exist on the
    deployed ABI. Always resolve by full signature (`resolveFunctionAbi`), never by name.
+3. **`launchFleetMission`'s `targetPlanetId` argument means `hostileMissionId` for
+   AcsDefend(5)/Intercept(6) specifically** (ACS defense coordination feature) — the
+   contract re-derives the real target internally from the referenced hostile mission;
+   encoding a real planet id there for these two mission types silently targets the wrong
+   thing rather than erroring. `Action.mission_id` carries the hostile mission id cleanly
+   in this codebase's own model; `tick.py`'s `_fleet_mission_args` is the one place the
+   repurposing becomes an actual calldata value. See `skills/veydrift-agent/references/
+   coordination.md` for the full mechanics.
 
 Also: `attackProtectionStatus`, `collectResources`, `debrisField`, `maxRaidLoot`,
 `protectedResources`, `raidableResources` are `nonpayable` in the ABI but semantically
@@ -515,7 +545,21 @@ enough to call out here specifically, not a duplicate of that ledger.
   band's candidate is never even generated once a higher band wins that tick; this
   module calls the same `candidates.py` generators a second time, unchanged, to surface
   them anyway. Zero changes to `plan.py`/`candidates.py`/`guard.py`, no new policy flag,
-  no persisted state, `vd tick` only.
+  no persisted state, `vd tick` only. Since the ACS defense coordination feature, also
+  surfaces a `transport` family (`generate_transport_candidates`, a pre-existing,
+  already-allowlisted/guarded generator — a scope decision to surface it, not new write
+  capability); Deploy remains excluded.
+- `skills/veydrift-agent/references/coordination.md` — ACS defense coordination:
+  AcsDefend(5)/Intercept(6) (`launchFleetMission`), `launchDefenseHold` (its own
+  entrypoint), and `openDefenseIntent` (`VeydriftAllianceSystem`) as real,
+  override-executable actions, plus a suggestion layer (`coordination.py`) built on
+  `radar.py`'s own `incoming_fleet` findings. Covers the `targetPlanetId`-means-
+  `hostileMissionId` repurposing (§7's third trap), the exactly-`Attack` hostile-mission-
+  type requirement, the `_canCoordinateDefense` self-owned-planet short-circuit (why the
+  live `coordination_allowed` check is never sufficient alone), and the honest
+  live-verification status (the still-`Outbound`-hostile `/mission/{id}` shape remains
+  typed-from-source; no fork-testing round has yet exercised any of these four
+  selectors).
 - `docs/NOTES.md`, `docs/veydrift-agent-prompt.md`, `docs/veydrift-agent-resources.md`,
   `docs/veydrift-briefing.html` — earlier inputs this project was built from; superseded
   in places by the addendum but kept for provenance.

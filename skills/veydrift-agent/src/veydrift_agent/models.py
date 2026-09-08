@@ -50,9 +50,24 @@ class ActionKind(str, Enum):
     RESOLVE_MISSION = "resolve_mission"  # resolveFleetMission(uint256)
     #: launchFleetMission — **overloaded on the deployed ABI** (a 7-arg and a 6-arg form).
     #: Always resolve it by full canonical signature, never by name (AGENTS.md §7 trap 2).
-    #: Non-combat mission types only; combat types are refused independently by
-    #: `guard.py`'s mission-type gate and `allowlist.ts`'s OPERATOR_ALLOWED_MISSION_TYPES.
+    #: Non-combat mission types, plus AcsDefend(5)/Intercept(6) since the ACS-coordination
+    #: feature (gated on `policy.actions.allow_acs_defense`, `operator` tier, manual-
+    #: override only -- no `candidates.py` generator, no `plan.py` ladder rung, same
+    #: reachability posture as `ALLIANCE` below). Every other combat type is still refused
+    #: independently by `guard.py`'s mission-type gate and `allowlist.ts`'s
+    #: OPERATOR_ALLOWED_MISSION_TYPES/ACS_MISSION_TYPES.
     FLEET_MISSION = "fleet_mission"
+    #: launchDefenseHold(uint256,uint256,MissionShips,Resources,uint16,uint256) -- ACS
+    #: coordination feature. Shares NOTHING with FLEET_MISSION: not an overload of
+    #: `launchFleetMission`, no `mission_type` argument at all (`FleetMissionType.
+    #: DefenseHold` (9) is dead enum space for that function's own dispatch -- this is a
+    #: wholly separate contract entrypoint, confirmed by reading
+    #: `VeydriftDefenseHoldModule.sol`/`VeydriftGame.sol` directly), same "wholly separate
+    #: entrypoint, own ActionKind" precedent `MISSILE_ATTACK` already set. Still consumes a
+    #: fleet slot and real ships -- `_gate_fleet_slots`/`_gate_fleet_ship_availability` are
+    #: widened to trigger on this kind too, not just FLEET_MISSION. Gated on
+    #: `policy.actions.allow_acs_defense`, `operator` tier, manual-override only.
+    DEFENSE_HOLD = "defense_hold"
     #: launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32) -- added commit 7
     #: of the launch-actions plan. Shares NOTHING with FLEET_MISSION: no fleet tuple, no
     #: `mission_type` argument (`FleetMissionType.MissileAttack` (7) is unreachable dead
@@ -64,17 +79,22 @@ class ActionKind(str, Enum):
     #: Attack uses) at both enforcement layers, `guard.py`'s `_MIN_TIER_FOR_FUNCTION`
     #: (`operator` tier) and `veydrift-wallet`'s `COMBAT_SIGNATURES`.
     MISSILE_ATTACK = "missile_attack"
-    #: One of 15 membership functions on `VeydriftAllianceSystem` -- a wholly separate
-    #: deployed contract, its own pinned ABI, its own address (`allianceContractAddress`).
-    #: `action.function` disambiguates which of the 15 (createAlliance, inviteMember,
-    #: acceptInvite, leaveAlliance, etc.) the same "one kind, many functions" shape
-    #: `FLEET_MISSION` already uses toward `launchFleetMission`'s mission types. **Never
-    #: planner-produced** -- no `candidates.py` generator, no `plan.py` ladder rung emits
-    #: this kind. Reachable only via `vd tick --action` +
-    #: `policy.strategy.allow_agent_action_override`, additionally gated on
-    #: `policy.actions.allow_alliance` at `economy` tier (not `operator` -- membership
-    #: actions carry no fund/combat risk the way sending fleets or missiles does). See
-    #: `references/manual-action-override.md` for a worked example.
+    #: One of 15 membership functions on `VeydriftAllianceSystem`, plus (ACS coordination
+    #: feature) a 16th, `openDefenseIntent` -- a wholly separate deployed contract, its own
+    #: pinned ABI, its own address (`allianceContractAddress`). `action.function`
+    #: disambiguates which one (createAlliance, inviteMember, acceptInvite, leaveAlliance,
+    #: openDefenseIntent, etc.) the same "one kind, many functions" shape `FLEET_MISSION`
+    #: already uses toward `launchFleetMission`'s mission types. **Never planner-produced**
+    #: -- no `candidates.py` generator, no `plan.py` ladder rung emits this kind. Reachable
+    #: only via `vd tick --action` + `policy.strategy.allow_agent_action_override`. The 15
+    #: membership functions are additionally gated on `policy.actions.allow_alliance` at
+    #: `economy` tier (membership carries no fund/combat risk). `openDefenseIntent` is
+    #: gated on the *different* `policy.actions.allow_acs_defense` flag instead, still at
+    #: `economy` tier (it opens a coordination record, moves no fleet/resource) -- checked
+    #: as its own special case in `guard._gate_alliance_action`, deliberately not folded
+    #: into `_ALLIANCE_FUNCTIONS`/`ALLIANCE_SIGNATURES` (see `_ACS_ALLIANCE_FUNCTIONS`'s own
+    #: docstring for why the cross-layer test needs them kept separate). See
+    #: `references/manual-action-override.md` for worked examples of both kinds of gating.
     ALLIANCE = "alliance"
     NOOP = "noop"
     ESCALATE = "escalate"
@@ -459,6 +479,16 @@ class RadarFinding(Base):
     #: shapes and this is reporting-only, never a Decision input.
     detail: str
     occurred_at: datetime | None = None
+    #: Populated only for kind="incoming_fleet" -- the raw `missionId` from
+    #: /wallet/{addr}/fleet-visibility's `incoming[]` row (previously discarded entirely
+    #: by `_incoming_fleet_findings`). `None` for the other two kinds. Lets a downstream
+    #: consumer (`coordination.py`'s `suggest_coordination`) reference the real, live
+    #: mission id an ACS Defend/Intercept action would need, without parsing `detail`.
+    mission_id: int | None = None
+    #: Populated only for kind="incoming_fleet" -- the raw `missionType` string (e.g.
+    #: "Attack", "Harvest"). `None` for the other two kinds. Lets `coordination.py` filter
+    #: to Attack rows specifically without parsing the free-text `detail` string.
+    mission_type_name: str | None = None
 
 
 class RadarReport(Base):
@@ -489,7 +519,7 @@ class OpportunityFinding(Base):
     underlying `Action` doesn't resolve a numeric target id (mirrors `Action`'s own
     optionality here, not a new ambiguity)."""
 
-    family: Literal["attack", "missile", "colonize", "foreign_harvest"]
+    family: Literal["attack", "missile", "colonize", "foreign_harvest", "transport"]
     origin_planet_id: int
     target_planet_id: int | None = None
     target_coordinates: str | None = None
@@ -501,6 +531,33 @@ class OpportunityFinding(Base):
 
 class OpportunityReport(Base):
     findings: list[OpportunityFinding] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------------------
+# Coordination — ACS defense coordination suggestions, derived from an already-built
+# RadarReport (see references/coordination.md). Never touches guard.py, never constructs
+# an Action -- purely advisory text, the human/agent still writes the `--action` JSON.
+# --------------------------------------------------------------------------------------
+
+
+class CoordinationSuggestion(Base):
+    """One suggestion `coordination.suggest_coordination` derived from a single
+    `incoming_fleet` RadarFinding whose `mission_type_name == "Attack"`. Human-readable
+    summary, same shape decision as `OpportunityFinding` -- never an auto-generated
+    action file."""
+
+    wallet: str  # whose planet is under attack -- self or an alliance member
+    target_planet_id: int
+    #: The live hostile mission id an AcsDefend/Intercept `--action` would reference
+    #: (`Action.mission_id`). `None` only if the source RadarFinding's own `mission_id`
+    #: was unset (should not happen for a real incoming_fleet row post-Phase-2, but this
+    #: stays optional rather than assumed).
+    hostile_mission_id: int | None = None
+    detail: str  # what's incoming + the coordination options available (see module docstring)
+
+
+class CoordinationReport(Base):
+    suggestions: list[CoordinationSuggestion] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------------------
@@ -564,6 +621,30 @@ class ActionsCfg(Base):
     #: environment variable for this at the wallet layer, ever -- see
     #: `veydrift-wallet/src/policy.ts`'s `resolveAllowAlliance`.
     allow_alliance: bool = False
+    #: ACS defense coordination -- AcsDefend/Intercept (`launchFleetMission` mission types
+    #: 5/6), `launchDefenseHold` (a wholly separate entrypoint), and `openDefenseIntent`
+    #: (on `VeydriftAllianceSystem`) as one feature, since all three combine into a single
+    #: shared defense at battle resolution on-chain. Default `False` reproduces the
+    #: pre-existing behaviour exactly: no path (planner or override) can submit any of
+    #: these four while this is off -- same "empty/off == old behaviour" convention every
+    #: flag in this class already uses. **Never planner-produced** -- no `candidates.py`
+    #: generator, no `plan.py` ladder rung; reachable only via `vd tick --action` +
+    #: `policy.strategy.allow_agent_action_override`, the same manual-override-only
+    #: posture the 15 alliance membership functions already established.
+    #:
+    #: Tier floor is split within this one flag, a new pattern in this codebase: AcsDefend/
+    #: Intercept/`launchDefenseHold` require `operator` (real fleet movement, real loss
+    #: risk -- same floor Attack/Missile/Transport already require). `openDefenseIntent`
+    #: requires only `economy` (it opens a coordination record; moves no fleet, spends no
+    #: resource -- same floor the other 15 alliance functions already use). Both still
+    #: require this flag; only the tier requirement differs by function. Checked
+    #: independently at both enforcement layers (`guard.py`'s `_gate_mission_type`/
+    #: `_MIN_TIER_FOR_FUNCTION`/`_gate_alliance_action` and `veydrift-wallet`'s
+    #: `checkAllowlist`), never one trusting the other's read of it. No CLI flag or
+    #: environment variable for this at the wallet layer, ever -- see `veydrift-wallet/
+    #: src/policy.ts`'s `resolveAllowAcsDefense`. See `references/coordination.md` for the
+    #: full contract mechanics and the honest verification-status caveats.
+    allow_acs_defense: bool = False
 
 
 class EscalationCfg(Base):
@@ -724,11 +805,23 @@ class Action(Base):
     kind: ActionKind
     #: Deployed contract function name, e.g. "startBuildingUpgrade". See §4 of the addendum.
     function: str | None = None
+    #: For `launchFleetMission`/`launchDefenseHold`, the origin planet (the fleet departs
+    #: from here). For `openDefenseIntent`, the defended planet (`defenderPlanetId`) --
+    #: the ACS-coordination feature's one deliberate exception to "origin" being this
+    #: field's usual meaning, since `openDefenseIntent` has no fleet/origin at all.
     planet_id: int | None = None
     entity_id: int | None = None
     entity_name: str | None = None
     target_level: int | None = None
     quantity: int | None = None
+    #: Three distinct meanings by `function`, documented here rather than split across
+    #: three near-duplicate fields (same "reuse across kinds, document per call site"
+    #: convention `quantity`/`target_player` already use): `resolveFleetMission`/
+    #: `recallFleetMission`'s own single `missionId` argument; for `launchFleetMission`
+    #: with `mission_type` AcsDefend(5)/Intercept(6), the *hostile* mission being
+    #: defended against/intercepted (see `mission_type`'s docstring for the encoding-time
+    #: repurposing this implies); and for `openDefenseIntent`, its own `hostileMissionId`
+    #: argument (a real, non-repurposed named parameter there — no encoding trick needed).
     mission_id: int | None = None
     cost: Resources = Field(default_factory=Resources)
     #: Which rung of the decision ladder fired, e.g. "5:storage-overflow". Makes the
@@ -755,14 +848,23 @@ class Action(Base):
     # ----------------------------------------------------------------------------------
     #: `ids.FleetMissionType`. Non-combat by default: `guard.py`'s mission-type gate and
     #: `allowlist.ts`'s OPERATOR_ALLOWED_MISSION_TYPES each refuse every combat type
-    #: independently EXCEPT Attack (3), which both permit only when
-    #: `policy.actions.allow_combat` is true (launch-actions plan commit 5) — see
-    #: `ActionsCfg.allow_combat`'s docstring. Every other combat type (AcsDefend/
-    #: Intercept/MissileAttack/AcsAttack/DefenseHold) stays refused unconditionally at
-    #: both layers, regardless of policy. Deliberately typed as a plain int, not the enum
-    #: — the enum is complete and auditable (it *lists* every combat type), and narrowing
-    #: the type here would imply an enforcement this field does not provide. Both gates
-    #: default-deny.
+    #: independently EXCEPT Attack (3), permitted only when `policy.actions.allow_combat`
+    #: is true (launch-actions plan commit 5) — see `ActionsCfg.allow_combat`'s docstring
+    #: — and EXCEPT AcsDefend (5)/Intercept (6), permitted only when `policy.actions.
+    #: allow_acs_defense` is true, `operator` tier, manual-override only (ACS coordination
+    #: feature; see `ActionsCfg.allow_acs_defense`'s docstring and `references/
+    #: coordination.md`). For these two, `mission_id` (below) carries the referenced
+    #: *hostile* mission's id — `target_planet_id`/`target_coordinates` stay `None`,
+    #: unused. `tick.py`'s encoder places `mission_id`'s value into the deployed
+    #: contract's `targetPlanetId` calldata slot for these two mission types specifically
+    #: (the contract re-derives the real target planet internally) — a deliberate
+    #: encoding-time-only repurposing, kept out of this clean model on purpose; see
+    #: `mission_id`'s own docstring and `AGENTS.md` §7's third silent-corruption trap.
+    #: MissileAttack (7)/AcsAttack (8)/
+    #: DefenseHold (9, its own dedicated entrypoint and `ActionKind` — see `DEFENSE_HOLD`)
+    #: stay refused/inapplicable here regardless of policy. Deliberately typed as a plain
+    #: int, not the enum — the enum is complete and auditable, and narrowing the type here
+    #: would imply an enforcement this field does not provide. Both gates default-deny.
     mission_type: int | None = None
     #: The planet the fleet departs from. Distinct from `planet_id`, which for a fleet
     #: mission names the *subject* planet of the action for logging/idempotency purposes.
@@ -787,7 +889,10 @@ class Action(Base):
     #: would have to search for outside the snapshot anyway. Also what
     #: `tick._attack_protection_allowed` reads directly (falling back to
     #: `_resolve_target_planet_id` only if unset) to know which target to re-check
-    #: `/wallet/{addr}/attack-protection` against.
+    #: `/wallet/{addr}/attack-protection` against. Also `launchDefenseHold`'s real, named
+    #: `targetPlanetId` argument (own or a fellow alliance member's planet) — a genuine,
+    #: non-repurposed use, unlike AcsDefend/Intercept's `mission_id` (see that field's
+    #: docstring) which leaves this field `None`.
     target_planet_id: int | None = None
     #: Ship id -> count. **Not a fleet tuple.** The deployed contract takes a 14-slot
     #: tuple that omits the two non-flyable ships (SolarSatellite id 9, Crawler id 15), so
@@ -807,16 +912,19 @@ class Action(Base):
     #: earlier draft of this field guessed the latter and was wrong. The contract sets it
     #: itself for `Attack` (`_requestAttackBattleRandomness`, `guard.py`'s `attack_
     #: protection`/`mission_type` gates are what actually govern whether an Attack may be
-    #: submitted at all, not this field) and the two counterplay types (neither reachable
-    #: from this codebase); for every mission type this codebase can produce it is either
-    #: ignored by the contract (Transport/Deploy/Harvest/Attack) or **required to be
-    #: exactly 0** — Colonize reverts with `InvalidId` on anything else
-    #: (`VeydriftColonizationModule._launchColonizeFleetMission`). So it is encoded as-is,
-    #: defaulting to 0, and is expected to stay unset for every mission type this codebase
-    #: generates, Attack included — `generate_attack_candidates` never sets it, the same
-    #: posture `generate_colonize_candidates` already takes. Naming it after the guessed
-    #: meaning would invite someone to set a duration here and hit a silent Colonize
-    #: revert.
+    #: submitted at all, not this field) and AcsDefend/Intercept (the contract overwrites
+    #: it with the referenced hostile mission's id -- `randomnessRequestId =
+    #: hostileMissionId` -- for its own resolution bookkeeping; this codebase's own
+    #: `Action.mission_id` already carries that same id cleanly, so nothing here needs to
+    #: set this field for those two either); for every mission type this codebase can
+    #: produce it is either ignored by the contract (Transport/Deploy/Harvest/Attack/
+    #: AcsDefend/Intercept) or **required to be exactly 0** — Colonize reverts with
+    #: `InvalidId` on anything else (`VeydriftColonizationModule._launchColonizeFleetMission`).
+    #: So it is encoded as-is, defaulting to 0, and is expected to stay unset for every
+    #: mission type this codebase generates or manually constructs — `generate_attack_
+    #: candidates` never sets it, the same posture `generate_colonize_candidates` already
+    #: takes. Naming it after the guessed meaning would invite someone to set a duration
+    #: here and hit a silent Colonize revert.
     randomness_request_id: int | None = None
 
     # ----------------------------------------------------------------------------------
@@ -834,6 +942,21 @@ class Action(Base):
     #: is a valid missile target. `guard._gate_missile_target` independently re-checks
     #: this bound rather than trusting the generator that set it.
     primary_target: int | None = None
+
+    # ----------------------------------------------------------------------------------
+    # DefenseHold field (ACS coordination feature). `None`/unused for every other
+    # `ActionKind` — only `DEFENSE_HOLD` populates it. `planet_id`/`target_planet_id`/
+    # `target_coordinates`/`ships`/`cargo`/`speed_pct` (already declared above, shared
+    # with FLEET_MISSION) are reused identically for `launchDefenseHold`'s
+    # origin/target/ships/cargo/speedPercent arguments.
+    # ----------------------------------------------------------------------------------
+    #: `launchDefenseHold`'s trailing `holdSeconds` argument -- no existing field fits;
+    #: `randomness_request_id` is a different trailing `uint256` on a different function
+    #: and its own docstring already forecloses reuse as a duration (guessed that way once
+    #: before, wrongly). Contract bounds: `MIN_DEFENSE_HOLD_SECONDS` (1 hour) to
+    #: `MAX_DEFENSE_HOLD_SECONDS` (32 hours) inclusive -- `guard._gate_defense_hold_target`
+    #: independently re-checks this bound rather than trusting the caller.
+    hold_seconds: int | None = None
 
     # ----------------------------------------------------------------------------------
     # Alliance fields (membership-only, VeydriftAllianceSystem). `None`/empty for every

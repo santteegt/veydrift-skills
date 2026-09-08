@@ -757,6 +757,23 @@ def fetch_missions(
     return http.fetch(f"/wallet/{wallet}/missions", params, max_age=max_age)
 
 
+def fetch_mission_by_id(mission_id: int | str, *, max_age: float | None = None) -> dict[str, Any]:
+    """GET /mission/{id} -- single mission detail BY ID, not wallet-scoped. Confirmed live
+    (`{"mission": {missionId, status, missionType, originPlanetId, targetPlanetId,
+    arrivalAt, originPlanet, targetPlanet, ...}}`) -- the exact shape `references/
+    api-routes.md` §11 names, spot-checked against a real (already-`Returned`) mission
+    before this feature shipped. Server-side cache TTL is 0 (always live), unlike most
+    other routes -- exactly the freshness guarantee `guard._gate_acs_defend_target`'s
+    live re-check of a referenced `hostileMissionId` needs (never trust generation-time
+    data, the same discipline `_gate_attack_protection`/`_gate_missile_target` already
+    established). The `Outbound`/still-hostile-and-joinable case specifically remains
+    typed-from-source -- no live account probed during this feature's development had a
+    genuinely live incoming Attack to observe (see references/coordination.md). Does NOT
+    catch `http.VeydriftAPIError` -- same contract as `fetch_alliance_state`; the caller
+    decides how to degrade."""
+    return http.fetch(f"/mission/{mission_id}", max_age=max_age)
+
+
 def fetch_highscores(
     *,
     category: str,

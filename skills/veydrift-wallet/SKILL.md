@@ -106,19 +106,24 @@ validated the transaction upstream. Five checks, all evaluated and reported:
    alliance feature, includes `allianceContractAddress` alongside the game contract's
 2. `tx.data`'s 4-byte selector ∈ the tier's allowed set, **computed from the pinned ABI**
    (never a hand-typed hex constant) — at `operator` tier, `launchInterplanetaryMissileAttack`
-   (its own, brand-new selector) is checked conditionally on `policy.actions.allow_combat`
-   here rather than unconditionally, the same lazy resolution item 5 uses for Attack; at
-   `economy` tier **or above**, the 15 `VeydriftAllianceSystem` membership functions are
-   checked the same lazy way against `policy.actions.allow_alliance` instead — an
-   inclusive tier check, unlike combat's, since `economy` is alliance's floor, not its
-   ceiling
+   and `launchDefenseHold` (each its own selector) are checked conditionally on
+   `policy.actions.allow_combat`/`.allow_acs_defense` respectively here rather than
+   unconditionally, the same lazy resolution item 5 uses for Attack; at `economy` tier
+   **or above**, the 15 `VeydriftAllianceSystem` membership functions are checked the
+   same lazy way against `policy.actions.allow_alliance`, and `openDefenseIntent` (its
+   own selector, kept separate from those 15) against the different
+   `policy.actions.allow_acs_defense` — an inclusive tier check throughout, unlike
+   combat's, since `economy` is the floor for all of these, not the ceiling
 3. `tx.value == 0` — no payable action is whitelisted at any tier reachable here
 4. `tx.chainId == 8453` (Base)
 5. `operator`-only: `launchFleetMission`'s mission-type argument (decoded from calldata,
    since it isn't part of the selector) must be Transport(0)/Deploy(1)/Colonize(2)/Harvest(4)
-   unconditionally, or Attack(3) when `policy.actions.allow_combat` resolves true —
-   AcsDefend/Intercept/MissileAttack/AcsAttack/DefenseHold are unreachable through this
-   engine no matter what tier or policy is set
+   unconditionally, or Attack(3)/AcsDefend(5)/Intercept(6) when `policy.actions.
+   allow_combat`/`.allow_acs_defense` respectively resolve true (two independent flags —
+   `allow_combat` alone never unlocks AcsDefend/Intercept) — MissileAttack/AcsAttack
+   remain unreachable through this engine no matter what tier or policy is set, and
+   DefenseHold(9) is dead enum space for this function specifically (its own
+   `launchDefenseHold` entrypoint above is the real, separate reachable path)
 
 Any failure: non-zero exit, the rejection reason printed, nothing signed. Full mechanics
 and rationale: `references/tx-safety.md`.

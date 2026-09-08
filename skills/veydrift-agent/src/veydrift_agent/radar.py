@@ -50,7 +50,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from veydrift_agent import http, read
-from veydrift_agent.models import PlanetSnapshot, RadarFinding, RadarReport, WatchTarget
+from veydrift_agent import coordination as coordination_mod
+from veydrift_agent.models import CoordinationReport, PlanetSnapshot, RadarFinding, RadarReport, WatchTarget
 from veydrift_agent.state import RadarState, WalletRadarState, load_radar_state, save_radar_state
 
 app = typer.Typer(
@@ -184,8 +185,26 @@ def _incoming_fleet_findings(wallet: str, planet_ids: set[int]) -> tuple[list[Ra
         detail = f"{mission_type_name} incoming from planet {origin}" if origin else f"{mission_type_name} incoming"
         if arrives_at is not None:
             detail += f", arriving {arrives_at.isoformat()}"
+        # ACS defense coordination feature: previously discarded entirely -- `mission_id`
+        # lets `coordination.py`'s `suggest_coordination` reference the real, live
+        # `hostileMissionId` an AcsDefend/Intercept/openDefenseIntent action would need,
+        # without parsing `detail`. The raw `missionId` is a decimal string on the wire
+        # (same convention as every other numeric-looking field this route returns) --
+        # coerced here, `None` on anything unparseable rather than a guessed id.
+        try:
+            mission_id = int(row.get("missionId"))
+        except (TypeError, ValueError):
+            mission_id = None
         findings.append(
-            RadarFinding(kind="incoming_fleet", wallet=wallet, planet_id=target_planet_id, detail=detail, occurred_at=arrives_at)
+            RadarFinding(
+                kind="incoming_fleet",
+                wallet=wallet,
+                planet_id=target_planet_id,
+                detail=detail,
+                occurred_at=arrives_at,
+                mission_id=mission_id,
+                mission_type_name=mission_type_name if mission_type_name != "unknown" else None,
+            )
         )
     return findings, None
 
@@ -392,6 +411,23 @@ def print_radar_report(report: RadarReport) -> None:
         )
 
 
+def print_coordination_report(report: CoordinationReport) -> None:
+    """ACS defense coordination feature. Unconditional, same as `print_radar_report`
+    above -- no `policy.actions.allow_acs_defense`/`allow_alliance` gate here (`vd radar
+    check` has no `policy.json` at all, per this command's own docstring); the wiring
+    that IS flag-gated is `vd tick`'s, since a tick has a policy to gate on."""
+    if not report.suggestions:
+        return
+    table = Table(title="Coordination suggestions", expand=False)
+    table.add_column("wallet")
+    table.add_column("target planet")
+    table.add_column("hostile mission id")
+    table.add_column("detail")
+    for s in report.suggestions:
+        table.add_row(s.wallet, str(s.target_planet_id), str(s.hostile_mission_id) if s.hostile_mission_id is not None else "-", s.detail)
+    _console.print(table)
+
+
 # --------------------------------------------------------------------------------------
 # vd radar check — scheduler-facing standalone entry point
 # --------------------------------------------------------------------------------------
@@ -465,11 +501,23 @@ def check(
     save_radar_state(state)
 
     print_radar_report(report)
+
+    # ACS defense coordination feature: unconditional, no policy.json/flag to gate on
+    # here (this command doesn't take one) -- see `print_coordination_report`'s own
+    # docstring for why the flag-gating lives in `vd tick` instead.
+    coordination_report = coordination_mod.suggest_coordination(report)
+    print_coordination_report(coordination_report)
+
     if json_output:
         # Compact, single-line -- deliberately not `indent=2`: this is meant for a
         # wrapper script to parse (the whole point of `--json`), and a single line is
         # trivial to locate/grep even when printed alongside the human `rich` report
         # above, unlike a pretty-printed multi-line block interleaved with table output.
+        # Coordination's line (if any) prints FIRST, RadarReport's LAST -- a pre-existing
+        # consumer that only ever looked at the final JSON line (the contract before this
+        # feature existed) keeps seeing exactly the same RadarReport there.
+        if coordination_report.suggestions:
+            print(coordination_report.model_dump_json())
         print(report.model_dump_json())
 
     raise typer.Exit(code=exit_code_for_report(report))

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { encodeAbiParameters, encodeFunctionData } from "viem";
 import {
   computePinnedAbiHash,
+  decodeSimulateReturnData,
   findFunctionsByName,
   functionsForSelector,
   getPinnedAbi,
+  getSelector,
   getSelectorForSignature,
   isNonpayableRead,
   loadPinnedMeta,
@@ -219,5 +222,53 @@ describe("pinned alliance ABI (VeydriftAllianceSystem)", () => {
       const fn = resolveFunctionAbi(sig, "alliance");
       expect(fn.stateMutability).not.toBe("payable");
     }
+  });
+});
+
+// ACS defense coordination feature: `walletctl simulate --json`'s decode step is what lets
+// tick.py read `canCoordinate`/`netHoldingFuelCost` back from a view-function pre-check call
+// without ever touching raw hex itself -- see references/coordination.md.
+describe("decodeSimulateReturnData", () => {
+  it("decodes a real view function's (canCoordinate, netHoldingFuelCost, depotSupport) tuple", () => {
+    const fn = resolveFunctionAbi(
+      "counterplayDefenseFuelContext(address,uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)",
+      "alliance",
+    );
+    const selector = getSelector(fn);
+    const returnData = encodeAbiParameters(fn.outputs, [true, 12345n, 6789n]);
+
+    const decoded = decodeSimulateReturnData(selector, returnData);
+
+    expect(decoded).toEqual({ canCoordinate: true, netHoldingFuelCost: "12345", depotSupport: "6789" });
+  });
+
+  it("returns undefined for a function with no outputs", () => {
+    const fn = resolveFunctionAbi("leaveAlliance()", "alliance");
+    const selector = getSelector(fn);
+    const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [] }).slice(0, 10) as `0x${string}`;
+
+    expect(decodeSimulateReturnData(selector, data)).toBeUndefined();
+  });
+
+  it("returns undefined when returnData is undefined", () => {
+    const fn = resolveFunctionAbi(
+      "defenseHoldFuelContext(address,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)",
+      "alliance",
+    );
+    expect(decodeSimulateReturnData(getSelector(fn), undefined)).toBeUndefined();
+  });
+
+  it("returns undefined (never throws) on malformed returnData rather than masking a successful simulation", () => {
+    const fn = resolveFunctionAbi(
+      "defenseHoldFuelContext(address,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)",
+      "alliance",
+    );
+    expect(decodeSimulateReturnData(getSelector(fn), "0xdead")).toBeUndefined();
+  });
+
+  it("returns undefined for an unresolvable selector", () => {
+    expect(
+      decodeSimulateReturnData("0xdeadbeef", "0x0000000000000000000000000000000000000000000000000000000000000001"),
+    ).toBeUndefined();
   });
 });

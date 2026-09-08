@@ -35,6 +35,7 @@
 import { decodeFunctionData, getAddress } from "viem";
 import { fetchLiveRuntimeConfig, getSelector, resolveFunctionAbi, type RuntimeConfig } from "./abi.js";
 import {
+  resolveAllowAcsDefense as resolveAllowAcsDefenseFromPolicy,
   resolveAllowAlliance as resolveAllowAllianceFromPolicy,
   resolveAllowCombat as resolveAllowCombatFromPolicy,
 } from "./policy.js";
@@ -109,16 +110,40 @@ const LAUNCH_FLEET_MISSION_SIGNATURES = [
  *   the single-layer-enforcement gap this allowlist alone used to cover (AGENTS.md §5).
  *
  * See `COMBAT_ALLOWED_MISSION_TYPES` below for Attack (3) -- gated on
- * `policy.actions.allow_combat`, checked separately, never merged into this set. The
- * remaining combat types (5 AcsDefend, 6 Intercept, 7 MissileAttack, 8 AcsAttack,
- * 9 DefenseHold) appear in neither set and stay refused unconditionally at every tier,
- * regardless of policy -- all five are alliance-coordination or Attack-adjacent
- * mission types this codebase has no other write path for (no
- * `joinAttackMission`/`launchInterplanetaryMissileAttack`/`launchDefenseHold`
- * allowlisting exists either); enabling any of them requires an actual source change to
- * both this file and `guard.py`'s, never a policy flag alone.
+ * `policy.actions.allow_combat`, checked separately, never merged into this set. See
+ * `ACS_MISSION_TYPES` below for AcsDefend (5)/Intercept (6) -- gated on
+ * `policy.actions.allow_acs_defense`, also checked separately (the ACS defense
+ * coordination feature). The remaining combat types (7 MissileAttack as a
+ * `launchFleetMission` mission-type argument, 8 AcsAttack, 9 DefenseHold) appear in
+ * neither set and stay refused unconditionally at every tier, regardless of policy --
+ * MissileAttack is reachable only via the wholly separate
+ * `launchInterplanetaryMissileAttack` entrypoint (`COMBAT_SIGNATURES` below), DefenseHold
+ * only via the wholly separate `launchDefenseHold` entrypoint
+ * (`DEFENSE_HOLD_SIGNATURES` below) -- neither is a `launchFleetMission` mission type
+ * this codebase's own reachable path uses. AcsAttack has no write path here at all;
+ * enabling it would require an actual source change to both this file and `guard.py`'s,
+ * never a policy flag alone.
  */
 export const OPERATOR_ALLOWED_MISSION_TYPES: ReadonlySet<number> = new Set([0, 1, 2, 4]);
+
+/**
+ * FleetMissionType values permitted at `operator` tier only when
+ * `policy.actions.allow_acs_defense` resolves `true` (`resolveAllowAcsDefense`,
+ * `policy.ts`) -- the ACS defense coordination feature. Deliberately its own set, not
+ * merged into `COMBAT_ALLOWED_MISSION_TYPES` (a different flag) or
+ * `OPERATOR_ALLOWED_MISSION_TYPES` (unconditional), so the cross-layer test (agent-side
+ * `test_tier_map_agrees_with_the_wallet_engines_allowlist`) can diff this against
+ * `guard.py`'s matching `_ACS_MISSION_TYPES` independently.
+ *
+ * **5 AcsDefend, 6 Intercept only.** Both reuse the existing `launchFleetMission`
+ * overloads unchanged -- the deployed contract's own counterplay branch treats them
+ * identically (`VeydriftGameplayModule.sol`'s `_launchFleetMission`), differentiated
+ * only downstream at combat-resolution time. See `references/coordination.md` for the
+ * full mechanics, including the real silent-corruption trap this pair introduces: the
+ * `targetPlanetId` calldata argument is repurposed to mean the referenced *hostile*
+ * mission's id for these two mission types specifically.
+ */
+export const ACS_MISSION_TYPES: ReadonlySet<number> = new Set([5, 6]);
 
 /**
  * FleetMissionType values that are permitted at `operator` tier only when
@@ -163,6 +188,29 @@ function combatSelectorSet(): ReadonlySet<`0x${string}`> {
 }
 
 /**
+ * Full canonical signature for `launchDefenseHold` (ACS defense coordination feature).
+ * Unlike AcsDefend/Intercept (mission types 5/6 on `launchFleetMission`), DefenseHold is
+ * its own, brand-new selector -- confirmed by reading `VeydriftDefenseHoldModule.sol`/
+ * `VeydriftGame.sol` directly, it is NOT an overload of `launchFleetMission` and shares
+ * no `mission_type` argument with it. Permitted only at `operator` tier AND only when
+ * `policy.actions.allow_acs_defense` resolves `true` -- the same master ACS-coordination
+ * flag AcsDefend/Intercept use, checked the same lazy way `COMBAT_SIGNATURES` already is,
+ * never merged into `tierSelectors`'s unconditional set.
+ */
+const DEFENSE_HOLD_SIGNATURES = [
+  "launchDefenseHold(uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),(uint128,uint128,uint128),uint16,uint256)",
+] as const;
+
+function defenseHoldSelectorSet(): ReadonlySet<`0x${string}`> {
+  const selectors = new Set<`0x${string}`>();
+  for (const sig of DEFENSE_HOLD_SIGNATURES) {
+    const fn = resolveFunctionAbi(sig);
+    selectors.add(getSelector(fn));
+  }
+  return selectors;
+}
+
+/**
  * The 15 in-scope alliance-membership functions on `VeydriftAllianceSystem` (a wholly separate
  * pinned contract -- `abi.ts`'s `resolveFunctionAbi(sig, "alliance")` resolves against it, never
  * the game ABI). Permitted at `economy` tier **or above**, and only when
@@ -193,6 +241,29 @@ const ALLIANCE_SIGNATURES = [
 function allianceSelectorSet(): ReadonlySet<`0x${string}`> {
   const selectors = new Set<`0x${string}`>();
   for (const sig of ALLIANCE_SIGNATURES) {
+    const fn = resolveFunctionAbi(sig, "alliance");
+    selectors.add(getSelector(fn));
+  }
+  return selectors;
+}
+
+/**
+ * `openDefenseIntent` -- ACS defense coordination feature. Deliberately its own set, NOT
+ * added to `ALLIANCE_SIGNATURES` above: that set is uniformly gated on
+ * `policy.actions.allow_alliance` at an inclusive economy-or-above tier; this one is
+ * gated on the different `policy.actions.allow_acs_defense` flag instead, still at an
+ * inclusive economy-or-above tier (it opens a coordination record -- moves no fleet,
+ * spends no resource, same low-risk floor the 15 membership functions already use).
+ * Keeping it separate is what lets the cross-layer test diff `ALLIANCE_SIGNATURES`
+ * against `guard.py`'s `_ALLIANCE_FUNCTIONS` (exactly the 15) without this one function
+ * breaking that equality. `setDiplomacy` remains fully out of scope, unconditionally --
+ * combat-adjacent, still deferred.
+ */
+const ACS_ALLIANCE_SIGNATURES = ["openDefenseIntent(uint256,uint256)"] as const;
+
+function acsAllianceSelectorSet(): ReadonlySet<`0x${string}`> {
+  const selectors = new Set<`0x${string}`>();
+  for (const sig of ACS_ALLIANCE_SIGNATURES) {
     const fn = resolveFunctionAbi(sig, "alliance");
     selectors.add(getSelector(fn));
   }
@@ -264,11 +335,13 @@ export async function checkAllowlist(
     fetchConfig?: RuntimeConfigFetcher;
     resolveAllowCombat?: () => boolean;
     resolveAllowAlliance?: () => boolean;
+    resolveAllowAcsDefense?: () => boolean;
   } = {},
 ): Promise<AllowlistResult> {
   const fetchConfig = opts.fetchConfig ?? fetchLiveRuntimeConfig;
   const resolveAllowCombat = opts.resolveAllowCombat ?? resolveAllowCombatFromPolicy;
   const resolveAllowAlliance = opts.resolveAllowAlliance ?? resolveAllowAllianceFromPolicy;
+  const resolveAllowAcsDefense = opts.resolveAllowAcsDefense ?? resolveAllowAcsDefenseFromPolicy;
   const checks: AllowlistCheck[] = [];
   const fail = (name: string, detail: string) => checks.push({ name, ok: false, detail });
   const pass = (name: string, detail?: string) => checks.push({ name, ok: true, detail });
@@ -329,15 +402,21 @@ export async function checkAllowlist(
   let allowedSelectors: ReadonlySet<`0x${string}`>;
   let combatSelectors: ReadonlySet<`0x${string}`>;
   let allianceSelectors: ReadonlySet<`0x${string}`>;
+  let defenseHoldSelectors: ReadonlySet<`0x${string}`>;
+  let acsAllianceSelectors: ReadonlySet<`0x${string}`>;
   try {
     allowedSelectors = tierSelectors(tier);
     combatSelectors = combatSelectorSet();
     allianceSelectors = allianceSelectorSet();
+    defenseHoldSelectors = defenseHoldSelectorSet();
+    acsAllianceSelectors = acsAllianceSelectorSet();
   } catch (err) {
     fail("selector", `could not compute "${tier}" tier's selector set: ${(err as Error).message}`);
     allowedSelectors = new Set();
     combatSelectors = new Set();
     allianceSelectors = new Set();
+    defenseHoldSelectors = new Set();
+    acsAllianceSelectors = new Set();
   }
   if (allowedSelectors.has(selector)) {
     pass("selector", `${selector} allowed at tier "${tier}"`);
@@ -373,6 +452,40 @@ export async function checkAllowlist(
       fail(
         "selector",
         `${selector} requires policy.actions.allow_alliance, but it could not be resolved: ${(err as Error).message}`,
+      );
+    }
+  } else if (defenseHoldSelectors.has(selector) && tier === "operator") {
+    // Lazy on purpose, same posture as combat/alliance above. launchDefenseHold is its
+    // own selector (not a launchFleetMission mission type), so this can be resolved
+    // directly here rather than needing a calldata-level decode the way AcsDefend/
+    // Intercept do below.
+    try {
+      if (resolveAllowAcsDefense()) {
+        pass("selector", `${selector} allowed at tier "${tier}" (ACS defense, policy.actions.allow_acs_defense=true)`);
+      } else {
+        fail("selector", `${selector} requires policy.actions.allow_acs_defense=true; it is not`);
+      }
+    } catch (err) {
+      fail(
+        "selector",
+        `${selector} requires policy.actions.allow_acs_defense, but it could not be resolved: ${(err as Error).message}`,
+      );
+    }
+  } else if (acsAllianceSelectors.has(selector) && (tier === "economy" || tier === "operator")) {
+    // openDefenseIntent -- inclusive tier check like the 15 alliance functions above
+    // (economy is a floor, not a ceiling), but gated on allow_acs_defense, not
+    // allow_alliance -- see ACS_ALLIANCE_SIGNATURES's own doc comment for why these stay
+    // two separate sets.
+    try {
+      if (resolveAllowAcsDefense()) {
+        pass("selector", `${selector} allowed at tier "${tier}" (ACS defense, policy.actions.allow_acs_defense=true)`);
+      } else {
+        fail("selector", `${selector} requires policy.actions.allow_acs_defense=true; it is not`);
+      }
+    } catch (err) {
+      fail(
+        "selector",
+        `${selector} requires policy.actions.allow_acs_defense, but it could not be resolved: ${(err as Error).message}`,
       );
     }
   } else {
@@ -414,11 +527,37 @@ export async function checkAllowlist(
                 `be resolved: ${(err as Error).message}`,
             );
           }
+        } else if (ACS_MISSION_TYPES.has(missionType)) {
+          // Lazy on purpose, same posture as Attack above. Note the repurposed
+          // calldata argument for this pair: `decoded.args[1]` (the targetPlanetId
+          // slot) carries the referenced hostileMissionId, not a real planet id -- see
+          // ACS_MISSION_TYPES's own doc comment. This check does not need to inspect
+          // that value; it only needs the mission type itself.
+          try {
+            if (resolveAllowAcsDefense()) {
+              pass(
+                "launchFleetMission.missionType",
+                `${missionType} (ACS defense, policy.actions.allow_acs_defense=true)`,
+              );
+            } else {
+              fail(
+                "launchFleetMission.missionType",
+                `missionType=${missionType} (AcsDefend/Intercept) requires policy.actions.allow_acs_defense=true; it is not`,
+              );
+            }
+          } catch (err) {
+            fail(
+              "launchFleetMission.missionType",
+              `missionType=${missionType} (AcsDefend/Intercept) requires policy.actions.allow_acs_defense, but it could not ` +
+                `be resolved: ${(err as Error).message}`,
+            );
+          }
         } else {
           fail(
             "launchFleetMission.missionType",
             `missionType=${missionType} is not in the allowed set {0 Transport, 1 Deploy, 2 Colonize, ` +
-              `4 Harvest, 3 Attack (only with policy.actions.allow_combat=true)}`,
+              `4 Harvest, 3 Attack (only with policy.actions.allow_combat=true), 5 AcsDefend/6 Intercept ` +
+              `(only with policy.actions.allow_acs_defense=true)}`,
           );
         }
       } catch (err) {

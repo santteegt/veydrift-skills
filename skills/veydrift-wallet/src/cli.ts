@@ -18,6 +18,7 @@ import { Command } from "commander";
 import { formatEther, getAddress } from "viem";
 import {
   computePinnedAbiHash,
+  decodeSimulateReturnData,
   fetchLiveRuntimeConfig,
   loadPinnedMeta,
   RUNTIME_CONFIG_URL,
@@ -236,11 +237,28 @@ program
   )
   .requiredOption("--tx <file>", "path to an unsigned tx JSON (from `build`)")
   .option("--from <address>", "sender address for the call/estimate")
-  .action(async (opts: { tx: string; from?: string }) => {
+  .option("--json", "emit a single JSON line ({ok, revertReason, error, decoded}) instead of plain text")
+  .action(async (opts: { tx: string; from?: string; json?: boolean }) => {
     try {
       const { tx } = loadTxFile(opts.tx);
       const from = opts.from ? getAddress(opts.from) : undefined;
       const result = await simulateTx(tx, { from });
+      const selector = tx.data.slice(0, 10).toLowerCase() as `0x${string}`;
+      const decoded = result.ok ? decodeSimulateReturnData(selector, result.returnData) : undefined;
+
+      if (opts.json) {
+        console.log(
+          JSON.stringify({
+            ok: result.ok,
+            revertReason: result.ok ? null : result.revertReason,
+            error: null,
+            decoded: decoded ?? null,
+          }),
+        );
+        if (!result.ok) process.exitCode = 1;
+        return;
+      }
+
       console.log(`function:      ${result.functionName ?? `(unknown selector ${tx.data.slice(0, 10)})`}`);
       console.log(`ok:            ${result.ok}`);
       if (result.ok) {
@@ -248,12 +266,17 @@ program
         console.log(`maxFeePerGas:     ${result.maxFeePerGas ?? "(unavailable)"}`);
         console.log(`estimatedCostWei: ${result.estimatedCostWei ?? "(unavailable)"}`);
         console.log(`return data:      ${result.returnData ?? "0x"}`);
+        if (decoded) console.log(`decoded:          ${JSON.stringify(decoded)}`);
       } else {
         console.log(`revert reason: ${result.revertReason}`);
         process.exitCode = 1;
       }
     } catch (err) {
-      console.error(`simulate failed: ${(err as Error).message}`);
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: false, revertReason: null, error: (err as Error).message, decoded: null }));
+      } else {
+        console.error(`simulate failed: ${(err as Error).message}`);
+      }
       process.exitCode = 1;
     }
   });

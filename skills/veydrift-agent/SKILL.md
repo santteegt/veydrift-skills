@@ -200,7 +200,8 @@ Defense enum order and the Deathstar/Dreadstar naming wrong (`references/entity-
 | How `vd tick` is driven under Claude Code, Hermes, and bare launchd | `references/scheduling.md` |
 | When and how to supply your own `Action` instead of the planner's choice (`vd tick --action`) | `references/manual-action-override.md` |
 | How the incoming-attack/resolved-battle/debris radar works, `vd radar check`'s exit codes, and why `incoming_fleets` alone can miss a real attack | `references/radar.md` |
-| Why an attack/missile/colonize/foreign-harvest opportunity can be invisible in the tick report even with the relevant flag on, and how `opportunities.py` surfaces it anyway | `references/opportunities.md` |
+| Why an attack/missile/colonize/foreign-harvest/transport opportunity can be invisible in the tick report even with the relevant flag on, and how `opportunities.py` surfaces it anyway | `references/opportunities.md` |
+| AcsDefend/Intercept/`launchDefenseHold`/`openDefenseIntent` mechanics, the `targetPlanetId`-means-`hostileMissionId` trap, and how `coordination.py` suggests them from radar findings | `references/coordination.md` |
 
 Every row above is a file bundled with this skill — it travels with the install and is all
 you need. (Any `docs/*.md` mention elsewhere in this skill's files is a build-time

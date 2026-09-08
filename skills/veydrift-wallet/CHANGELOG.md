@@ -11,6 +11,44 @@ lockstep.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-08
+
+ACS defense coordination feature (see `skills/veydrift-agent/CHANGELOG.md` `1.19.0` for
+the full picture): AcsDefend(5)/Intercept(6) mission types, `launchDefenseHold`'s own
+selector, and `openDefenseIntent`'s own selector become allowlisted, plus a new
+`walletctl simulate --json` capability. Minor bump — purely additive: no existing
+selector's tier/mission-type requirements changed, no existing CLI flag's behaviour
+changed when `--json` is omitted.
+
+### Added
+- **`allowlist.ts`**: `ACS_MISSION_TYPES: ReadonlySet<number> = new Set([5, 6])`, unioned
+  into `launchFleetMission`'s allowed mission-type set when `resolveAllowAcsDefense()` is
+  `true` — a wholly separate flag from `allow_combat`, which must never unlock these two.
+  New `DEFENSE_HOLD_SIGNATURES` (one signature) and `ACS_ALLIANCE_SIGNATURES` (one
+  signature, `openDefenseIntent`) arrays, each with their own selector-set helper and
+  `checkAllowlist` branch — `launchDefenseHold` at `operator` tier, `openDefenseIntent` at
+  `economy`-or-`operator`, both gated on `allow_acs_defense`. Deliberately kept out of
+  `LAUNCH_FLEET_MISSION_SIGNATURES`/`ALLIANCE_SIGNATURES` respectively — see
+  `veydrift-agent`'s matching `_DEFENSE_HOLD_ONLY_FUNCTIONS`/`_ACS_ALLIANCE_FUNCTIONS`
+  docstrings for why the cross-layer test needs each kept separate.
+- **`policy.ts`**: `resolveAllowAcsDefense()`, an exact structural mirror of
+  `resolveAllowCombat`/`resolveAllowAlliance` — no CLI flag or environment variable for
+  this at the wallet layer, ever.
+- **`abi.ts`**: `decodeSimulateReturnData(selector, returnData)` — decodes a `view`
+  function's return data against its own ABI outputs, `undefined` when the function has no
+  outputs or decoding fails.
+- **`cli.ts`**: new `walletctl simulate --json` flag, emitting a single
+  `{ok, revertReason, error, decoded}` JSON line instead of plain-text output —
+  `decoded` is the new capability, letting a caller read a `view` function's actual return
+  value (`counterplayDefenseFuelContext`/`defenseHoldFuelContext`/`canCoordinateDefense`'s
+  `canCoordinate`/`netHoldingFuelCost` for this feature, and generalizable to any future
+  read-shaped simulate call). Plain-text output is unchanged when `--json` is omitted.
+
+### Verified
+- All four new/newly-allowlisted signatures (`launchDefenseHold`, `openDefenseIntent`,
+  `counterplayDefenseFuelContext`, `defenseHoldFuelContext`) cross-checked against live
+  `cast sig` output in `tests/selectors.cast.test.ts` — byte-exact selector correctness.
+
 ## [1.0.0] - 2026-09-07
 
 The Veydrift game contract was upgraded on-chain (deployed 2026-09-07T02:02:59Z). The pinned

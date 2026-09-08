@@ -15,8 +15,11 @@ generators a second time, independent of the ladder, and reporting every result.
 Deliberately excluded (see references/opportunities.md for the full rationale, not
 repeated here):
 
-- Transport/Deploy — the account's own fleet-logistics moves, not an external
-  opportunity to know about.
+- Deploy — the account's own fleet-logistics move, not an external opportunity to know
+  about. Transport WAS excluded on the same reasoning until the ACS defense coordination
+  plan's explicit scope decision to make it override-executable like everything else this
+  module surfaces -- see `_scan_transport`'s own docstring for why it needed a dedicated
+  call rather than fitting `_scan_planet`'s existing dispatch dict.
 - No new `policy.*` toggle — visibility is governed entirely by the same
   `allow_combat`/`allow_fleet_noncombat`/`strategy.colonize` flags each generator already
   checks internally.
@@ -77,8 +80,21 @@ def scan_opportunities(
         findings.extend(
             _scan_planet(snapshot, policy, planet, "foreign_harvest", foreign_debris_targets=foreign_debris_targets)
         )
+        findings.extend(_scan_transport(snapshot, policy, planet, target_planets))
 
     return OpportunityReport(findings=findings)
+
+
+def _scan_transport(
+    snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot, target_planets: list[PlanetSnapshot]
+) -> list[OpportunityFinding]:
+    """`candidates.generate_transport_candidates` takes `target_planets` as a required
+    POSITIONAL 4th argument, unlike the other four generators' `**target_kwarg`-only
+    shape `_scan_planet` dispatches through -- needs its own dedicated call rather than
+    forcing that dict to special-case one entry. Reuses the same `target_planets` list
+    `scan_opportunities` already computed for the ladder's own ordering, no extra work."""
+    results = candidates.generate_transport_candidates(snapshot, policy, planet, target_planets)
+    return [_to_finding("transport", planet, candidate) for candidate in results]
 
 
 def _scan_planet(

@@ -42,6 +42,16 @@
   - [12.1 Setup — three fresh, alliance-free accounts](#121-setup--three-fresh-alliance-free-accounts)
   - [12.2 The full lifecycle, each step confirmed against real on-chain state, not just events](#122-the-full-lifecycle-each-step-confirmed-against-real-on-chain-state-not-just-events)
   - [12.3 What this closes, precisely](#123-what-this-closes-precisely)
+- [13. Round 6 (2026-09-08) — ACS defense coordination, all four functions live on a pinned fork](#13-round-6-2026-09-08--acs-defense-coordination-all-four-functions-live-on-a-pinned-fork)
+  - [13.1 Setup — two real accounts, one alliance member, one not](#131-setup--two-real-accounts-one-alliance-member-one-not)
+  - [13.2 `launchDefenseHold` — live-sent, fuel math cross-checked three ways](#132-launchdefensehold--live-sent-fuel-math-cross-checked-three-ways)
+  - [13.3 A genuine finding: self-attack is blocked, and the live attack-protection route doesn't say so](#133-a-genuine-finding-self-attack-is-blocked-and-the-live-attack-protection-route-doesnt-say-so)
+  - [13.4 The hostile Attack, launched live from a genuinely separate account](#134-the-hostile-attack-launched-live-from-a-genuinely-separate-account)
+  - [13.5 AcsDefend — the `targetPlanetId`-repurposing confirmed by the emitted event itself](#135-acsdefend--the-targetplanetid-repurposing-confirmed-by-the-emitted-event-itself)
+  - [13.6 Intercept — full parity with AcsDefend, confirmed live](#136-intercept--full-parity-with-acsdefend-confirmed-live)
+  - [13.7 `openDefenseIntent` — live-sent, and a real gap this round found and fixed](#137-opendefenseintent--live-sent-and-a-real-gap-this-round-found-and-fixed)
+  - [13.8 Negative case: a non-Attack hostile mission is rejected live](#138-negative-case-a-non-attack-hostile-mission-is-rejected-live)
+  - [13.9 What this closes, precisely](#139-what-this-closes-precisely)
 
 ---
 
@@ -1096,3 +1106,274 @@ the Owner) — this had only ever been unit-tested against a fixture before this
 
 Mainnet: still untouched by this fork-testing effort specifically — same as every round before
 this one.
+
+## 13. Round 6 (2026-09-08) — ACS defense coordination, all four functions live on a pinned fork
+
+The ACS defense coordination feature (`skills/veydrift-agent/references/coordination.md`,
+`docs/SPEC.md` correction 74) made AcsDefend(5)/Intercept(6) (`launchFleetMission`),
+`launchDefenseHold` (its own entrypoint), and `openDefenseIntent`
+(`VeydriftAllianceSystem`) real, override-executable actions — none had been fork-tested.
+This round closes that, for all four, and found (and fixed) one real gap along the way.
+
+### 13.1 Setup — two real accounts, one alliance member, one not
+
+Fork pinned at Base block `51048700` (`anvil --fork-url "$VEYDRIFT_FORK_RPC_URL" --chain-id
+8453 --fork-block-number 51048700`), both accounts topped up to 100 ETH via
+`anvil_setBalance`, the same no-real-key impersonation technique every prior round uses.
+
+- **`0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1`** ("aa1") — the same 10-planet account
+  rounds 2-4 already used. Chosen again here specifically because it owns **multiple
+  planets in the same system** (galaxy 2, system 477 — planets 23, 184, 186, 578, 579,
+  615, 634), which is what makes a short-travel-time defending fleet possible without
+  needing to hunt for a second account. Also, usefully, already an alliance member —
+  `allianceOf` reports `(allianceId: 1, role: Owner)` of a 3-member alliance tagged
+  `CERBERUS` — needed for the `openDefenseIntent` half of this round.
+- **`0x71ce5605ab649d97446ef179bc2983b18ddc9a48`** — the same account round 4 used as an
+  Attack target (its planet 25). Not an alliance member (`allianceOf` reports `allianceId:
+  0`). Used here as the **attacker** — a live `/wallet/{addr}/attack-protection?
+  targetPlanetId=N` check confirmed `allowed: true` for every one of aa1's planets from
+  this account's perspective before building anything, the same discovery method round 4
+  established.
+- A scratch `policy.json` was required for each impersonated wallet in turn (`resolveAllowAcsDefense`/
+  `resolveAllowCombat` have no ENOENT fallback, by design, same as `resolveAllowCombat` in
+  round 4) — `tier: "operator"`, `actions.allow_acs_defense: true` (aa1's policy) or
+  `actions.allow_combat: true` (the attacker's policy).
+
+### 13.2 `launchDefenseHold` — live-sent, fuel math cross-checked three ways
+
+Action: `launchDefenseHold(186, 184, {largeCargo:1}, {0,0,0}, 100, 3600)` — origin planet
+186 (`2:477:8`), target planet 184 (`2:477:3`), both aa1's own, 1 hour hold. `walletctl
+build` estimated gas 811594; `simulate --json` returned `{"ok":true,...,"decoded":
+{"_0":"74418"}}` — the new `--json` capability (`veydrift-wallet` `1.1.0`) correctly
+decoding `launchDefenseHold`'s own `missionId` return value for the first time against a
+real chain. `send --confirm --provider fork-impersonate --tier operator` submitted it: tx
+`0xc8a5d40b68573ef7a6bf4ee531ecfd693582603080c79041311b387bc809cf2b`, **`status:
+"success"`**, gasUsed 787847.
+
+Five events decoded, not four — `launchDefenseHold` emits its **own** dedicated event
+*in addition to* the generic `FleetMission*` triple every other fleet mission emits
+(confirmed live, not previously stated anywhere in this codebase's docs): `PlanetSettled`,
+`PlanetShipCountChanged(planetId=186, ship=4 [LargeCargo], total=9)` (10 → 9, the
+committed unit), **`DefenseHoldStationed(missionId=74418, owner=aa1, defenderPlanetId=184,
+originPlanetId=186, arrivalAt=1788887540, holdUntil=1788891140, returnAt=1788891473)`**,
+then `FleetMissionLaunched`/`FleetMissionCargo`/`FleetMissionShips` (missionId `74418`,
+missionType `9`, matching `arrivalAt`/`returnAt`). Timings confirm the encoding exactly:
+`holdUntil - arrivalAt = 3600` (the `hold_seconds` argument, verbatim), `returnAt -
+holdUntil = 333` (the same travel time as the outbound leg, confirmed below).
+
+`FleetMissionCargo.fuelCost = 12`. Cross-checked three independent ways:
+
+1. `calc.distance("2:477:8", "2:477:3") = 1025`; `calc.travel_seconds(1025, 12000, 100) =
+   333` — matches the on-chain `arrivalAt - departureAt` exactly (`departureAt` = the
+   send's own `blockTimestamp`, `1788887207`; `arrivalAt = 1788887540`).
+2. `calc.mission_fuel(...)` for 1 LargeCargo over that distance predicts **7** — the
+   *ordinary* point-to-point component only, since `calc.py` has no formula for holding
+   fuel (deliberately, per AGENTS.md §5's "no cost-scaling function" invariant).
+3. A direct, independent `cast call` against `defenseHoldFuelContext` with the same
+   ships/`hold_seconds` — **after** the send, on the now-mutated fork state — returned
+   `(true, 5, 0)`. `7 + 5 = 12`, matching the real on-chain `fuelCost` exactly. This is
+   the live confirmation that `tick._defense_hold_coordination_probe`'s live
+   `netHoldingFuelCost` (never independently recomputed) is the correct — and only
+   correct — source for this cost component; `calc.py`'s ordinary formula alone would
+   have understated the real spend by exactly this 5-deuterium margin.
+
+### 13.3 A genuine finding: self-attack is blocked, and the live attack-protection route doesn't say so
+
+The original test plan called for aa1 to attack **its own** other planet (avoiding the
+need to characterize a second account's ships/tech at all) — `GET /wallet/{addr}/
+attack-protection?targetPlanetId=<own planet>` reported `allowed: true, blockedReason:
+"none"` for every one of aa1's own planets, exactly as it would for a legitimate target.
+Building the action anyway reverted:
+
+```
+custom error 0x400d5197  ==  SelfAttack()
+```
+
+**`SelfAttack()` is a real, unconditional contract-level restriction the live
+`/attack-protection` route's `allowed` field does not reflect at all** — that field
+answers the score-protection/bashing/alliance-relation question, not "is this even a
+legal target in the first place." A caller (human, or this codebase's own
+`candidates.generate_attack_candidates`, which reads that same route as a courtesy filter
+per its own docstring) relying on `allowed: true` alone as sufficient for a self-target
+would build a transaction that always reverts. Not currently a live risk to this
+codebase — no generator here ever proposes attacking one of the wallet's own planets in
+the first place — but worth recording as a genuine gap in what that route's `allowed`
+field actually guarantees, should a future check ever lean on it more heavily.
+
+Restructured the plan around two genuinely separate accounts instead (§13.1).
+
+### 13.4 The hostile Attack, launched live from a genuinely separate account
+
+Action: `launchFleetMission(297, 578, 3, {recycler:1}, {0,0,0}, 0)` — the attacker's
+planet 297 (`2:419:6`) → aa1's planet 578 (`2:477:6`), confirmed `allowed: true` live
+beforehand. A single Recycler was chosen **deliberately for its slow speed** (not battle
+realism — full battle resolution is out of reach for the same off-chain-randomness-reveal
+reason it always has been, AGENTS.md §11), to leave a wide travel-time margin for the
+counterplay fleets below to land in time. Gas estimation needed a retry (Anvil's own
+`eth_estimateGas` genuinely took longer than the wallet CLI's client-side timeout while
+warming freshly-forked state for an account neither this codebase nor any prior round had
+touched — confirmed by timing the same call directly with `cast estimate`, 17.4s; the
+second `walletctl build` attempt succeeded once that state was warm). `simulate --json`
+returned `{"ok":true,...,"decoded":{"_0":"74419"}}`. Sent: tx
+`0x98061a12f8609fb8cc8eec804b7cfeced826f4f295c2fa9fb4ff0bfc79fc8f72`, **`status:
+"success"`**, gasUsed 4192215.
+
+`FleetMissionLaunched(missionId=74419, owner=0x71ce5605..., missionType=3, originPlanetId=297,
+targetPlanetId=578, arrivalAt=1788889270, returnAt=1788890906, randomnessRequestId=15271)`.
+`arrivalAt - departureAt (1788887634) = 1636` seconds, matching `calc.travel_seconds(8210,
+3800, 100) = 1636` exactly (distance `calc.distance("2:419:6","2:477:6") = 8210`; Recycler
+speed 3800 at this account's own Combustion 9/Impulse 6/Hyperspace 4). `randomnessRequestId
+= 15271`, nonzero despite the built calldata passing `0` — the same
+`_requestAttackBattleRandomness` overwrite round 4 first observed, confirmed again here.
+
+### 13.5 AcsDefend — the `targetPlanetId`-repurposing confirmed by the emitted event itself
+
+Live `counterplayDefenseFuelContext` probe first, exactly as `tick._acs_defend_
+coordination_probe` would build it (`viewer=aa1`, `defenderPlanetId=578` — read from the
+hostile mission's own `targetPlanetId`, never from the action's own fields, per Opus
+review finding 7 — `hostileMissionId=74419`, `ships={largeCargo:1}`, a hand-computed
+`holdSeconds`): `cast call` returned `(true, 2, 0)` — `canCoordinate=true` here via the
+self-owned-defended-planet short-circuit (aa1 owns 578), `netHoldingFuelCost=2`.
+
+Action: `launchFleetMission(186, 74419, 5, {largeCargo:1}, {0,0,0}, 0)` — note the second
+argument is **`74419`, the hostile mission id, not a planet id** — this is
+`Action.mission_id` occupying the calldata's `targetPlanetId` slot exactly as `tick.
+_fleet_mission_args`'s AcsDefend/Intercept branch encodes it (AGENTS.md §7 trap 3).
+`simulate --json` → `{"ok":true,...,"decoded":{"_0":"74420"}}`. Sent: tx
+`0xd70efcc231cc75244fc86a6f876e2246f9602d82b458e9c6284c0410df41da88`, **`status:
+"success"`**, gasUsed 703504.
+
+`FleetMissionLaunched(missionId=74420, owner=aa1, missionType=5, originPlanetId=186,
+targetPlanetId=578, arrivalAt=1788889270, returnAt=1788889601,
+randomnessRequestId=74419)`. Four independent confirmations of the mechanics this
+codebase's own docs and gates rely on, all from one decoded event:
+
+1. **`targetPlanetId` in the emitted event is `578`** — the real defended planet — even
+   though the calldata sent had `74419` in that argument position. The contract
+   genuinely re-derives `targetPlanetId = hostile.targetPlanetId` internally; this is the
+   first live, on-chain confirmation of the repurposing this codebase's encoder relies on
+   (previously confirmed by source read only).
+2. **`arrivalAt` (`1788889270`) is *exactly* the hostile mission's own `arrivalAt`** —
+   not merely "no later than" as `FleetAlreadyArrived`'s check might suggest in
+   isolation, but forced equal by the contract (`arrivalAt = hostile.arrivalAt;`,
+   confirmed live for the first time here).
+3. **`randomnessRequestId` (`74419`) is the hostile mission's own id** — confirms
+   `Action.randomness_request_id`'s own docstring (`randomnessRequestId = hostileMissionId`
+   for AcsDefend/Intercept, for the contract's own resolution bookkeeping) against a
+   real emitted value, not just source.
+4. **`returnAt - arrivalAt = 331`**, the *same* as the outbound travel time (`calc.
+   travel_seconds("2:477:8"→"2:477:6", LargeCargo) = 331`) — the joined fleet does not
+   "hold" the way `launchDefenseHold`'s does; it arrives in sync with the hostile, then
+   immediately begins its return trip. `hold_seconds`-shaped time in the counterplay path
+   is purely a fuel-cost input (`counterplayDefenseFuelContext`'s own argument), never a
+   real on-site stationing window the way `launchDefenseHold`'s genuinely is.
+
+`FleetMissionCargo.fuelCost = 9`. Cross-checked: `calc.mission_fuel(...)` for 1
+LargeCargo over distance 1010 (`"2:477:8"`→`"2:477:6"`) predicts the ordinary component,
+**7**; a `cast call` to `counterplayDefenseFuelContext` with the contract's own actual
+`holdSeconds` (`hostile.arrivalAt (1788889270) - own pre-override arrival
+(1788887735+331=1788888066) = 1204`) returned `netHoldingFuelCost = 2`. `7 + 2 = 9`,
+exact.
+
+Ship count confirmed before/after: `shipCount(186, 4)` (LargeCargo) read `8` after this
+send — `10` at the start of this round, `-1` for §13.2's `launchDefenseHold`, `-1` for
+this AcsDefend, `8` remaining. Exact.
+
+### 13.6 Intercept — full parity with AcsDefend, confirmed live
+
+Same hostile mission (`74419`), a **different** origin planet and ship: `launchFleetMission(23,
+74419, 6, {cruiser:1}, {0,0,0}, 0)` — planet 23 (`2:477:7`) still had plenty of margin
+(1433s remaining against the hostile's `arrivalAt`, a 203s Cruiser travel time).
+`simulate --json` → `{"ok":true,...,"decoded":{"_0":"74421"}}`. Sent: tx
+`0xb12670fa70035d3c426eb822ea97e8af99377bb06054436b953add140f0d33e5`, **`status:
+"success"`**, gasUsed 683550.
+
+`FleetMissionLaunched(missionId=74421, owner=aa1, missionType=6, originPlanetId=23,
+targetPlanetId=578, arrivalAt=1788889270, returnAt=1788889473,
+randomnessRequestId=74419)` — every one of §13.5's four confirmations holds identically
+for Intercept: real `targetPlanetId` re-derivation, `arrivalAt` forced equal to the
+hostile's, `randomnessRequestId` overwritten to the hostile mission id, and `returnAt -
+arrivalAt = 203` matching the Cruiser's own outbound travel time exactly. The only
+difference between AcsDefend and Intercept, launch-side, is the `missionType` value
+itself — confirmed empirically here, not just by reading the shared `_launchFleetMission`
+dispatch. `activeFleetMissionCount(aa1) = 3` after this send (launchDefenseHold + AcsDefend
++ Intercept — the Attack was launched by the other account, so doesn't count here), and
+`shipCount(23, 6)` (Cruiser) read `0`, down from `1` — exact.
+
+### 13.7 `openDefenseIntent` — live-sent, and a real gap this round found and fixed
+
+Action: `openDefenseIntent(578, 74419)`, `contract: "alliance"` — aa1 both owns planet 578
+and is a Cerberus member, satisfying `openDefenseIntent`'s own on-chain checks
+(`target.owner == msg.sender` **and** `membership.allianceId != 0`, both required
+unconditionally — confirmed by direct source read of `VeydriftAllianceSystem.sol:676-701`
+before building anything). `simulate --json` → `{"ok":true,...,"decoded":
+{"intentId":"1"}}` — a named output this time (`intentId`), unlike `canCoordinateDefense`'s
+unnamed `_0`. Sent: tx `0x9a7168d78c671a0d84e2b9125058cd96d3cd95ceaaff42d703a9965e054b95c8`,
+**`status: "success"`**, gasUsed 218120.
+
+`AllianceDefenseIntentOpened(intentId=1, allianceId=1, defenderPlanetId=578,
+hostileMissionId=74419, coordinator=aa1, joinCutoffAt=1788888970)`. `joinCutoffAt =
+1788888970 = hostile.arrivalAt (1788889270) - ACS_DEFEND_JOIN_CUTOFF_SECONDS (300)`,
+exact.
+
+**A real gap, found by this send succeeding for a reason worth double-checking: does
+`guard.py`'s own `openDefenseIntent` gate verify the same ownership the contract itself
+requires unconditionally?** It did not. `guard._gate_alliance_action`'s `openDefenseIntent`
+branch checked the flag, the live alliance membership, and the live hostile-mission
+validity — but never that `action.planet_id` is actually one of the caller's own owned
+planets, the same check `_gate_acs_defend_target`/`_gate_defense_hold_target` already
+apply to their own origin planets. Concretely: a hand-written override naming a planet the
+caller does *not* own would have PASSed this gate and only failed at the contract itself
+(`NotPlanetOwner`) — safe (no funds/fleet ever at risk), but a real, avoidable gap in this
+gate's own "independently re-derive every precondition this codebase can verify" claim.
+Fixed in the same change this round's findings landed in:
+`snapshot.planet(action.planet_id) is not None` added as an explicit check, mirroring the
+other two new gates exactly; `tests/test_guard.py::
+test_open_defense_intent_blocks_when_caller_does_not_own_the_defended_planet` pins it.
+This is also the finding that corrected an ambiguity in this feature's own earlier docs
+(`references/coordination.md`, before this round): `openDefenseIntent` is the defended
+planet's **own owner** announcing they're under attack, never a teammate opening an intent
+*for* someone else — the contract has no path for the latter at all.
+
+### 13.8 Negative case: a non-Attack hostile mission is rejected live
+
+`launchFleetMission(615, 74418, 5, {cruiser:1}, {0,0,0}, 0)` — deliberately referencing
+`74418`, §13.2's `launchDefenseHold` mission (`missionType` `9`, not `3`), as a bad
+`hostileMissionId`. Reverted:
+
+```
+custom error 0x84c69485  ==  InvalidMissionType(uint8)
+```
+
+confirming live, not just by source, that the counterplay branch's own mission-type check
+is exactly `Attack` — the precise scenario Opus review finding 2 (this feature's own plan
+review) flagged as the regression a broader Attack/Intercept/MissileAttack triple would
+have silently permitted. `guard._hostile_mission_coordination_defect`'s own
+`missionType != "Attack"` check exists specifically to catch this before send; this round
+confirms the contract itself agrees.
+
+### 13.9 What this closes, precisely
+
+**All four ACS defense coordination functions are now live-sent and confirmed against
+real on-chain state**: `launchDefenseHold`, AcsDefend, Intercept, `openDefenseIntent`.
+Every event this codebase's own encoder/gates depend on was decoded and cross-checked,
+not just assumed from source: the `targetPlanetId`-repurposing, `arrivalAt` forced equal
+to the hostile's, `randomnessRequestId` overwritten to the hostile mission id, the exactly-
+`Attack` mission-type requirement (both positively, via the two counterplay sends, and
+negatively, via §13.8's revert), and the live-fuel-cost-never-recomputed design decision
+(three-way cross-check in §13.2, two-way in §13.5).
+
+One real gap was found and fixed: `guard._gate_alliance_action`'s `openDefenseIntent`
+branch now independently verifies caller ownership of the defended planet, matching what
+the contract itself requires unconditionally (§13.7).
+
+One real, generally-applicable finding outside this feature's own scope: `SelfAttack()` is
+a hard contract restriction the live `/attack-protection` route's `allowed` field does not
+reflect (§13.3) — worth keeping in mind for any future code that leans on that field as
+sufficient for a self-target.
+
+**Still out of reach, honestly**: full combined-defense *resolution* (whether a joined
+AcsDefend/Intercept fleet's help changes a battle's outcome) — behind the same off-chain
+randomness reveal that has kept Attack's own resolution out of reach since round 4.
+Mainnet: still untouched by this fork-testing effort specifically, same as every round
+before this one.

@@ -481,7 +481,7 @@ upgrade, same convention every enum in `ids.py` already uses. Lives in a new
 sibling module, `alliance_ids.py`, not folded into `ids.py` (whose own docstring scopes it to the
 *game* contract's six enums specifically).
 
-### 7.2 The 15 membership functions this codebase implements
+### 7.2 The 15 membership functions this codebase implements, plus a 16th (ACS coordination)
 
 `createAlliance`, `updateAllianceProfile`, `inviteMember`, `cancelInvite`, `acceptInvite`,
 `requestJoinAlliance`, `cancelJoinRequest`, `dismissJoinRequest`, `approveJoinRequest`,
@@ -489,9 +489,14 @@ sibling module, `alliance_ids.py`, not folded into `ids.py` (whose own docstring
 `transferAllianceOwnership` — all `nonpayable`, none `payable` (confirmed: zero `payable` hits
 in the file's own player-callable surface; the one `payable` function in the compiled ABI,
 `upgradeToAndCall(address,bytes)`, is the inherited UUPS upgrade entrypoint, owner-only,
-irrelevant to this codebase). `setDiplomacy` (Ally/NAP/War) and `openDefenseIntent` (ACS
-coordination) exist on the same contract but are deliberately out of scope — combat-adjacent,
-deferred.
+irrelevant to this codebase). `setDiplomacy` (Ally/NAP/War) exists on the same contract but
+remains deliberately out of scope — combat-adjacent, deferred. **`openDefenseIntent` (ACS
+coordination) is no longer out of scope** — implemented by the ACS defense coordination
+feature (`docs/SPEC.md` correction 74) as a 16th, override-only function, gated on the
+different `policy.actions.allow_acs_defense` flag; see
+`skills/veydrift-agent/references/coordination.md` for the full mechanics, including the two
+purpose-built `view` functions this same feature also calls (`counterplayDefenseFuelContext`/
+`defenseHoldFuelContext`) and `canCoordinateDefense`.
 
 ### 7.3 No live-hash verification path for this contract's ABI, ever
 

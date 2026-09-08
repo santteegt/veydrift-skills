@@ -129,9 +129,15 @@ class FleetMissionType(IntEnum):
     """packages/contracts/src/VeydriftGameStorage.sol:197-208 (commit 202d1ac).
 
     `Intercept` and `DefenseHold` appear in neither `docs.md` nor the prior notes
-    (docs/RESEARCH-ADDENDUM.md §3). Combat mission types (Attack=3, AcsAttack=8,
-    MissileAttack=7, Intercept=6) are unreachable from this codebase at every tier
-    (docs/SPEC.md §4) — they are listed here only so the enum is complete and auditable.
+    (docs/RESEARCH-ADDENDUM.md §3). AcsAttack(8)/MissileAttack(7, as a `launchFleetMission`
+    mission-type argument -- the separate `launchInterplanetaryMissileAttack` entrypoint is
+    a different thing entirely, see `MISSILE_ATTACK`'s own docstring on `ActionKind`) stay
+    unreachable from this codebase at every tier, regardless of policy (docs/SPEC.md §4) --
+    listed here only so the enum stays complete and auditable. **AcsDefend(5)/Intercept(6)
+    and DefenseHold(9) are reachable** since the ACS defense coordination feature --
+    `policy.actions.allow_acs_defense`, `operator` tier, manual-override only (`launchDefenseHold`
+    is DefenseHold's own dedicated entrypoint, not a `launchFleetMission` mission type in
+    this codebase's own reachable path -- see `references/coordination.md`).
     """
 
     TRANSPORT = 0

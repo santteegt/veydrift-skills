@@ -267,7 +267,8 @@ change called out:
     "allow_ships": false,             // flip to true once you want ship proposals
     "allow_fleet_noncombat": false,   // gates Transport/Deploy/Harvest proposals -- operator tier, see §13
     "allow_combat": false,            // gates Attack + Missile -- operator tier, see §16
-    "allow_alliance": false           // gates 15 alliance actions -- economy tier or above, override-only, see §16
+    "allow_alliance": false,          // gates 15 alliance actions -- economy tier or above, override-only, see §16
+    "allow_acs_defense": false        // gates AcsDefend/Intercept/launchDefenseHold (operator) + openDefenseIntent (economy) -- override-only, see §16
   },
   "escalation": {
     "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,
@@ -456,8 +457,9 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `allow_defense` | bool | `true`/`false` | `false` |
 | `allow_ships` | bool | `true`/`false` | `false` |
 | `allow_fleet_noncombat` | bool | `true`/`false` — also unlocks the foreign-harvest `opportunities:` signal (§10) regardless of whether the ladder's own logistics rung ever wins with it. | `false` |
-| `allow_combat` | bool | `true`/`false` — gates BOTH combat actions this codebase supports: Attack (`launchFleetMission` mission type 3) and Missile (`launchInterplanetaryMissileAttack`, a separate contract entrypoint), at `operator` tier (`allow_fleet_noncombat` is irrelevant to either — both are checked independently of it). Every other `FleetMissionType` combat value (`AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`) is still **read and unconditionally ignored by every code path**; enabling any of those requires an actual source change, not a config edit. Setting this true makes both launch-encodable/allowlist-permitted AND lets the ladder's two most conservative rungs propose one: `8e:attack` attacks the highest-raidable reachable target via `/highscores`, using every combat-capable ship built on the origin planet, only once every other rung (including Colonize) has found nothing at all; `8f:missile`, reached only once Attack itself has found nothing, fires every owned Interplanetary Missile at the target's most-numerous eligible defense type. Also unlocks the attack/missile `opportunities:` signal (§10) at every tier, including `advisor` — you'll see a raid target even on a tick that proposed something else. See §16. | `false` |
-| `allow_alliance` | bool | `true`/`false` — gates 15 alliance-membership actions on `VeydriftAllianceSystem` (create/invite/accept/leave/kick/roles/ownership-transfer — a wholly separate deployed contract, its own address, its own pinned ABI), at `economy` tier **or above** (unlike combat, not `operator`-only — membership carries no fund/combat risk). **Never planner-proposed** — no ladder rung emits one; reachable only via `vd tick --action`, additionally gated on `policy.strategy.allow_agent_action_override`. `vd tick` reports current membership and pending invites/join-requests on every tick whenever this is `true`, regardless of what action that tick proposes. Diplomacy (Ally/NAP/War) and ACS coordination remain out of scope, unconditionally. See §16. | `false` |
+| `allow_combat` | bool | `true`/`false` — gates BOTH combat actions this codebase supports: Attack (`launchFleetMission` mission type 3) and Missile (`launchInterplanetaryMissileAttack`, a separate contract entrypoint), at `operator` tier (`allow_fleet_noncombat` is irrelevant to either — both are checked independently of it). `MissileAttack`/`AcsAttack` (as `launchFleetMission` mission-type values) are still **read and unconditionally ignored by every code path**; enabling either requires an actual source change, not a config edit. AcsDefend/Intercept are a separate story — see `allow_acs_defense` below; `allow_combat` alone never unlocks them. Setting this true makes both launch-encodable/allowlist-permitted AND lets the ladder's two most conservative rungs propose one: `8e:attack` attacks the highest-raidable reachable target via `/highscores`, using every combat-capable ship built on the origin planet, only once every other rung (including Colonize) has found nothing at all; `8f:missile`, reached only once Attack itself has found nothing, fires every owned Interplanetary Missile at the target's most-numerous eligible defense type. Also unlocks the attack/missile `opportunities:` signal (§10) at every tier, including `advisor` — you'll see a raid target even on a tick that proposed something else. See §16. | `false` |
+| `allow_alliance` | bool | `true`/`false` — gates 15 alliance-membership actions on `VeydriftAllianceSystem` (create/invite/accept/leave/kick/roles/ownership-transfer — a wholly separate deployed contract, its own address, its own pinned ABI), at `economy` tier **or above** (unlike combat, not `operator`-only — membership carries no fund/combat risk). **Never planner-proposed** — no ladder rung emits one; reachable only via `vd tick --action`, additionally gated on `policy.strategy.allow_agent_action_override`. `vd tick` reports current membership and pending invites/join-requests on every tick whenever this is `true`, regardless of what action that tick proposes. Also gates whether `coordination.py`'s ACS defense suggestions are surfaced at all (a visibility gate, independent of `allow_acs_defense` below, which gates acting on one). Diplomacy (Ally/NAP/War) remains out of scope, unconditionally. See §16. | `false` |
+| `allow_acs_defense` | bool | `true`/`false` — gates AcsDefend/Intercept (`launchFleetMission` mission types 5/6), `launchDefenseHold` (its own entrypoint), and `openDefenseIntent` (on `VeydriftAllianceSystem`) as one feature. Tier floor splits within this one flag: AcsDefend/Intercept/`launchDefenseHold` need `operator` (real fleet/loss risk); `openDefenseIntent` needs only `economy` (it opens a coordination record; moves no fleet, spends no resource). **Never planner-proposed** — reachable only via `vd tick --action`, additionally gated on `policy.strategy.allow_agent_action_override`, same posture as `allow_alliance`. `vd tick` (when `allow_alliance` is also on) and `vd radar check` both surface real, live `hostile_mission_id` values worth acting on via `coordination.py`'s suggestions. See §16 and `references/coordination.md` for the full contract mechanics. | `false` |
 
 **`escalation`**
 
@@ -1114,7 +1116,7 @@ asks it to invent numbers it doesn't have.
 | `/health` reports `ok: false`, but the tick still runs normally | Expected: `ok:false` caused *solely* by a combat-related backend readiness issue (a "New attacks are temporarily paused"-style condition) no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy, so that specific condition can't affect what it would propose. Any other cause of `ok:false` still blocks/escalates as before. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
-| Guards read `17/20 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
+| Guards read `22/25 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 | `incoming: none` but you were attacked | Expected — that field only ever lists *future* arrivals; it can't show an attack that has already resolved. Check the `radar:` line instead (§10), or run `vd radar check` (§11a) directly — its second signal reads your mission archive specifically to catch this case. |
@@ -1127,11 +1129,13 @@ asks it to invent numbers it doesn't have.
   before you decide how seriously to treat key storage.
 - **`allow_combat` in `policy.json` gates BOTH combat actions this codebase supports —
   Attack and Missile — at `operator` tier, AND is what makes the ladder's two combat
-  rungs (`8e:attack`, `8f:missile`) live.** Every other `FleetMissionType` combat value
-  (`AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/`DefenseHold`) is still ignored by
-  every code path regardless of this flag — enabling any of those requires an actual
-  source code change, not a config edit. Setting `allow_combat: true` at `operator` tier
-  **does** let the agent attack on its own, in either of two ways:
+  rungs (`8e:attack`, `8f:missile`) live.** `MissileAttack`/`AcsAttack` (as
+  `launchFleetMission` mission-type values) are still ignored by every code path
+  regardless of this flag — enabling either requires an actual source code change, not a
+  config edit. AcsDefend/Intercept/`launchDefenseHold`/`openDefenseIntent` are a separate
+  story now — see `allow_acs_defense` below; `allow_combat` alone never unlocks any of
+  them. Setting `allow_combat: true` at `operator` tier **does** let the agent attack on
+  its own, in either of two ways:
   - **`8e:attack`** (reached only once every earlier rung, including Colonize, finds
     nothing at all): picks the highest-raidable reachable target from the `/highscores`
     economy ranking whose attack-protection is confirmed allowed, and sends every
@@ -1154,6 +1158,18 @@ asks it to invent numbers it doesn't have.
   current membership and any pending invites/join-requests on every tick. It floors at
   `economy` tier, not `operator` — membership carries no fund/combat risk the way sending
   a fleet or a missile does.
+- **`allow_acs_defense` follows the same "never acts on its own" shape as
+  `allow_alliance`** — AcsDefend/Intercept (`launchFleetMission`), `launchDefenseHold`,
+  and `openDefenseIntent` are reachable *exclusively* through `vd tick --action`, never
+  planner-proposed. Unlike `allow_alliance`, its tier floor splits within the one flag:
+  the three that move a real fleet need `operator`; `openDefenseIntent` (a coordination
+  signal only, moves nothing) needs `economy`. Turning on `allow_alliance` also turns on
+  the suggestion side for this feature — `vd tick`'s report and `vd radar check` both
+  start naming a real, live `hostileMissionId` you could reference in an override, once a
+  live incoming Attack is detected. See `references/coordination.md` (bundled with the
+  agent skill) for the full mechanics before hand-writing one of these overrides — in
+  particular, `launchFleetMission`'s `mission_id` field means the *hostile* mission being
+  defended against for AcsDefend/Intercept, not a target planet.
 - **Real transactions have already been submitted to Veydrift on mainnet from this
   codebase** — at tier 2 (`economy`) and tier 3 (`operator`), through the real
   `build → simulate → send` path, not a fixture or a fork. See `README.md`'s Status

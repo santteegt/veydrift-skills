@@ -2,6 +2,11 @@
   "$defs": {
     "ActionsCfg": {
       "properties": {
+        "allow_acs_defense": {
+          "default": false,
+          "title": "Allow Acs Defense",
+          "type": "boolean"
+        },
         "allow_alliance": {
           "default": false,
           "title": "Allow Alliance",

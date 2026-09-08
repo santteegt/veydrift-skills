@@ -136,6 +136,23 @@ _MIN_TIER_FOR_FUNCTION: dict[str, Tier] = {
     "setMemberRole": Tier.ECONOMY,
     "setMembersRole": Tier.ECONOMY,
     "transferAllianceOwnership": Tier.ECONOMY,
+    # ACS defense coordination feature. A wholly separate entrypoint from
+    # launchFleetMission (no mission_type argument at all -- see ActionKind.DEFENSE_HOLD's
+    # docstring), so this is its own tier-map entry, not an extension of the row above.
+    # `operator`, same floor as launchFleetMission itself -- real fleet movement, real
+    # loss risk. Gated further by `_gate_defense_hold_target` (below) on
+    # `policy.actions.allow_acs_defense`; `operator` alone is not sufficient, the same
+    # shape every other combat-adjacent function in this map takes. Mirrors
+    # veydrift-wallet/src/allowlist.ts's `DEFENSE_HOLD_SIGNATURES`.
+    "launchDefenseHold": Tier.OPERATOR,
+    # `openDefenseIntent` (VeydriftAllianceSystem) is the ACS coordination feature's 16th
+    # alliance-contract function, but deliberately NOT added to `_ALLIANCE_FUNCTIONS`
+    # below -- it is gated on the different `allow_acs_defense` flag, not `allow_alliance`
+    # -- so it gets its own tier-map entry here at the same `economy` floor the 15
+    # membership functions use (it opens a coordination record; moves no fleet, spends no
+    # resource). See `_ACS_ALLIANCE_FUNCTIONS`'s own docstring for why the cross-layer
+    # test needs it kept separate from `_ALLIANCE_FUNCTIONS`.
+    "openDefenseIntent": Tier.ECONOMY,
 }
 
 _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR: 3}
@@ -154,6 +171,15 @@ _TIER_ORDER: dict[Tier, int] = {Tier.ADVISOR: 1, Tier.ECONOMY: 2, Tier.OPERATOR:
 #: than decoding an argument; this set mirrors that shape on the Python side.
 _COMBAT_ONLY_FUNCTIONS: frozenset[str] = frozenset({"launchInterplanetaryMissileAttack"})
 
+#: ACS defense coordination feature's version of the same carve-out, one tier up:
+#: `launchDefenseHold` is unconditionally `operator` in `_MIN_TIER_FOR_FUNCTION`, but
+#: `allowlist.ts` pulls its selector out of `LAUNCH_FLEET_MISSION_SIGNATURES`'s
+#: unconditional tier set entirely -- it lives in its own always-conditional
+#: `DEFENSE_HOLD_SIGNATURES` instead, since it isn't a `launchFleetMission` overload at
+#: all (see `ActionKind.DEFENSE_HOLD`'s docstring). Exists purely so the cross-layer test
+#: can diff it declaratively, the same role `_COMBAT_ONLY_FUNCTIONS` already plays.
+_DEFENSE_HOLD_ONLY_FUNCTIONS: frozenset[str] = frozenset({"launchDefenseHold"})
+
 #: The 15 functions in `_MIN_TIER_FOR_FUNCTION` above that are ALSO conditional on
 #: `policy.actions.allow_alliance`, in addition to their `economy` tier requirement --
 #: plays the exact same cross-layer-test role `_COMBAT_ONLY_FUNCTIONS` plays for Missile,
@@ -161,6 +187,10 @@ _COMBAT_ONLY_FUNCTIONS: frozenset[str] = frozenset({"launchInterplanetaryMissile
 #: set against `allowlist.ts`'s `ALLIANCE_SIGNATURES` declaratively, and confirm every
 #: member is actually mapped to at least `Tier.ECONOMY` above. The real enforcement lives
 #: in `_gate_alliance_action` (below), not here.
+#:
+#: Deliberately does **not** include `openDefenseIntent` -- see `_ACS_ALLIANCE_FUNCTIONS`
+#: immediately below for why that one function needs its own, separate set instead of
+#: being folded in here.
 _ALLIANCE_FUNCTIONS: frozenset[str] = frozenset(
     {
         "createAlliance",
@@ -180,6 +210,20 @@ _ALLIANCE_FUNCTIONS: frozenset[str] = frozenset(
         "transferAllianceOwnership",
     }
 )
+
+#: `openDefenseIntent` (VeydriftAllianceSystem, ACS coordination feature) is a 16th
+#: function on the same contract as `_ALLIANCE_FUNCTIONS`' 15 -- but it is gated on
+#: `policy.actions.allow_acs_defense`, not `allow_alliance`, so it must stay OUT of
+#: `_ALLIANCE_FUNCTIONS` (which the wallet-side `checkAllowlist` gates uniformly on
+#: `allow_alliance` via `ALLIANCE_SIGNATURES`) and out of `allowlist.ts`'s
+#: `ALLIANCE_SIGNATURES` array too -- folding it into either would silently widen what
+#: `allow_alliance` alone unlocks, and would break the existing
+#: `guard._ALLIANCE_FUNCTIONS == ts_alliance_signature_names` cross-layer equality (Opus
+#: review finding 1). Kept as its own singleton set instead, unioned into
+#: `_gate_alliance_action`'s dispatch and `_gate_abi_hash`'s alliance-PASS condition
+#: alongside `_ALLIANCE_FUNCTIONS`, and diffed independently against `allowlist.ts`'s own
+#: separate `ACS_ALLIANCE_SIGNATURES` array by the cross-layer test.
+_ACS_ALLIANCE_FUNCTIONS: frozenset[str] = frozenset({"openDefenseIntent"})
 
 #: `FleetMissionType` values `launchFleetMission` may submit unconditionally -- no
 #: policy flag affects this set (Phase 5c, docs/SPEC.md §5.5). Default-deny: any
@@ -216,14 +260,55 @@ _ALLOWED_MISSION_TYPES: frozenset[int] = frozenset(
 #: unconditional-vs-conditional distinction visible at a glance for both the reader and
 #: the cross-layer test, which diffs both halves independently.
 #:
-#: Only **3 Attack**. `5 AcsDefend`, `6 Intercept`, `8 AcsAttack`, `9 DefenseHold` stay
-#: out of both sets, at every tier, regardless of `allow_combat` -- AGENTS.md §5:
-#: "combat stays unreachable by code, not by config" still governs every combat type
-#: this flag does *not* name. All four are alliance-coordination mission types this
-#: codebase has no other write path for either (no `joinAttackMission`/
-#: `launchDefenseHold` allowlisting exists); enabling any of them requires an actual
-#: source change here AND in `allowlist.ts`, never a policy flag alone.
+#: Only **3 Attack**. `7 MissileAttack` (as a `launchFleetMission` mission-type argument
+#: -- the separate `launchInterplanetaryMissileAttack` entrypoint is a different thing
+#: entirely) and `8 AcsAttack` stay out of every set, at every tier, regardless of
+#: `allow_combat` -- AGENTS.md §5: "combat stays unreachable by code, not by config"
+#: still governs both. Enabling either requires an actual source change here AND in
+#: `allowlist.ts`, never a policy flag alone. `5 AcsDefend`/`6 Intercept` are a separate
+#: story -- see `_ACS_MISSION_TYPES` below, conditional on the different
+#: `allow_acs_defense` flag, never on `allow_combat`. `9 DefenseHold` is dead enum space
+#: for `launchFleetMission` specifically (its own `launchDefenseHold` entrypoint reuses
+#: the same `FleetMissionType` enum only for the contract's shared vocabulary, never as a
+#: `launchFleetMission` mission-type argument) -- structurally impossible via this
+#: function regardless of any policy flag, confirmed directly against
+#: `VeydriftGameplayModule.sol`'s own `uint8(missionType) > uint8(Intercept)` revert.
 _COMBAT_MISSION_TYPES: frozenset[int] = frozenset({ids.FleetMissionType.ATTACK})
+
+#: `FleetMissionType` values permitted on `launchFleetMission` only when
+#: `policy.actions.allow_acs_defense` is `true` -- the ACS defense coordination feature.
+#: Deliberately separate from both `_ALLOWED_MISSION_TYPES` and `_COMBAT_MISSION_TYPES`
+#: (its own flag, its own tier floor via `_gate_defense_hold_target`/`_gate_mission_type`
+#: -- `allow_combat=true` alone must NEVER unlock these two; the cross-layer test asserts
+#: this explicitly). Mirrors `allowlist.ts`'s `ACS_MISSION_TYPES` constant exactly.
+#:
+#: For these two mission types, the deployed contract repurposes the `targetPlanetId`
+#: calldata argument slot to mean `hostileMissionId` instead -- AGENTS.md §7's third
+#: silent-corruption trap. `Action.mission_id` carries that id in this codebase's own
+#: model; `Action.target_planet_id`/`target_coordinates` stay unused for these two.
+_ACS_MISSION_TYPES: frozenset[int] = frozenset(
+    {ids.FleetMissionType.ACS_DEFEND, ids.FleetMissionType.INTERCEPT}
+)
+
+#: `VeydriftAntiRaidPrimitives.sol`'s `ACS_DEFEND_JOIN_CUTOFF_SECONDS` (`= 5 minutes`) --
+#: `canJoinAcsDefense(now, arrivalAt) = now + 300 < arrivalAt`, enforced by
+#: `VeydriftAllianceSystem._canCoordinateDefense` (which `counterplayDefenseFuelContext`'s
+#: `canCoordinate` return value folds in). Re-derived independently here, not imported
+#: (this module has no source to import it from), because `_canCoordinateDefense`
+#: short-circuits `true` for a self-owned defended planet BEFORE this check ever runs --
+#: `coordination_allowed=True` is therefore never sufficient on its own for that case,
+#: and `_gate_acs_defend_target` must re-check the cutoff itself. Duplicated from the
+#: exact same pin, the same "duplicated here, sourced from the exact same pin" convention
+#: this module already uses for `_MISSILE_TARGET_MAX` and friends.
+_ACS_DEFEND_JOIN_CUTOFF_SECONDS = 300
+
+#: `VeydriftAntiRaidPrimitives.sol`'s `MIN_DEFENSE_HOLD_SECONDS`/`MAX_DEFENSE_HOLD_SECONDS`
+#: (1 hour / 32 hours) -- `launchDefenseHold` reverts `InvalidHoldWindow` outside this
+#: range. `defenseHoldFuelContext` cannot check this (it has no bound to enforce; the
+#: contract's own `launchDefenseHold` function checks it directly, before ever calling
+#: that view), so `_gate_defense_hold_target` re-derives it independently.
+_DEFENSE_HOLD_MIN_SECONDS = 3600
+_DEFENSE_HOLD_MAX_SECONDS = 115200
 
 #: `VeydriftPlanetManagementModule.sol`'s own bound for `launchInterplanetaryMissileAttack`'s
 #: `primaryTarget` argument: `primaryTarget > Defense.LargeShieldDome` reverts
@@ -286,6 +371,23 @@ def idempotency_key(action: Action) -> str:
     proposed, so each fix closed the gap before a wider surface this plan adds could turn
     a latent collision into a routine one.
 
+    **ACS defense coordination feature added two more collisions of the same shape,
+    caught here before they ever went live (Opus review finding 10)**:
+
+    - **`FLEET_MISSION`'s existing branch** keys on `target_coordinates`, which is
+      deliberately unset for AcsDefend/Intercept (the real target is repurposed into
+      `mission_id`, not `target_coordinates` -- see `Action.mission_type`'s docstring),
+      so two different AcsDefend/Intercept actions from the same planet against two
+      different hostile missions would otherwise collide onto one key. Fixed by folding
+      in `action.mission_id` unconditionally -- harmless for every other mission type,
+      where `mission_id` is always `None` anyway.
+    - **`ALLIANCE`'s existing branch** keys on `alliance_id`/`target_player`/
+      `target_players`/`role`, none of which `openDefenseIntent` sets (it takes only
+      `defenderPlanetId`/`hostileMissionId`, both already `planet_id`/`mission_id`) -- so
+      every `openDefenseIntent` for the same planet would collapse onto one key
+      regardless of which hostile mission was being coordinated against. Given its own
+      branch, keyed on `mission_id` instead of the 15-membership-function suffix.
+
     Shared with `state.PendingTx.key` / `AgentState.revert_counts` so `idempotency` and
     `revert_streak` key off the exact same identity. No migration needed for the format
     change: confirmed directly against this project's own `agent-state.json` that no
@@ -294,7 +396,13 @@ def idempotency_key(action: Action) -> str:
     package's `CHANGELOG.md`'s `1.8.0` entry."""
     key = f"{action.planet_id}:{action.function}:{action.entity_id}"
     if action.kind is ActionKind.FLEET_MISSION:
-        key = f"{key}:{action.mission_type}:{action.target_coordinates}"
+        key = f"{key}:{action.mission_type}:{action.target_coordinates}:{action.mission_id}"
+    elif action.kind is ActionKind.DEFENSE_HOLD:
+        # ACS defense coordination feature. `entity_id` is always `None` (no on-chain
+        # entity), so every DefenseHold launched from one planet would otherwise share
+        # one key regardless of target -- the same collision class this function's other
+        # branches already fixed once each.
+        key = f"{key}:{action.target_planet_id}"
     elif action.kind is ActionKind.RESOLVE_MISSION:
         key = f"{key}:{action.mission_id}"
     elif action.kind is ActionKind.MISSILE_ATTACK:
@@ -306,20 +414,25 @@ def idempotency_key(action: Action) -> str:
         # (no generator existed for it until this same commit).
         key = f"{key}:{action.target_planet_id}:{action.primary_target}"
     elif action.kind is ActionKind.ALLIANCE:
-        # Alliance feature. The exact same collision, caught here before it ever went
-        # live: `planet_id`/`entity_id` are both always `None` for every one of the 15
-        # alliance functions (there is no on-chain planet/entity involved at all), so
-        # every alliance action of one kind -- e.g. every `kickMember` call, regardless
-        # of which alliance or which target -- would otherwise share one key/revert-
-        # streak counter. Folds in every field that actually varies across calls of the
-        # same function: `alliance_id` (all 15), `target_player` (most of them),
-        # `target_players` (the two batch functions) joined into one string so the key
-        # stays a plain string, and `role` (the two role-setting functions, since the
-        # same target could legitimately be re-targeted at a different role).
-        key = (
-            f"{key}:{action.alliance_id}:{action.target_player}:"
-            f"{','.join(action.target_players)}:{action.role}"
-        )
+        if action.function == "openDefenseIntent":
+            # ACS defense coordination feature -- see this function's own docstring.
+            key = f"{key}:{action.mission_id}"
+        else:
+            # Alliance feature. The exact same collision, caught here before it ever went
+            # live: `planet_id`/`entity_id` are both always `None` for every one of the
+            # 15 alliance functions (there is no on-chain planet/entity involved at all),
+            # so every alliance action of one kind -- e.g. every `kickMember` call,
+            # regardless of which alliance or which target -- would otherwise share one
+            # key/revert-streak counter. Folds in every field that actually varies across
+            # calls of the same function: `alliance_id` (all 15), `target_player` (most
+            # of them), `target_players` (the two batch functions) joined into one string
+            # so the key stays a plain string, and `role` (the two role-setting
+            # functions, since the same target could legitimately be re-targeted at a
+            # different role).
+            key = (
+                f"{key}:{action.alliance_id}:{action.target_player}:"
+                f"{','.join(action.target_players)}:{action.role}"
+            )
     return key
 
 
@@ -345,7 +458,7 @@ def is_structural_tier_block(non_passing_gates: list[tuple[str, str]]) -> bool:
 
     This is not a guess: a routine tier-1 proposal on an unlocked entity (the
     `prerequisites` gate PASSes -- nothing about a plain mine upgrade is locked) shows
-    exactly `guards: 16/19 pass (block)`, and the 3 gates that don't pass there are
+    exactly `guards: 22/25 pass (block)`, and the 3 gates that don't pass there are
     precisely `tier` (BLOCK), `gas` (ESCALATE, no estimate), `eth_floor` (ESCALATE,
     balance never checked at tier 1) -- this predicate is written to recognise exactly
     that cluster as carrying zero promotion-relevant information, matching what
@@ -517,6 +630,12 @@ def _gate_mission_type(
     this, exactly like every other `launchFleetMission` mission type -- `allow_combat`
     widens *which* mission type is permitted, never the tier requirement itself.
 
+    **ACS defense coordination feature**: also plus `_ACS_MISSION_TYPES` (AcsDefend/
+    Intercept) when `policy.actions.allow_acs_defense` is `true` -- a wholly separate flag
+    from `allow_combat`; the latter must never unlock these two on its own. Passing this
+    check is necessary but not sufficient for AcsDefend/Intercept -- `_gate_acs_defend_
+    target` (below) independently re-checks the referenced hostile mission itself.
+
     Colonize additionally goes through `_colony_target_range_violation` (below) and, new
     here, `_colony_cap_violation` -- a Colonize that would exceed `calc.max_planets`'s cap
     is `BLOCK`ed the same way an out-of-range target is: both are cases where the contract
@@ -532,7 +651,11 @@ def _gate_mission_type(
             "launchFleetMission action has no mission_type set -- cannot verify it against "
             "the allowed set; a malformed action, not nothing to check",
         )
-    allowed = _ALLOWED_MISSION_TYPES | (_COMBAT_MISSION_TYPES if policy.actions.allow_combat else frozenset())
+    allowed = (
+        _ALLOWED_MISSION_TYPES
+        | (_COMBAT_MISSION_TYPES if policy.actions.allow_combat else frozenset())
+        | (_ACS_MISSION_TYPES if policy.actions.allow_acs_defense else frozenset())
+    )
     if action.mission_type not in allowed:
         name = ids.mission_type_name(action.mission_type)
         return _verdict(
@@ -540,7 +663,9 @@ def _gate_mission_type(
             GuardStatus.BLOCK,
             f"mission_type {action.mission_type} ({name}) is not in the allowed set {sorted(allowed)} "
             "(Transport/Deploy/Colonize/Harvest always; Attack only with "
-            f"policy.actions.allow_combat=true, currently {policy.actions.allow_combat})",
+            f"policy.actions.allow_combat=true, currently {policy.actions.allow_combat}; "
+            "AcsDefend/Intercept only with policy.actions.allow_acs_defense=true, "
+            f"currently {policy.actions.allow_acs_defense})",
         )
     if action.mission_type == ids.FleetMissionType.COLONIZE:
         # Judge finding 2: independently re-check tick.py's own colony-target bounds --
@@ -691,16 +816,21 @@ def _gate_fleet_slots(action: Action, snapshot: Snapshot) -> GuardVerdict:
     shipyard`'s live `fleetSlots` block -- no new fetch needed), so this is a pure
     re-derivation, the same defense-in-depth posture every other gate here takes.
 
-    Scoped to `FLEET_MISSION` only (`launchFleetMission`) -- `resolveFleetMission`
-    *frees* a slot rather than consuming one, and `launchInterplanetaryMissileAttack`
-    (a later commit) is fully synchronous and consumes no fleet slot at all, confirmed
-    directly against its contract implementation.
+    Scoped to `FLEET_MISSION` and `DEFENSE_HOLD` (`launchFleetMission`/`launchDefenseHold`)
+    -- `resolveFleetMission` *frees* a slot rather than consuming one, and
+    `launchInterplanetaryMissileAttack` (a later commit) is fully synchronous and
+    consumes no fleet slot at all, confirmed directly against its contract
+    implementation. `launchDefenseHold` (ACS coordination feature) increments
+    `activeFleetMissionCount` exactly like `launchFleetMission` does, confirmed directly
+    against `VeydriftDefenseHoldModule.sol`'s own `FleetSlotLimitReached` check -- this
+    docstring already named that module as a real call site before the widening below
+    existed to actually cover it.
 
     Fails closed on missing data, never PASSes vacuously: either field being `None` means
     "unverifiable this tick," not "assume a slot is free" -- the same posture every other
     gate here takes toward absent data (AGENTS.md §5)."""
-    if action.kind is not ActionKind.FLEET_MISSION:
-        return _verdict("fleet_slots", GuardStatus.PASS, "action is not launchFleetMission")
+    if action.kind not in (ActionKind.FLEET_MISSION, ActionKind.DEFENSE_HOLD):
+        return _verdict("fleet_slots", GuardStatus.PASS, "action is not launchFleetMission/launchDefenseHold")
     if snapshot.fleet_slots_active is None or snapshot.fleet_slots_limit is None:
         return _verdict(
             "fleet_slots", GuardStatus.BLOCK, "fleet slot usage/limit is unknown -- cannot verify a slot is free"
@@ -904,6 +1034,292 @@ def _gate_missile_target(action: Action, snapshot: Snapshot, policy: Policy) -> 
     )
 
 
+def _parse_epoch_seconds(raw: object) -> int | None:
+    """Accepts an int/float unix timestamp or a decimal-string one (the shape `read.py`'s
+    own `_parse_datetime` already documents the live API using for `arrivalAt`/friends) --
+    duplicated here in miniature rather than imported, since guard.py takes only already-
+    fetched values as parameters and never calls into `read.py` itself. Returns `None`
+    for anything else, including an ISO string -- `/mission/{id}` is a live route this
+    codebase has only spot-checked once (references/coordination.md); an unexpected shape
+    here must fail closed, not guess."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    if isinstance(raw, str):
+        try:
+            return int(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _hostile_mission_coordination_defect(
+    hostile_mission: dict | None,
+    *,
+    defender_planet_id: int | None,
+    now_epoch: int,
+) -> str | None:
+    """Shared by `_gate_acs_defend_target` (AcsDefend/Intercept launch) and
+    `_gate_alliance_action`'s `openDefenseIntent` branch: both need the exact same
+    independent re-check of a referenced hostile mission, since
+    `VeydriftAllianceSystem._canCoordinateDefense` short-circuits `true` for a self-owned
+    defended planet BEFORE checking any of status/hostility/target-match/cutoff -- so a
+    live `coordination_allowed=True` is never sufficient on its own; this is the
+    independent half that stays load-bearing even then.
+
+    `hostile_mission` is the inner `mission` object from `GET /mission/{id}`'s response
+    (`{"mission": {...}}`), already unwrapped by `tick.py` -- not the raw envelope.
+
+    Checks, in order: `hostile_mission` is not `None` (a failed/unattempted fetch);
+    `missionType == "Attack"` **exactly** -- not the broader Attack/Intercept/
+    MissileAttack triple `_isHostileMission` uses for the alliance contract's own
+    authorization question, since `VeydriftGameplayModule.sol`'s counterplay branch
+    itself only ever accepts an `Attack` as the thing being defended against/intercepted
+    (confirmed directly against source: `hostile.missionType != FleetMissionType.Attack`
+    reverts `InvalidMissionType` unconditionally); `status == "Outbound"`; `targetPlanetId`
+    matches the real defended planet (when known); and the 5-minute join cutoff
+    (`_ACS_DEFEND_JOIN_CUTOFF_SECONDS`) has not passed.
+
+    Returns `None` when every check holds, else a detail string naming the first failure
+    -- fail-closed on any ambiguity, never a silent PASS on absent/stale data (AGENTS.md
+    §5)."""
+    if hostile_mission is None:
+        return "could not fetch live GET /mission/{id} for the referenced hostile mission"
+    mission_type = hostile_mission.get("missionType")
+    if mission_type != "Attack":
+        return f"hostile mission's missionType is {mission_type!r}, not exactly 'Attack'"
+    status = hostile_mission.get("status")
+    if status != "Outbound":
+        return f"hostile mission status is {status!r}, not 'Outbound'"
+    if defender_planet_id is not None and hostile_mission.get("targetPlanetId") != defender_planet_id:
+        return (
+            f"hostile mission targetPlanetId {hostile_mission.get('targetPlanetId')!r} does not "
+            f"match the defended planet {defender_planet_id}"
+        )
+    arrival_at = _parse_epoch_seconds(hostile_mission.get("arrivalAt"))
+    if arrival_at is None:
+        return "hostile mission has no parseable arrivalAt -- cannot verify the join cutoff"
+    if now_epoch + _ACS_DEFEND_JOIN_CUTOFF_SECONDS >= arrival_at:
+        return (
+            f"the {_ACS_DEFEND_JOIN_CUTOFF_SECONDS}s join cutoff has passed "
+            f"(now={now_epoch}, arrivalAt={arrival_at})"
+        )
+    return None
+
+
+def _acs_defend_own_travel_seconds(action: Action, snapshot: Snapshot, target_coordinates: str) -> int | None:
+    """The one piece of `_gate_acs_defend_target`'s `FleetAlreadyArrived` check that
+    needs its own distance/speed re-derivation -- `_derive_fleet_mission_spend` already
+    does this same computation for the ordinary FLEET_MISSION case, but keyed off
+    `action.target_coordinates`, which is deliberately unset for AcsDefend/Intercept (the
+    real target comes from the live hostile-mission fetch instead, passed in here).
+    Returns `None` on any missing/unverifiable input -- never a guessed travel time."""
+    if not action.ships or action.origin_planet_id is None:
+        return None
+    origin = snapshot.planet(action.origin_planet_id)
+    if origin is None or origin.coordinates is None:
+        return None
+    try:
+        distance = calc.distance(origin.coordinates, target_coordinates)
+    except (ValueError, TypeError):
+        return None
+    combustion, impulse, hyperspace = _drive_tech_levels(snapshot)
+    speeds: list[int] = []
+    for ship_id, count in action.ships.items():
+        if count <= 0:
+            continue
+        try:
+            _, _, speed = calc.ship_movement_stats(ship_id, combustion, impulse, hyperspace)
+        except (KeyError, ValueError):
+            return None
+        speeds.append(speed)
+    if not speeds:
+        return None
+    slowest_speed = min(speeds)
+    speed_percent = action.speed_pct if action.speed_pct is not None else 100
+    if not (10 <= speed_percent <= 100 and speed_percent % 10 == 0):
+        return None
+    return calc.travel_seconds(distance, slowest_speed, speed_percent)
+
+
+def _gate_acs_defend_target(
+    action: Action,
+    snapshot: Snapshot,
+    policy: Policy,
+    *,
+    hostile_mission: dict | None,
+    coordination_allowed: bool | None,
+    now,
+) -> GuardVerdict:
+    """New gate, ACS defense coordination feature. `launchFleetMission` with
+    `mission_type` AcsDefend(5)/Intercept(6) only -- every other action PASSes trivially.
+
+    Independently re-derives every precondition this codebase can verify for the
+    counterplay branch of `VeydriftGameplayModule.sol`'s `_launchFleetMission` (confirmed
+    directly against source, pinned commit 202d1ac), the same defense-in-depth posture
+    `_gate_missile_target`/`_gate_alliance_action` already take:
+
+    1. `policy.actions.allow_acs_defense` is `true` (`_gate_mission_type` already checks
+       this against `_ACS_MISSION_TYPES`, but this gate re-checks it independently
+       rather than assuming gate-ordering carries the guarantee forward).
+    2. `hostile_mission`/`coordination_allowed` are both re-checked via
+       `_hostile_mission_coordination_defect` -- exactly-`Attack`, still-`Outbound`,
+       target match, and the 5-minute join cutoff. **`coordination_allowed=True` alone is
+       never sufficient**: `_canCoordinateDefense` short-circuits `true` for a self-owned
+       defended planet before checking any of the above, so the independent
+       `/mission/{id}` re-check stays load-bearing even when `coordination_allowed` is
+       trivially `True`. Both `None` and a failed check BLOCK.
+    3. `FleetAlreadyArrived`: the caller's own fleet, launched now, must arrive no later
+       than the hostile mission's `arrivalAt` -- independently computed from `action.
+       ships`/`action.speed_pct` and the real target's coordinates
+       (`hostile_mission["targetPlanet"]["coordinates"]`, since `action.
+       target_coordinates` is deliberately left unset for these two mission types -- see
+       `Action.mission_type`'s docstring). A distance/speed re-derivation this codebase
+       cannot skip, not a recomputed *cost* formula (AGENTS.md §5's "no cost-scaling
+       function" invariant is about cost, not travel time -- `calc.travel_seconds`/
+       `calc.distance` are already used identically by every other fleet-mission gate in
+       this module).
+    4. `action.origin_planet_id` is one of the caller's own owned planets -- neither view
+       function receives an `originPlanetId` argument, so this is the one precondition
+       only `Snapshot` can supply.
+
+    Fails closed on every missing piece -- `hostile_mission is None`,
+    `coordination_allowed is None`, unparseable/foreign target coordinates, or
+    unverifiable ship speed all BLOCK, never PASS."""
+    if action.function != "launchFleetMission" or action.mission_type not in _ACS_MISSION_TYPES:
+        return _verdict("acs_defend_target", GuardStatus.PASS, "action is not an AcsDefend/Intercept launchFleetMission")
+    if not policy.actions.allow_acs_defense:
+        return _verdict("acs_defend_target", GuardStatus.BLOCK, "policy.actions.allow_acs_defense is false")
+
+    defender_planet_id = hostile_mission.get("targetPlanetId") if isinstance(hostile_mission, dict) else None
+    now_epoch = int(now.timestamp()) if hasattr(now, "timestamp") else int(now)
+    defect = _hostile_mission_coordination_defect(
+        hostile_mission, defender_planet_id=defender_planet_id, now_epoch=now_epoch
+    )
+    if defect is not None:
+        return _verdict("acs_defend_target", GuardStatus.BLOCK, defect)
+    if coordination_allowed is not True:
+        return _verdict(
+            "acs_defend_target",
+            GuardStatus.BLOCK,
+            f"live counterplayDefenseFuelContext reports coordination_allowed={coordination_allowed!r} "
+            "-- an unverifiable/false canCoordinate is never treated as allowed",
+        )
+    if action.origin_planet_id is None or snapshot.planet(action.origin_planet_id) is None:
+        return _verdict(
+            "acs_defend_target",
+            GuardStatus.BLOCK,
+            f"origin planet {action.origin_planet_id} is not one of the caller's own owned planets",
+        )
+
+    assert hostile_mission is not None  # _hostile_mission_coordination_defect already confirmed this
+    target_planet = hostile_mission.get("targetPlanet")
+    target_coordinates = target_planet.get("coordinates") if isinstance(target_planet, dict) else None
+    hostile_arrival_at = _parse_epoch_seconds(hostile_mission.get("arrivalAt"))
+    if not target_coordinates or hostile_arrival_at is None:
+        return _verdict(
+            "acs_defend_target",
+            GuardStatus.BLOCK,
+            "hostile mission response has no targetPlanet.coordinates/arrivalAt -- cannot "
+            "verify FleetAlreadyArrived",
+        )
+    own_travel_seconds = _acs_defend_own_travel_seconds(action, snapshot, target_coordinates)
+    if own_travel_seconds is None:
+        return _verdict(
+            "acs_defend_target",
+            GuardStatus.BLOCK,
+            "could not independently verify the caller's own travel time to the defended "
+            "planet (missing ships/route/technology data)",
+        )
+    own_arrival_at = now_epoch + own_travel_seconds
+    if own_arrival_at > hostile_arrival_at:
+        return _verdict(
+            "acs_defend_target",
+            GuardStatus.BLOCK,
+            f"own computed arrival ({own_arrival_at}) is after the hostile mission's "
+            f"arrivalAt ({hostile_arrival_at}) -- FleetAlreadyArrived",
+        )
+    return _verdict(
+        "acs_defend_target",
+        GuardStatus.PASS,
+        f"hostile mission {hostile_mission.get('missionId')} is a live, still-joinable "
+        "Attack; coordination_allowed=True; own fleet arrives in time",
+    )
+
+
+def _gate_defense_hold_target(
+    action: Action,
+    snapshot: Snapshot,
+    policy: Policy,
+    *,
+    coordination_allowed: bool | None,
+) -> GuardVerdict:
+    """New gate, ACS defense coordination feature. `launchDefenseHold` only -- every
+    other action PASSes trivially.
+
+    Independently re-derives every precondition `VeydriftDefenseHoldModule.sol`'s
+    `launchDefenseHold` enforces that this codebase can verify from `Snapshot` alone,
+    plus the live `defenseHoldFuelContext` re-check `tick.py` fetches -- the same
+    defense-in-depth posture `_gate_acs_defend_target` takes toward its own contract path:
+
+    1. `policy.actions.allow_acs_defense` is `true`.
+    2. `action.hold_seconds` is within `[_DEFENSE_HOLD_MIN_SECONDS,
+       _DEFENSE_HOLD_MAX_SECONDS]` inclusive -- `InvalidHoldWindow` otherwise.
+       `defenseHoldFuelContext` has no bound to enforce this (the contract's own
+       `launchDefenseHold` checks it directly, before ever calling that view), so this
+       codebase's own re-check is the only one, not a second opinion on an existing one.
+    3. `action.planet_id != action.target_planet_id` -- `SamePlanet` otherwise.
+       `defenseHoldFuelContext` cannot check this either (it takes no `originPlanetId`
+       argument at all).
+    4. `action.planet_id` is one of the caller's own owned planets -- the other thing
+       `defenseHoldFuelContext` structurally cannot verify.
+    5. `coordination_allowed` is `True` -- unlike AcsDefend/Intercept's `canCoordinate`,
+       this one *is* sufficient on its own for the target-planet authorization question:
+       `defenseHoldFuelContext` isn't tied to any specific hostile mission (any same-
+       alliance planet, any chosen window), so there is no separate mission-validity
+       question for this gate to ask independently -- same-planet and origin-ownership
+       (checks 3-4) are the two things it structurally cannot check, both covered above.
+
+    Fails closed on `coordination_allowed is None` and on any missing/invalid field --
+    never a silent PASS on absent data (AGENTS.md §5)."""
+    if action.function != "launchDefenseHold":
+        return _verdict("defense_hold_target", GuardStatus.PASS, "action is not launchDefenseHold")
+    if not policy.actions.allow_acs_defense:
+        return _verdict("defense_hold_target", GuardStatus.BLOCK, "policy.actions.allow_acs_defense is false")
+    if action.hold_seconds is None or not (
+        _DEFENSE_HOLD_MIN_SECONDS <= action.hold_seconds <= _DEFENSE_HOLD_MAX_SECONDS
+    ):
+        return _verdict(
+            "defense_hold_target",
+            GuardStatus.BLOCK,
+            f"hold_seconds {action.hold_seconds!r} is out of range "
+            f"[{_DEFENSE_HOLD_MIN_SECONDS}, {_DEFENSE_HOLD_MAX_SECONDS}] -- InvalidHoldWindow",
+        )
+    if action.planet_id is None or action.target_planet_id is None:
+        return _verdict("defense_hold_target", GuardStatus.BLOCK, "action has no planet_id/target_planet_id set")
+    if action.planet_id == action.target_planet_id:
+        return _verdict("defense_hold_target", GuardStatus.BLOCK, "origin and target are the same planet -- SamePlanet")
+    if snapshot.planet(action.planet_id) is None:
+        return _verdict(
+            "defense_hold_target",
+            GuardStatus.BLOCK,
+            f"origin planet {action.planet_id} is not one of the caller's own owned planets",
+        )
+    if coordination_allowed is not True:
+        return _verdict(
+            "defense_hold_target",
+            GuardStatus.BLOCK,
+            f"live defenseHoldFuelContext reports coordination_allowed={coordination_allowed!r} "
+            "-- an unverifiable/false canCoordinate is never treated as allowed",
+        )
+    return _verdict(
+        "defense_hold_target",
+        GuardStatus.PASS,
+        f"hold_seconds {action.hold_seconds} in range, origin/target distinct and owned, coordination_allowed=True",
+    )
+
+
 def _alliance_member(alliance_state: AllianceState, address: str) -> object | None:
     """Case-insensitive lookup into `alliance_state.members` -- addresses in JSON/JS
     contexts are frequently mixed-case-inconsistent (checksummed vs. lowercase), and this
@@ -913,7 +1329,14 @@ def _alliance_member(alliance_state: AllianceState, address: str) -> object | No
 
 
 def _gate_alliance_action(
-    action: Action, snapshot: Snapshot, policy: Policy, alliance_state: AllianceState | None
+    action: Action,
+    snapshot: Snapshot,
+    policy: Policy,
+    alliance_state: AllianceState | None,
+    *,
+    hostile_mission: dict | None = None,
+    coordination_allowed: bool | None = None,
+    now=None,
 ) -> GuardVerdict:
     """New gate, alliance feature commit 3 -- the 15 membership functions on
     `VeydriftAllianceSystem`, a wholly separate deployed contract. Every other action
@@ -946,8 +1369,60 @@ def _gate_alliance_action(
        -- see each branch below for its own contract-derived rationale). Batch functions
        (`kickMembers`/`setMembersRole`) fail the WHOLE batch if any one target fails its
        individual check -- fail-closed on the batch, never partial-allow.
-    """
+
+    **`openDefenseIntent` (ACS coordination feature) is a 16th function on this same
+    contract, handled as its own special case below** -- deliberately NOT folded into
+    `_ALLIANCE_FUNCTIONS`/checks 1-2 above (see `_ACS_ALLIANCE_FUNCTIONS`'s own
+    docstring): it is gated on `policy.actions.allow_acs_defense`, not `allow_alliance`,
+    and reuses `_hostile_mission_coordination_defect` -- the exact same live re-check
+    `_gate_acs_defend_target` performs -- rather than duplicating that logic, since both
+    functions verify the identical precondition (a live, still-joinable hostile Attack
+    against the planet the caller is coordinating a defense for)."""
     fn = action.function
+    if fn == "openDefenseIntent":
+        if not policy.actions.allow_acs_defense:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "policy.actions.allow_acs_defense is false")
+        if alliance_state is None:
+            return _verdict(
+                "alliance_action",
+                GuardStatus.BLOCK,
+                "could not fetch live /wallet/{addr}/alliance state -- an unverifiable check is never treated as allowed",
+            )
+        if alliance_state.membership is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "caller is not a member of any alliance -- NotAllianceMember")
+        if action.planet_id is None or action.mission_id is None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, "action has no planet_id/mission_id (hostileMissionId) set")
+        # Live fork verification (round 6, 2026-09-08) confirmed directly against source
+        # AND against a real revert on a real send: `openDefenseIntent` requires
+        # `target.owner == msg.sender` UNCONDITIONALLY
+        # (`VeydriftAllianceSystem.sol:682`, `NotPlanetOwner`) -- this is NOT "any alliance
+        # member may open an intent for a teammate's planet," a reading an earlier draft
+        # of this feature's docs left ambiguous. Only the defended planet's own owner may
+        # ever call this for it. `Snapshot.planet(...)` is the same live-ownership check
+        # `_gate_acs_defend_target`/`_gate_defense_hold_target` already use for origin
+        # ownership -- re-derived here independently of the contract's own revert, not
+        # trusted to `walletctl simulate` alone.
+        if snapshot.planet(action.planet_id) is None:
+            return _verdict(
+                "alliance_action",
+                GuardStatus.BLOCK,
+                f"planet {action.planet_id} is not one of the caller's own owned planets -- NotPlanetOwner",
+            )
+        now_epoch = int(now.timestamp()) if hasattr(now, "timestamp") else int(now) if now is not None else 0
+        defect = _hostile_mission_coordination_defect(
+            hostile_mission, defender_planet_id=action.planet_id, now_epoch=now_epoch
+        )
+        if defect is not None:
+            return _verdict("alliance_action", GuardStatus.BLOCK, defect)
+        if coordination_allowed is not True:
+            return _verdict(
+                "alliance_action",
+                GuardStatus.BLOCK,
+                f"live canCoordinateDefense reports coordination_allowed={coordination_allowed!r} "
+                "-- an unverifiable/false canCoordinate is never treated as allowed",
+            )
+        return _verdict("alliance_action", GuardStatus.PASS, "openDefenseIntent preconditions satisfied")
+
     if fn not in _ALLIANCE_FUNCTIONS:
         return _verdict("alliance_action", GuardStatus.PASS, "action is not an alliance function")
     if not policy.actions.allow_alliance:
@@ -1132,15 +1607,21 @@ def _gate_prerequisites(action: Action, snapshot: Snapshot) -> GuardVerdict:
     -- fail closed, never PASS on absent data), and on a shield-dome/missile-slot cap
     violation.
 
-    `FLEET_MISSION` gets its own branch (`_gate_fleet_ship_availability`) -- see that
-    function's docstring.
+    `FLEET_MISSION` and `DEFENSE_HOLD` both get the same branch (`_gate_fleet_ship_
+    availability`) -- see that function's docstring. `_gate_fleet_ship_availability`
+    itself is kind-agnostic (it only reads `action.ships`/`action.origin_planet_id`), but
+    *this* dispatch is what routes to it -- before this fix, `DEFENSE_HOLD` fell through
+    to the `family = _FAMILY_FOR_ACTION_KIND.get(action.kind)` lookup below, which returns
+    `None` for `DEFENSE_HOLD` (not a member of that dict), silently PASSing ship
+    availability for every DefenseHold action -- exactly the vacuous-pass-on-absent-data
+    failure mode AGENTS.md §5 warns against, caught here before it ever shipped.
 
     Actions with no entity to check (`resolve_mission`/`noop`/`escalate`/`halt`, or any
     action missing `entity_id`) PASS trivially -- there is nothing here for this gate to
     say anything about, the same posture `_gate_energy`/`_gate_affordability` take toward
     an action with no target planet.
     """
-    if action.kind is ActionKind.FLEET_MISSION:
+    if action.kind in (ActionKind.FLEET_MISSION, ActionKind.DEFENSE_HOLD):
         return _gate_fleet_ship_availability(action, snapshot)
 
     family = _FAMILY_FOR_ACTION_KIND.get(action.kind)
@@ -1198,7 +1679,7 @@ def _gate_address(action: Action, *, live_addresses: set[str] | None, unsigned_t
 def _gate_abi_hash(action: Action, snapshot: Snapshot) -> GuardVerdict:
     if not action.is_onchain():
         return _verdict("abi_hash", GuardStatus.PASS, "action has no calldata to pin-check")
-    if action.function in _ALLIANCE_FUNCTIONS:
+    if action.function in _ALLIANCE_FUNCTIONS or action.function in _ACS_ALLIANCE_FUNCTIONS:
         # Decoupled deliberately, not a gap: `snapshot.deployment_abi_hash` is the GAME
         # contract's live hash (from GET /health's own runtime-config-derived field) --
         # comparing it against an alliance action would either BLOCK for the wrong reason
@@ -1355,12 +1836,15 @@ def _drive_tech_levels(snapshot: Snapshot) -> tuple[int, int, int]:
     )
 
 
-def _derive_fleet_mission_spend(action: Action, snapshot: Snapshot) -> Resources | None:
-    """Independently re-derive a `FLEET_MISSION` action's true launch spend -- cargo plus
-    fuel, fuel counted as deuterium (`VeydriftGameplayModule.sol:246-260`, pinned commit
-    202d1ac: ``_spend(origin, {..., deuterium: cargo.deuterium + fuelCost})``) -- from
-    `action.ships` / `action.origin_planet_id` / `action.target_coordinates` alone,
-    **never** from `action.cost`.
+def _derive_fleet_mission_spend(
+    action: Action, snapshot: Snapshot, *, net_holding_fuel_cost: int | None = None
+) -> Resources | None:
+    """Independently re-derive a `FLEET_MISSION`/`DEFENSE_HOLD` action's true launch
+    spend -- cargo plus fuel, fuel counted as deuterium
+    (`VeydriftGameplayModule.sol:246-260`, pinned commit 202d1ac: ``_spend(origin, {...,
+    deuterium: cargo.deuterium + fuelCost})``) -- from `action.ships` /
+    `action.origin_planet_id` / `action.target_coordinates` alone, **never** from
+    `action.cost`.
 
     This is `guard.py`'s own defense-in-depth check for the one action family whose true
     cost previously lived off `Action.cost` entirely (judge finding 1, 2026-08-17):
@@ -1372,14 +1856,54 @@ def _derive_fleet_mission_spend(action: Action, snapshot: Snapshot) -> Resources
     posture `_gate_energy` already takes toward `plan.py`'s energy invariant: an
     independent re-derivation, never a call into the planner's own code.
 
+    **`net_holding_fuel_cost` (ACS defense coordination feature) is `tick.py`'s live
+    `counterplayDefenseFuelContext`/`defenseHoldFuelContext` fetch, the real
+    contract-computed holding-fuel component neither this function's own formula nor
+    `calc.py` has any way to derive (AGENTS.md §5: "no cost-scaling function... live cost
+    always comes from the API's own data, never recomputed"). Same bug class as judge
+    finding 1 above, closed the same way -- the live value, not a guessed zero, becomes
+    part of the spend this function reports:
+
+    - **`DEFENSE_HOLD`**: `launchDefenseHold` always calls `defenseHoldFuelContext` and
+      adds its `netHoldingFuelCost` on top of the ordinary point-to-point travel fuel
+      (confirmed directly against `VeydriftDefenseHoldModule.sol` source) -- so this
+      branch runs the *same* distance/ships/fuel computation the general FLEET_MISSION
+      case below does (DefenseHold's `target_coordinates`/`target_planet_id` are real,
+      non-repurposed fields, unlike AcsDefend/Intercept's), then adds
+      `net_holding_fuel_cost` on top. `net_holding_fuel_cost is None` fails closed --
+      never substituted as zero, the same posture judge finding 1 already established for
+      this entire function.
+    - **AcsDefend/Intercept** (still `FLEET_MISSION` kind, `mission_type` 5/6):
+      `action.target_coordinates` is deliberately unset for these two (the real target is
+      repurposed into `mission_id` instead -- see `Action.mission_type`'s docstring), so
+      the ordinary distance-based travel-fuel component below cannot be independently
+      recomputed from `Snapshot` alone for these two specifically (the real target may be
+      a foreign planet outside `Snapshot.planets` entirely). This function does NOT
+      attempt to reconstruct that component from the live hostile-mission fetch --
+      deliberately narrower than the DEFENSE_HOLD branch above, not a silent gap: it
+      reports cargo plus `net_holding_fuel_cost` alone, closing the specific
+      "netHoldingFuelCost silently ignored" defect the review flagged, without claiming
+      byte-parity with the contract's full `fuelCost` for this one narrower reason.
+      `net_holding_fuel_cost is None` fails closed here too.
+
     For every other `ActionKind` this is just `action.cost`, unchanged.
 
     Returns `None` when the spend cannot be verified (unknown route, absent ship/route/
     technology data) -- **unverifiable, never zero** (AGENTS.md §5's "a guardrail must
     never pass vacuously on absent data," applied to this derivation's own inputs, not
     just to snapshot data)."""
-    if action.kind is not ActionKind.FLEET_MISSION:
+    if action.kind is ActionKind.FLEET_MISSION and action.mission_type in _ACS_MISSION_TYPES:
+        if net_holding_fuel_cost is None:
+            return None
+        return Resources(
+            metal=action.cargo.metal,
+            crystal=action.cargo.crystal,
+            deuterium=action.cargo.deuterium + net_holding_fuel_cost,
+        )
+    if action.kind not in (ActionKind.FLEET_MISSION, ActionKind.DEFENSE_HOLD):
         return action.cost
+    if action.kind is ActionKind.DEFENSE_HOLD and net_holding_fuel_cost is None:
+        return None
     if not action.ships or action.origin_planet_id is None:
         return None
     origin = snapshot.planet(action.origin_planet_id)
@@ -1414,6 +1938,9 @@ def _derive_fleet_mission_spend(action: Action, snapshot: Snapshot) -> Resources
 
     slowest_speed = min(speed for _, _, speed in ship_stats)
     fuel = calc.mission_fuel(ship_stats, distance, slowest_speed)
+    if action.kind is ActionKind.DEFENSE_HOLD:
+        assert net_holding_fuel_cost is not None  # checked above
+        fuel += net_holding_fuel_cost
     return Resources(
         metal=action.cargo.metal,
         crystal=action.cargo.crystal,
@@ -1421,13 +1948,13 @@ def _derive_fleet_mission_spend(action: Action, snapshot: Snapshot) -> Resources
     )
 
 
-def _gate_affordability(action: Action, snapshot: Snapshot) -> GuardVerdict:
+def _gate_affordability(action: Action, snapshot: Snapshot, *, net_holding_fuel_cost: int | None = None) -> GuardVerdict:
     if action.planet_id is None:
         return _verdict("affordability", GuardStatus.PASS, "action has no target planet to check cost against")
     planet = snapshot.planet(action.planet_id)
     if planet is None:
         return _verdict("affordability", GuardStatus.BLOCK, f"planet {action.planet_id} not found in snapshot")
-    spend = _derive_fleet_mission_spend(action, snapshot)
+    spend = _derive_fleet_mission_spend(action, snapshot, net_holding_fuel_cost=net_holding_fuel_cost)
     if spend is None:
         return _verdict(
             "affordability",
@@ -1618,13 +2145,15 @@ def _gate_fields(action: Action, snapshot: Snapshot, policy: Policy) -> GuardVer
     return _verdict("fields", GuardStatus.PASS, f"fields at {pct:.0f}%")
 
 
-def _gate_reserve(action: Action, snapshot: Snapshot, policy: Policy) -> GuardVerdict:
+def _gate_reserve(
+    action: Action, snapshot: Snapshot, policy: Policy, *, net_holding_fuel_cost: int | None = None
+) -> GuardVerdict:
     if action.planet_id is None:
         return _verdict("reserve", GuardStatus.PASS, "action has no target planet / no spend")
     planet = snapshot.planet(action.planet_id)
     if planet is None:
         return _verdict("reserve", GuardStatus.BLOCK, f"planet {action.planet_id} not found in snapshot")
-    spend = _derive_fleet_mission_spend(action, snapshot)
+    spend = _derive_fleet_mission_spend(action, snapshot, net_holding_fuel_cost=net_holding_fuel_cost)
     if spend is None:
         return _verdict(
             "reserve",
@@ -1700,8 +2229,10 @@ def _gate_eth_floor(action: Action, policy: Policy, *, eth_balance_wei: int | No
     return _verdict("eth_floor", GuardStatus.PASS, f"{eth_balance_wei} wei >= eth_gas_floor_wei")
 
 
-def _gate_value_ceiling(action: Action, snapshot: Snapshot, policy: Policy) -> GuardVerdict:
-    spend = _derive_fleet_mission_spend(action, snapshot)
+def _gate_value_ceiling(
+    action: Action, snapshot: Snapshot, policy: Policy, *, net_holding_fuel_cost: int | None = None
+) -> GuardVerdict:
+    spend = _derive_fleet_mission_spend(action, snapshot, net_holding_fuel_cost=net_holding_fuel_cost)
     if spend is None:
         return _verdict(
             "value_ceiling",
@@ -1772,9 +2303,12 @@ def evaluate_guardrails(
     attack_protection_allowed: bool | None = None,
     attack_protection_blocked_reason: str | None = None,
     alliance_state: AllianceState | None = None,
+    hostile_mission: dict | None = None,
+    coordination_allowed: bool | None = None,
+    net_holding_fuel_cost: int | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 23 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 25 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -1791,6 +2325,16 @@ def evaluate_guardrails(
     for the missile-specific `blocked_reason` branch. `alliance_state` (alliance feature
     commit 3) is `tick.py`'s live `/wallet/{addr}/alliance` fetch, meaningful only for one
     of the 15 alliance functions -- see `_gate_alliance_action`'s docstring.
+
+    **ACS defense coordination feature**: `hostile_mission` is `tick.py`'s live,
+    already-unwrapped `GET /mission/{id}` fetch (the inner `mission` object), meaningful
+    for an AcsDefend/Intercept `launchFleetMission` action or `openDefenseIntent`.
+    `coordination_allowed` is `tick.py`'s live `counterplayDefenseFuelContext`/
+    `defenseHoldFuelContext`/`canCoordinateDefense` `canCoordinate` result, meaningful for
+    the same two action shapes plus `launchDefenseHold`. `net_holding_fuel_cost` is the
+    same probe's `netHoldingFuelCost` result, meaningful for the same three -- see
+    `_gate_acs_defend_target`/`_gate_defense_hold_target`/`_derive_fleet_mission_spend`'s
+    docstrings for why each fails closed on `None` rather than assuming zero/false.
     """
     from datetime import UTC
     from datetime import datetime as _datetime
@@ -1804,7 +2348,24 @@ def evaluate_guardrails(
         _gate_prerequisites(action, snapshot),
         _gate_fleet_slots(action, snapshot),
         _gate_missile_target(action, snapshot, policy),
-        _gate_alliance_action(action, snapshot, policy, alliance_state),
+        _gate_acs_defend_target(
+            action,
+            snapshot,
+            policy,
+            hostile_mission=hostile_mission,
+            coordination_allowed=coordination_allowed,
+            now=now,
+        ),
+        _gate_defense_hold_target(action, snapshot, policy, coordination_allowed=coordination_allowed),
+        _gate_alliance_action(
+            action,
+            snapshot,
+            policy,
+            alliance_state,
+            hostile_mission=hostile_mission,
+            coordination_allowed=coordination_allowed,
+            now=now,
+        ),
         _gate_attack_protection(
             action,
             attack_protection_allowed=attack_protection_allowed,
@@ -1815,14 +2376,14 @@ def evaluate_guardrails(
         _gate_health(action, snapshot),
         _gate_game_paused(snapshot),
         _gate_index_lag(policy, agent_state, now=now),
-        _gate_affordability(action, snapshot),
+        _gate_affordability(action, snapshot, net_holding_fuel_cost=net_holding_fuel_cost),
         _gate_energy(action, snapshot),
         _gate_storage_overflow(action, snapshot, policy),
         _gate_fields(action, snapshot, policy),
-        _gate_reserve(action, snapshot, policy),
+        _gate_reserve(action, snapshot, policy, net_holding_fuel_cost=net_holding_fuel_cost),
         _gate_gas(action, policy, agent_state, gas_cost_wei=gas_cost_wei, now=now),
         _gate_eth_floor(action, policy, eth_balance_wei=eth_balance_wei),
-        _gate_value_ceiling(action, snapshot, policy),
+        _gate_value_ceiling(action, snapshot, policy, net_holding_fuel_cost=net_holding_fuel_cost),
         _gate_idempotency(action, agent_state),
         _gate_revert_streak(action, agent_state, policy),
     ]

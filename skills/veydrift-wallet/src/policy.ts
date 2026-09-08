@@ -41,6 +41,8 @@ export class AllowCombatResolutionError extends Error {}
 
 export class AllowAllianceResolutionError extends Error {}
 
+export class AllowAcsDefenseResolutionError extends Error {}
+
 const DEFAULT_VEYDRIFT_HOME = "~/.veydrift";
 
 /** Mirrors veydrift-agent's `veydrift_home()` (state.py): $VEYDRIFT_HOME env, else ~/.veydrift.
@@ -144,6 +146,7 @@ export interface ResolveActionFlagOptions {
  *  each call site so a future third flag doesn't have to re-justify the same shape again. */
 export type ResolveAllowCombatOptions = ResolveActionFlagOptions;
 export type ResolveAllowAllianceOptions = ResolveActionFlagOptions;
+export type ResolveAllowAcsDefenseOptions = ResolveActionFlagOptions;
 
 function resolveBooleanActionFlag(
   fieldName: string,
@@ -246,4 +249,23 @@ export function resolveAllowCombat(opts: ResolveAllowCombatOptions = {}): boolea
  */
 export function resolveAllowAlliance(opts: ResolveAllowAllianceOptions = {}): boolean {
   return resolveBooleanActionFlag("allow_alliance", AllowAllianceResolutionError, opts);
+}
+
+/**
+ * Resolve whether ACS defense coordination actions (AcsDefend/Intercept mission types on
+ * `launchFleetMission`, `launchDefenseHold`, and `openDefenseIntent` -- `allowlist.ts`'s
+ * `ACS_MISSION_TYPES`/`DEFENSE_HOLD_SIGNATURES`/`ACS_ALLIANCE_SIGNATURES`) are permitted.
+ * Same shape and same threat model as `resolveAllowCombat`/`resolveAllowAlliance` above --
+ * read `policy.json`'s `actions.allow_acs_defense`, no CLI flag or env var ever, `false`
+ * on ENOENT, throw on anything malformed/ambiguous. The tier floor these functions need
+ * (operator for AcsDefend/Intercept/DefenseHold, economy-or-above for openDefenseIntent)
+ * is `allowlist.ts`'s selector-check branches' concern, not this resolver's -- this
+ * function only ever answers "is the flag true," never "at which tier."
+ *
+ * Callers invoke this lazily -- only once a decoded transaction's selector/mission-type
+ * is actually one of these four -- so a malformed or absent `allow_acs_defense` field
+ * never blocks an unrelated transaction.
+ */
+export function resolveAllowAcsDefense(opts: ResolveAllowAcsDefenseOptions = {}): boolean {
+  return resolveBooleanActionFlag("allow_acs_defense", AllowAcsDefenseResolutionError, opts);
 }

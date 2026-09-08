@@ -1,8 +1,12 @@
-# Opportunities — attack/missile/colonize/foreign-harvest candidates independent of the ladder
+# Opportunities — attack/missile/colonize/foreign-harvest/transport candidates independent of the ladder
 
 `opportunities.py` is the module this document explains. Fully additive: zero changes to
 `plan.py`/`candidates.py`/`guard.py`, no new policy field, no persisted state, no CLI
-command of its own.
+command of its own — this held for the original four families and still holds for
+`transport`, added later by the ACS defense coordination plan's scope decision (see
+below); `transport`'s own write path (`generate_transport_candidates`, already
+allowlisted/guarded) predates this module entirely and needed no new capability, only
+surfacing.
 
 ## Why this exists: the ladder is a short-circuit, not "generate everything, then pick"
 
@@ -23,7 +27,7 @@ slot? foreign debris to harvest? — was invisible on any tick where a higher-pr
 won, which in practice is most ticks. This module closes that gap: it calls the same four
 generators a second time, independent of the ladder, and reports every result.
 
-## The four families, and why exactly these four
+## The five families, and why exactly these five
 
 | Family | Generator (`candidates.py`) | Gated internally on |
 | --- | --- | --- |
@@ -31,15 +35,25 @@ generators a second time, independent of the ladder, and reports every result.
 | `missile` | `generate_missile_candidates` | `policy.actions.allow_combat` |
 | `colonize` | `generate_colonize_candidates` | `policy.strategy.colonize` |
 | `foreign_harvest` | `generate_foreign_harvest_candidates` | `policy.actions.allow_fleet_noncombat` |
+| `transport` | `generate_transport_candidates` | `policy.actions.allow_fleet_noncombat` |
 
-**Not included: Transport/Deploy.** `select_logistics_candidate` dispatches across four
-families (Transport, Deploy, local Harvest, foreign Harvest); only the *external
-opportunity* half of that set — foreign Harvest — belongs here. Transport/Deploy are the
-account's own fleet-logistics moves, not something external to be informed about.
+`transport` needs its own dedicated call (`_scan_transport`, not `_scan_planet`'s
+dispatch dict) — `generate_transport_candidates` takes `target_planets` as a required
+**positional** 4th argument, unlike the other four generators' keyword-only
+(`**target_kwarg`) shape. It reuses the same `target_planets` list `scan_opportunities`
+already computed for the ladder's own ordering, so this adds no extra work.
+
+**Not included: Deploy.** `select_logistics_candidate` dispatches across four families
+(Transport, Deploy, local Harvest, foreign Harvest); Transport was excluded here on the
+same reasoning as Deploy until the ACS defense coordination plan's explicit scope
+decision to make every suggestion this codebase surfaces genuinely override-executable
+(Transport's write path already existed and needed no new capability — only surfacing).
+Deploy remains excluded: still the account's own fleet-logistics move, not something
+external to be informed about, and this plan made no scope decision about it.
 
 ## No new gating logic needed — the generators already self-gate
 
-Every one of the four generators checks its own flag as its very first line and returns
+Every one of the five generators checks its own flag as its very first line and returns
 `[]` immediately if it's off — confirmed by direct read of each function body, not
 assumed. This means `opportunities.py` needs **zero** gating logic of its own: a policy
 with every relevant flag at its default (off) produces an empty `OpportunityReport`
@@ -49,7 +63,7 @@ real duplication-of-truth risk (the exact kind of drift `AGENTS.md` §5 warns ab
 elsewhere in this codebase for the two-enforcement-layer allowlists) — reusing the
 generators' own internal checks avoids that entirely.
 
-All four generators are also pure and side-effect-free: no `http`/`read` calls, no
+All five generators are also pure and side-effect-free: no `http`/`read` calls, no
 mutation, nothing that could raise on bad network data. Every network-shaped input
 arrives as an already-fetched parameter the caller supplies. Calling them a second time,
 purely off data `tick.py` already fetched for the ladder, costs nothing extra — no

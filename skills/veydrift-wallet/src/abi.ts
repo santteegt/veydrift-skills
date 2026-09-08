@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Abi, AbiFunction } from "viem";
-import { toFunctionSelector, toFunctionSignature } from "viem";
+import { decodeFunctionResult, toFunctionSelector, toFunctionSignature } from "viem";
 
 // Resolve bundled paths relative to this file, never `cwd` -- this module may be invoked from
 // anywhere once the skill is installed elsewhere (npx skills add copies the tree).
@@ -280,4 +280,39 @@ export function functionsForSelector(selector: `0x${string}`): AbiFunction[] {
     const fns = abi.filter((e): e is AbiFunction => e.type === "function");
     return fns.filter((fn) => toFunctionSelector(fn).toLowerCase() === lower);
   });
+}
+
+/**
+ * Decode `returnData` against the resolved function's own ABI `outputs`, whenever
+ * they're non-empty -- a generalizable capability (any future read-shaped call
+ * benefits, not just the two ACS-coordination view functions this was built for:
+ * `counterplayDefenseFuelContext`/`defenseHoldFuelContext`, called via the same
+ * `buildTx`/`simulateTx` pipeline as any other Action, `contract: "alliance"`). Lives
+ * here rather than in `tx.ts`/`simulateTx` itself: decoding is a display/consumption
+ * concern (this is what `walletctl simulate --json` calls, `cli.ts`), not part of
+ * building or executing the call -- `simulateTx` stays free of it. Returns `undefined`
+ * (not an error) when the function has no outputs, isn't resolvable from the pinned
+ * ABIs, or decoding otherwise fails -- a decode failure must never mask a successful
+ * simulation as `ok: false`.
+ */
+export function decodeSimulateReturnData(
+  selector: `0x${string}`,
+  returnData: `0x${string}` | undefined,
+): Record<string, unknown> | undefined {
+  if (!returnData) return undefined;
+  const fn = functionsForSelector(selector)[0];
+  if (!fn || !fn.outputs || fn.outputs.length === 0) return undefined;
+  try {
+    const decoded = decodeFunctionResult({ abi: [fn], data: returnData });
+    const values = Array.isArray(decoded) ? decoded : [decoded];
+    const named: Record<string, unknown> = {};
+    fn.outputs.forEach((output, i) => {
+      const key = output.name && output.name.length > 0 ? output.name : `_${i}`;
+      const value = values[i];
+      named[key] = typeof value === "bigint" ? value.toString() : value;
+    });
+    return named;
+  } catch {
+    return undefined;
+  }
 }

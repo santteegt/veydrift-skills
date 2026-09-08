@@ -138,22 +138,34 @@ change is everything downstream of that:
   `VeydriftAllianceSystem` — `createAlliance`, `inviteMember`, `acceptInvite`,
   `leaveAlliance`, and 11 more — are reachable via `vd tick --action` only (never
   planner-proposed), gated on a new `policy.actions.allow_alliance` flag at `economy`
-  tier or above. Diplomacy (`setDiplomacy`: Ally/NAP/War) and ACS coordination
-  (`openDefenseIntent`) remain fully out of scope, unconditionally — combat-adjacent,
-  deferred. Combat is **almost** entirely out of scope,
-  unconditionally, still — the `FleetMissionType` enum's `AcsDefend`/`Intercept`/
-  `MissileAttack`/`AcsAttack`/`DefenseHold` values (as `launchFleetMission` mission
-  types — a distinct thing from the separate `launchInterplanetaryMissileAttack`
-  contract function below, despite the similar name) remain unreachable in code at every
-  tier, regardless of policy. Two exceptions now exist, both gated on
-  `policy.actions.allow_combat` at `operator` tier and both planner-reachable: **Attack**
-  (`launchFleetMission` mission type 3, since correction 70/71, §9, launch-actions plan
-  commits 5-6, 2026-08-28), at the ladder's `8e:attack` rung, and **Missile**
+  tier or above. Diplomacy (`setDiplomacy`: Ally/NAP/War) remains fully out of scope,
+  unconditionally — combat-adjacent, deferred. **ACS defense coordination
+  (`openDefenseIntent`, plus AcsDefend(5)/Intercept(6) as `launchFleetMission` mission
+  types and `launchDefenseHold`, its own entrypoint) is no longer out of scope either**,
+  per the ACS defense coordination feature (correction 74, §9): all four are
+  override-executable via `vd tick --action` only (never planner-proposed), gated on a
+  new `policy.actions.allow_acs_defense` flag whose tier floor splits within the one
+  flag — AcsDefend/Intercept/`launchDefenseHold` at `operator`, `openDefenseIntent` at
+  `economy` (matching the 15 membership functions' own floor). Combat proper (Attack's
+  battle resolution and Missile's launch aside) remains **almost** entirely out of scope,
+  unconditionally, still — `MissileAttack`/`AcsAttack` (as `launchFleetMission` mission
+  types — a distinct thing from the separate `launchInterplanetaryMissileAttack` contract
+  function below, despite the similar name) remain unreachable in code at every tier,
+  regardless of policy, and `DefenseHold`(9) is dead enum space for `launchFleetMission`
+  specifically (structurally impossible via that function regardless of policy — its own
+  `launchDefenseHold` entrypoint above is the real, separate reachable path). Three
+  exceptions now exist, each gated on its own flag at `operator` tier (except
+  `openDefenseIntent`, `economy`) and each planner-reachable except the ACS defense
+  coordination feature (manual-override only, by design): **Attack** (`launchFleetMission`
+  mission type 3, since correction 70/71, §9, launch-actions plan commits 5-6,
+  2026-08-28), at the ladder's `8e:attack` rung; **Missile**
   (`launchInterplanetaryMissileAttack`, a wholly separate contract entrypoint sharing
   nothing with `launchFleetMission`, since correction 72, commit 7, same date), at the
-  even-more-conservative `8f:missile` rung. Both require a human to opt in; neither is on
-  by default. A raid-profitability model remains out of
-  scope (`protectedResources` semantics still unconfirmed). Colonisation is **no
+  even-more-conservative `8f:missile` rung; and **ACS defense coordination**
+  (AcsDefend/Intercept/`launchDefenseHold`/`openDefenseIntent`, since correction 74),
+  manual-override only. All three require a human to opt in; none is on by default. A
+  raid-profitability model remains out of scope (`protectedResources` semantics still
+  unconfirmed). Colonisation is **no
   longer** a non-goal, per the above. Non-combat fleet logistics (Transport/Harvest) is
   **no longer** a non-goal either, and the generators are less conservative than they
   once were: Transport only ever considers the wallet's own planets, using
@@ -300,14 +312,18 @@ Tier is one field in `policy.json`. **No code path advances it** — only a huma
 > both enforcement layers in Phase 5b (§6.4). Both are fixed here to match the code and
 > `docs/COVERAGE.md` §1.6/§1.2.
 
-Combat (`AcsDefend`, `Intercept`, `MissileAttack`, `AcsAttack`, `DefenseHold`) is **unreachable in
-code at every tier, regardless of policy** — enabling any of them requires a source change, never a
-config edit. `Attack` is the one exception: as of the launch-actions plan's commit 5 (2026-08-28,
+`MissileAttack`/`AcsAttack` (as `launchFleetMission` mission-type arguments) are **unreachable in
+code at every tier, regardless of policy** — enabling either requires a source change, never a
+config edit. `Attack` is one exception: as of the launch-actions plan's commit 5 (2026-08-28,
 §9 correction 70), `policy.json`'s `allow_combat` key is a real, independently-checked gate for it
-at both enforcement layers, at `operator` tier. With two debris fields across ~195 planets the
-expected return does not justify the downside of the *other five* combat mission types, and the
-friction excluding them stays cheap; Attack's own economics are a separate, later question this
-correction does not attempt to settle.
+at both enforcement layers, at `operator` tier. `AcsDefend`/`Intercept`/`DefenseHold` are a second
+exception, per the ACS defense coordination feature (§9 correction 74): `policy.json`'s
+`allow_acs_defense` key gates all three (plus `openDefenseIntent`, on `VeydriftAllianceSystem`),
+manual-override-only, at `operator` tier for the fleet-moving three and `economy` for
+`openDefenseIntent`. With two debris fields across ~195 planets the expected return does not
+justify the downside of the *remaining two* combat mission types, and the friction excluding them
+stays cheap; Attack's own economics are a separate, later question this correction does not
+attempt to settle.
 
 > **Fix, 2026-08-12 (spec defect found by WP5).** `startShipProduction` was missing from the tier
 > table in v2.0, while §5.4's ladder rung 8 proposes ships when `actions.allow_ships` is enabled.
@@ -1792,7 +1808,9 @@ missions and colonisation (§5.4/§5.5/§6.4):**
     enforcement layers — the first change to widen §1's combat non-goal since this spec
     was written. Every other combat mission type (`AcsDefend`, `Intercept`,
     `MissileAttack`, `AcsAttack`, `DefenseHold`) stays unreachable in code at every tier,
-    regardless of policy, unchanged.
+    regardless of policy, unchanged **as of this correction** — `AcsDefend`/`Intercept`/
+    `DefenseHold` were later reopened by the ACS defense coordination feature, correction
+    74 below; `MissileAttack`/`AcsAttack` remain unreachable as stated here.
 
     `guard.py`'s `_ALLOWED_MISSION_TYPES` (unconditional: Transport/Deploy/Colonize/
     Harvest) gains a sibling, `_COMBAT_MISSION_TYPES = {Attack}`, checked only when
@@ -2092,6 +2110,97 @@ json`-alliance-branches/`_run_tick`-wiring/`_alliance_summary_line` blocks (~35 
 `skills/veydrift-wallet/tests/abi.test.ts`'s alliance-ABI block, `allowlist.test.ts`'s
 alliance describe block, `tx.test.ts`'s `contract` field tests, `policy.test.ts`'s
 `resolveAllowAlliance` quintet, and 15 new `selectors.cast.test.ts` entries.
+
+**Correction 74: ACS defense coordination — AcsDefend(5)/Intercept(6)
+(`launchFleetMission`), `launchDefenseHold` (its own entrypoint), and `openDefenseIntent`
+(`VeydriftAllianceSystem`), all manual-override-only.** Reopens what correction 71 and
+`AGENTS.md` §5 previously called permanently unreachable-by-code for AcsDefend/Intercept/
+DefenseHold specifically, on deliberate instruction after review — the friction those
+mission types still carry for `MissileAttack`/`AcsAttack` is unchanged. New
+`policy.actions.allow_acs_defense` flag, tier floor split within the one flag:
+AcsDefend/Intercept/`launchDefenseHold` require `operator` (real fleet/loss risk, same
+floor Attack/Missile already use); `openDefenseIntent` requires only `economy` (moves no
+fleet, spends no resource, same floor the 15 alliance membership functions use).
+
+**Contract mechanics, confirmed by direct source read** (`VeydriftGameplayModule.sol`,
+`VeydriftDefenseHoldModule.sol`, `VeydriftAllianceSystem.sol`,
+`libraries/VeydriftAntiRaidPrimitives.sol`, pinned commit `202d1ac`) — full writeup in
+`skills/veydrift-agent/references/coordination.md`:
+
+- AcsDefend/Intercept reuse `launchFleetMission`'s two existing overloads unchanged, but
+  repurpose the `targetPlanetId` calldata argument to mean `hostileMissionId` — a new,
+  **third** documented silent-corruption trap (`AGENTS.md` §7). The referenced hostile
+  mission must be exactly `Attack` (not the broader Attack/Intercept/MissileAttack triple
+  `openDefenseIntent`'s own authorization uses), still `Outbound`, target-matched, within
+  the 5-minute `ACS_DEFEND_JOIN_CUTOFF_SECONDS` window, and must satisfy
+  `FleetAlreadyArrived` (the caller's own computed arrival ≤ the hostile's `arrivalAt`).
+- `launchDefenseHold` is a wholly separate entrypoint (selector `d3ad415f`), not a
+  `launchFleetMission` overload — `hold_seconds` bounded to `[1 hour, 32 hours]`, real
+  (non-repurposed) origin/target arguments, still consumes a fleet slot and real ships.
+- `openDefenseIntent` is optional, not a prerequisite for AcsDefend/Intercept — its
+  `intentId` is never consumed elsewhere on-chain; its value is purely the
+  `AllianceDefenseIntentOpened` coordination signal.
+- Two live `view` functions (`counterplayDefenseFuelContext`/`defenseHoldFuelContext`)
+  return the real, contract-computed holding-fuel cost — used as the authoritative live
+  cost, never independently recomputed (this codebase's existing "no cost-scaling
+  function" invariant, §5). **`VeydriftAllianceSystem._canCoordinateDefense` short-
+  circuits `true` for a self-owned defended planet before checking status/hostility/
+  target-match/cutoff at all** — so a live `canCoordinate=true` is never sufficient on
+  its own; the independent hostile-mission re-check stays load-bearing even then.
+
+**New, 24th and 25th guard gates: `guard._gate_acs_defend_target`/
+`_gate_defense_hold_target`.** `_gate_alliance_action` gains a 16th function,
+`openDefenseIntent`, deliberately kept OUT of the existing `_ALLIANCE_FUNCTIONS`/
+`ALLIANCE_SIGNATURES` sets (a new, separate `_ACS_ALLIANCE_FUNCTIONS`/
+`ACS_ALLIANCE_SIGNATURES` carve-out on each side) so the pre-existing
+`_ALLIANCE_FUNCTIONS == ts_alliance_signature_names` cross-layer equality never breaks.
+`guard.idempotency_key` gained a fifth special case (`DEFENSE_HOLD`) and a sub-case
+inside the `ALLIANCE` branch for `openDefenseIntent`; the existing `FLEET_MISSION`
+branch's key now folds in `mission_id`, fixing a real collision between two different
+AcsDefend/Intercept actions launched from the same planet against different hostile
+missions. `_derive_fleet_mission_spend` folds in the live `netHoldingFuelCost` for both
+new action shapes — the same "spend must never be silently understated" defect class
+judge finding 1 (2026-08-17) already fixed once for the plain `FLEET_MISSION` case.
+`guard.PINNED_ABI_HASH`'s normal live-hash path covers AcsDefend/Intercept/
+`launchDefenseHold` unchanged (all three are on the GAME contract); only
+`openDefenseIntent` gets the alliance-contract no-live-hash carve-out.
+
+An adversarial review pass against this feature's own draft plan (Fable 5, before any
+code was written) found 15 concrete defects, several severe enough that the plan as first
+written would have shipped a gate silently permitting a broader hostile-mission-type set
+than the contract allows, a real idempotency collision, and a wallet-side JSON channel
+that didn't exist yet (`walletctl simulate` had no `--json` output before this feature).
+All 15 are incorporated into what shipped; see `skills/veydrift-agent/CHANGELOG.md`'s
+`1.19.0` entry and `skills/veydrift-wallet/CHANGELOG.md`'s `1.1.0` entry for the itemized
+result.
+
+Two new modules layer suggestions on top, both fully additive: `coordination.py`
+(`suggest_coordination`) derives a suggestion per `incoming_fleet` radar finding whose
+`mission_type_name == "Attack"`, wired into `vd tick` (gated on
+`policy.actions.allow_alliance`, a visibility gate independent of `allow_acs_defense`)
+and unconditionally into `vd radar check`; `opportunities.py` gains a fifth family,
+`transport` (the pre-existing, already-allowlisted `generate_transport_candidates`,
+surfaced here for the first time — a scope decision, not new write capability).
+
+**Live verification status, stated honestly, not overclaimed**: `GET /mission/{id}`'s
+shape was confirmed live against a real (already-resolved) mission; the still-`Outbound`-
+and-hostile case remains typed-from-source against the real backend specifically (a
+fork-created hostile mission is invisible to the real indexer by construction). All four
+new/newly-allowlisted selectors (`launchDefenseHold`, `openDefenseIntent`,
+`counterplayDefenseFuelContext`, `defenseHoldFuelContext`) were cross-checked against live
+`cast sig` output. **All four functions have since been live-sent on a local Anvil fork
+of Base (round 6, 2026-09-08, `skills/veydrift-wallet/references/fork-testing.md` §13)** —
+`launchDefenseHold`, AcsDefend, Intercept, and `openDefenseIntent` each produced real,
+decoded on-chain events and real before/after state, including live confirmation of the
+`targetPlanetId`-repurposing, the forced-equal `arrivalAt`, the `randomnessRequestId`
+overwrite, and (via a deliberate negative case) the exactly-`Attack` mission-type
+requirement rejecting a non-Attack hostile mission with a real `InvalidMissionType`
+revert. That round also found and fixed a real gap: `guard._gate_alliance_action`'s
+`openDefenseIntent` branch did not verify caller ownership of the defended planet, a
+precondition the contract itself requires unconditionally — now checked independently via
+`Snapshot`, matching the other two new gates. Scope remains honestly bounded: full
+combined-defense resolution (behind the same off-chain randomness reveal gap Attack's own
+resolution already has) was not, and could not be, exercised.
 
 ---
 

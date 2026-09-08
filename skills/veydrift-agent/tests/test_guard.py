@@ -189,10 +189,11 @@ def verdict(report, gate: str):
 def test_all_nineteen_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 23
+    assert report.total == 25
     gates = {v.gate for v in report.verdicts}
     assert gates == {
         "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "missile_target",
+        "acs_defend_target", "defense_hold_target",
         "alliance_action", "attack_protection",
         "address",
         "abi_hash", "health",
@@ -2164,13 +2165,26 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
     # conditional COMBAT_SIGNATURES instead (see guard._COMBAT_ONLY_FUNCTIONS's own
     # docstring for why this is a genuine, not accidental, shape difference between the
     # two layers). Excluded here, diffed against COMBAT_SIGNATURES below instead.
-    py_operator_unconditional = py_operator - guard._COMBAT_ONLY_FUNCTIONS
+    # ACS defense coordination feature: `launchDefenseHold` is its own carve-out of the
+    # exact same shape, one tier up from alliance's -- unconditionally `operator` in
+    # guard.py's tier map, but its own always-conditional `DEFENSE_HOLD_SIGNATURES` on the
+    # TS side, not `LAUNCH_FLEET_MISSION_SIGNATURES` (it isn't a launchFleetMission
+    # overload at all). Excluded here, diffed against DEFENSE_HOLD_SIGNATURES below.
+    py_operator_unconditional = py_operator - guard._COMBAT_ONLY_FUNCTIONS - guard._DEFENSE_HOLD_ONLY_FUNCTIONS
     # Alliance feature, commit 3: the same shape as the missile carve-out above, one tier
     # down -- the 15 alliance functions are `economy` in guard.py's tier map (their real
     # tier requirement), but allowlist.ts's `ECONOMY_SIGNATURES` is the UNCONDITIONAL
     # economy set; alliance's selectors live in the separate, always-conditional
     # ALLIANCE_SIGNATURES instead. Excluded here, diffed against ALLIANCE_SIGNATURES below.
-    py_economy_unconditional = py_economy - guard._ALLIANCE_FUNCTIONS
+    # ACS defense coordination feature: `openDefenseIntent` gets the identical carve-out,
+    # one function wide -- `economy` in guard.py's tier map, but its own always-
+    # conditional `ACS_ALLIANCE_SIGNATURES` on the TS side, deliberately kept out of both
+    # `ALLIANCE_SIGNATURES` and `ECONOMY_SIGNATURES` (Opus review finding 1 -- folding it
+    # into `_ALLIANCE_FUNCTIONS` would break the `_ALLIANCE_FUNCTIONS ==
+    # ts_alliance_signature_names` equality below, since it deliberately isn't in
+    # ALLIANCE_SIGNATURES either). Excluded here, diffed against ACS_ALLIANCE_SIGNATURES
+    # below.
+    py_economy_unconditional = py_economy - guard._ALLIANCE_FUNCTIONS - guard._ACS_ALLIANCE_FUNCTIONS
 
     assert py_economy_unconditional == ts_economy, (
         "economy-tier functions disagree between guard.py and allowlist.ts.\n"
@@ -2217,6 +2231,38 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
         f"_MIN_TIER_FOR_FUNCTION: {sorted(guard._ALLIANCE_FUNCTIONS - py_economy)}"
     )
 
+    # ACS defense coordination feature: the same pair of assertions as combat's/alliance's,
+    # for `launchDefenseHold`'s own carve-out.
+    ts_defense_hold_signature_names = names_in("DEFENSE_HOLD_SIGNATURES")
+    assert guard._DEFENSE_HOLD_ONLY_FUNCTIONS == ts_defense_hold_signature_names, (
+        "defense-hold (allow_acs_defense-gated) functions disagree between guard.py's "
+        "_DEFENSE_HOLD_ONLY_FUNCTIONS and allowlist.ts's DEFENSE_HOLD_SIGNATURES.\n"
+        f"  only in guard.py:    {sorted(guard._DEFENSE_HOLD_ONLY_FUNCTIONS - ts_defense_hold_signature_names)}\n"
+        f"  only in allowlist.ts:{sorted(ts_defense_hold_signature_names - guard._DEFENSE_HOLD_ONLY_FUNCTIONS)}"
+    )
+    assert guard._DEFENSE_HOLD_ONLY_FUNCTIONS <= py_operator, (
+        f"guard._DEFENSE_HOLD_ONLY_FUNCTIONS contains a function not mapped to Tier.OPERATOR in "
+        f"_MIN_TIER_FOR_FUNCTION: {sorted(guard._DEFENSE_HOLD_ONLY_FUNCTIONS - py_operator)}"
+    )
+
+    # ACS defense coordination feature: the same pair of assertions, for
+    # `openDefenseIntent`'s own carve-out.
+    ts_acs_alliance_signature_names = names_in("ACS_ALLIANCE_SIGNATURES")
+    assert guard._ACS_ALLIANCE_FUNCTIONS == ts_acs_alliance_signature_names, (
+        "ACS-alliance (allow_acs_defense-gated) functions disagree between guard.py's "
+        "_ACS_ALLIANCE_FUNCTIONS and allowlist.ts's ACS_ALLIANCE_SIGNATURES.\n"
+        f"  only in guard.py:    {sorted(guard._ACS_ALLIANCE_FUNCTIONS - ts_acs_alliance_signature_names)}\n"
+        f"  only in allowlist.ts:{sorted(ts_acs_alliance_signature_names - guard._ACS_ALLIANCE_FUNCTIONS)}"
+    )
+    assert guard._ACS_ALLIANCE_FUNCTIONS <= py_economy, (
+        f"guard._ACS_ALLIANCE_FUNCTIONS contains a function not mapped to Tier.ECONOMY in "
+        f"_MIN_TIER_FOR_FUNCTION: {sorted(guard._ACS_ALLIANCE_FUNCTIONS - py_economy)}"
+    )
+    # And the two carve-outs must never collide with the 15/1 sets they sit alongside --
+    # a name in both would be silently double-gated by two different flags.
+    assert not (guard._ACS_ALLIANCE_FUNCTIONS & guard._ALLIANCE_FUNCTIONS)
+    assert not (guard._DEFENSE_HOLD_ONLY_FUNCTIONS & guard._COMBAT_ONLY_FUNCTIONS)
+
     # Phase 5c (docs/SPEC.md §5.5): the two layers must also agree on WHICH mission types
     # launchFleetMission may submit, not just that the function itself is allowed --
     # guard.py's `mission_type` gate and allowlist.ts's calldata-level check are two
@@ -2257,15 +2303,40 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
         "allow_combat is meant to widen exactly one mission type, not combat as an undifferentiated whole"
     )
 
+    # ACS defense coordination feature: a third, independent pair of static sets, one tier
+    # down from combat's -- AcsDefend/Intercept only, gated on the DIFFERENT
+    # allow_acs_defense flag. Kept separate from _COMBAT_MISSION_TYPES on purpose, so this
+    # test can also assert allow_combat=true never unlocks these two on its own.
+    ts_acs_mission_types = numbers_in_readonly_set("ACS_MISSION_TYPES")
+    py_acs_mission_types = set(guard._ACS_MISSION_TYPES)
+    assert py_acs_mission_types == ts_acs_mission_types, (
+        "acs-defense-gated launchFleetMission mission types disagree between guard.py's "
+        "_ACS_MISSION_TYPES and allowlist.ts's ACS_MISSION_TYPES.\n"
+        f"  only in guard.py:    {sorted(py_acs_mission_types - ts_acs_mission_types)}\n"
+        f"  only in allowlist.ts:{sorted(ts_acs_mission_types - py_acs_mission_types)}"
+    )
+    assert py_acs_mission_types == {ids.FleetMissionType.ACS_DEFEND, ids.FleetMissionType.INTERCEPT}, (
+        f"guard.py's _ACS_MISSION_TYPES is not exactly {{AcsDefend, Intercept}}: {sorted(py_acs_mission_types)}"
+    )
+
     # And neither side's UNCONDITIONAL set has smuggled a combat type in -- Attack is
     # correctly absent from these two (it lives only in the combat-gated pair above), and
-    # the remaining five combat types must be absent from all four sets, always, at every
-    # tier and regardless of allow_combat.
+    # AcsDefend/Intercept are correctly absent too (they live only in the acs-gated pair
+    # above). The remaining three combat types must be absent from every one of the six
+    # sets checked in this test, always, at every tier and regardless of any policy flag.
     assert ids.FleetMissionType.ATTACK not in py_mission_types, "guard.py's unconditional set allows Attack outright"
     assert ids.FleetMissionType.ATTACK not in ts_mission_types, "allowlist.ts's unconditional set allows Attack outright"
+    assert ids.FleetMissionType.ACS_DEFEND not in py_mission_types, "guard.py's unconditional set allows AcsDefend outright"
+    assert ids.FleetMissionType.ACS_DEFEND not in ts_mission_types, "allowlist.ts's unconditional set allows AcsDefend outright"
+    assert ids.FleetMissionType.INTERCEPT not in py_mission_types, "guard.py's unconditional set allows Intercept outright"
+    assert ids.FleetMissionType.INTERCEPT not in ts_mission_types, "allowlist.ts's unconditional set allows Intercept outright"
+    # The critical regression this feature must never introduce: allow_combat=true alone
+    # must NEVER unlock AcsDefend/Intercept -- they are gated on the different
+    # allow_acs_defense flag exclusively.
+    assert not (py_combat_mission_types & py_acs_mission_types), "guard.py's combat-gated set overlaps its acs-gated set"
+    assert not (ts_combat_mission_types & ts_acs_mission_types), "allowlist.ts's combat-gated set overlaps its acs-gated set"
+
     never_allowed_combat_types = {
-        ids.FleetMissionType.ACS_DEFEND,
-        ids.FleetMissionType.INTERCEPT,
         ids.FleetMissionType.MISSILE_ATTACK,
         ids.FleetMissionType.ACS_ATTACK,
         ids.FleetMissionType.DEFENSE_HOLD,
@@ -2275,6 +2346,8 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
         ("allowlist.ts's unconditional set", ts_mission_types),
         ("guard.py's combat-gated set", py_combat_mission_types),
         ("allowlist.ts's combat-gated set", ts_combat_mission_types),
+        ("guard.py's acs-gated set", py_acs_mission_types),
+        ("allowlist.ts's acs-gated set", ts_acs_mission_types),
     ):
         assert not (s & never_allowed_combat_types), f"{label} allows an always-excluded combat type: {s & never_allowed_combat_types}"
 
@@ -2796,3 +2869,669 @@ def test_alliance_action_abi_hash_passes_even_when_the_game_hash_mismatches():
     policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
     report = evaluate(action, make_snapshot(abi_hash="sha256:not-the-pinned-hash"), policy, alliance_state=make_alliance_state())
     assert verdict(report, "abi_hash").status is GuardStatus.PASS
+
+
+# --------------------------------------------------------------------------------------
+# ACS defense coordination feature -- AcsDefend(5)/Intercept(6) (launchFleetMission),
+# launchDefenseHold (its own entrypoint), and openDefenseIntent (VeydriftAllianceSystem).
+# Reachable only via manual override, `policy.actions.allow_acs_defense` -- the same
+# reachability posture the 15 alliance membership functions above already established.
+#
+# `NOW_EPOCH`: with a 1-Small-Cargo fleet from planet 664 ("7:181:14") to "7:181:15"
+# (distance 1005, no drive tech researched), the caller's own computed travel time is
+# 506s (verified against calc.py directly: calc.travel_seconds(1005, 5000, 100) == 506,
+# ship speed 5000 from calc.ship_movement_stats(SMALL_CARGO, 0, 0, 0)).
+# --------------------------------------------------------------------------------------
+
+NOW_EPOCH = int(NOW.timestamp())
+ACS_OWN_TRAVEL_SECONDS = 506  # 1 Small Cargo, distance 1005, no drive tech -- see above.
+
+
+def make_acs_defend_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.FLEET_MISSION,
+        function="launchFleetMission",
+        planet_id=664,
+        mission_type=ids.FleetMissionType.ACS_DEFEND,
+        origin_planet_id=664,
+        mission_id=99001,
+        ships={ids.Ship.SMALL_CARGO: 1},
+        rule="operator override",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def make_defense_hold_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.DEFENSE_HOLD,
+        function="launchDefenseHold",
+        planet_id=664,
+        origin_planet_id=664,
+        target_planet_id=23,
+        target_coordinates="7:181:15",
+        ships={ids.Ship.SMALL_CARGO: 1},
+        hold_seconds=3600,
+        rule="operator override",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def make_hostile_mission(**overrides) -> dict:
+    """The inner `mission` object from `GET /mission/{id}`'s response, already unwrapped
+    -- see `_hostile_mission_coordination_defect`'s docstring. Defaults to a live,
+    still-joinable Attack landing comfortably after both the caller's own computed
+    arrival (`ACS_OWN_TRAVEL_SECONDS`) and the 5-minute join cutoff."""
+    base = dict(
+        missionId=99001,
+        missionType="Attack",
+        status="Outbound",
+        targetPlanetId=664,
+        arrivalAt=NOW_EPOCH + 600,
+        targetPlanet={"coordinates": "7:181:15"},
+    )
+    base.update(overrides)
+    return base
+
+
+# --- _parse_epoch_seconds / _hostile_mission_coordination_defect (whitebox) ---
+
+
+def test_parse_epoch_seconds_accepts_int_float_and_decimal_string():
+    assert guard._parse_epoch_seconds(1786536000) == 1786536000
+    assert guard._parse_epoch_seconds(1786536000.0) == 1786536000
+    assert guard._parse_epoch_seconds("1786536000") == 1786536000
+    assert guard._parse_epoch_seconds("  1786536000  ") == 1786536000
+
+
+def test_parse_epoch_seconds_rejects_unparseable_shapes():
+    """An ISO string, `None`, and a bool must all fail closed to `None` -- never a guess."""
+    assert guard._parse_epoch_seconds(None) is None
+    assert guard._parse_epoch_seconds("2026-08-12T12:00:00Z") is None
+    assert guard._parse_epoch_seconds(True) is None
+    assert guard._parse_epoch_seconds([1786536000]) is None
+
+
+def test_hostile_mission_coordination_defect_none_fetch_fails_closed():
+    assert guard._hostile_mission_coordination_defect(None, defender_planet_id=664, now_epoch=NOW_EPOCH) is not None
+
+
+def test_hostile_mission_coordination_defect_passes_the_happy_path():
+    defect = guard._hostile_mission_coordination_defect(
+        make_hostile_mission(), defender_planet_id=664, now_epoch=NOW_EPOCH
+    )
+    assert defect is None
+
+
+@pytest.mark.parametrize("mission_type", ["Intercept", "MissileAttack", "AcsAttack", "Transport", None])
+def test_hostile_mission_coordination_defect_requires_exactly_attack(mission_type):
+    """Opus review finding 2: the counterplay branch's own mission-type check is exactly
+    `Attack`, narrower than `_isHostileMission`'s Attack/Intercept/MissileAttack triple --
+    reusing that broader triple here would silently permit joining against a mission the
+    real contract would revert `InvalidMissionType` for."""
+    mission = make_hostile_mission(missionType=mission_type)
+    defect = guard._hostile_mission_coordination_defect(mission, defender_planet_id=664, now_epoch=NOW_EPOCH)
+    assert defect is not None
+    assert "Attack" in defect
+
+
+@pytest.mark.parametrize("status", ["Returned", "Resolved", None])
+def test_hostile_mission_coordination_defect_requires_outbound_status(status):
+    mission = make_hostile_mission(status=status)
+    defect = guard._hostile_mission_coordination_defect(mission, defender_planet_id=664, now_epoch=NOW_EPOCH)
+    assert defect is not None
+    assert "Outbound" in defect
+
+
+def test_hostile_mission_coordination_defect_requires_target_planet_match():
+    mission = make_hostile_mission(targetPlanetId=999)
+    defect = guard._hostile_mission_coordination_defect(mission, defender_planet_id=664, now_epoch=NOW_EPOCH)
+    assert defect is not None
+    assert "does not match" in defect
+
+
+def test_hostile_mission_coordination_defect_skips_target_match_when_defender_unknown():
+    """`defender_planet_id=None` (unknown/not-applicable) must not spuriously BLOCK on a
+    target mismatch it has no basis to check."""
+    mission = make_hostile_mission(targetPlanetId=999)
+    defect = guard._hostile_mission_coordination_defect(mission, defender_planet_id=None, now_epoch=NOW_EPOCH)
+    assert defect is None
+
+
+def test_hostile_mission_coordination_defect_requires_parseable_arrival_at():
+    mission = make_hostile_mission(arrivalAt=None)
+    defect = guard._hostile_mission_coordination_defect(mission, defender_planet_id=664, now_epoch=NOW_EPOCH)
+    assert defect is not None
+    assert "arrivalAt" in defect
+
+
+def test_hostile_mission_coordination_defect_join_cutoff_boundary():
+    """`VeydriftAntiRaidPrimitives.canJoinAcsDefense`: `now + 300 < arrivalAt`. Exactly at
+    the boundary (`arrivalAt == now + 300`) the cutoff has passed (`<`, not `<=`); one
+    second later it has not."""
+    at_boundary = make_hostile_mission(arrivalAt=NOW_EPOCH + guard._ACS_DEFEND_JOIN_CUTOFF_SECONDS)
+    defect = guard._hostile_mission_coordination_defect(at_boundary, defender_planet_id=664, now_epoch=NOW_EPOCH)
+    assert defect is not None
+    assert "cutoff" in defect
+
+    past_boundary = make_hostile_mission(arrivalAt=NOW_EPOCH + guard._ACS_DEFEND_JOIN_CUTOFF_SECONDS + 1)
+    defect = guard._hostile_mission_coordination_defect(past_boundary, defender_planet_id=664, now_epoch=NOW_EPOCH)
+    assert defect is None
+
+
+# --- _gate_acs_defend_target ---
+
+
+def test_acs_defend_target_passes_trivially_for_a_non_acs_action():
+    report = evaluate(make_build_action(), make_snapshot(), make_policy())
+    assert verdict(report, "acs_defend_target").status is GuardStatus.PASS
+
+
+def test_acs_defend_target_passes_trivially_for_a_non_acs_mission_type():
+    action = make_acs_defend_action(mission_type=ids.FleetMissionType.TRANSPORT, target_coordinates="7:181:15")
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy)
+    assert verdict(report, "acs_defend_target").status is GuardStatus.PASS
+
+
+@pytest.mark.parametrize("mission_type", [ids.FleetMissionType.ACS_DEFEND, ids.FleetMissionType.INTERCEPT])
+def test_acs_defend_target_blocks_when_allow_acs_defense_is_false(mission_type):
+    action = make_acs_defend_action(mission_type=mission_type)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=False))
+    report = evaluate(
+        action, make_snapshot(), policy, hostile_mission=make_hostile_mission(), coordination_allowed=True
+    )
+    assert verdict(report, "acs_defend_target").status is GuardStatus.BLOCK
+
+
+def test_acs_defend_target_blocks_when_hostile_mission_fetch_failed():
+    """Fail-closed on `None` -- a failed/unattempted live fetch, never treated as
+    allowed."""
+    action = make_acs_defend_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy, hostile_mission=None, coordination_allowed=True)
+    assert verdict(report, "acs_defend_target").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("coordination_allowed", [None, False])
+def test_acs_defend_target_blocks_when_coordination_allowed_is_not_true(coordination_allowed):
+    action = make_acs_defend_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, make_snapshot(), policy, hostile_mission=make_hostile_mission(), coordination_allowed=coordination_allowed
+    )
+    assert verdict(report, "acs_defend_target").status is GuardStatus.BLOCK
+
+
+def test_acs_defend_target_blocks_when_referenced_mission_is_not_exactly_attack():
+    """The gate-level regression test for Opus review finding 2 -- see the whitebox test
+    above for the exhaustive per-type version; this confirms it's actually wired through
+    `evaluate_guardrails`."""
+    action = make_acs_defend_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        hostile_mission=make_hostile_mission(missionType="Intercept"),
+        coordination_allowed=True,
+    )
+    assert verdict(report, "acs_defend_target").status is GuardStatus.BLOCK
+
+
+def test_acs_defend_target_blocks_on_fleet_already_arrived():
+    """Own computed arrival (`ACS_OWN_TRAVEL_SECONDS` = 506s) after the hostile mission's
+    own `arrivalAt` -- `FleetAlreadyArrived`, independent of and stricter than the
+    5-minute join cutoff (both would pass the cutoff check here)."""
+    action = make_acs_defend_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    hostile = make_hostile_mission(arrivalAt=NOW_EPOCH + 400)  # cutoff passes (400 > 300), FleetAlreadyArrived doesn't (506 > 400)
+    report = evaluate(action, make_snapshot(), policy, hostile_mission=hostile, coordination_allowed=True)
+    v = verdict(report, "acs_defend_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "FleetAlreadyArrived" in v.detail
+
+
+def test_acs_defend_target_blocks_when_origin_planet_not_owned():
+    action = make_acs_defend_action(origin_planet_id=999)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, make_snapshot(), policy, hostile_mission=make_hostile_mission(), coordination_allowed=True
+    )
+    assert verdict(report, "acs_defend_target").status is GuardStatus.BLOCK
+
+
+def test_acs_defend_target_blocks_when_target_planet_coordinates_missing():
+    action = make_acs_defend_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    hostile = make_hostile_mission(targetPlanet={})
+    report = evaluate(action, make_snapshot(), policy, hostile_mission=hostile, coordination_allowed=True)
+    assert verdict(report, "acs_defend_target").status is GuardStatus.BLOCK
+
+
+def test_acs_defend_target_blocks_when_own_ship_speed_is_unverifiable():
+    action = make_acs_defend_action(ships={})
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, make_snapshot(), policy, hostile_mission=make_hostile_mission(), coordination_allowed=True
+    )
+    assert verdict(report, "acs_defend_target").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("mission_type", [ids.FleetMissionType.ACS_DEFEND, ids.FleetMissionType.INTERCEPT])
+def test_acs_defend_target_passes_every_precondition(mission_type):
+    action = make_acs_defend_action(mission_type=mission_type)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, make_snapshot(), policy, hostile_mission=make_hostile_mission(), coordination_allowed=True
+    )
+    assert verdict(report, "acs_defend_target").status is GuardStatus.PASS
+
+
+def test_acs_defend_target_mission_type_gate_agrees_it_is_allowed():
+    """The `mission_type` gate (`_gate_mission_type`) and this new gate are independent --
+    confirm both actually ALLOW the same action when `allow_acs_defense=True`, not just
+    that neither BLOCKs it in isolation."""
+    action = make_acs_defend_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, make_snapshot(), policy, hostile_mission=make_hostile_mission(), coordination_allowed=True
+    )
+    assert verdict(report, "mission_type").status is GuardStatus.PASS
+    assert verdict(report, "acs_defend_target").status is GuardStatus.PASS
+
+
+def test_acs_defend_target_allow_combat_alone_does_not_unlock_it():
+    """The critical regression this feature must never introduce: `allow_combat=true`
+    without `allow_acs_defense` must still BLOCK both the `mission_type` gate and this
+    one -- they are gated on two different flags."""
+    action = make_acs_defend_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_combat=True, allow_acs_defense=False))
+    report = evaluate(
+        action, make_snapshot(), policy, hostile_mission=make_hostile_mission(), coordination_allowed=True
+    )
+    assert verdict(report, "mission_type").status is GuardStatus.BLOCK
+    assert verdict(report, "acs_defend_target").status is GuardStatus.BLOCK
+
+
+# --- _gate_defense_hold_target ---
+
+
+def test_defense_hold_target_passes_trivially_for_a_non_defense_hold_action():
+    report = evaluate(make_build_action(), make_snapshot(), make_policy())
+    assert verdict(report, "defense_hold_target").status is GuardStatus.PASS
+
+
+def test_defense_hold_target_blocks_when_allow_acs_defense_is_false():
+    action = make_defense_hold_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=False))
+    report = evaluate(action, make_snapshot(), policy, coordination_allowed=True)
+    assert verdict(report, "defense_hold_target").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("hold_seconds", [None, 3599, 115201, 0, -1])
+def test_defense_hold_target_blocks_out_of_range_hold_seconds(hold_seconds):
+    action = make_defense_hold_action(hold_seconds=hold_seconds)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy, coordination_allowed=True)
+    v = verdict(report, "defense_hold_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "InvalidHoldWindow" in v.detail
+
+
+@pytest.mark.parametrize("hold_seconds", [3600, 115200, 3601, 115199, 57600])
+def test_defense_hold_target_allows_in_range_hold_seconds_boundaries(hold_seconds):
+    action = make_defense_hold_action(hold_seconds=hold_seconds)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy, coordination_allowed=True)
+    assert verdict(report, "defense_hold_target").status is GuardStatus.PASS
+
+
+def test_defense_hold_target_blocks_same_planet():
+    action = make_defense_hold_action(target_planet_id=664)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy, coordination_allowed=True)
+    v = verdict(report, "defense_hold_target")
+    assert v.status is GuardStatus.BLOCK
+    assert "SamePlanet" in v.detail
+
+
+def test_defense_hold_target_blocks_when_origin_planet_not_owned():
+    action = make_defense_hold_action(planet_id=999, origin_planet_id=999)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy, coordination_allowed=True)
+    assert verdict(report, "defense_hold_target").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("coordination_allowed", [None, False])
+def test_defense_hold_target_blocks_when_coordination_allowed_is_not_true(coordination_allowed):
+    action = make_defense_hold_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy, coordination_allowed=coordination_allowed)
+    assert verdict(report, "defense_hold_target").status is GuardStatus.BLOCK
+
+
+def test_defense_hold_target_passes_every_precondition():
+    action = make_defense_hold_action()
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy, coordination_allowed=True)
+    assert verdict(report, "defense_hold_target").status is GuardStatus.PASS
+
+
+def test_defense_hold_target_tier_floor_is_operator_not_economy():
+    action = make_defense_hold_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(), policy, coordination_allowed=True)
+    assert verdict(report, "tier").status is GuardStatus.BLOCK
+
+
+# --- _gate_prerequisites / _gate_fleet_slots widened to DEFENSE_HOLD ---
+
+
+def test_defense_hold_ship_availability_is_checked_not_skipped():
+    """The corrected version of Opus review finding 8: before the `_gate_prerequisites`
+    dispatch fix, `DEFENSE_HOLD` fell through to a `None` family lookup and PASSed
+    ship-availability trivially, regardless of whether the origin planet owned the ships
+    committed. Requesting more Small Cargos than built must BLOCK."""
+    action = make_defense_hold_action(ships={ids.Ship.SMALL_CARGO: 5})
+    planet = make_planet(ships=[Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=1, cost=Resources())])
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, make_snapshot(planets=[planet]), policy, coordination_allowed=True)
+    v = verdict(report, "prerequisites")
+    assert v.status is GuardStatus.BLOCK
+    assert "Small Cargo" in v.detail
+
+
+def test_defense_hold_fleet_slots_is_checked_not_skipped():
+    action = make_defense_hold_action()
+    planet = make_planet(ships=[Entity(id=ids.Ship.SMALL_CARGO, name="Small Cargo", count=1, cost=Resources())])
+    snapshot = make_snapshot(planets=[planet], fleet_slots_active=1, fleet_slots_limit=1)
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, snapshot, policy, coordination_allowed=True)
+    v = verdict(report, "fleet_slots")
+    assert v.status is GuardStatus.BLOCK
+    assert "no free fleet slot" in v.detail
+
+
+# --- _derive_fleet_mission_spend / affordability / reserve / value_ceiling ---
+
+
+def test_acs_defend_spend_includes_net_holding_fuel_cost():
+    """Opus review finding 9: without the fix, AcsDefend/Intercept spend would be zero
+    (target_coordinates is deliberately unset for these two -- the ordinary distance-
+    based formula can't run), silently ignoring the real live holding-fuel cost."""
+    planet = make_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=100))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_acs_defend_action(cost=Resources())
+    spend = guard._derive_fleet_mission_spend(action, snapshot, net_holding_fuel_cost=75)
+    assert spend == Resources(metal=0, crystal=0, deuterium=75)
+
+
+def test_acs_defend_spend_is_none_never_zero_when_net_holding_fuel_cost_unknown():
+    planet = make_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=100))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_acs_defend_action(cost=Resources())
+    assert guard._derive_fleet_mission_spend(action, snapshot, net_holding_fuel_cost=None) is None
+
+
+def test_acs_defend_affordability_blocks_on_unverifiable_spend_not_a_hand_written_cost():
+    """A hand-written override with a `cost` field set must NOT be trusted -- this action
+    family's true cost only ever comes from the independent re-derivation above."""
+    planet = make_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=0))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_acs_defend_action(cost=Resources(deuterium=999_999))
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, snapshot, policy, hostile_mission=make_hostile_mission(), coordination_allowed=True, net_holding_fuel_cost=None
+    )
+    assert verdict(report, "affordability").status is GuardStatus.BLOCK
+
+
+def test_defense_hold_spend_is_ordinary_fuel_plus_net_holding_fuel_cost():
+    """`launchDefenseHold`'s real `target_coordinates` (unlike AcsDefend/Intercept's,
+    deliberately unset) let this branch run the ordinary distance-based fuel formula --
+    then add the live `net_holding_fuel_cost` on top, mirroring
+    `VeydriftDefenseHoldModule.sol`'s own `fuelCost = ordinary + netHoldingFuelCost`."""
+    planet = make_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=1000))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_defense_hold_action(cost=Resources())
+    spend = guard._derive_fleet_mission_spend(action, snapshot, net_holding_fuel_cost=40)
+    # Ordinary fuel for 1 Small Cargo over distance 1005, no drive tech, is 2 deuterium
+    # (verified against calc.py directly, same fixture the FLEET_MISSION spend tests use).
+    assert spend == Resources(metal=0, crystal=0, deuterium=42)
+
+
+def test_defense_hold_spend_is_none_never_zero_when_net_holding_fuel_cost_unknown():
+    """The near-zero understatement Opus review finding 9 specifically named: a
+    hand-written DefenseHold override with no `cost` field must never silently derive a
+    spend of zero when the live holding-fuel fetch is unavailable."""
+    planet = make_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=1000))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_defense_hold_action(cost=Resources())
+    assert guard._derive_fleet_mission_spend(action, snapshot, net_holding_fuel_cost=None) is None
+
+
+def test_defense_hold_affordability_blocks_when_net_holding_fuel_cost_unknown():
+    planet = make_planet(resources_as_of_now=Resources(metal=0, crystal=0, deuterium=1000))
+    snapshot = make_snapshot(planets=[planet])
+    action = make_defense_hold_action(cost=Resources())
+    policy = make_policy(tier=Tier.OPERATOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(action, snapshot, policy, coordination_allowed=True, net_holding_fuel_cost=None)
+    assert verdict(report, "affordability").status is GuardStatus.BLOCK
+
+
+# --- openDefenseIntent (VeydriftAllianceSystem, `_gate_alliance_action`'s 16th function) ---
+
+
+def make_open_defense_intent_action(**overrides) -> Action:
+    base = dict(
+        kind=ActionKind.ALLIANCE,
+        function="openDefenseIntent",
+        planet_id=664,
+        mission_id=99001,
+        rule="operator override",
+        rationale="test",
+    )
+    base.update(overrides)
+    return Action(**base)
+
+
+def test_open_defense_intent_is_not_gated_by_allow_alliance():
+    """Deliberately NOT folded into `_ALLIANCE_FUNCTIONS` -- `allow_alliance=True` alone,
+    without `allow_acs_defense`, must still BLOCK."""
+    action = make_open_defense_intent_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True, allow_acs_defense=False))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        alliance_state=make_alliance_state(),
+        hostile_mission=make_hostile_mission(),
+        coordination_allowed=True,
+    )
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_open_defense_intent_passes_at_economy_with_allow_acs_defense():
+    action = make_open_defense_intent_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        alliance_state=make_alliance_state(),
+        hostile_mission=make_hostile_mission(),
+        coordination_allowed=True,
+    )
+    assert verdict(report, "alliance_action").status is GuardStatus.PASS
+    assert verdict(report, "tier").status is GuardStatus.PASS
+
+
+def test_open_defense_intent_blocks_below_economy_tier():
+    action = make_open_defense_intent_action()
+    policy = make_policy(tier=Tier.ADVISOR, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        alliance_state=make_alliance_state(),
+        hostile_mission=make_hostile_mission(),
+        coordination_allowed=True,
+    )
+    assert verdict(report, "tier").status is GuardStatus.BLOCK
+
+
+def test_open_defense_intent_blocks_when_alliance_state_is_none():
+    action = make_open_defense_intent_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, make_snapshot(), policy, alliance_state=None, hostile_mission=make_hostile_mission(), coordination_allowed=True
+    )
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_open_defense_intent_blocks_when_caller_is_not_an_alliance_member():
+    action = make_open_defense_intent_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        alliance_state=make_alliance_state(membership=None),
+        hostile_mission=make_hostile_mission(),
+        coordination_allowed=True,
+    )
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_open_defense_intent_blocks_when_hostile_mission_fetch_failed():
+    action = make_open_defense_intent_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, make_snapshot(), policy, alliance_state=make_alliance_state(), hostile_mission=None, coordination_allowed=True
+    )
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_open_defense_intent_blocks_when_target_planet_does_not_match_defended_planet():
+    """Unlike `_gate_acs_defend_target` (where the defended planet IS the hostile
+    mission's own target by construction), `openDefenseIntent`'s `action.planet_id` is
+    independently supplied -- this is the one call site where the target-match check
+    inside `_hostile_mission_coordination_defect` has real teeth."""
+    action = make_open_defense_intent_action(planet_id=664)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        alliance_state=make_alliance_state(),
+        hostile_mission=make_hostile_mission(targetPlanetId=999),
+        coordination_allowed=True,
+    )
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("coordination_allowed", [None, False])
+def test_open_defense_intent_blocks_when_coordination_allowed_is_not_true(coordination_allowed):
+    action = make_open_defense_intent_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        alliance_state=make_alliance_state(),
+        hostile_mission=make_hostile_mission(),
+        coordination_allowed=coordination_allowed,
+    )
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_open_defense_intent_blocks_when_planet_id_or_mission_id_missing():
+    action = make_open_defense_intent_action(mission_id=None)
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action, make_snapshot(), policy, alliance_state=make_alliance_state(), hostile_mission=make_hostile_mission(), coordination_allowed=True
+    )
+    assert verdict(report, "alliance_action").status is GuardStatus.BLOCK
+
+
+def test_open_defense_intent_blocks_when_caller_does_not_own_the_defended_planet():
+    """Live fork verification (round 6): `openDefenseIntent` reverts `NotPlanetOwner`
+    on-chain when `target.owner != msg.sender` -- an unconditional requirement, not "any
+    alliance member may open an intent for a teammate." `action.planet_id` not being one
+    of the caller's own owned planets (per `Snapshot`) must BLOCK here too, independently
+    of the contract's own revert."""
+    action = make_open_defense_intent_action(planet_id=999999)  # not in the snapshot's planets
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        alliance_state=make_alliance_state(),
+        hostile_mission=make_hostile_mission(targetPlanetId=999999),
+        coordination_allowed=True,
+    )
+    v = verdict(report, "alliance_action")
+    assert v.status is GuardStatus.BLOCK
+    assert "NotPlanetOwner" in v.detail
+
+
+def test_open_defense_intent_abi_hash_passes_even_when_the_game_hash_mismatches():
+    """`openDefenseIntent` is on the alliance contract, same decoupling as the 15
+    membership functions -- confirms `_ACS_ALLIANCE_FUNCTIONS` is unioned into
+    `_gate_abi_hash`'s PASS condition alongside `_ALLIANCE_FUNCTIONS`."""
+    action = make_open_defense_intent_action()
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
+    report = evaluate(
+        action,
+        make_snapshot(abi_hash="sha256:not-the-pinned-hash"),
+        policy,
+        alliance_state=make_alliance_state(),
+        hostile_mission=make_hostile_mission(),
+        coordination_allowed=True,
+    )
+    assert verdict(report, "abi_hash").status is GuardStatus.PASS
+
+
+# --- idempotency_key -- ACS defense coordination feature's two new collision classes ---
+
+
+def test_idempotency_key_distinguishes_two_acs_defends_against_different_hostile_missions():
+    """Opus review finding 10: `FLEET_MISSION`'s existing key (mission_type +
+    target_coordinates) collapses onto one value for AcsDefend/Intercept, since
+    `target_coordinates` is deliberately unset for these two -- the real discriminator is
+    `mission_id`, now folded in."""
+    key_a = guard.idempotency_key(make_acs_defend_action(mission_id=111))
+    key_b = guard.idempotency_key(make_acs_defend_action(mission_id=222))
+    assert key_a != key_b
+
+
+def test_idempotency_key_distinguishes_defense_hold_by_target_planet():
+    key_a = guard.idempotency_key(make_defense_hold_action(target_planet_id=23))
+    key_b = guard.idempotency_key(make_defense_hold_action(target_planet_id=24))
+    assert key_a != key_b
+
+
+def test_idempotency_key_distinguishes_open_defense_intent_by_mission_id():
+    key_a = guard.idempotency_key(make_open_defense_intent_action(mission_id=111))
+    key_b = guard.idempotency_key(make_open_defense_intent_action(mission_id=222))
+    assert key_a != key_b
+
+
+def test_idempotency_key_open_defense_intent_does_not_collide_with_a_membership_function():
+    """`openDefenseIntent` sets none of `alliance_id`/`target_player`/`target_players`/
+    `role` -- confirms its own branch, not the 15-membership-function suffix (which would
+    render as `None:None::None` and collapse every `openDefenseIntent` for one planet
+    onto a single key regardless of `mission_id`, the exact defect this branch fixes)."""
+    key = guard.idempotency_key(make_open_defense_intent_action(mission_id=111))
+    assert "None:None::None" not in key
+    assert "111" in key
+
+
+def test_idempotency_key_defense_hold_does_not_collide_with_fleet_mission_from_same_planet():
+    fleet_key = guard.idempotency_key(make_fleet_action())
+    hold_key = guard.idempotency_key(make_defense_hold_action())
+    assert fleet_key != hold_key

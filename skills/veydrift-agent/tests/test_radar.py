@@ -199,6 +199,29 @@ def test_check_targets_reports_every_incoming_row_regardless_of_mission_type():
     finding = report.findings[0]
     assert finding.kind == "incoming_fleet"
     assert "Harvest" in finding.detail
+    # ACS defense coordination feature: previously discarded entirely.
+    assert finding.mission_id == 1
+    assert finding.mission_type_name == "Harvest"
+
+
+@respx.mock
+def test_check_targets_incoming_fleet_mission_id_unparseable_fails_closed_to_none():
+    """A missing/unparseable `missionId` must not raise, and must not fabricate an id --
+    `RadarFinding.mission_id` stays `None`, same fail-closed posture the rest of this
+    codebase takes toward absent data."""
+    respx.get(f"{BASE}/wallet/{WALLET}/fleet-visibility").mock(
+        return_value=httpx.Response(
+            200,
+            json={"incoming": [{"missionType": "Attack", "targetPlanetId": "664", "originPlanetId": "1"}]},
+        )
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/missions").mock(return_value=_empty_missions())
+
+    report = radar.check_targets([WatchTarget(wallet=WALLET, planet_id=664)], RadarState())
+
+    assert len(report.findings) == 1
+    assert report.findings[0].mission_id is None
+    assert report.findings[0].mission_type_name == "Attack"
 
 
 @respx.mock
@@ -542,6 +565,48 @@ def test_check_wallet_mode_exits_one_on_findings_and_prints_json():
     assert result.exit_code == 1, result.output
     payload = json.loads(result.output.strip().splitlines()[-1])
     assert len(payload["findings"]) == 1
+
+
+@respx.mock
+def test_check_wallet_mode_prints_coordination_suggestions_unconditionally():
+    """ACS defense coordination feature: `vd radar check` has no `policy.json`/flag to
+    gate this on -- an Attack finding must produce a coordination suggestion every time,
+    printed before the (still-last) RadarReport JSON line."""
+    respx.get(f"{BASE}/wallet/{WALLET}/planets").mock(return_value=httpx.Response(200, json=_planets_payload(WALLET, _planet_row(664))))
+    respx.get(f"{BASE}/wallet/{WALLET}/fleet-visibility").mock(
+        return_value=httpx.Response(
+            200, json={"incoming": [{"missionId": "99001", "missionType": "Attack", "targetPlanetId": "664", "originPlanetId": "1"}]}
+        )
+    )
+    respx.get(f"{BASE}/wallet/{WALLET}/missions").mock(return_value=_empty_missions())
+    respx.get(f"{BASE}/universe/galaxies/7/systems/181").mock(return_value=_empty_universe())
+
+    result = runner.invoke(cli.app, ["radar", "check", "--wallet", WALLET, "--json"])
+
+    assert result.exit_code == 1, result.output
+    assert "Coordination suggestions" in result.output
+    assert "99001" in result.output
+    lines = result.output.strip().splitlines()
+    # RadarReport must still be the LAST JSON line -- a pre-existing consumer's contract.
+    radar_payload = json.loads(lines[-1])
+    assert len(radar_payload["findings"]) == 1
+    coordination_payload = json.loads(lines[-2])
+    assert len(coordination_payload["suggestions"]) == 1
+    assert coordination_payload["suggestions"][0]["hostile_mission_id"] == 99001
+
+
+@respx.mock
+def test_check_wallet_mode_omits_coordination_json_line_when_no_suggestions():
+    respx.get(f"{BASE}/wallet/{WALLET}/planets").mock(return_value=httpx.Response(200, json=_planets_payload(WALLET, _planet_row(664))))
+    respx.get(f"{BASE}/wallet/{WALLET}/fleet-visibility").mock(return_value=httpx.Response(200, json={"incoming": []}))
+    respx.get(f"{BASE}/wallet/{WALLET}/missions").mock(return_value=_empty_missions())
+    respx.get(f"{BASE}/universe/galaxies/7/systems/181").mock(return_value=_empty_universe())
+
+    result = runner.invoke(cli.app, ["radar", "check", "--wallet", WALLET, "--json"])
+
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.strip().splitlines() if line.startswith("{")]
+    assert len(lines) == 1  # only the RadarReport line -- no empty coordination line
 
 
 @respx.mock

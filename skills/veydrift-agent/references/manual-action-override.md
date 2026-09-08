@@ -94,13 +94,67 @@ Two independent requirements stack here, not one: `policy.strategy.allow_agent_a
 true, independently, or the send is refused at whichever layer catches it first. See
 `references/guardrails.md`'s `alliance_action` gate for the full per-function precondition list.
 
+### ACS defense coordination actions are override-only too
+
+Same reachability posture as alliance actions above: AcsDefend/Intercept
+(`launchFleetMission`), `launchDefenseHold`, and `openDefenseIntent` reach this codebase
+*exclusively* through `--action` — no `candidates.py` generator, no `plan.py` ladder rung.
+`vd tick`'s report and `vd radar check` both surface real, live `hostile_mission_id`
+values to reference (via `coordination.py`'s suggestions, gated on
+`policy.actions.allow_alliance`) once a live incoming Attack is detected — see
+`references/coordination.md` for the full contract mechanics.
+
+Join an ACS defense against a live hostile Attack (`hostileMissionId` 99001, surfaced by
+`vd radar check --alliance-id <id>` or `vd tick`'s own "coordination:" line):
+
+```json
+{
+  "kind": "fleet_mission",
+  "function": "launchFleetMission",
+  "planet_id": 664,
+  "mission_type": 5,
+  "origin_planet_id": 664,
+  "mission_id": 99001,
+  "ships": {"6": 5},
+  "rule": "operator override",
+  "rationale": "AcsDefend against incoming Attack (hostile mission 99001)"
+}
+```
+
+Station a fleet ahead of time (no hostile mission needed):
+
+```json
+{
+  "kind": "defense_hold",
+  "function": "launchDefenseHold",
+  "planet_id": 664,
+  "origin_planet_id": 664,
+  "target_planet_id": 665,
+  "target_coordinates": "7:181:15",
+  "ships": {"6": 5},
+  "speed_pct": 100,
+  "hold_seconds": 3600,
+  "rule": "operator override",
+  "rationale": "Station a fleet at 665 for 1 hour"
+}
+```
+
+Both require `policy.actions.allow_acs_defense: true` at tier `operator` —
+`openDefenseIntent` (optional, a coordination signal only) requires the same flag but
+only tier `economy`, the same split-tier pattern `ActionsCfg.allow_acs_defense`'s own
+docstring documents. `mission_id` for `launchFleetMission` here means the *hostile*
+mission being defended against/intercepted, **not** a target planet — see
+`references/coordination.md`'s write-up of the `targetPlanetId`-means-`hostileMissionId`
+repurposing (AGENTS.md §7's third silent-corruption trap) before hand-writing one of
+these.
+
 ## What still runs — everything
 
 Once your `Action` is loaded, it flows through the **exact same** `_run_tick` pipeline a
 planner-chosen action does. Nothing below is skipped, softened, or specific to an
 override:
 
-- Every one of `guard.py`'s 22 gates (`references/guardrails.md`) — killswitch, tier,
+- Every one of `guard.py`'s 25 gates (`references/guardrails.md`) — killswitch, tier,
   affordability, energy, fields, reserve, gas, eth_floor, value_ceiling, idempotency,
   revert_streak, colony cap, ship-availability, fleet slots, and the rest.
 - `wallet_engine.require_confirmation` — a human still has to run the printed

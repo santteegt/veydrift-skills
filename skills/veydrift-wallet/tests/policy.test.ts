@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  AllowAcsDefenseResolutionError,
   AllowAllianceResolutionError,
   AllowCombatResolutionError,
   policyPath,
+  resolveAllowAcsDefense,
   resolveAllowAlliance,
   resolveAllowCombat,
   resolveTier,
@@ -287,5 +289,94 @@ describe("resolveAllowAlliance -- alliance feature: no CLI flag, no env var, eve
       JSON.stringify({ version: 1, tier: "operator", actions: { allow_combat: true, allow_alliance: false } });
     expect(resolveAllowCombat({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(true);
     expect(resolveAllowAlliance({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
+  });
+});
+
+describe("resolveAllowAcsDefense -- ACS defense coordination feature: no CLI flag, no env var, ever (same shape as resolveAllowCombat/resolveAllowAlliance, different field/error type)", () => {
+  it("returns true when the policy file's actions.allow_acs_defense is true", () => {
+    const allowed = resolveAllowAcsDefense({
+      env: { VEYDRIFT_HOME: "/fake" },
+      readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_acs_defense: true } }),
+    });
+    expect(allowed).toBe(true);
+  });
+
+  it("returns false when the policy file's actions.allow_acs_defense is false", () => {
+    const allowed = resolveAllowAcsDefense({
+      env: { VEYDRIFT_HOME: "/fake" },
+      readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_acs_defense: false } }),
+    });
+    expect(allowed).toBe(false);
+  });
+
+  it("returns false (never refuses) when no policy file exists at all -- there is no flag to fall back to", () => {
+    const readFile = (p: string) => {
+      throw enoent(p);
+    };
+    expect(resolveAllowAcsDefense({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
+  });
+
+  it("refuses (never falls back to a permissive default) when the policy file is unparseable JSON", () => {
+    expect(() =>
+      resolveAllowAcsDefense({ env: { VEYDRIFT_HOME: "/fake" }, readFile: () => "{ not valid json" }),
+    ).toThrow(AllowAcsDefenseResolutionError);
+  });
+
+  it("refuses when actions.allow_acs_defense is missing", () => {
+    expect(() =>
+      resolveAllowAcsDefense({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: {} }),
+      }),
+    ).toThrow(/no valid "actions.allow_acs_defense" field/);
+  });
+
+  it("refuses when the actions object itself is missing", () => {
+    expect(() =>
+      resolveAllowAcsDefense({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "operator" }),
+      }),
+    ).toThrow(/no valid "actions.allow_acs_defense" field/);
+  });
+
+  it("refuses when actions.allow_acs_defense is not a boolean", () => {
+    expect(() =>
+      resolveAllowAcsDefense({
+        env: { VEYDRIFT_HOME: "/fake" },
+        readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_acs_defense: "true" } }),
+      }),
+    ).toThrow(/no valid "actions.allow_acs_defense" field/);
+  });
+
+  it("refuses when the policy file exists but errors on read for a reason other than ENOENT", () => {
+    const readFile = () => {
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    };
+    expect(() => resolveAllowAcsDefense({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toThrow(
+      AllowAcsDefenseResolutionError,
+    );
+  });
+
+  it("has no --allow-acs-defense CLI flag or VEYDRIFT_ALLOW_ACS_DEFENSE env var -- ResolveAllowAcsDefenseOptions has no such fields", () => {
+    const allowed = resolveAllowAcsDefense({
+      env: { VEYDRIFT_HOME: "/fake", VEYDRIFT_ALLOW_ACS_DEFENSE: "true" } as NodeJS.ProcessEnv,
+      readFile: () => JSON.stringify({ version: 1, tier: "operator", actions: { allow_acs_defense: false } }),
+    });
+    expect(allowed).toBe(false); // the policy file's actual value wins; the bogus env var is never read
+  });
+
+  it("allow_combat, allow_alliance, and allow_acs_defense are independent -- any one being true does not imply the others", () => {
+    const readFile = () =>
+      JSON.stringify({
+        version: 1,
+        tier: "operator",
+        actions: { allow_combat: true, allow_alliance: false, allow_acs_defense: false },
+      });
+    expect(resolveAllowCombat({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(true);
+    expect(resolveAllowAlliance({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
+    expect(resolveAllowAcsDefense({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
   });
 });
