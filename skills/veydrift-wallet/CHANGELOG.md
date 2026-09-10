@@ -11,6 +11,21 @@ lockstep.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-09
+
+### Fixed
+- **`abi.ts` / `cli.ts`**: `walletctl simulate --json` (and the plain-text `decoded:`
+  line) crashed with `Do not know how to serialize a BigInt` whenever the decoded return
+  value carried a nested `bigint` — i.e. any `tuple`/struct output such as a `Resources`
+  return (`previewResources`, `buildingUpgradeCost`, …). `decodeSimulateReturnData` only
+  stringified `bigint`s at the top level; struct fields one level down (and `tuple[]`
+  elements two levels down) passed through untouched and then broke `JSON.stringify`.
+  Now deep-converts every nested `bigint` to a decimal string, and both `JSON.stringify`
+  call sites in `cli.ts`'s `simulate` command pass `bigintReplacer` as a second layer.
+  Also fixes a latent truncation: a single array-typed output (`tuple[]`) was keyed off
+  `Array.isArray(decoded)` and collapsed to its first element — now keyed off
+  `outputs.length`.
+
 ## [1.1.0] - 2026-09-08
 
 ACS defense coordination feature (see `skills/veydrift-agent/CHANGELOG.md` `1.19.0` for

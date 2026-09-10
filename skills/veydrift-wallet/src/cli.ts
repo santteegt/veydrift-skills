@@ -248,12 +248,15 @@ program
 
       if (opts.json) {
         console.log(
-          JSON.stringify({
-            ok: result.ok,
-            revertReason: result.ok ? null : result.revertReason,
-            error: null,
-            decoded: decoded ?? null,
-          }),
+          JSON.stringify(
+            {
+              ok: result.ok,
+              revertReason: result.ok ? null : result.revertReason,
+              error: null,
+              decoded: decoded ?? null,
+            },
+            bigintReplacer,
+          ),
         );
         if (!result.ok) process.exitCode = 1;
         return;
@@ -266,7 +269,7 @@ program
         console.log(`maxFeePerGas:     ${result.maxFeePerGas ?? "(unavailable)"}`);
         console.log(`estimatedCostWei: ${result.estimatedCostWei ?? "(unavailable)"}`);
         console.log(`return data:      ${result.returnData ?? "0x"}`);
-        if (decoded) console.log(`decoded:          ${JSON.stringify(decoded)}`);
+        if (decoded) console.log(`decoded:          ${JSON.stringify(decoded, bigintReplacer)}`);
       } else {
         console.log(`revert reason: ${result.revertReason}`);
         process.exitCode = 1;

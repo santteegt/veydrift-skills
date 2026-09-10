@@ -242,6 +242,22 @@ describe("decodeSimulateReturnData", () => {
     expect(decoded).toEqual({ canCoordinate: true, netHoldingFuelCost: "12345", depotSupport: "6789" });
   });
 
+  it("deep-converts nested bigints in a struct (`Resources` tuple) output so the result is JSON-serializable", () => {
+    // `previewResources(uint256) -> (uint128 metal, uint128 crystal, uint128 deuterium)`:
+    // a single tuple output whose fields are bigints one level down. A flat top-level
+    // pass leaves them as bigints and `JSON.stringify` then throws.
+    const fn = resolveFunctionAbi("previewResources(uint256)");
+    const selector = getSelector(fn);
+    const returnData = encodeAbiParameters(fn.outputs, [
+      { metal: 124861n, crystal: 15807n, deuterium: 26649n },
+    ]);
+
+    const decoded = decodeSimulateReturnData(selector, returnData);
+
+    expect(decoded).toEqual({ _0: { metal: "124861", crystal: "15807", deuterium: "26649" } });
+    expect(() => JSON.stringify(decoded)).not.toThrow();
+  });
+
   it("returns undefined for a function with no outputs", () => {
     const fn = resolveFunctionAbi("leaveAlliance()", "alliance");
     const selector = getSelector(fn);

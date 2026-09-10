@@ -295,6 +295,19 @@ export function functionsForSelector(selector: `0x${string}`): AbiFunction[] {
  * ABIs, or decoding otherwise fails -- a decode failure must never mask a successful
  * simulation as `ok: false`.
  */
+/** Recursively replace every `bigint` with its decimal string so the result is
+ *  `JSON.stringify`-able. A flat top-level pass isn't enough: a struct/`tuple`
+ *  output (e.g. a `Resources` return) decodes to an object whose `uint128` fields
+ *  are nested bigints, and `tuple[]` nests them one level deeper again. */
+function deepStringifyBigints(value: unknown): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (Array.isArray(value)) return value.map(deepStringifyBigints);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, deepStringifyBigints(v)]));
+  }
+  return value;
+}
+
 export function decodeSimulateReturnData(
   selector: `0x${string}`,
   returnData: `0x${string}` | undefined,
@@ -304,12 +317,15 @@ export function decodeSimulateReturnData(
   if (!fn || !fn.outputs || fn.outputs.length === 0) return undefined;
   try {
     const decoded = decodeFunctionResult({ abi: [fn], data: returnData });
-    const values = Array.isArray(decoded) ? decoded : [decoded];
+    // viem returns a bare value for a single output (even when that value is itself
+    // an array, e.g. a `tuple[]`) and an array of values for multiple outputs --
+    // key off `outputs.length`, not `Array.isArray`, or a single array-typed output
+    // gets truncated to its first element.
+    const values = fn.outputs.length === 1 ? [decoded] : (decoded as readonly unknown[]);
     const named: Record<string, unknown> = {};
     fn.outputs.forEach((output, i) => {
       const key = output.name && output.name.length > 0 ? output.name : `_${i}`;
-      const value = values[i];
-      named[key] = typeof value === "bigint" ? value.toString() : value;
+      named[key] = deepStringifyBigints(values[i]);
     });
     return named;
   } catch {
