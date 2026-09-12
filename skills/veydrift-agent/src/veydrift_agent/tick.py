@@ -724,6 +724,24 @@ def _walletctl_build(
     it is a legitimate gas-limit hint for the eventual `walletctl send`, not something
     compared against a wei ceiling.
 
+    **`error` also carries a degraded-but-successful build's real diagnostic (2026-09
+    fix).** `built["gasEstimateError"]`/`["feeEstimateError"]` (`veydrift-wallet`'s
+    `StoredTx`, `tx.ts`'s `toStoredTx`) are the actual reason `estimatedCostWei` came back
+    `None` when one was genuinely attempted and failed -- a real revert, or a live fee-fetch
+    RPC failure -- as opposed to the benign "no provider configured, no estimate ever
+    attempted" case, which leaves both fields `None` with nothing to report. Before this
+    fix, `walletctl build` only ever printed either to its own stderr, which this function
+    never reads on a `returncode == 0` success path -- so a genuine on-chain revert (like
+    AGENTS.md §7 trap #4's Colonize corruption, which is exactly how this gap was found)
+    surfaced identically to "no estimate available for a mundane reason" as an unexplained
+    `gas: escalate` verdict, forcing a human to re-run `walletctl build`/`simulate` by hand
+    to see why. Returning it here reuses the caller's existing `if build_error:` ->
+    `walletctl_build` ESCALATE append (the same path a hard build failure already takes)
+    purely as an additional diagnostic; `gas_cost_wei` is guaranteed `None` whenever either
+    field is set, so this can never contradict a real cost estimate, and it never touches
+    `guard_report.decision` beyond what the `gas` gate's own `None`-triggered ESCALATE
+    already forces -- see `guard._gate_gas`'s docstring.
+
     `built_tx_path` is the `--out` file `walletctl build` wrote -- the same file
     `walletctl send --tx <path> --confirm` consumes. Returned so the `require_confirmation`
     path (Fix 3) can print the exact command a human should run, without re-building."""
@@ -752,7 +770,9 @@ def _walletctl_build(
     )
     cost_raw = built.get("estimatedCostWei")
     gas_cost_wei = int(cost_raw) if cost_raw not in (None, "") else None
-    return tx, gas_cost_wei, None, out_file
+    estimate_error_parts = [part for part in (built.get("gasEstimateError"), built.get("feeEstimateError")) if part]
+    estimate_error = "; ".join(estimate_error_parts) if estimate_error_parts else None
+    return tx, gas_cost_wei, estimate_error, out_file
 
 
 def _parse_walletctl_status_lines(stdout: str) -> tuple[int | None, str | None]:
@@ -2243,6 +2263,17 @@ def _proposal_lines(
     if unsigned_tx is not None:
         submitted = "" if executed else f" (NOT SUBMITTED -- tier {tier.value})"
         lines.append(f"  tx:     to {unsigned_tx.to}  data {unsigned_tx.data[:10]}...{submitted}")
+    # 2026-09 fix: a build-time issue -- a hard walletctl failure (unsigned_tx is None), or
+    # a build that succeeded but whose gas/fee estimate genuinely failed (unsigned_tx is
+    # present, e.g. a real on-chain revert -- exactly the "gas: escalate" with no visible
+    # reason that made AGENTS.md §7 trap #4's Colonize corruption take a manual diagnostic
+    # to find) -- must be as visible here as a simulate/send failure already is below, not
+    # buried in proposals.jsonl/the tick markdown alone. Reads the same `walletctl_build`
+    # ESCALATE verdict `build_error` is already appended as, the same lookup-by-gate-name
+    # `simulation_failed` below already uses for `walletctl_simulate`.
+    build_verdict = next((v for v in guard_report.verdicts if v.gate == "walletctl_build"), None)
+    if build_verdict is not None:
+        lines.append(f"  !! BUILD ISSUE -- {build_verdict.detail}")
     # Fix 2: a revert or an unresolved outcome must be surfaced prominently in the tick
     # report itself, not just buried in strategy.md/actions.jsonl.
     if send_outcome == "reverted":

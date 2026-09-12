@@ -11,6 +11,27 @@ lockstep.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-09-12
+
+### Fixed
+- **`cli.ts` / `tx.ts`**: `build --out`'s JSON never carried `gasEstimateError`/
+  `feeEstimateError` — `buildTx` computed them correctly (the real reason a gas/fee
+  estimate genuinely failed, e.g. an actual on-chain revert, as opposed to the benign "no
+  provider configured" case) but `build`'s CLI handler only ever printed them to its own
+  stderr. `veydrift-agent`'s `_walletctl_build` reads only the `--out` file, so it had no
+  way to see *why* `estimatedCostWei` came back `null` — a genuine revert surfaced
+  identically to a mundane missing estimate as an unexplained `gas: escalate`, which is
+  exactly what forced a manual `walletctl build`/`simulate`-by-hand diagnostic to find
+  AGENTS.md §7 trap #4's Colonize corruption in the first place.
+
+### Changed
+- **`tx.ts`**: new exported `StoredTx` interface and `toStoredTx(built: BuiltTx):
+  StoredTx` — the `build --out` mapping, previously inline in `cli.ts`'s `.action()`
+  closure (untestable without a full CLI invocation), now lives as a pure, directly
+  unit-tested function next to `BuiltTx`. `cli.ts`'s own `StoredTx` interface and manual
+  field-by-field mapping are removed in favor of this. No behavior change beyond the two
+  new fields above.
+
 ## [1.1.1] - 2026-09-09
 
 ### Fixed

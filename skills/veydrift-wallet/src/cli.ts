@@ -35,8 +35,10 @@ import {
   getRpcUrl,
   sendTx,
   simulateTx,
+  toStoredTx,
   SendRefusedError,
   type Action,
+  type StoredTx,
 } from "./tx.js";
 import type { UnsignedTx } from "./providers/types.js";
 
@@ -57,21 +59,6 @@ function resolveTier(flag: string | undefined): Tier {
     }
     process.exit(4);
   }
-}
-
-interface StoredTx {
-  to: string;
-  data: string;
-  value: string;
-  chainId: number;
-  gas?: string;
-  /** wei per gas unit, live from the chain when `build` fetched it. `null` (never a guessed
-   *  number, never omitted) if the fetch failed. See src/tx.ts's `fetchMaxFeePerGas`. */
-  maxFeePerGas?: string | null;
-  /** gas * maxFeePerGas -- the field the Python guard's wei-denominated gas ceilings compare
-   *  against. `null` whenever either input is missing. */
-  estimatedCostWei?: string | null;
-  purpose?: string;
 }
 
 function loadTxFile(path: string): { tx: UnsignedTx; purpose?: string } {
@@ -203,17 +190,8 @@ program
         );
       }
 
-      const out: StoredTx = {
-        to: built.to,
-        data: built.data,
-        value: built.value.toString(),
-        chainId: built.chainId,
-        gas: built.gas?.toString(),
-        maxFeePerGas: built.maxFeePerGas !== undefined ? built.maxFeePerGas.toString() : null,
-        estimatedCostWei: built.estimatedCostWei !== undefined ? built.estimatedCostWei.toString() : null,
-        purpose: built.purpose,
-      };
-      const json = JSON.stringify({ ...out, functionName: built.functionName, signature: built.signature }, null, 2);
+      const out: StoredTx = toStoredTx(built);
+      const json = JSON.stringify(out, null, 2);
       if (opts.out) {
         writeFileSync(opts.out, json + "\n");
         console.log(`wrote ${opts.out}`);

@@ -9,6 +9,7 @@ import {
   sendTx,
   SendRefusedError,
   simulateTx,
+  toStoredTx,
   type VeydriftPublicClient,
 } from "../src/tx.js";
 
@@ -177,6 +178,56 @@ describe("buildTx", () => {
     expect(built.maxFeePerGas).toBeUndefined();
     expect(built.estimatedCostWei).toBeUndefined();
     expect(built.feeEstimateError).toMatch(/rpc down/);
+  });
+});
+
+// The `build --out` file's on-disk shape (`cli.ts`'s `StoredTx`). Previously the mapping
+// lived only inline in the CLI's `.action()` closure and dropped `gasEstimateError`/
+// `feeEstimateError` entirely -- `tick.py`'s `_walletctl_build` had no way to see *why* a
+// gas estimate was missing (only a bare `estimatedCostWei: null`), so a genuine on-chain
+// revert surfaced identically to "no provider configured" as an unexplained `gas: escalate`
+// verdict, forcing a human to re-run `walletctl build`/`simulate` by hand to find the real
+// reason (see the Colonize precision-loss finding, AGENTS.md §7 trap #4, discovered exactly
+// this way). `toStoredTx` is now the single place this mapping lives, tested directly here.
+describe("toStoredTx", () => {
+  function fixtureBuilt(overrides: Partial<Parameters<typeof toStoredTx>[0]> = {}) {
+    return {
+      to: GAME_ADDRESS,
+      data: "0xdeadbeef" as `0x${string}`,
+      value: 0n,
+      chainId: 8453,
+      functionName: "settlePlanet",
+      signature: "settlePlanet(uint256)",
+      ...overrides,
+    };
+  }
+
+  it("carries gasEstimateError through to the stored tx when a real estimate attempt reverted", () => {
+    const out = toStoredTx(fixtureBuilt({ gasEstimateError: "execution reverted: InvalidCoordinates()" }));
+    expect(out.gasEstimateError).toBe("execution reverted: InvalidCoordinates()");
+    expect(out.gas).toBeUndefined();
+    expect(out.estimatedCostWei).toBeNull();
+  });
+
+  it("carries feeEstimateError through to the stored tx when the live fee fetch failed", () => {
+    const out = toStoredTx(fixtureBuilt({ feeEstimateError: "rpc down" }));
+    expect(out.feeEstimateError).toBe("rpc down");
+    expect(out.estimatedCostWei).toBeNull();
+  });
+
+  it("emits null (never omitted, never undefined) for both error fields on a clean build", () => {
+    const out = toStoredTx(
+      fixtureBuilt({ gas: 150_000n, maxFeePerGas: 12_345_678n, estimatedCostWei: 150_000n * 12_345_678n }),
+    );
+    expect(out.gasEstimateError).toBeNull();
+    expect(out.feeEstimateError).toBeNull();
+    expect(out.gas).toBe("150000");
+    expect(out.estimatedCostWei).toBe(String(150_000n * 12_345_678n));
+  });
+
+  it("round-trips through JSON.stringify with no bigint left un-stringified", () => {
+    const out = toStoredTx(fixtureBuilt({ gas: 150_000n, gasEstimateError: "execution reverted" }));
+    expect(() => JSON.stringify(out)).not.toThrow();
   });
 });
 

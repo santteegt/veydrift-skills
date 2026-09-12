@@ -11,6 +11,27 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.19.2] - 2026-09-12
+
+### Fixed
+- **`tick.py`**: `_walletctl_build` discarded `walletctl build`'s real
+  `gasEstimateError`/`feeEstimateError` (only ever printed to its own stderr, never in the
+  `--out` file this function reads — see `veydrift-wallet`'s `1.1.2` entry for the other
+  side of this fix). Whenever a gas/fee estimate was genuinely attempted and failed (e.g.
+  a real revert), `guard.py`'s `gas` gate could only ever say "no gas cost estimate
+  available", identical to the mundane "no provider configured" case — which is exactly
+  what forced a manual `walletctl build`/`simulate`-by-hand diagnostic to find the
+  Colonize precision-loss bug (`1.19.1`, AGENTS.md §7 trap #4) in the first place. Now
+  returned as `_walletctl_build`'s `error`, reusing the existing `walletctl_build`
+  ESCALATE-verdict path a hard build failure already takes — `gas_cost_wei` is guaranteed
+  `None` whenever either error field is set, so this never contradicts a real cost
+  estimate or unlocks a send that wasn't already blocked.
+- **`tick.py`**: `_proposal_lines` had no printed-report line for a `walletctl_build`
+  ESCALATE at all (hard failure or, now, a degraded gas estimate) — unlike
+  `walletctl_simulate`'s dedicated "SIMULATION FAILED" line, the detail was visible only
+  in `proposals.jsonl`/the tick markdown, never in `vd tick`'s own console output. New
+  `!! BUILD ISSUE --` line closes that last-mile gap for both cases.
+
 ## [1.19.1] - 2026-09-12
 
 ### Fixed

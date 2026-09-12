@@ -2900,6 +2900,100 @@ def test_walletctl_build_gas_cost_wei_none_when_estimated_cost_wei_is_null(isola
     assert gas_cost_wei is None
 
 
+def test_walletctl_build_surfaces_the_real_revert_reason_when_gas_estimation_fails(isolated_home, monkeypatch):
+    """`gasEstimateError` (2026-09 fix): `estimatedCostWei: null` alone can mean either
+    "no provider configured, no estimate ever attempted" (benign) or "a real
+    `eth_estimateGas` call reverted" (the actual reason a Colonize proposal built corrupt
+    calldata, AGENTS.md §7 trap #4, was previously invisible from the tick report alone --
+    it only ever showed as an unexplained `gas: escalate`). `walletctl build` genuinely
+    computes this reason but previously only ever printed it to its own stderr, never into
+    the `--out` file this function reads. `unsigned_tx`/`built_tx_path` must still be
+    populated -- the build itself succeeded, only the cost estimate degraded."""
+    action = _build_action()
+    built_payload = {
+        "to": "0xf397910F005151b09644228573a4353818D3755d",
+        "data": "0x165715e3" + "00" * 32,
+        "value": "0",
+        "chainId": 8453,
+        "gas": None,
+        "maxFeePerGas": None,
+        "estimatedCostWei": None,
+        "gasEstimateError": "execution reverted: InvalidCoordinates()",
+        "feeEstimateError": None,
+    }
+
+    def _fake_run_walletctl(*args, timeout=None):
+        out_path = Path(args[args.index("--out") + 1])
+        out_path.write_text(json.dumps(built_payload))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    unsigned_tx, gas_cost_wei, error, built_tx_path = tick._walletctl_build(action, provider="keystore")
+
+    assert error == "execution reverted: InvalidCoordinates()"
+    assert gas_cost_wei is None
+    # The build itself still succeeded -- only the cost estimate is missing.
+    assert unsigned_tx is not None
+    assert built_tx_path is not None
+
+
+def test_walletctl_build_surfaces_a_fee_fetch_error_the_same_way(isolated_home, monkeypatch):
+    """`feeEstimateError` -- the other way `estimatedCostWei` ends up `null` for a real,
+    reportable reason (a live RPC failure fetching `maxFeePerGas`/`getGasPrice`, not a
+    revert)."""
+    action = _build_action()
+    built_payload = {
+        "to": "0xf397910F005151b09644228573a4353818D3755d",
+        "data": "0x165715e3" + "00" * 32,
+        "value": "0",
+        "chainId": 8453,
+        "gas": "156540",
+        "maxFeePerGas": None,
+        "estimatedCostWei": None,
+        "gasEstimateError": None,
+        "feeEstimateError": "rpc down",
+    }
+
+    def _fake_run_walletctl(*args, timeout=None):
+        out_path = Path(args[args.index("--out") + 1])
+        out_path.write_text(json.dumps(built_payload))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    _unsigned_tx, gas_cost_wei, error, _path = tick._walletctl_build(action, provider="keystore")
+
+    assert error == "rpc down"
+    assert gas_cost_wei is None
+
+
+def test_walletctl_build_error_stays_none_when_no_estimate_was_ever_attempted(isolated_home, monkeypatch):
+    """The benign case must not regress: `gasEstimateError`/`feeEstimateError` absent
+    entirely (the "no provider configured" case walletctl itself never treats as an
+    error) still yields `error is None` -- nothing invented where there is nothing to
+    report."""
+    action = _build_action()
+    built_payload = {
+        "to": "0xf397910F005151b09644228573a4353818D3755d",
+        "data": "0x165715e3" + "00" * 32,
+        "value": "0",
+        "chainId": 8453,
+        "gas": None,
+        "maxFeePerGas": None,
+        "estimatedCostWei": None,
+    }
+
+    def _fake_run_walletctl(*args, timeout=None):
+        out_path = Path(args[args.index("--out") + 1])
+        out_path.write_text(json.dumps(built_payload))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    _unsigned_tx, gas_cost_wei, error, _path = tick._walletctl_build(action, provider="keystore")
+
+    assert error is None
+    assert gas_cost_wei is None
+
+
 def test_walletctl_build_cost_crosses_the_unit_boundary_into_the_gas_gate(isolated_home, monkeypatch):
     """The full boundary-crossing regression test the FIX 1 brief calls for: a realistic
     `walletctl build` payload (gas units ~1.5e5, price ~1.2e7 wei) must make the `gas`
@@ -3681,6 +3775,56 @@ def test_full_tick_simulation_failure_surfaces_in_report_and_proposal(isolated_h
 
     tick_files = list(log.ticks_dir().glob("*.md"))
     assert "InsufficientResources(6798, 1874, 4444)" in tick_files[0].read_text()
+
+
+def test_full_tick_build_time_gas_estimate_error_surfaces_and_blocks_send(isolated_home, monkeypatch, tmp_path):
+    """2026-09 fix, end-to-end: a build that succeeds (produces a real tx) but whose gas
+    estimate genuinely failed (a revert -- exactly what AGENTS.md §7 trap #4's Colonize
+    corruption looked like before it was diagnosed by hand) must reach the printed
+    report and the logged proposal via the same `walletctl_build` ESCALATE path a hard
+    build failure already takes -- not vanish into an unexplained `gas: escalate` with no
+    detail. `_walletctl_build` here returns a real `unsigned_tx` (build succeeded) paired
+    with the real revert reason as `error` -- the exact shape `_walletctl_build` now
+    produces when `built["gasEstimateError"]` is set."""
+    _write_policy(tier="economy", wallet_engine={"provider": "keystore", "require_confirmation": False})
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32)
+
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
+    monkeypatch.setattr(plan_mod, "plan_next_action", lambda *a, **kw: _build_action())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: {_LIVE_ADDR})
+    monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, _LIVE_ADDR))
+    monkeypatch.setattr(
+        tick,
+        "_walletctl_build",
+        lambda act, **kw: (tx, None, "execution reverted: InvalidCoordinates()", built_tx_path),
+    )
+
+    def _send_should_not_be_called(*a, **kw):
+        raise AssertionError("must not send when the gas estimate itself failed")
+
+    monkeypatch.setattr(tick, "_walletctl_send", _send_should_not_be_called)
+    _allow_guard(monkeypatch)
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+    assert "execution reverted: InvalidCoordinates()" in result.output
+    assert not log.actions_path().exists()
+
+    proposals = log.read_proposals()
+    build_verdicts = [v for v in proposals[0]["guard_verdicts"] if v["gate"] == "walletctl_build"]
+    assert len(build_verdicts) == 1
+    assert build_verdicts[0]["status"] == "escalate"
+    assert "execution reverted: InvalidCoordinates()" in build_verdicts[0]["detail"]
+    assert proposals[0]["guard_decision"] == "escalate"
+    assert proposals[0]["executed"] is False
+
+    tick_files = list(log.ticks_dir().glob("*.md"))
+    assert "execution reverted: InvalidCoordinates()" in tick_files[0].read_text()
 
 
 # --------------------------------------------------------------------------------------

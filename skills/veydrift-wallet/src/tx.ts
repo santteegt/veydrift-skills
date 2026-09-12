@@ -228,6 +228,56 @@ export async function buildTx(action: Action, opts: BuildOptions = {}): Promise<
   };
 }
 
+/** The on-disk shape `build --out` writes and `send`/`simulate --tx` read back
+ *  (`loadTxFile`, `cli.ts`). Kept here, next to `BuiltTx`, so the two stay in sync by
+ *  construction rather than by two files agreeing to update together. */
+export interface StoredTx {
+  to: string;
+  data: string;
+  value: string;
+  chainId: number;
+  gas?: string;
+  /** wei per gas unit, live from the chain when `build` fetched it. `null` (never a guessed
+   *  number, never omitted) if the fetch failed. */
+  maxFeePerGas?: string | null;
+  /** gas * maxFeePerGas -- the field the Python guard's wei-denominated gas ceilings compare
+   *  against. `null` whenever either input is missing. */
+  estimatedCostWei?: string | null;
+  /** The actual reason `gas`/`estimatedCostWei` are missing, when an estimate was
+   *  genuinely attempted and failed (e.g. the call would revert) -- `null` for the benign
+   *  case (no provider configured, so no estimate was ever attempted). Previously surfaced
+   *  only as a `console.error` warning on `build`'s own stderr and never written here,
+   *  which left `tick.py`'s consumer (and, downstream, `guard.py`'s `gas` gate) with no way
+   *  to see *why* an estimate was missing -- see `veydrift-agent`'s `_walletctl_build`. */
+  gasEstimateError?: string | null;
+  /** Same as `gasEstimateError`, for a failed live `maxFeePerGas`/`getGasPrice` fetch
+   *  (an RPC issue, not a revert) -- the other way `estimatedCostWei` ends up `null`. */
+  feeEstimateError?: string | null;
+  purpose?: string;
+  functionName?: string;
+  signature?: string;
+}
+
+/** `BuiltTx` -> `StoredTx`, the exact mapping `build --out` writes. A pure function so it
+ *  can be unit-tested directly against `buildTx`'s documented `undefined`/`null`
+ *  conventions, rather than only indirectly through a full CLI invocation. */
+export function toStoredTx(built: BuiltTx): StoredTx {
+  return {
+    to: built.to,
+    data: built.data,
+    value: built.value.toString(),
+    chainId: built.chainId,
+    gas: built.gas?.toString(),
+    maxFeePerGas: built.maxFeePerGas !== undefined ? built.maxFeePerGas.toString() : null,
+    estimatedCostWei: built.estimatedCostWei !== undefined ? built.estimatedCostWei.toString() : null,
+    gasEstimateError: built.gasEstimateError ?? null,
+    feeEstimateError: built.feeEstimateError ?? null,
+    purpose: built.purpose,
+    functionName: built.functionName,
+    signature: built.signature,
+  };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Decoding / display -- shared by `build`, `simulate` and `send` printouts.
 // ---------------------------------------------------------------------------------------------

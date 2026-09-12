@@ -459,6 +459,25 @@ enough to call out here specifically, not a duplicate of that ledger.
   fork testing, and the two round-2 caveats are closed.** Mainnet itself has since been
   touched by this codebase for real, separately from this fork-testing effort — see this
   bullet's opening and `README.md`'s Status section.
+  **A third, unrelated defect in this same area was found live (2026-09), not via fork
+  testing but while diagnosing an unexplained `gas: escalate` on a real Colonize attempt
+  (AGENTS.md §7 trap #4).** `walletctl build`'s own `gasEstimateError`/`feeEstimateError`
+  — the real reason a gas/fee estimate genuinely failed (e.g. an actual revert) as
+  opposed to the benign "no provider configured" case — were computed correctly by
+  `tx.ts`'s `buildTx` but only ever printed to `build`'s own stderr; `--out`'s JSON never
+  carried them, so `tick.py`'s `_walletctl_build` (which only reads that file) had no way
+  to see *why* `estimatedCostWei` came back `null`, and `guard.py`'s `gas` gate could only
+  ever say "no gas cost estimate available" with zero indication of cause. This forced
+  exactly the manual `walletctl build`/`simulate`-by-hand diagnostic that found trap #4 in
+  the first place. Fixed by adding `gasEstimateError`/`feeEstimateError` to `StoredTx`
+  (`tx.ts`'s new `toStoredTx`, the single place the `build --out` mapping now lives) and
+  threading them through `_walletctl_build` into the same `walletctl_build` ESCALATE
+  verdict a hard build failure already produces — and, since that verdict previously had
+  no dedicated line in the printed tick report either (unlike `walletctl_simulate`'s
+  "SIMULATION FAILED"), a new `!! BUILD ISSUE --` line in `_proposal_lines` closes that
+  last-mile gap too. Purely additive to what a tick can already ESCALATE on — `gas_cost_
+  wei` is guaranteed `None` whenever either error field is set, so this never contradicts
+  a real cost estimate or unlocks a send that was not already blocked.
 - **`walletctl`'s tier check defends against a misconfigured caller, not a hostile one.**
   It reads tier from `$VEYDRIFT_HOME/policy.json`, but falls back to a caller-supplied
   `--tier` when no policy file exists — a process that controls its own environment can
