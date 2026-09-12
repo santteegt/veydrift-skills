@@ -256,10 +256,14 @@ in-scope membership selectors are byte-identical across the two commits. See `re
 abi-pinning.md`'s "Second contract" section — the no-live-recheck limit is a permanent
 limit of the upstream API, not something to work around by inventing a substitute check.
 
-## 7. Three silent-corruption traps in the write path
+## 7. Four silent-corruption traps in the write path
 
-None produces an error; all three produce a wrong transaction. If you touch fleet-mission
-encoding, re-read `docs/RESEARCH-ADDENDUM.md` §3–§4 in full, not just this summary:
+None of the first three produces an error; all three produce a wrong transaction. The
+fourth *did* error, the one time it's been observed live — but only because the
+corrupted value it produces happens to fall outside the real universe, not because
+anything about the trap itself guarantees a revert; see its own entry below. If you
+touch fleet-mission encoding, re-read `docs/RESEARCH-ADDENDUM.md` §3–§4 in full, not
+just this summary:
 
 1. **The 14-slot fleet tuple is not the 16-entry Ship enum.** SolarSatellite (id 9) and
    Crawler (id 15) can't fly and are omitted, so tuple indices 9–13 map to Ship ids 10–14.
@@ -275,6 +279,24 @@ encoding, re-read `docs/RESEARCH-ADDENDUM.md` §3–§4 in full, not just this s
    in this codebase's own model; `tick.py`'s `_fleet_mission_args` is the one place the
    repurposing becomes an actual calldata value. See `skills/veydrift-agent/references/
    coordination.md` for the full mechanics.
+4. **Colonize's packed target (`_encode_colony_target`, `tick.py`) sets bit 255 —
+   ~215 bits above the coordinate fields it carries in bits 0–39 — and crosses the
+   `walletctl` subprocess boundary as JSON.** `cli.ts`'s `build` command reads the action
+   file with plain `JSON.parse`, no bigint reviver; a bare numeric literal at this
+   magnitude silently rounds to the nearest IEEE-754 double, which for this value is
+   exactly `1 << 255` — every coordinate collapses to galaxy 0/system 0/position 0,
+   regardless of the real target. Confirmed live (2026-09): a real Colonize attempt at
+   `7:291:1` built calldata encoding galaxy=0/system=0/position=0 instead, reverting
+   on-chain with `InvalidCoordinates()` before any transaction was sent — but that revert
+   is incidental to galaxy 0 not existing in the real universe, not a guarantee this trap
+   provides; a corrupted target that happened to land on a real, unowned slot would
+   silently succeed and burn a real Colony Ship at the wrong coordinate. Fixed by
+   emitting the packed target as a decimal **string**: `tx.ts`'s `coerceAbiValue` already
+   calls `BigInt(value)` for a `string` `uint*` arg, which parses the digits directly with
+   no intermediate `Number` and survives exactly. `tests/test_tick.py::
+   test_fleet_mission_colonize_target_survives_the_walletctl_json_boundary` pins the
+   actual `json.dumps`/`json.loads` round-trip this depends on — never a bare `int` for
+   any value that can exceed `2**53`.
 
 Also: `attackProtectionStatus`, `collectResources`, `debrisField`, `maxRaidLoot`,
 `protectedResources`, `raidableResources` are `nonpayable` in the ABI but semantically

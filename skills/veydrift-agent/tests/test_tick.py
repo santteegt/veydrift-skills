@@ -943,7 +943,15 @@ def test_fleet_mission_ship_tuple_raises_on_non_flyable_ship_even_at_zero_count(
 
 def test_fleet_mission_colonize_encodes_the_packed_coordinate_target():
     """VeydriftColonizationModule.sol:472-479 (`_encodeColonyTarget`):
-    `(1<<255) | (galaxy<<24) | (system<<8) | position`."""
+    `(1<<255) | (galaxy<<24) | (system<<8) | position`.
+
+    The packed target is emitted as a decimal **string**, not a bare `int` (AGENTS.md §7
+    trap #4) -- it sets bit 255, ~215 bits above the coordinate fields it carries, which
+    silently rounds to `1 << 255` (galaxy=0/system=0/position=0) once it crosses the
+    walletctl subprocess boundary as a bare JSON numeric literal and `cli.ts` parses it
+    with plain `JSON.parse`. `int(target)` below is the regression check that matters --
+    see `test_fleet_mission_colonize_target_survives_the_walletctl_json_boundary` for the
+    actual JSON round-trip this exists to protect."""
     from veydrift_agent import ids
 
     action = _fleet_action(
@@ -955,10 +963,43 @@ def test_fleet_mission_colonize_encodes_the_packed_coordinate_target():
     )
     built = tick._action_to_walletctl_json(action, _fleet_snapshot())
     target = built["args"][1]
-    assert target == (1 << 255) | (7 << 24) | (181 << 8) | 16
+    assert isinstance(target, str)
+    assert int(target) == (1 << 255) | (7 << 24) | (181 << 8) | 16
     # Colonize's trailing uint256 is randomnessRequestId -- the contract hard-reverts
     # (InvalidId) unless it is exactly 0.
     assert built["args"][-1] == 0
+
+
+def test_fleet_mission_colonize_target_survives_the_walletctl_json_boundary():
+    """AGENTS.md §7 trap #4, the regression itself: a bare `int` for the packed Colonize
+    target survives `json.dumps` (Python ints are arbitrary-precision) but does not
+    survive the far side's plain `JSON.parse` (IEEE-754 doubles top out at 2**53) --
+    `walletctl`'s `cli.ts` has no bigint reviver. Simulates that exact boundary with
+    `json.dumps` + `json.loads` standing in for the Python -> JSON-file -> Node hop:
+    before the fix (a bare `int`), the round-trip silently corrupts the value; after it
+    (a decimal `str`), the value is inert to a JSON parser and only `int()`/`BigInt()`
+    ever interprets it, so it survives exactly."""
+    from veydrift_agent import ids
+
+    action = _fleet_action(
+        mission_type=ids.FleetMissionType.COLONIZE,
+        target_coordinates="7:291:1",
+        ships={ids.Ship.COLONY_SHIP: 1},
+        cargo=Resources(),
+        speed_pct=None,
+    )
+    built = tick._action_to_walletctl_json(action, _fleet_snapshot())
+    expected = (1 << 255) | (7 << 24) | (291 << 8) | 1
+
+    # The actual boundary: what a JSON parser sees after tick.py's json.dumps.
+    round_tripped = json.loads(json.dumps(built))
+    target = round_tripped["args"][1]
+    assert isinstance(target, str), (
+        "target_planet_id must cross the walletctl JSON boundary as a string -- a bare "
+        "int here would round-trip through JSON.parse's IEEE-754 doubles and silently "
+        "corrupt to 1<<255 (galaxy=0/system=0/position=0), per AGENTS.md §7 trap #4"
+    )
+    assert int(target) == expected
 
 
 def test_missile_attack_encodes_positional_args(monkeypatch):

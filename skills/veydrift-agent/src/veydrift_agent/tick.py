@@ -488,7 +488,21 @@ def _fleet_mission_args(action: Action, snapshot: Snapshot | None) -> tuple[str,
     if action.mission_type == ids.FleetMissionType.COLONIZE:
         if action.target_coordinates is None:
             raise ValueError("launchFleetMission Colonize action has no target_coordinates")
-        target_planet_id = _encode_colony_target(action.target_coordinates)
+        # AGENTS.md §7 trap #4. The packed target sets bit 255 (`_COLONIZATION_COORDINATE_
+        # FLAG = 1 << 255`), ~215 bits above the coordinate fields it carries in bits 0-39
+        # -- far past a JS double's ~52-bit mantissa. `walletctl`'s `cli.ts` reads this args
+        # list via plain `JSON.parse` (no bigint reviver), which silently rounds a bare
+        # numeric literal at this magnitude down to the nearest representable double --
+        # confirmed directly: `JSON.parse` on this exact value round-trips to precisely
+        # `1n << 255n`, decoding as galaxy=0/system=0/position=0 regardless of the real
+        # target. `tx.ts`'s `coerceAbiValue` already special-cases `typeof value ===
+        # "string"` via `BigInt(value)` for every `uint*` arg, which parses a decimal
+        # string's digits directly with no intermediate `Number` -- so emitting this one
+        # value as a decimal string is sufficient, on its own, to survive the JSON
+        # boundary intact. Every other `launchFleetMission` target stays a real (small)
+        # planet id and is unaffected; this is the only value in this codebase's write
+        # path built to exceed 2**53.
+        target_planet_id = str(_encode_colony_target(action.target_coordinates))
     elif action.mission_type in (ids.FleetMissionType.ACS_DEFEND, ids.FleetMissionType.INTERCEPT):
         if action.mission_id is None:
             raise ValueError("launchFleetMission AcsDefend/Intercept action has no mission_id (hostileMissionId)")

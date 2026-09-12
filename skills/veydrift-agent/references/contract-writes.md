@@ -70,7 +70,11 @@ system, position)` = `(1 << 255) | (galaxy << 24) | (system << 8) | position`
 (`VeydriftColonizationModule.sol:472-479`, unchanged by the upgrade), decoded again on resolution via
 `_decodeColonyTarget`. Its trailing `uint256` (both overloads) is `randomnessRequestId`,
 not a holding duration — `_launchColonizeFleetMission` reverts (`InvalidId`) unless it is
-exactly `0`.
+exactly `0`. That packed target's bit-255 flag is also AGENTS.md §7's fourth
+silent-corruption trap: `tick.py` must emit it as a decimal string, never a bare `int`,
+or it silently rounds to `1 << 255` (galaxy=0/system=0/position=0) crossing the
+`walletctl` subprocess boundary — see AGENTS.md §7 for the mechanics and the live
+confirmation.
 
 **Live in both enforcement layers since 2026-08-17 (this skill's `CHANGELOG.md`'s
 `1.0.0` entry)**:

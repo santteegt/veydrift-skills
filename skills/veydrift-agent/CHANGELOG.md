@@ -11,6 +11,25 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.19.1] - 2026-09-12
+
+### Fixed
+- **`tick.py`**: AGENTS.md §7 trap #4. `_fleet_mission_args`'s Colonize branch emitted the
+  packed on-chain target (`_encode_colony_target`, which sets bit 255) as a bare `int`.
+  `walletctl`'s `cli.ts` reads the action JSON with plain `JSON.parse`, no bigint reviver
+  — a numeric literal that large silently rounds to the nearest IEEE-754 double, which
+  for this value is exactly `1 << 255`, so every Colonize target collapsed to
+  galaxy=0/system=0/position=0 regardless of the real coordinate. Confirmed live: a real
+  attempt at `7:291:1` built calldata for galaxy 0/system 0/position 0 instead, reverting
+  on-chain with `InvalidCoordinates()` before any transaction was sent — incidentally
+  (galaxy 0 doesn't exist in the real universe), not because the trap itself guarantees a
+  revert. Fixed by emitting the packed target as a decimal string; `tx.ts`'s
+  `coerceAbiValue` already calls `BigInt(value)` for a string `uint*` arg, which parses
+  the digits directly with no intermediate `Number` and survives exactly — no
+  `veydrift-wallet` change needed. `tests/test_tick.py::
+  test_fleet_mission_colonize_target_survives_the_walletctl_json_boundary` pins the
+  actual `json.dumps`/`json.loads` boundary this depends on.
+
 ## [1.19.0] - 2026-09-08
 
 ACS defense coordination feature: AcsDefend(5)/Intercept(6) (`launchFleetMission`),
