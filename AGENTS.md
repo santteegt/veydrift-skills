@@ -207,6 +207,21 @@ touching related code, re-run the check named alongside each one.
   (the `targetPlanetId`-means-`hostileMissionId` repurposing, the exactly-`Attack`
   requirement, the `_canCoordinateDefense` self-owned-planet short-circuit, the honest
   verification-status caveats).
+- **`policy.strategy.planet_rotation` (default `false`) is the only thing allowed to
+  change which planet three ladder rungs (`6:building-queue-empty`, `8b:unlock-chain`,
+  `8:shipyard-idle`) walk first — never a re-scoring of candidates.** Off, `plan.py`
+  behaves exactly as it always has: those three rungs walk `policy.planets`'s literal
+  order and return on the first planet with anything selectable, same as storage
+  overflow (rung 5) and research (rung 7's first half) are *not* rotated, ever — research
+  in particular reads `target_planets[0]` unconditionally as the planet `startResearch`
+  is actually submitted through, so rotating it would silently change which planet's
+  resources fund research. On, `AgentState.last_attended_planet_id` rotates only those
+  three rungs' own planet walk, and only advances when a rotation-eligible action
+  genuinely sent or was handed to a human for confirmation — never on a bare proposal,
+  which is what keeps `last_proposal_fingerprint`'s dedup meaningful for a multi-planet
+  account. See `skills/veydrift-agent/references/strategy-playbook.md` §13 for the full
+  mechanics and why cross-planet economic scoring (the obvious-looking alternative) would
+  make the starvation problem worse, not better.
 - **Secrets never reach a log or a tracked file.** `log.py` scrubs any
   `0x[0-9a-fA-F]{64}` that isn't a known tx hash, and refuses to write a value matching a
   configured secret env var. Before committing, `git diff --cached` anything touching
@@ -523,7 +538,11 @@ enough to call out here specifically, not a duplicate of that ledger.
   nothing for this; fixing it needs a structured replacement for `list[str]` carrying an
   optional `target_level` (mirroring `EntityTarget`'s `count`), touching `models.py`, both
   `select_*` functions in `candidates.py`, ~2 dozen test call sites, `policy.example.json`,
-  and the inline JSON examples in `docs/PLAYER-GUIDE.md`/`.html`.
+  and the inline JSON examples in `docs/PLAYER-GUIDE.md`/`.html`. This is an *entity*-level
+  problem, distinct from `policy.strategy.planet_rotation` below, which is the *planet*-level
+  sibling — a stuck `research_priority` entry stays stuck regardless of which planet's turn
+  it is, and planet rotation doesn't change which entity a planet proposes once it's that
+  planet's turn.
 - **An empty `building_priority` makes all six infrastructure buildings (Robotics Factory,
   Nanite Factory, Shipyard, Research Lab, Terraformer, Missile Silo) structurally
   unreachable**, not merely deprioritized — `generate_infrastructure_candidates`

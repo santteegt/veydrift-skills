@@ -1458,6 +1458,7 @@ def _describe_override(
     colonize_targets: list[tuple[str, int]],
     attack_targets: dict[int, tuple[str, Resources, bool | None]],
     missile_targets: dict[int, tuple[str, dict[int, int], bool | None]],
+    last_attended_planet_id: int | None,
 ) -> tuple[dict[str, Any], str]:
     """`(override_record, override_line)` for a `vd tick --action`-supplied action --
     the code-enforced disagreement record `references/manual-action-override.md`
@@ -1468,6 +1469,12 @@ def _describe_override(
     so it costs nothing beyond the CPU time of a second scoring pass, and its result is
     never executed -- only recorded, in `proposals.jsonl` (`override_record`), `logs/
     strategy.md` and the printed tick report (`override_line`, both via `_finish_tick`).
+
+    `last_attended_planet_id` must be the exact same value `_run_tick`'s own planner
+    branch would pass -- otherwise the "planner would have proposed" record silently
+    disagrees with reality for a `policy.strategy.planet_rotation` account, which is
+    precisely the scenario this feature exists to describe (an operator overriding the
+    planner is exactly the situation a multi-planet starvation problem shows up in).
 
     Never called on the killswitch path (`_run_tick`'s halted-snapshot branch) -- that
     path's own contract ("halts before any network call beyond /health") is unaffected by
@@ -1485,6 +1492,7 @@ def _describe_override(
         colonize_targets=colonize_targets,
         attack_targets=attack_targets,
         missile_targets=missile_targets,
+        last_attended_planet_id=last_attended_planet_id,
     )
     record = {
         "operator_action": {
@@ -2490,6 +2498,14 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # choice only -- every rung after this one (guard, tier gates, require_confirmation,
     # the lockfile already held by the caller, dedup+logging) is unchanged and applies to
     # an override exactly as it does to a planner-chosen action.
+    #
+    # policy.strategy.planet_rotation feature: `plan_next_action` has no opinion on this
+    # policy flag -- it just rotates whenever given a non-None pointer. This is the one
+    # place that decides whether the flag is actually on, and threads the SAME resolved
+    # value into both the override-comparison call below and the real planner call, so
+    # `_describe_override`'s "planner would have proposed" record never disagrees with
+    # what the real planner branch would have used.
+    rotation_pointer = agent_state.last_attended_planet_id if policy_model.strategy.planet_rotation else None
     override_record: dict[str, Any] | None = None
     override_line: str | None = None
     if override_action is not None:
@@ -2505,6 +2521,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             colonize_targets=colonize_targets,
             attack_targets=attack_targets,
             missile_targets=missile_targets,
+            last_attended_planet_id=rotation_pointer,
         )
     else:
         action = plan_mod.plan_next_action(
@@ -2518,6 +2535,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             colonize_targets=colonize_targets,
             attack_targets=attack_targets,
             missile_targets=missile_targets,
+            last_attended_planet_id=rotation_pointer,
         )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an
@@ -2952,6 +2970,21 @@ def _finish_tick(
         agent_state.record_tick(now=now)
         agent_state.proposals_count += 1
         agent_state.last_proposal_fingerprint = fingerprint
+        # policy.strategy.planet_rotation feature: advance the rotation pointer only when
+        # this planet's turn was genuinely used up -- sent for real, or handed to a human
+        # for confirmation (`executed`/`confirm_hint`, the same two signals
+        # `last_unresolved_onchain_proposal` below already keys off) -- never on a bare
+        # tier-1/dry-run proposal that changes nothing. This is what keeps the dedup
+        # fingerprint above meaningful for a multi-planet account: if nothing executes,
+        # the pointer never moves, so a repeated identical recommendation keeps
+        # deduping exactly as it always has, instead of flip-flopping between planets
+        # forever with no real progress on either. Deliberately unconditional on WHICH
+        # rung produced `action` (storage's own building-spend path counts exactly the
+        # same as Band 2/4/8 firing directly) -- `action.rule` is untrusted on the
+        # override path, and "was this planet's turn genuinely used" is the same
+        # question regardless of which rung answered it.
+        if policy_model.strategy.planet_rotation and action.planet_id is not None and (executed or confirm_hint is not None):
+            agent_state.last_attended_planet_id = action.planet_id
         # This tick's own proposal becomes the NEXT tick's "unresolved" check target only
         # if it's on-chain and this tick itself did not execute it (tier 1, or
         # require_confirmation stopped the send -- confirm_hint is only ever set in that

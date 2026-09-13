@@ -759,6 +759,33 @@ class StrategyCfg(Base):
     #: `policy.actions.allow_fleet_noncombat`, the same gate every other non-combat fleet
     #: generator already requires -- this field alone does not enable fleet logistics.
     fleet_home_planet_id: int | None = None
+    #: Explicit opt-in for cross-tick planet-fairness rotation. Three ladder rungs walk
+    #: `policy.planets` in list order and return on the first planet with anything
+    #: selectable, never scoring across planets the way storage overflow and the
+    #: research rung already do: "6:building-queue-empty" (`plan._next_building_action`),
+    #: "8b:unlock-chain" (`candidates.select_unlock_chain_candidate`), and
+    #: "8:shipyard-idle" (`candidates.select_shipyard_candidate`). As long as an
+    #: earlier-listed planet has any pending work on one of those three rungs, a
+    #: later-listed planet (a freshly settled colony, most concretely) never reaches
+    #: them at all -- confirmed live managing a two-planet account. Default `False`
+    #: reproduces pre-existing behaviour exactly: `tick.py` only ever threads a real
+    #: `AgentState.last_attended_planet_id` into `plan_next_action` when this is `true`;
+    #: `plan_next_action` itself doesn't know this flag exists, it just rotates whenever
+    #: given a non-`None` pointer, same "empty/off == old behaviour" convention every
+    #: other `strategy` flag uses. When on, `tick.py` advances the pointer only when the
+    #: winning action for one of the three rungs above actually sent or was handed to a
+    #: human for confirmation (`executed` or `confirm_hint` -- see `_finish_tick`) --
+    #: never on a bare proposal, so a tier-1/dry-run account's repeated identical
+    #: recommendation still dedups exactly as it always has (see
+    #: `last_proposal_fingerprint`'s docstring, `state.py`). Storage overflow and the
+    #: research rung are deliberately never rotated -- storage already picks the single
+    #: most urgent overflow across every target planet regardless of order, and
+    #: `generate_research_candidates` reads `target_planets[0]` specifically as the
+    #: planet `startResearch` is actually submitted through, which rotating would
+    #: silently change. Bands 5-8f (fleet logistics, Colonize, Attack, Missile) are also
+    #: left un-rotated: each is opt-in, single-fire and high-stakes, where planet
+    #: fairness is a much smaller concern than for routine building/ship/defense work.
+    planet_rotation: bool = False
 
 
 class Policy(Base):

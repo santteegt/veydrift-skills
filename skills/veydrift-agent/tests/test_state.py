@@ -196,6 +196,28 @@ def test_agent_state_missing_unresolved_proposal_field_loads_with_default(isolat
     assert loaded.last_unresolved_onchain_proposal is None
 
 
+def test_last_attended_planet_id_defaults_none_and_round_trips(isolated_home):
+    """policy.strategy.planet_rotation feature."""
+    assert state.load_agent_state().last_attended_planet_id is None
+
+    s = state.AgentState()
+    s.last_attended_planet_id = 664
+    state.save_agent_state(s)
+
+    assert state.load_agent_state().last_attended_planet_id == 664
+
+
+def test_agent_state_missing_last_attended_planet_id_field_loads_with_default(isolated_home):
+    """Same additive-field guarantee as last_proposal_fingerprint above -- an
+    agent-state.json written before policy.strategy.planet_rotation existed must still
+    load."""
+    state.agent_state_path().parent.mkdir(parents=True, exist_ok=True)
+    state.agent_state_path().write_text(json.dumps({"version": 1, "tick_count": 3}))
+
+    loaded = state.load_agent_state()
+    assert loaded.last_attended_planet_id is None
+
+
 def test_record_gas_spent_accumulates_within_a_day():
     s = state.AgentState()
     from datetime import UTC, datetime

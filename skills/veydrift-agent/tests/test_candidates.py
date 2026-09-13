@@ -17,6 +17,7 @@ import pytest
 
 from veydrift_agent import calc, candidates, ids, techtree
 from veydrift_agent.models import (
+    Action,
     ActionKind,
     ActionsCfg,
     CrawlerProduction,
@@ -2613,3 +2614,80 @@ def test_select_missile_candidate_returns_the_winner_when_enabled():
     assert winner is not None
     assert winner.family == "missile"
     assert alternatives == []
+
+
+# --------------------------------------------------------------------------------------
+# policy.strategy.planet_rotation feature (plan.py): select_shipyard_candidate and
+# select_unlock_chain_candidate carry no ordering logic of their own -- they walk
+# whatever list they're given and take the first planet with anything selectable.
+# plan.py is what decides whether that list is policy.planets's literal order or a
+# rotated view; these two tests prove there's nothing in EITHER function that would
+# fight a caller-supplied rotation.
+# --------------------------------------------------------------------------------------
+
+
+def test_select_shipyard_candidate_picks_from_whichever_planet_is_first_in_the_given_order(monkeypatch):
+    """Two planets, each independently producing a distinguishable, selectable ship
+    candidate -- whichever is FIRST in the list wins, regardless of planet id."""
+    planet_a = _origin_planet(planet_id=664)
+    planet_b = _destination_planet(planet_id=665)
+    snapshot = Snapshot(
+        taken_at="2026-01-01T00:00:00Z",
+        wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        health_ok=True,
+        research_queue=QueueEntry(kind=QueueKind.RESEARCH, entity_id=0, entity_name="Energy Technology"),
+        planets=[planet_a, planet_b],
+    )
+    policy = make_policy(planets=[664, 665], actions=ActionsCfg(allow_ships=True))
+
+    def _fake_ship_candidates(snap, pol, planet):
+        return [
+            candidates.Candidate(
+                action=Action(kind=ActionKind.SHIP, function="startShipProduction", planet_id=planet.planet_id, quantity=1),
+                family="ship",
+                score=1.0,
+                score_basis="test fixture",
+            )
+        ]
+
+    monkeypatch.setattr(candidates, "generate_ship_candidates", _fake_ship_candidates)
+    monkeypatch.setattr(candidates, "generate_defense_candidates", lambda *a, **kw: [])
+
+    winner_ab, _ = candidates.select_shipyard_candidate(snapshot, policy, [planet_a, planet_b])
+    winner_ba, _ = candidates.select_shipyard_candidate(snapshot, policy, [planet_b, planet_a])
+
+    assert winner_ab.action.planet_id == 664
+    assert winner_ba.action.planet_id == 665
+
+
+def test_select_unlock_chain_candidate_picks_from_whichever_planet_is_first_in_the_given_order(monkeypatch):
+    """Same proof for Band 4 -- select_unlock_chain_candidate takes the first planet
+    with any unlock-chain candidate at all (never compares cost across planets, see its
+    own docstring), so caller-supplied order fully determines the winner."""
+    planet_a = _origin_planet(planet_id=664)
+    planet_b = _destination_planet(planet_id=665)
+    snapshot = Snapshot(
+        taken_at="2026-01-01T00:00:00Z",
+        wallet="0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+        health_ok=True,
+        planets=[planet_a, planet_b],
+    )
+    policy = make_policy(planets=[664, 665])
+
+    def _fake_unlock_candidates(snap, pol, planet):
+        return [
+            candidates.Candidate(
+                action=Action(kind=ActionKind.BUILD, function="startBuildingUpgrade", planet_id=planet.planet_id),
+                family="unlock",
+                score=None,
+                score_basis="test fixture",
+            )
+        ]
+
+    monkeypatch.setattr(candidates, "generate_unlock_chain_candidates", _fake_unlock_candidates)
+
+    winner_ab, _ = candidates.select_unlock_chain_candidate(snapshot, policy, [planet_a, planet_b])
+    winner_ba, _ = candidates.select_unlock_chain_candidate(snapshot, policy, [planet_b, planet_a])
+
+    assert winner_ab.action.planet_id == 664
+    assert winner_ba.action.planet_id == 665

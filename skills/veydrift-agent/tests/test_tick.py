@@ -4399,3 +4399,172 @@ def test_readiness_reports_human_activity_checked_and_hits_counts(isolated_home,
     assert "human_activity_checked: 1 tick(s) checked" in result.output
     assert "; 1 found" in result.output
 
+
+
+# --------------------------------------------------------------------------------------
+# policy.strategy.planet_rotation feature: AgentState.last_attended_planet_id only
+# advances when a rotation-eligible rung's action genuinely sent or was handed to a
+# human for confirmation -- never on a bare proposal -- and only when the policy flag
+# is on. See AGENTS.md §10 and StrategyCfg.planet_rotation's own docstring for the
+# motivating incident.
+# --------------------------------------------------------------------------------------
+
+
+def test_planet_rotation_off_by_default_pointer_never_updates(isolated_home, monkeypatch, tmp_path):
+    """policy.example.json's own default (planet_rotation: false) must reproduce
+    pre-existing behaviour exactly, even when a real send happens."""
+    _write_policy(tier="economy", wallet_engine={"provider": "keystore", "require_confirmation": False})
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, gas=1_000_000_000, built_tx_path=built_tx_path)
+    monkeypatch.setattr(tick, "_walletctl_send", lambda *a, **kw: ("0x" + "aa" * 32, None))
+    monkeypatch.setattr(tick, "_walletctl_receipt", lambda tx_hash: {"status": "success", "blockNumber": "0x64", "actualCostWei": "1"})
+    monkeypatch.setattr(tick, "_await_indexed", lambda **kw: True)
+    _allow_guard(monkeypatch)
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+    proposals = log.read_proposals()
+    assert proposals[0]["executed"] is True  # a real send genuinely happened...
+
+    assert load_agent_state().last_attended_planet_id is None  # ...but the pointer never moved
+
+
+def test_planet_rotation_on_pointer_updates_after_a_real_send(isolated_home, monkeypatch, tmp_path):
+    _write_policy(
+        tier="economy",
+        wallet_engine={"provider": "keystore", "require_confirmation": False},
+        strategy={"planet_rotation": True},
+    )
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, gas=1_000_000_000, built_tx_path=built_tx_path)
+    monkeypatch.setattr(tick, "_walletctl_send", lambda *a, **kw: ("0x" + "aa" * 32, None))
+    monkeypatch.setattr(tick, "_walletctl_receipt", lambda tx_hash: {"status": "success", "blockNumber": "0x64", "actualCostWei": "1"})
+    monkeypatch.setattr(tick, "_await_indexed", lambda **kw: True)
+    _allow_guard(monkeypatch)
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+    proposals = log.read_proposals()
+    assert proposals[0]["executed"] is True
+
+    assert load_agent_state().last_attended_planet_id == 664  # _build_action()'s planet_id
+
+
+def test_planet_rotation_on_pointer_updates_when_require_confirmation_stops_the_send(isolated_home, monkeypatch, tmp_path):
+    """Not executed (require_confirmation stopped it), but the pointer still advances --
+    a human was genuinely handed a ready-to-send command for this planet, which is the
+    same "this planet's turn was used" signal as a real send."""
+    _write_policy(tier="economy", strategy={"planet_rotation": True})  # require_confirmation defaults true
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, gas=1_000_000_000, built_tx_path=built_tx_path)
+    _allow_guard(monkeypatch)
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+    proposals = log.read_proposals()
+    assert proposals[0]["executed"] is False
+
+    assert load_agent_state().last_attended_planet_id == 664
+
+
+def test_planet_rotation_on_pointer_untouched_at_tier_one(isolated_home, monkeypatch):
+    """Tier 1 (advisor): can_send is always False, so neither `executed` nor
+    `confirm_hint` is ever set -- nothing genuinely happened for this planet, so the
+    pointer must not move, preserving last_proposal_fingerprint's own dedup behaviour
+    for a repeated identical tier-1 recommendation."""
+    _write_policy(strategy={"planet_rotation": True})  # tier defaults advisor
+    _patch_common(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+
+    assert load_agent_state().last_attended_planet_id is None
+
+
+def test_planet_rotation_pointer_persists_and_feeds_the_next_tick(isolated_home, monkeypatch, tmp_path):
+    """End-to-end across two ticks: the pointer written by tick 1 is what tick 2 reads
+    back out via load_agent_state -- proving the persistence round-trip, independent of
+    plan.py's own rotation logic (already covered directly in test_plan.py)."""
+    _write_policy(
+        tier="economy",
+        wallet_engine={"provider": "keystore", "require_confirmation": False},
+        strategy={"planet_rotation": True},
+    )
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, gas=1_000_000_000, built_tx_path=built_tx_path)
+    monkeypatch.setattr(tick, "_walletctl_send", lambda *a, **kw: ("0x" + "aa" * 32, None))
+    monkeypatch.setattr(tick, "_walletctl_receipt", lambda tx_hash: {"status": "success", "blockNumber": "0x64", "actualCostWei": "1"})
+    monkeypatch.setattr(tick, "_await_indexed", lambda **kw: True)
+    _allow_guard(monkeypatch)
+
+    result = runner.invoke(tick.app, [])
+    assert result.exit_code == 0, result.output
+    assert load_agent_state().last_attended_planet_id == 664
+
+    # A second, distinct action for a different planet -- tick 2 must not dedup against
+    # tick 1 (different planet_id is already enough to change the content fingerprint).
+    second_action = _build_action().model_copy(update={"planet_id": 665})
+    _patch_common(
+        monkeypatch,
+        action=second_action,
+        live_addresses={_LIVE_ADDR},
+        unsigned_tx=tx,
+        gas=1_000_000_000,
+        built_tx_path=built_tx_path,
+    )
+    monkeypatch.setattr(tick, "_walletctl_send", lambda *a, **kw: ("0x" + "bb" * 32, None))
+    monkeypatch.setattr(tick, "_walletctl_receipt", lambda tx_hash: {"status": "success", "blockNumber": "0x65", "actualCostWei": "1"})
+    monkeypatch.setattr(tick, "_await_indexed", lambda **kw: True)
+    _allow_guard(monkeypatch)
+
+    result2 = runner.invoke(tick.app, [])
+    assert result2.exit_code == 0, result2.output
+    assert load_agent_state().last_attended_planet_id == 665
+
+
+def test_describe_override_receives_the_same_rotation_pointer_as_the_real_planner_branch(isolated_home, monkeypatch):
+    """The override-disagreement record (`references/manual-action-override.md`) must
+    never silently disagree with what _run_tick's own planner branch would have used --
+    exactly the scenario this feature was motivated by (an operator overriding the
+    planner because of a multi-planet starvation problem)."""
+    _write_policy(
+        tier="economy",
+        wallet_engine={"provider": "keystore", "require_confirmation": True},
+        strategy={"planet_rotation": True, "allow_agent_action_override": True},
+    )
+    agent_state = load_agent_state()
+    agent_state.last_attended_planet_id = 664
+    save_agent_state(agent_state)
+
+    captured: dict[str, object] = {}
+    real_plan_next_action = plan_mod.plan_next_action
+
+    def _spy_plan_next_action(*args, **kwargs):
+        captured["last_attended_planet_id"] = kwargs.get("last_attended_planet_id")
+        return real_plan_next_action(*args, **kwargs)
+
+    monkeypatch.setattr(plan_mod, "plan_next_action", _spy_plan_next_action)
+    monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: _healthy_snapshot())
+    monkeypatch.setattr(tick, "_resolvable_mission_ids", lambda *a, **kw: [])
+    monkeypatch.setattr(tick, "_own_planet_debris", lambda *a, **kw: {})
+    monkeypatch.setattr(tick, "_foreign_debris_targets", lambda *a, **kw: {})
+    monkeypatch.setattr(tick.radar_mod, "check_targets", lambda *a, **kw: RadarReport())
+    monkeypatch.setattr(tick, "_live_addresses", lambda: {_LIVE_ADDR})
+    monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, _LIVE_ADDR))
+    monkeypatch.setattr(tick, "_walletctl_build", lambda act, **kw: (None, None, None, None))
+    _allow_guard(monkeypatch)
+
+    override_action = _build_action().model_copy(update={"rule": "operator override"})
+    action_file = Path(tick.__file__).parent / "_test_override_action.json"
+    action_file.write_text(override_action.model_dump_json())
+    try:
+        result = runner.invoke(tick.app, ["--action", str(action_file)])
+        assert result.exit_code == 0, result.output
+    finally:
+        action_file.unlink(missing_ok=True)
+
+    assert captured["last_attended_planet_id"] == 664

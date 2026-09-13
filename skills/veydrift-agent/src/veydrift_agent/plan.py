@@ -143,12 +143,49 @@ app = typer.Typer(no_args_is_help=True, help="Decide the next action from a snap
 
 def _target_planets(snapshot: Snapshot, policy: Policy) -> list[PlanetSnapshot]:
     """`policy.planets == []` means "all snapshot planets" (docs/SPEC.md §5.6); otherwise
-    the policy's own order is the priority order the ladder walks in.
+    the policy's own order is the priority order the ladder walks in -- for Band 1
+    (storage overflow) and Band 3's research half, unconditionally; for the three
+    rotation-eligible rungs (Band 2, Band 4's unlock-chain, Band 8's shipyard-idle),
+    only when `policy.strategy.planet_rotation` is off (the default). When it's on,
+    `plan_next_action` walks those three in a separately-rotated view instead -- see
+    `_rotate_for_fairness` -- so this function's return value stays the honest
+    policy-declared order for every caller (`opportunities.py` included) regardless.
     """
     if not policy.planets:
         return list(snapshot.planets)
     by_id = {p.planet_id: p for p in snapshot.planets}
     return [by_id[planet_id] for planet_id in policy.planets if planet_id in by_id]
+
+
+def _rotate_for_fairness(
+    target_planets: list[PlanetSnapshot], last_attended_planet_id: int | None
+) -> list[PlanetSnapshot]:
+    """A separate rotated VIEW of `target_planets`, for Band 2's loop and the
+    Band 4/Band 8 selectors that take a planet list -- never rebinds `target_planets`
+    itself, which Band 1 (order-independent) and Band 3's research half
+    (`generate_research_candidates` reads `target_planets[0]` specifically as the planet
+    `startResearch` is actually submitted through) both still need in the original
+    policy-declared order.
+
+    Rotates to start with the planet AFTER `last_attended_planet_id`, wrapping around;
+    returns the input **unchanged** (same list object, not a copy) when
+    `last_attended_planet_id` is `None` or no longer present in `target_planets` --
+    an abandoned/lost planet, the very first tick a policy ever enables rotation, or a
+    stale id left over from a `policy.planets` edit. Never raises, never drops or
+    duplicates a planet.
+
+    Callers gate whether this ever receives a non-`None` `last_attended_planet_id` at
+    all (`tick.py`, on `policy.strategy.planet_rotation`) -- this function itself has no
+    opinion on the policy flag; it just rotates whatever pointer it's given.
+    """
+    if last_attended_planet_id is None:
+        return target_planets
+    ids_in_order = [p.planet_id for p in target_planets]
+    try:
+        idx = ids_in_order.index(last_attended_planet_id)
+    except ValueError:
+        return target_planets
+    return target_planets[idx + 1 :] + target_planets[: idx + 1]
 
 
 # --------------------------------------------------------------------------------------
@@ -211,6 +248,7 @@ def plan_next_action(
     colonize_targets: list[tuple[str, int]] | None = None,
     attack_targets: dict[int, tuple[str, Resources, bool | None]] | None = None,
     missile_targets: dict[int, tuple[str, dict[int, int], bool | None]] | None = None,
+    last_attended_planet_id: int | None = None,
 ) -> Action:
     """Decide exactly one `Action` from `snapshot` + `policy`. First matching rung wins;
     `Action.rule` records which one fired (e.g. `"5:storage-overflow-spend"`) so the log
@@ -224,6 +262,14 @@ def plan_next_action(
     `/raid-finder/debris`, `/highscores`) and pass in. Defaults are the safe "nothing
     pending" state, so calling this with just a snapshot and policy is a legitimate
     offline planning call.
+
+    `last_attended_planet_id` (`policy.strategy.planet_rotation` feature): this function
+    has no opinion on that policy flag -- it's `tick.py`'s job to decide whether to pass
+    a real `AgentState.last_attended_planet_id` or `None` here. When non-`None`, only
+    Band 2's per-planet loop and the Band 4/Band 8 selectors that take a planet list walk
+    a rotated view starting after this planet instead of `policy.planets`'s literal
+    order -- see `_rotate_for_fairness`. Defaulting to `None` keeps "calling this with
+    just a snapshot and policy" behaviorally identical to before this feature existed.
     """
     if killswitch_active:
         return Action(kind=ActionKind.HALT, rule="0:killswitch", rationale="KILLSWITCH file present; halting before any further action.")
@@ -306,6 +352,17 @@ def plan_next_action(
             )
 
     target_planets = _target_planets(snapshot, policy)
+    # policy.strategy.planet_rotation feature: a separately-rotated VIEW for the three
+    # rungs below that walk a planet list in order and return on the first match
+    # (Band 2's loop, Band 4's unlock-chain, Band 8's shipyard-idle) -- never
+    # `target_planets` itself, which Band 1 and Band 3's research call below still need
+    # in the original policy-declared order (research reads `target_planets[0]`
+    # specifically as the planet `startResearch` is submitted through; rotating that
+    # would silently change which planet funds research). `last_attended_planet_id` is
+    # `None` unless `tick.py` explicitly opted in via the policy flag, in which case
+    # `_rotate_for_fairness` returns `target_planets` unchanged -- so this is a no-op by
+    # construction whenever the feature is off.
+    rotated_planets = _rotate_for_fairness(target_planets, last_attended_planet_id)
 
     # Band 1: deadline-driven storage overflow.
     storage_winner, storage_alternatives = candidates.select_storage_candidate(snapshot, policy, target_planets)
@@ -313,20 +370,24 @@ def plan_next_action(
         rule = "5:storage-overflow-storage" if storage_winner.family == "storage" else "5:storage-overflow-spend"
         return _finalize(storage_winner, storage_alternatives, rule, policy)
 
-    # Band 2: economically scored building (mine, energy-first-filtered).
-    for planet in target_planets:
+    # Band 2: economically scored building (mine, energy-first-filtered). Rotation-
+    # eligible -- walks `rotated_planets`, not `target_planets`.
+    for planet in rotated_planets:
         if planet.queues.get(QueueKind.BUILDING) is None:
             candidate = _next_building_action(planet, snapshot, policy, rule="6:building-queue-empty")
             if candidate is not None:
                 return candidate
 
-    # Band 3: policy-declared research, then ships/defense.
+    # Band 3: policy-declared research, then ships/defense. Research is NEVER
+    # rotation-eligible (see `rotated_planets`'s own comment above) -- always
+    # `target_planets`.
     if snapshot.research_queue is None:
         research_winner, research_alternatives = candidates.select_research_candidate(snapshot, policy, target_planets)
         if research_winner is not None:
             return _finalize(research_winner, research_alternatives, "7:research-queue-empty", policy)
 
-    shipyard_winner, shipyard_alternatives = candidates.select_shipyard_candidate(snapshot, policy, target_planets)
+    # Rotation-eligible -- see `rotated_planets`'s own comment above.
+    shipyard_winner, shipyard_alternatives = candidates.select_shipyard_candidate(snapshot, policy, rotated_planets)
     if shipyard_winner is not None:
         return _finalize(shipyard_winner, shipyard_alternatives, "8:shipyard-idle", policy)
 
@@ -338,8 +399,9 @@ def plan_next_action(
     # never outrank storage overflow and can never displace a scored economic or
     # policy-declared research/ship/defense candidate -- see `candidates.
     # select_unlock_chain_candidate`'s docstring for why this is a separate rung rather
-    # than folded into rung 6's `building_priority` branch.
-    unlock_winner, unlock_alternatives = candidates.select_unlock_chain_candidate(snapshot, policy, target_planets)
+    # than folded into rung 6's `building_priority` branch. Rotation-eligible -- see
+    # `rotated_planets`'s own comment above.
+    unlock_winner, unlock_alternatives = candidates.select_unlock_chain_candidate(snapshot, policy, rotated_planets)
     if unlock_winner is not None:
         return _finalize(unlock_winner, unlock_alternatives, "8b:unlock-chain", policy)
 
@@ -433,6 +495,15 @@ def run(
     killswitch: bool = typer.Option(False, help="Simulate a present KILLSWITCH file."),
     pending_tx: bool = typer.Option(False, "--pending-tx", help="Simulate an unreconciled pending tx."),
     json_output: bool = typer.Option(False, "--json", help="Print the Action as JSON instead of a panel."),
+    last_attended_planet_id: int | None = typer.Option(
+        None,
+        "--last-attended-planet-id",
+        help=(
+            "Simulate policy.strategy.planet_rotation's AgentState.last_attended_planet_id "
+            "(rotates Band 2/4/8's own planet walk to start after this planet). Omit to "
+            "reproduce today's behaviour -- this offline entrypoint never reads agent-state.json."
+        ),
+    ),
 ) -> None:
     """Decide the next action from a snapshot + policy file. Offline; no network calls."""
     console = Console()
@@ -448,6 +519,7 @@ def run(
         policy_model,
         killswitch_active=killswitch,
         pending_tx_unreconciled=pending_tx,
+        last_attended_planet_id=last_attended_planet_id,
     )
 
     if json_output:

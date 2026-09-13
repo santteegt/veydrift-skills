@@ -43,6 +43,7 @@ enough to check it by hand.
 - [10. What is unobserved, and which planner paths that leaves untested](#10-what-is-unobserved-and-which-planner-paths-that-leaves-untested)
 - [11. Checklist: sanity-checking a proposal by hand](#11-checklist-sanity-checking-a-proposal-by-hand)
 - [12. Working out the build-up: the unlock-chain rung](#12-working-out-the-build-up-the-unlock-chain-rung)
+- [13. Fair rotation across multiple planets](#13-fair-rotation-across-multiple-planets)
 
 ---
 
@@ -342,7 +343,9 @@ where it moved.
    Note that this band is deadline-driven, not economically scored — every candidate
    `candidates.generate_storage_candidates` produces carries `score=None`.
 6. **Building queue empty -> next build.** §3-§5's derivation, run per target planet in
-   policy order. As of Phase 2, `candidates.select_building_candidate` is the entity
+   policy order (or, with `policy.strategy.planet_rotation` on, a rotated view starting
+   after whichever planet last actually sent or was handed to a human for confirmation —
+   §13 has the mechanism). As of Phase 2, `candidates.select_building_candidate` is the entity
    picker: `candidates.generate_mine_candidates` never generates a mine candidate that
    fails the energy-first check (§3) at all — the energy substitute
    (`candidates.generate_energy_candidates`) is what fills that gap — and each generated
@@ -430,11 +433,20 @@ where it moved.
    Espionage Technology, until the list is edited by hand. Treat both fields as "my #1
    priority, with the rest as fallback names for if #1 ever becomes locked," not as a
    build order the planner works through.
+
+   This is a different axis from §13's `planet_rotation` below: this paragraph is about
+   *entity* names within a single planet's declared list never ceding their slot; §13 is
+   about which *planet*, among several, gets first refusal on a given tick. Neither
+   feature fixes the other's problem — a stuck `research_priority` entry stays stuck
+   regardless of which planet's turn it is, and rotation doesn't change which entity a
+   planet proposes once it's that planet's turn.
 8. **Shipyard idle AND economy on track -> ships/defense per policy.** Fires only if
    `policy.actions.allow_ships` or `allow_defense` is true (both default `false` in
    `assets/policy.example.json`, so this rung rarely fires in practice) and something
    else (building or research) is already actively progressing
-   (`candidates.economy_on_track`). If ships are allowed and a satellite is currently the
+   (`candidates.economy_on_track`). Per target planet, ship branch before defense
+   branch, first hit wins -- `policy.planets`'s own order by default, or a
+   `policy.strategy.planet_rotation`-rotated one; see §13. If ships are allowed and a satellite is currently the
    cheaper energy source on this planet (§5, `candidates.generate_ship_candidates`),
    proposes one; if defense is allowed, proposes the cheapest defense entry (Rocket
    Launcher, `candidates.generate_defense_candidates`, always `score=None`) as a
@@ -760,3 +772,51 @@ next step, not a commitment: every tick re-derives from scratch, so if the accou
 levels change between ticks (including from a human's own manual play), the next proposed
 step reflects that, never a queue laid down in advance. `building_priority` is unaffected
 by any of this — it keeps its own, separate, higher-precedence reachability path.
+
+## 13. Fair rotation across multiple planets
+
+**The problem.** Three rungs — 6 (building queue empty), 8b (unlock-chain), and 8
+(shipyard idle) — walk `policy.planets` in list order and return on the first planet
+with anything selectable at all; none of them scores across planets the way storage
+overflow (rung 5) and research (rung 7's first half) already do. As long as an
+earlier-listed planet has any pending work on one of those three rungs, a later-listed
+planet — a freshly settled colony, most concretely — never reaches them, tick after
+tick, until a human manually overrides. Confirmed live managing a two-planet account
+before this feature existed: adding a colony to `policy.planets` did not, by itself, get
+it any ladder attention at all.
+
+**Why not just score across planets instead of rotating.** The tempting fix is to let
+the best-scored candidate win globally, across every target planet, the way rung 5
+already does. That's wrong for this specific problem: a brand-new colony's first moves
+(Solar Plant 0→1, Metal Mine 0→1) are cheap and low-absolute-value compared to an
+established planet's higher-level mine upgrades. A pure payback-hours ranking would very
+likely keep picking the developed planet forever — the colony would still starve, just
+for a smarter-sounding reason. Fairness needs a fairness mechanism, not a better score.
+
+**The mechanism.** `policy.strategy.planet_rotation` (default `false`, reproducing
+pre-existing behaviour exactly). When it's on, `tick.py` reads
+`AgentState.last_attended_planet_id` and passes it into `plan_next_action`, which
+rotates a *separate view* of `target_planets` — starting with the planet after that id,
+wrapping around — for rungs 6, 8b and 8 specifically. Rung 5 (storage) and rung 7's
+research half keep walking `target_planets` in its original, policy-declared order
+unconditionally: research in particular reads `target_planets[0]` as the actual planet
+`startResearch` is submitted through, and rotating that would silently change which
+planet's resources fund research.
+
+The pointer only advances when a rotation-eligible rung's action genuinely sent, or was
+handed to a human for confirmation (`wallet_engine.require_confirmation`) — never on a
+bare tier-1/dry-run proposal that changed nothing. This is what keeps
+`last_proposal_fingerprint`'s own dedup meaningful for a multi-planet account: if
+nothing executes, the pointer never moves, so a repeated identical recommendation still
+deduplicates exactly as it always has, rather than flip-flopping between planets forever
+with no real progress on either.
+
+Bands 5-8f — fleet logistics, Colonize, Attack, Missile — are deliberately left
+un-rotated. Each is opt-in, single-fire, and high-stakes; planet fairness across them is
+a much smaller concern than for the routine building/ship/defense work rungs 6/8b/8
+handle every tick.
+
+See `StrategyCfg.planet_rotation` and `AgentState.last_attended_planet_id`'s own
+docstrings for the exact mechanics, and `AGENTS.md` §10 for the entity-level sibling
+problem (`research_priority`/`building_priority` never ceding their slot) this does not
+also fix.

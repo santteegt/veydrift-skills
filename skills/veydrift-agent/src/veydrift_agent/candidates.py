@@ -1063,9 +1063,16 @@ def generate_unlock_chain_candidates(snapshot: Snapshot, policy: Policy, planet:
 def select_unlock_chain_candidate(
     snapshot: Snapshot, policy: Policy, target_planets: list[PlanetSnapshot]
 ) -> tuple[Candidate | None, list[Candidate]]:
-    """The unlock-chain family's own rung: across every target planet, the cheapest
-    (weighted) unlock-chain step becomes the winner; every other unlock-chain candidate
-    generated becomes a ranked alternative.
+    """The unlock-chain family's own rung: walks `target_planets` in order and takes the
+    **first** planet with any unlock-chain candidate at all -- that planet's own cheapest
+    (weighted) step (`generate_unlock_chain_candidates` already sorts within one planet)
+    becomes the winner. An earlier docstring here claimed this compares cost *across*
+    every target planet and picks the global cheapest; it does not -- a later-listed
+    planet's cheaper step never gets considered once an earlier-listed planet has any
+    candidate. Every other candidate, from every planet, becomes a ranked alternative.
+    `target_planets`'s order is `policy.strategy.planet_rotation`-eligible the same way
+    `select_shipyard_candidate`'s is: `plan_next_action` passes a separately-rotated view
+    here when that flag is on, so "first" means "first in the rotated walk" in that case.
 
     **Deliberately not folded into `select_building_candidate`'s `building_priority`
     branch.** That branch treats a declared `building_priority` as intent strong enough to
@@ -2041,12 +2048,17 @@ def select_shipyard_candidate(
     snapshot: Snapshot, policy: Policy, target_planets: list[PlanetSnapshot]
 ) -> tuple[Candidate | None, list[Candidate]]:
     """Ported from `plan.py`'s pre-Phase-2 `_shipyard_action`: per target planet, ship
-    branch before defense branch, first hit wins. Phase 3: both branches now filter out
-    `"locked:"` candidates before picking a winner (pre-Phase-3, `generate_ship_candidates`
-    could never yield a locked entry, so no filter was needed there; Crawler/`ship_targets`
-    now can). Among selectable ships, the best-scored one wins (ties/all-unscored fall
-    back to generation order, i.e. Solar Satellite's priority is unchanged when nothing
-    new is configured) -- `rank_candidates` already implements exactly that ordering."""
+    branch before defense branch, first hit wins -- in `target_planets`'s own order,
+    which is `policy.strategy.planet_rotation`-eligible: `plan_next_action` passes a
+    separately-rotated view here when that flag is on, so "first" means "first in the
+    rotated walk," not always literally `policy.planets`'s declared order. This function
+    itself has no rotation logic of its own; it just walks whatever list it's given.
+    Phase 3: both branches now filter out `"locked:"` candidates before picking a winner
+    (pre-Phase-3, `generate_ship_candidates` could never yield a locked entry, so no
+    filter was needed there; Crawler/`ship_targets` now can). Among selectable ships, the
+    best-scored one wins (ties/all-unscored fall back to generation order, i.e. Solar
+    Satellite's priority is unchanged when nothing new is configured) -- `rank_candidates`
+    already implements exactly that ordering."""
     if not target_planets or not economy_on_track(snapshot, target_planets):
         return None, []
     alternatives: list[Candidate] = []

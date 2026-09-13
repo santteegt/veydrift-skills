@@ -285,7 +285,10 @@ commit 7 of the same plan — see §5's module table):
                                  below, it CAN win Band 2)
      2. economically scored  -- building upgrade, ascending payback hours (energy-first
                                  is a hard filter here, not a score); Phase 3: an explicit
-                                 `building_priority` takes precedence over the mine walk
+                                 `building_priority` takes precedence over the mine walk.
+                                 Per target planet, first idle-queue planet wins --
+                                 `policy.planets`'s order, or (`planet_rotation: true`) a
+                                 rotated one; same for bands 4 and 8's shipyard half below
      3. policy-declared      -- research (Phase 3: `research_priority` first, else an
                                  unlock-breadth-ranked default -- was purely
                                  lowest-level-first -- labelled "default:" when it's the

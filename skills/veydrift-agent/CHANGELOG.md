@@ -11,6 +11,41 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-09-13
+
+### Added
+- **`policy.strategy.planet_rotation`** (default `false`, `models.py`). Three ladder
+  rungs — `6:building-queue-empty` (`plan.py`'s Band 2 loop), `8b:unlock-chain`
+  (`candidates.select_unlock_chain_candidate`), `8:shipyard-idle`
+  (`candidates.select_shipyard_candidate`) — walk `policy.planets` in list order and
+  return on the first planet with anything selectable at all, never scoring across
+  planets the way storage overflow and research already do. As long as an earlier-listed
+  planet had any pending work on one of those three rungs, a later-listed planet (a
+  freshly settled colony, most concretely) never reached them, tick after tick, until a
+  human manually overrode — confirmed live managing a two-planet account. Turning this
+  on rotates those three rungs' own planet walk (via a new `plan._rotate_for_fairness`,
+  applied to a *separate view*, never `target_planets` itself — storage and research
+  keep the original order unconditionally, since `generate_research_candidates` reads
+  `target_planets[0]` as the actual planet `startResearch` is submitted through) to start
+  after whichever planet last genuinely sent or was handed to a human for confirmation
+  (new `AgentState.last_attended_planet_id`, additive, no version bump). The pointer
+  never advances on a bare proposal, so `last_proposal_fingerprint`'s dedup stays
+  meaningful for a multi-planet account at tier 1 or with `require_confirmation=true`
+  producing no real progress. Default `false` reproduces pre-existing behaviour exactly.
+  `plan_next_action`/`vd plan run` gain a matching optional `last_attended_planet_id`
+  kwarg/`--last-attended-planet-id` flag; `plan_next_action` itself has no opinion on the
+  policy flag, `tick.py` decides whether to ever pass a non-`None` pointer.
+- Pre-existing, unrelated to this feature's own behavior: `select_unlock_chain_candidate`'s
+  docstring claimed it compares cost *across* every target planet and picks the global
+  cheapest — it does not, and never did; it takes the first planet with any unlock-chain
+  candidate at all. Corrected while touching this code for rotation.
+
+### Docs
+- `AGENTS.md` §5, `references/strategy-playbook.md` §13 (new section), `AGENTS.md` §10
+  (cross-referenced against the existing `research_priority`/`building_priority`
+  "never cedes its slot" entity-level sibling), `docs/PLAYER-GUIDE.md`,
+  `docs/TECHNICAL-WALKTHROUGH.md`, `assets/policy.example.json`.
+
 ## [1.19.2] - 2026-09-12
 
 ### Fixed

@@ -253,6 +253,27 @@ class AgentState(_Base):
     #: Additive field, same rationale as `last_proposal_fingerprint` above.
     last_unresolved_onchain_proposal: UnresolvedProposal | None = None
 
+    #: `policy.strategy.planet_rotation` feature. The `planet_id` of the winning Action
+    #: the last time one of the three rotation-eligible rungs
+    #: ("6:building-queue-empty", "8b:unlock-chain", "8:shipyard-idle") fired AND that
+    #: action actually sent or was handed to a human for confirmation (`executed` or
+    #: `confirm_hint` -- see `tick._finish_tick`) -- never updated by a bare proposal
+    #: that didn't reach either point, so a tier-1/dry-run account's repeated identical
+    #: recommendation keeps deduping exactly as `last_proposal_fingerprint` already does.
+    #: Read by `plan_next_action` (via a new optional kwarg `tick.py` only ever populates
+    #: when the policy flag is on) to rotate those three rungs' own per-planet walk to
+    #: start AFTER this planet next time, so a later-listed planet with pending work
+    #: doesn't wait forever behind an earlier-listed one that always has something ready.
+    #: Deliberately NOT updated by storage overflow's own rung or the research rung --
+    #: `generate_research_candidates` reads `target_planets[0]` unconditionally as the
+    #: planet `startResearch` is submitted through, unrelated to fairness -- nor by
+    #: Colonize/Attack/Missile/logistics, which stay un-rotated entirely (see
+    #: `StrategyCfg.planet_rotation`'s own docstring). Additive field: an
+    #: agent-state.json written before this existed simply loads with the default None
+    #: (AgentState is not part of the frozen models.py on-disk contract -- AGENTS.md §4 --
+    #: so this is safe without a version bump).
+    last_attended_planet_id: int | None = None
+
     def record_tick(self, *, now: datetime | None = None) -> None:
         now = now or datetime.now(UTC)
         if self.first_tick_at is None:

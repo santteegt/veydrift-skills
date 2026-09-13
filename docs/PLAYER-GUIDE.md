@@ -286,7 +286,8 @@ change called out:
     "enable_crawler": false,          // opt-in for the scored Crawler family — see below
     "allow_agent_action_override": false,  // vd tick --action opt-in -- see §9
     "colonize": false,                // opt-in for Colonize proposals -- see §13
-    "fleet_home_planet_id": null      // set to a planet id to enable Deploy -- see §13
+    "fleet_home_planet_id": null,     // set to a planet id to enable Deploy -- see §13
+    "planet_rotation": false          // fair turn-taking across multiple planets -- see below
   }
 }
 ```
@@ -500,6 +501,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `allow_agent_action_override` | bool | `true`/`false` — gates `vd tick --action <file>`. See §9. | `false` |
 | `colonize` | bool | `true`/`false` — opt-in for Colonize proposals, the most conservative rung in the ladder (fires only once nothing else has anything to propose). Also requires a built Colony Ship; target selection needs no other declared field. Also unlocks the colonize `opportunities:` signal (§10) even on ticks where something else wins the ladder. See §13. | `false` |
 | `fleet_home_planet_id` | int or `null` | a planet id you own — opt-in for Deploy proposals (permanently repositioning a whole flyable fleet home). Also requires `actions.allow_fleet_noncombat: true`; this field alone does not enable it. See §13. | `null` |
+| `planet_rotation` | bool | `true`/`false` — with more than one planet in `planets`, an earlier-listed planet with any pending building/ship/defense work always wins the ladder's building-queue/unlock-chain/shipyard-idle rungs, so a later-listed planet (a freshly settled colony, most concretely) can go untouched indefinitely. `true` rotates those three rungs to start after whichever planet last genuinely had a real send or a confirm-command handed to you, so turns alternate instead of one planet always winning. Storage overflow and research are never rotated — research always draws from the same first-declared planet regardless. Off by default: with one planet, or with `planets: []` and only one real planet, this has no effect either way. | `false` |
 
 > **`resource_weights` is used to tie-break, not to pick a family — it only ever changes
 > the winning proposal in three narrow places, and only ever changes a *displayed* number

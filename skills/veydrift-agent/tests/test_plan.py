@@ -41,7 +41,7 @@ from veydrift_agent.models import (
     StorageCfg,
     StrategyCfg,
 )
-from veydrift_agent.plan import _next_building_action, plan_next_action
+from veydrift_agent.plan import _next_building_action, _rotate_for_fairness, plan_next_action
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -872,6 +872,138 @@ def test_unlock_chain_rung_never_reached_when_an_economic_candidate_exists():
 
     assert action.rule == "6:building-queue-empty"
     assert action.entity_id == ids.Building.SOLAR_PLANT
+
+
+# --------------------------------------------------------------------------------------
+# policy.strategy.planet_rotation feature: rotation fairness across Bands 2/4/8. See
+# AGENTS.md §10 and StrategyCfg.planet_rotation's own docstring for the motivating
+# incident -- a later-listed planet's Band-2 candidate never even got evaluated as long
+# as an earlier-listed one always had something ready.
+# --------------------------------------------------------------------------------------
+
+
+def _two_planet_snapshot():
+    """Two independent clones of planet_664 (id 665 added) -- both produce the exact
+    same Band-2 winner (Solar Plant 0->1) on their own, so which one wins a given tick
+    is purely a function of list/rotation order, not candidate quality. Reuses the
+    already-pinned planet_664.json fixture rather than hand-building a second full
+    planet from scratch."""
+    snapshot = load_snapshot("planet_664.json")
+    planet_a = snapshot.planets[0]
+    planet_b = planet_a.model_copy(update={"planet_id": 665, "coordinates": "7:181:15"})
+    return snapshot.model_copy(update={"planets": [planet_a, planet_b]})
+
+
+class TestRotateForFairness:
+    def test_none_pointer_returns_the_input_unchanged(self):
+        snapshot = _two_planet_snapshot()
+        planets = snapshot.planets
+        assert _rotate_for_fairness(planets, None) is planets
+
+    def test_pointer_not_present_returns_the_input_unchanged(self):
+        snapshot = _two_planet_snapshot()
+        planets = snapshot.planets
+        assert _rotate_for_fairness(planets, 999999) is planets
+
+    def test_single_planet_list_is_a_no_op(self):
+        snapshot = load_snapshot("planet_664.json")
+        planets = snapshot.planets
+        assert _rotate_for_fairness(planets, 664) == planets
+
+    def test_two_planets_alternate_cleanly(self):
+        snapshot = _two_planet_snapshot()
+        a, b = snapshot.planets
+        assert [p.planet_id for p in _rotate_for_fairness([a, b], 664)] == [665, 664]
+        assert [p.planet_id for p in _rotate_for_fairness([a, b], 665)] == [664, 665]
+
+    def test_three_planets_rotate_from_the_middle_and_the_end(self):
+        snapshot = _two_planet_snapshot()
+        a, b = snapshot.planets
+        c = a.model_copy(update={"planet_id": 666, "coordinates": "7:181:16"})
+        planets = [a, b, c]
+        # last-attended is the middle element -> start with the one after it, wrap.
+        assert [p.planet_id for p in _rotate_for_fairness(planets, 665)] == [666, 664, 665]
+        # last-attended is the last element -> wraps fully back to the front.
+        assert [p.planet_id for p in _rotate_for_fairness(planets, 666)] == [664, 665, 666]
+
+    def test_never_drops_or_duplicates_a_planet(self):
+        snapshot = _two_planet_snapshot()
+        a, b = snapshot.planets
+        c = a.model_copy(update={"planet_id": 666, "coordinates": "7:181:16"})
+        planets = [a, b, c]
+        for pointer in (None, 664, 665, 666, 999999):
+            rotated = _rotate_for_fairness(planets, pointer)
+            assert {p.planet_id for p in rotated} == {664, 665, 666}
+            assert len(rotated) == 3
+
+
+def test_band2_rotation_picks_the_later_listed_planet_after_the_earlier_one_attended():
+    """The exact motivating scenario: two planets, both with an identical, always-
+    available Band-2 candidate. Without a pointer (today's/rotation-off behavior), the
+    first-listed planet always wins. With last_attended_planet_id set to that planet's
+    id, the other one wins instead."""
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(planets=[664, 665])
+
+    default_action = plan_next_action(snapshot, policy)
+    assert default_action.rule == "6:building-queue-empty"
+    assert default_action.planet_id == 664
+
+    rotated_action = plan_next_action(snapshot, policy, last_attended_planet_id=664)
+    assert rotated_action.rule == "6:building-queue-empty"
+    assert rotated_action.planet_id == 665
+
+    # And it wraps back around.
+    wrapped_action = plan_next_action(snapshot, policy, last_attended_planet_id=665)
+    assert wrapped_action.planet_id == 664
+
+
+def test_band2_rotation_falls_back_to_unrotated_order_for_an_unknown_pointer():
+    """An abandoned/lost planet id, or a stale pointer from before a policy.planets
+    edit, must never crash or drop a planet -- just behave as if rotation were off."""
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(planets=[664, 665])
+
+    action = plan_next_action(snapshot, policy, last_attended_planet_id=999999)
+
+    assert action.planet_id == 664
+
+
+def test_band2_rotation_over_all_snapshot_planets_when_policy_planets_is_empty():
+    """`policy.planets == []` (discover from the snapshot) must rotate the same way as
+    an explicit list -- the pointer is keyed by planet id, not list index."""
+    snapshot = _two_planet_snapshot()
+    policy = make_policy(planets=[])
+
+    action = plan_next_action(snapshot, policy, last_attended_planet_id=664)
+
+    assert action.planet_id == 665
+
+
+def test_research_rung_ignores_rotation_and_always_funds_via_the_first_declared_planet():
+    """generate_research_candidates reads target_planets[0] unconditionally as the
+    planet startResearch is submitted through -- rotating that would silently change
+    which planet's resources fund research. Both planets here have an idle building
+    queue (so Band 2 would normally win first) -- force research to be the only
+    reachable rung by disallowing building, so this isolates Band 3's own planet
+    selection specifically."""
+    from veydrift_agent.models import StrategyCfg
+
+    snapshot = _two_planet_snapshot()
+    for planet_id in (664, 665):
+        planet = snapshot.planet(planet_id)
+        lab = next(b for b in planet.buildings if b.id == ids.Building.RESEARCH_LAB)
+        lab.level = 1  # unlocks Energy Technology (needs Research Lab >= 1) on both planets
+    policy = make_policy(
+        planets=[664, 665],
+        actions=ActionsCfg(allow_building=False, allow_research=True),
+        strategy=StrategyCfg(research_priority=["Energy Technology"]),
+    )
+
+    for pointer in (None, 664, 665):
+        action = plan_next_action(snapshot, policy, last_attended_planet_id=pointer)
+        assert action.rule == "7:research-queue-empty"
+        assert action.planet_id == 664
 
 
 if __name__ == "__main__":
