@@ -11,6 +11,25 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.20.1] - 2026-09-13
+
+### Docs
+- **`docs/SPEC.md`**: added Correction 75, backfilling `1.20.0`'s `planet_rotation`
+  feature into the acceptance-criteria corrections list (mechanics, the pre-
+  implementation review's three blocking findings, and why cross-planet economic
+  scoring was rejected as the obvious-looking alternative). While doing this,
+  corrected a mistaken claim from `1.20.0`'s own commit message: SPEC.md's corrections
+  73/74 (alliance membership, ACS defense coordination) were reported as missing —
+  they are not; they exist under a bolded-paragraph heading style (`**Correction N
+  (...):**`) rather than corrections 70-72's numbered-list style, which a too-narrow
+  grep pattern missed. No content was actually missing; only this changelog's own
+  prior claim was wrong.
+- **`docs/PLAYER-GUIDE.html`/`TECHNICAL-WALKTHROUGH.html`**: mirrored `1.20.0`'s
+  `.md`-only `planet_rotation` documentation into the standalone HTML guides (the
+  policy field-reference table row and the ladder-band rotation note) — these are
+  hand-authored companions to the `.md` sources, not generated, and were missed in
+  `1.20.0`.
+
 ## [1.20.0] - 2026-09-13
 
 ### Added

@@ -2202,6 +2202,62 @@ precondition the contract itself requires unconditionally — now checked indepe
 combined-defense resolution (behind the same off-chain randomness reveal gap Attack's own
 resolution already has) was not, and could not be, exercised.
 
+**Correction 75 (2026-09-13): fair planet rotation, `policy.strategy.planet_rotation`.**
+Unlike every correction above, this touches no contract surface at all — a pure `plan.py`/
+`tick.py` change closing a real, previously-undocumented gap in how the ladder handles
+more than one target planet. Three rungs — `6:building-queue-empty` (Band 2's per-planet
+loop), `8b:unlock-chain` (`candidates.select_unlock_chain_candidate`), and
+`8:shipyard-idle` (`candidates.select_shipyard_candidate`) — walk `target_planets` in list
+order and return on the first planet with anything selectable at all, never scoring across
+planets the way storage overflow (rung 5) and research (rung 7's first half) already do.
+As long as an earlier-listed planet had any pending work on one of those three rungs, a
+later-listed planet — a freshly settled colony, most concretely — never reached them, tick
+after tick, until a human manually overrode; confirmed live managing a two-planet account.
+
+Default `false` reproduces pre-existing behaviour exactly. On, a new
+`AgentState.last_attended_planet_id` (additive, no version bump — `AgentState` is not part
+of the frozen `models.py` on-disk contract, §4) rotates a *separate view* of
+`target_planets` for those three rungs specifically, via a new `plan._rotate_for_fairness`
+— never `target_planets` itself, which storage and research keep in the original,
+policy-declared order unconditionally: `generate_research_candidates` reads
+`target_planets[0]` unconditionally as the actual planet `startResearch` is submitted
+through, and rotating that would silently change which planet's resources fund research.
+The pointer only advances when a rotation-eligible rung's winning action genuinely sent or
+was handed to a human for confirmation (`executed`/`confirm_hint`) — never on a bare
+proposal, which is what keeps `last_proposal_fingerprint`'s dedup meaningful for a
+multi-planet account at tier 1 or with `require_confirmation=true` producing no real
+progress; a naive per-tick rotation without this distinction would have flip-flopped
+between planets every tick with no underlying change, defeating that dedup entirely.
+`tick.py`'s two `plan_next_action` call sites (the real planner branch, and
+`_describe_override`'s own comparison call) both receive the identical resolved pointer,
+so the override-disagreement record `references/manual-action-override.md` promises never
+silently disagrees with what the real planner branch would have used — the exact scenario
+a human overriding the planner because of this starvation problem is in.
+
+Bands 5-8f (fleet logistics, Colonize, Attack, Missile) are deliberately left un-rotated:
+each is opt-in, single-fire and high-stakes, where planet fairness is a much smaller
+concern than for the routine building/ship/defense work rungs 6/8b/8 handle every tick.
+Cross-planet economic scoring (the obvious-looking alternative to rotation) was considered
+and rejected: a brand-new colony's first moves are cheap and low-absolute-value compared
+to an established planet's higher-level upgrades, so a pure payback-hours ranking across
+planets would very likely keep picking the developed planet forever — the colony would
+still starve, just for a smarter-sounding reason.
+
+Went through an adversarial pre-implementation review (Opus, before any code was written)
+that found three blocking issues in the original plan: the dedup-defeating risk above (not
+originally accounted for); Band 4's unlock-chain rung was missed entirely, despite having
+the identical first-hit-wins shape as Bands 2/8 (its own docstring's claim that it compares
+cost across every target planet and picks the global cheapest was also found to be false —
+corrected in the same change, a pre-existing defect unrelated to rotation itself); and
+`_describe_override`'s own planner comparison call was missed. All three are incorporated
+into what shipped. See `skills/veydrift-agent/references/strategy-playbook.md` §13 for the
+full mechanics and `skills/veydrift-agent/CHANGELOG.md`'s `1.20.0` entry for the itemized
+result. New tests: `_rotate_for_fairness` unit tests, `plan_next_action` rotation tests
+(including the research-unaffected regression and the `policy.planets == []` case),
+`select_shipyard_candidate`/`select_unlock_chain_candidate` order-respecting tests,
+`tick.py`-level tests for the `executed`/`confirm_hint` gating and the two-tick persistence
+round-trip, and `AgentState` backward-compatibility tests (20 new, 1040 total).
+
 ---
 
 ## 10. Risks
