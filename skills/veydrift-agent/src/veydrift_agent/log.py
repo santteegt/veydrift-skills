@@ -30,6 +30,7 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.markup import escape as _escape_markup
 from rich.panel import Panel
 
 from veydrift_agent.state import logs_dir, ticks_dir, veydrift_home
@@ -255,12 +256,28 @@ def format_tick_block(
 
 
 def print_tick_report(block_text: str, *, tick_number: int) -> None:
-    _console.print(Panel(block_text, title=f"vd tick #{tick_number}", border_style="cyan", expand=False))
+    # Escaped, not printed with markup=False: `Panel`'s own str->Text conversion parses
+    # markup regardless of the console's setting. Fixes a real, pre-existing bug this
+    # feature's own smoke test caught live: any line containing a bracketed tag --
+    # `[family]` in `_proposal_lines`'s "alts:" line, now also brief.py's `[severity]`/
+    # `[source]` (a Snapshot field path like "planets[664].energy" is itself bracketed)
+    # -- silently vanished from the printed panel. `proposals.jsonl`/`ticks/<ts>.md`
+    # were never affected (plain text, no Rich involved), only this console panel.
+    _console.print(Panel(_escape_markup(block_text), title=f"vd tick #{tick_number}", border_style="cyan", expand=False))
 
 
-def write_tick_markdown(block_text: str, *, taken_at: datetime) -> Path:
+def write_tick_markdown(block_text: str, *, taken_at: datetime, extra_markdown: str | None = None) -> Path:
+    """`extra_markdown` (optional): appended as its own section after the fenced block,
+    for detail that belongs in the saved record but would make the printed panel
+    (`print_tick_report`, which shares `block_text` with this function) too long --
+    currently `brief.py`'s full observed-vs-inferred rendering, `tick._finish_tick`'s
+    only caller of this parameter. Scrubbed exactly like `block_text` -- this file is
+    the on-disk audit artifact, so nothing bypasses `scrub_text`."""
     path = ticks_dir() / f"{taken_at.strftime('%Y-%m-%dT%H-%M-%SZ')}.md"
-    path.write_text(f"# Tick {taken_at.isoformat()}\n\n```text\n{scrub_text(block_text)}\n```\n")
+    text = f"# Tick {taken_at.isoformat()}\n\n```text\n{scrub_text(block_text)}\n```\n"
+    if extra_markdown:
+        text += f"\n## Full brief\n\n```text\n{scrub_text(extra_markdown)}\n```\n"
+    path.write_text(text)
     return path
 
 

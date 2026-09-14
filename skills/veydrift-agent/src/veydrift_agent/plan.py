@@ -124,8 +124,10 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape as _escape_markup
 from rich.panel import Panel
 
+from veydrift_agent import brief as brief_mod
 from veydrift_agent import candidates
 from veydrift_agent.models import (
     Action,
@@ -207,6 +209,7 @@ def _finalize(
     alternatives: list[candidates.Candidate],
     rule: str,
     policy: Policy,
+    snapshot: Snapshot,
 ) -> Action:
     notes = [
         AlternativeNote(
@@ -217,7 +220,8 @@ def _finalize(
         )
         for alt in alternatives[: policy.strategy.max_alternatives]
     ]
-    return winner.action.model_copy(update={"rule": rule, "alternatives": notes})
+    action = winner.action.model_copy(update={"rule": rule, "alternatives": notes})
+    return brief_mod.attach(action, snapshot, policy, score_basis=winner.score_basis)
 
 
 def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Policy, rule: str) -> Action | None:
@@ -228,7 +232,7 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
     winner, alternatives = candidates.select_building_candidate(snapshot, policy, planet)
     if winner is None:
         return None
-    return _finalize(winner, alternatives, rule, policy)
+    return _finalize(winner, alternatives, rule, policy, snapshot)
 
 
 # --------------------------------------------------------------------------------------
@@ -331,12 +335,16 @@ def plan_next_action(
         )
 
     if resolvable_mission_ids:
-        return Action(
-            kind=ActionKind.RESOLVE_MISSION,
-            function="resolveFleetMission",
-            mission_id=resolvable_mission_ids[0],
-            rule="3:mission-resolving",
-            rationale=f"Mission {resolvable_mission_ids[0]} has been Resolving for >60s; resolveFleetMission is permissionless and free.",
+        return brief_mod.attach(
+            Action(
+                kind=ActionKind.RESOLVE_MISSION,
+                function="resolveFleetMission",
+                mission_id=resolvable_mission_ids[0],
+                rule="3:mission-resolving",
+                rationale=f"Mission {resolvable_mission_ids[0]} has been Resolving for >60s; resolveFleetMission is permissionless and free.",
+            ),
+            snapshot,
+            policy,
         )
 
     if policy.escalation.on_incoming_fleet:
@@ -368,7 +376,7 @@ def plan_next_action(
     storage_winner, storage_alternatives = candidates.select_storage_candidate(snapshot, policy, target_planets)
     if storage_winner is not None:
         rule = "5:storage-overflow-storage" if storage_winner.family == "storage" else "5:storage-overflow-spend"
-        return _finalize(storage_winner, storage_alternatives, rule, policy)
+        return _finalize(storage_winner, storage_alternatives, rule, policy, snapshot)
 
     # Band 2: economically scored building (mine, energy-first-filtered). Rotation-
     # eligible -- walks `rotated_planets`, not `target_planets`.
@@ -384,12 +392,12 @@ def plan_next_action(
     if snapshot.research_queue is None:
         research_winner, research_alternatives = candidates.select_research_candidate(snapshot, policy, target_planets)
         if research_winner is not None:
-            return _finalize(research_winner, research_alternatives, "7:research-queue-empty", policy)
+            return _finalize(research_winner, research_alternatives, "7:research-queue-empty", policy, snapshot)
 
     # Rotation-eligible -- see `rotated_planets`'s own comment above.
     shipyard_winner, shipyard_alternatives = candidates.select_shipyard_candidate(snapshot, policy, rotated_planets)
     if shipyard_winner is not None:
-        return _finalize(shipyard_winner, shipyard_alternatives, "8:shipyard-idle", policy)
+        return _finalize(shipyard_winner, shipyard_alternatives, "8:shipyard-idle", policy, snapshot)
 
     # Band 4 (Phase 4 of the general-strategy-engine program, docs/SPEC.md §5.4): a
     # locked ship_targets/defense_targets/research_priority entry can never be produced
@@ -403,7 +411,7 @@ def plan_next_action(
     # `rotated_planets`'s own comment above.
     unlock_winner, unlock_alternatives = candidates.select_unlock_chain_candidate(snapshot, policy, rotated_planets)
     if unlock_winner is not None:
-        return _finalize(unlock_winner, unlock_alternatives, "8b:unlock-chain", policy)
+        return _finalize(unlock_winner, unlock_alternatives, "8b:unlock-chain", policy, snapshot)
 
     # Band 5 (Phase 5c of the general-strategy-engine program, docs/SPEC.md §5.4, foreign
     # Harvest added in commit 3 of the launch-actions plan): non-combat fleet logistics --
@@ -426,7 +434,7 @@ def plan_next_action(
             "logistics-harvest": "8c:logistics-harvest",
             "logistics-harvest-foreign": "8c:logistics-harvest-foreign",
         }[logistics_winner.family]
-        return _finalize(logistics_winner, logistics_alternatives, rule, policy)
+        return _finalize(logistics_winner, logistics_alternatives, rule, policy, snapshot)
 
     # Band 6 (commit 4 of the launch-actions plan, rung `8d`): Colonize, consuming an
     # already-built Colony Ship toward `policy.strategy.colonize` (default `False`, so
@@ -440,7 +448,7 @@ def plan_next_action(
         snapshot, policy, target_planets, colonize_targets=colonize_targets
     )
     if colonize_winner is not None:
-        return _finalize(colonize_winner, colonize_alternatives, "8d:colonize", policy)
+        return _finalize(colonize_winner, colonize_alternatives, "8d:colonize", policy, snapshot)
 
     # Band 7 (commit 6 of the launch-actions plan, rung `8e`): Attack, the first combat
     # mission type this codebase can ever propose. Gated on `policy.actions.allow_combat`
@@ -456,7 +464,7 @@ def plan_next_action(
         snapshot, policy, target_planets, attack_targets=attack_targets
     )
     if attack_winner is not None:
-        return _finalize(attack_winner, attack_alternatives, "8e:attack", policy)
+        return _finalize(attack_winner, attack_alternatives, "8e:attack", policy, snapshot)
 
     # Band 8 (commit 7 of the launch-actions plan, rung `8f`): Missile, the second and
     # final combat action type this codebase can propose. Gated on
@@ -470,7 +478,7 @@ def plan_next_action(
         snapshot, policy, target_planets, missile_targets=missile_targets
     )
     if missile_winner is not None:
-        return _finalize(missile_winner, missile_alternatives, "8f:missile", policy)
+        return _finalize(missile_winner, missile_alternatives, "8f:missile", policy, snapshot)
 
     return Action(
         kind=ActionKind.NOOP,
@@ -538,7 +546,13 @@ def run(
     body.append(f"why:       {action.rationale}")
     if action.alternatives:
         body.append(f"alts:      {len(action.alternatives)} considered and not selected (see --json for detail)")
-    console.print(Panel("\n".join(body), title=f"vd plan run -- {action.kind.value}"))
+    if action.brief is not None:
+        body.append("")
+        body.extend(brief_mod.render_lines(action.brief, full=True))
+    # Escaped -- see log.print_tick_report's comment on the same fix: a bracketed tag
+    # (`[family]` below, or brief.py's `[severity]`/`[source]`) is otherwise silently
+    # swallowed by Panel's own markup parsing.
+    console.print(Panel(_escape_markup("\n".join(body)), title=f"vd plan run -- {action.kind.value}"))
 
 
 if __name__ == "__main__":

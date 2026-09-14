@@ -62,6 +62,134 @@
       "title": "AlternativeNote",
       "type": "object"
     },
+    "BriefFact": {
+      "description": "One fact inside `Briefing.observed`/`Briefing.inferred` (`brief.py`). `observed`\nfacts are read straight off `Snapshot` \u2014 `source` names the field they came from, so\na reader (or a test) can check the claim against the snapshot itself. `inferred`\nfacts are the planner's own math or judgement \u2014 `source` names the derivation (a\n`Candidate.score_basis` string, a `calc.py` function call). `value` is always a\ndisplay string, never a bare number, so \"unknown\" (never a substituted `0`, per\nAGENTS.md \u00a75) reads the same as any other value.",
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "value": {
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "value",
+        "source"
+      ],
+      "title": "BriefFact",
+      "type": "object"
+    },
+    "BriefRisk": {
+      "description": "One risk `brief.py` flagged for a proposal. `code` is a stable id (grep-able\nacross proposals.jsonl); `severity` is `\"high\"`/`\"medium\"`/`\"low\"`, matching\n`Briefing.risks`'s own sort order (highest first). Purely informational, exactly\nlike `AlternativeNote` \u2014 never a `Decision` input, never re-derived by `guard.py`,\nwhich runs its own independent, authoritative checks.",
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "detail"
+      ],
+      "title": "BriefRisk",
+      "type": "object"
+    },
+    "Briefing": {
+      "description": "A structured explanation of one `Action`, built once by `brief.py` after the\nplanner (or a manual override) has already decided \u2014 never a `Decision` input, never\nconsulted by `guard.py` or `plan.py`'s own ladder logic (`AlternativeNote`'s existing\n\"informational only\" convention, extended). Exists to answer two things a bare\n`rationale` string doesn't cleanly separate: what this action is *for* (goal,\nprerequisites, queue impact, timing, risks), and which numbers came from the live API\nversus which the planner computed (`observed` vs `inferred`) \u2014 see `brief.py`'s\nmodule docstring for the full contract. `None` on `Action.brief` for any off-chain\naction (noop/escalate/halt) or an `Action` no code path has attached one to yet (old\nlog lines predating this field).",
+      "properties": {
+        "goal": {
+          "default": "",
+          "title": "Goal",
+          "type": "string"
+        },
+        "indexed_block": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Indexed Block"
+        },
+        "inferred": {
+          "items": {
+            "$ref": "#/$defs/BriefFact"
+          },
+          "title": "Inferred",
+          "type": "array"
+        },
+        "observed": {
+          "items": {
+            "$ref": "#/$defs/BriefFact"
+          },
+          "title": "Observed",
+          "type": "array"
+        },
+        "prerequisites": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Prerequisites",
+          "type": "array"
+        },
+        "queue_impact": {
+          "default": "",
+          "title": "Queue Impact",
+          "type": "string"
+        },
+        "risks": {
+          "items": {
+            "$ref": "#/$defs/BriefRisk"
+          },
+          "title": "Risks",
+          "type": "array"
+        },
+        "snapshot_taken_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Snapshot Taken At"
+        },
+        "timing": {
+          "default": "",
+          "title": "Timing",
+          "type": "string"
+        }
+      },
+      "title": "Briefing",
+      "type": "object"
+    },
     "Resources": {
       "description": "A metal/crystal/deuterium triple. Used for holdings, costs, caps and reserves.",
       "properties": {
@@ -141,6 +269,17 @@
       },
       "title": "Alternatives",
       "type": "array"
+    },
+    "brief": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Briefing"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "cargo": {
       "$ref": "#/$defs/Resources"

@@ -21,7 +21,8 @@ docstring's own dedup/logging contract. See `references/manual-action-override.m
 
 **Repeated identical proposals are deduped, not re-logged** (step 8): `_finish_tick`
 fingerprints the record it's about to write (`_fingerprint_proposal`, sha256 over every
-field except `ts`/`tick`) and compares it against `AgentState.last_proposal_fingerprint`.
+field except `_FINGERPRINT_EXCLUDED_KEYS`) and compares it against `AgentState.
+last_proposal_fingerprint`.
 A match means this tick produced no new evidence — most commonly a human or agent
 re-running `vd tick` seconds later just to re-inspect output in a different `--format` —
 so `tick_count`/`proposals_count` don't advance and nothing is appended to
@@ -88,6 +89,7 @@ import typer
 from rich.console import Console
 
 from veydrift_agent import alliance_ids, guard as guard_mod
+from veydrift_agent import brief as brief_mod
 from veydrift_agent import coordination as coordination_mod
 from veydrift_agent import http, ids, log, read
 from veydrift_agent import opportunities as opportunities_mod
@@ -2339,6 +2341,12 @@ def _proposal_lines(
     lines.append(f"  why:    {action.rationale}")
     if action.expected_effect:
         lines.append(f"  effect: {action.expected_effect}")
+    if action.brief is not None:
+        # Compact: goal/queue/time/top-risk only -- the full observed-vs-inferred fact
+        # lists go to ticks/<ts>.md and `vd plan run`/--json instead (brief.render_lines'
+        # full=True form), so this panel stays short.
+        for brief_line in brief_mod.render_lines(action.brief, full=False):
+            lines.append(f"  {brief_line}")
     if action.alternatives:
         lines.append(f"  alts:   {len(action.alternatives)} considered and not selected --")
         for alt in action.alternatives:
@@ -2592,7 +2600,12 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     override_record: dict[str, Any] | None = None
     override_line: str | None = None
     if override_action is not None:
-        action = override_action
+        # A manual override never went through plan.py's _finalize (the planner's own
+        # brief.attach call site) -- attach one here so an override's proposal report/
+        # proposals.jsonl entry gets the same goal/queue/timing/risk structure a
+        # planner-chosen action gets. `_describe_override` below still compares against
+        # `override_action` (pre-brief) -- attaching a brief changes nothing it reads.
+        action = brief_mod.attach(override_action, snapshot, policy_model)
         override_record, override_line = _describe_override(
             override_action,
             snapshot,
@@ -2995,18 +3008,24 @@ def _send_and_await(
     return False, "unknown", tx_hash
 
 
-_FINGERPRINT_EXCLUDED_KEYS = {"ts", "tick", "human_activity_check"}
+#: "brief" excluded because its observed facts (live resource amounts, queue seconds-
+#: remaining, energy figures) legitimately change tick to tick even when the proposed
+#: action itself is a genuine content-identical repeat -- including it would silently
+#: defeat dedup on almost every tick, the same reasoning `human_activity_check` already
+#: documents for itself above.
+_FINGERPRINT_EXCLUDED_KEYS = {"ts", "tick", "human_activity_check", "brief"}
 
 
 def _fingerprint_proposal(record: dict[str, Any]) -> str:
-    """Stable content fingerprint of a proposals.jsonl record, excluding `ts`/`tick` --
-    the only two fields expected to differ between a genuine content-identical repeat and
-    a first-time proposal -- and `human_activity_check`: that field describes a
-    best-effort /activity lookup about a DIFFERENT (earlier, unresolved) proposal, not
-    this one, and its content (since_ts, items found) legitimately varies tick to tick
-    even when this tick's own proposed action is a genuine content-identical repeat of
-    the last one. Including it would silently defeat dedup on every tick that has
-    anything unresolved to check -- i.e. almost every tick at tier 1. `sort_keys=True`
+    """Stable content fingerprint of a proposals.jsonl record, excluding `_FINGERPRINT_
+    EXCLUDED_KEYS`: `ts`/`tick` are the only two fields expected to differ between a
+    genuine content-identical repeat and a first-time proposal; `human_activity_check`
+    describes a best-effort /activity lookup about a DIFFERENT (earlier, unresolved)
+    proposal, not this one, and its content (since_ts, items found) legitimately varies
+    tick to tick even when this tick's own proposed action is a genuine content-identical
+    repeat of the last one; `brief` (`brief.py`) carries live observed facts (resource
+    amounts, queue seconds-remaining) that vary the same way. Including any of these
+    would silently defeat dedup on almost every tick. `sort_keys=True`
     makes this order-independent even though `guard_verdicts` is already
     gate-order-deterministic; `default=str` covers any non-JSON-native value the same way
     `log.py`'s own serialisation would. Computed over the in-memory record, deliberately
@@ -3058,6 +3077,7 @@ def _finish_tick(
         "rationale": action.rationale,
         "expected_effect": action.expected_effect,
         "alternatives": [alt.model_dump() for alt in action.alternatives],
+        "brief": action.brief.model_dump() if action.brief is not None else None,
         "guard_decision": guard_report.decision.value,
         "guard_verdicts": [v.model_dump() for v in guard_report.verdicts],
         "tx": unsigned_tx.model_dump() if unsigned_tx else None,
@@ -3180,6 +3200,21 @@ def _finish_tick(
         for suggestion in coordination_report.suggestions:
             log.append_strategy(f"tick {agent_state.tick_count}: coordination -- {suggestion.detail}", now=now)
 
+    # brief.py's high-severity risks (hostile fleet incoming, a combat action) get the
+    # same never-suppressed treatment as radar/coordination above, for the same reason --
+    # time-bounded and worth a strategy.md line every time, not just once per unique
+    # proposal. Medium/low risks stay in the brief itself (proposals.jsonl, the tick
+    # report, ticks/<ts>.md) -- writing every one of those to strategy.md every tick
+    # would drown it the same way opportunities' own comment below explains.
+    if action.brief is not None:
+        for risk in action.brief.risks:
+            if risk.severity == "high":
+                log.append_strategy(
+                    f"tick {agent_state.tick_count}: RISK {risk.code}: {risk.detail} -- "
+                    f"{action.function or action.kind.value} planet {action.planet_id}",
+                    now=now,
+                )
+
     # Opportunities deliberately do NOT get radar's unconditional strategy.md treatment.
     # Radar's findings are naturally transient (an incoming fleet arrives once, a
     # resolved attack is de-duplicated by radar-state.json, debris eventually gets
@@ -3205,7 +3240,11 @@ def _finish_tick(
     if (action.kind is ActionKind.ESCALATE or guard_report.decision is not Decision.ALLOW) and not structural and not is_duplicate:
         log.append_strategy(f"tick {agent_state.tick_count}: {action.rule} -- {action.rationale} (guard={guard_report.decision.value})", now=now)
 
-    log.write_tick_markdown(block_text, taken_at=now)
+    log.write_tick_markdown(
+        block_text,
+        taken_at=now,
+        extra_markdown="\n".join(brief_mod.render_lines(action.brief, full=True)) if action.brief is not None else None,
+    )
 
     if format == "json":
         typer.echo(

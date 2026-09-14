@@ -826,6 +826,60 @@ class AlternativeNote(Base):
     why_not: str = ""
 
 
+class BriefFact(Base):
+    """One fact inside `Briefing.observed`/`Briefing.inferred` (`brief.py`). `observed`
+    facts are read straight off `Snapshot` — `source` names the field they came from, so
+    a reader (or a test) can check the claim against the snapshot itself. `inferred`
+    facts are the planner's own math or judgement — `source` names the derivation (a
+    `Candidate.score_basis` string, a `calc.py` function call). `value` is always a
+    display string, never a bare number, so "unknown" (never a substituted `0`, per
+    AGENTS.md §5) reads the same as any other value."""
+
+    label: str
+    value: str
+    source: str
+
+
+class BriefRisk(Base):
+    """One risk `brief.py` flagged for a proposal. `code` is a stable id (grep-able
+    across proposals.jsonl); `severity` is `"high"`/`"medium"`/`"low"`, matching
+    `Briefing.risks`'s own sort order (highest first). Purely informational, exactly
+    like `AlternativeNote` — never a `Decision` input, never re-derived by `guard.py`,
+    which runs its own independent, authoritative checks."""
+
+    code: str
+    severity: Literal["high", "medium", "low"]
+    detail: str
+
+
+class Briefing(Base):
+    """A structured explanation of one `Action`, built once by `brief.py` after the
+    planner (or a manual override) has already decided — never a `Decision` input, never
+    consulted by `guard.py` or `plan.py`'s own ladder logic (`AlternativeNote`'s existing
+    "informational only" convention, extended). Exists to answer two things a bare
+    `rationale` string doesn't cleanly separate: what this action is *for* (goal,
+    prerequisites, queue impact, timing, risks), and which numbers came from the live API
+    versus which the planner computed (`observed` vs `inferred`) — see `brief.py`'s
+    module docstring for the full contract. `None` on `Action.brief` for any off-chain
+    action (noop/escalate/halt) or an `Action` no code path has attached one to yet (old
+    log lines predating this field)."""
+
+    goal: str = ""
+    prerequisites: list[str] = Field(default_factory=list)
+    queue_impact: str = ""
+    timing: str = ""
+    observed: list[BriefFact] = Field(default_factory=list)
+    inferred: list[BriefFact] = Field(default_factory=list)
+    #: Sorted high -> low severity by `brief.py`; `risks[0]` (if any) is the "major risk."
+    risks: list[BriefRisk] = Field(default_factory=list)
+    #: The `Snapshot.taken_at` / `Snapshot.latest_indexed_block` this brief's `observed`
+    #: facts were read from — lets a reader judge freshness without cross-referencing
+    #: `proposals.jsonl`'s own `ts` (which is when the record was written, not when the
+    #: snapshot was taken).
+    snapshot_taken_at: datetime | None = None
+    indexed_block: int | None = None
+
+
 class Action(Base):
     """Zero or one of these per tick. `function` is None for noop/escalate/halt."""
 
@@ -1012,6 +1066,12 @@ class Action(Base):
     alliance_tag: str | None = None
     alliance_name: str | None = None
     alliance_description: str | None = None
+
+    # ----------------------------------------------------------------------------------
+    # Briefing (additive). `None` for every off-chain Action (noop/escalate/halt) and
+    # for any Action no code path has attached one to yet -- see `brief.py`.
+    # ----------------------------------------------------------------------------------
+    brief: Briefing | None = None
 
     def is_onchain(self) -> bool:
         return self.function is not None

@@ -344,6 +344,19 @@ pass, ranked, each with a `why_not` (a payback-hours comparison, or a lock reaso
 `techtree.describe()`). Purely informational: never an ROI verdict, never read by
 `guard.py` or any `Decision` logic.
 
+**Structured proposal briefings, `Action.brief` (new module, `brief.py`, docs/SPEC.md
+correction 76).** Same "purely informational" posture as `alternatives`, applied to the
+rest of a proposal's explanation: a goal (keyed by `Action.rule`), prerequisites
+(`techtree.unmet()`), queue impact and timing, and a severity-ranked risk list. Its real
+contribution is separating `Briefing.observed` (values read straight off `Snapshot`, each
+naming its source field) from `Briefing.inferred` (the planner's own math — a
+`Candidate.score_basis`, or a `calc.py` duration formula used only when the API didn't
+report one) — a distinction the free-text `rationale` field never made explicit. Called
+from every path that can produce an on-chain `Action` (`plan._finalize`, rung 3's
+`resolveFleetMission` return, `tick.py`'s manual-override path); `None` for every
+off-chain kind. One rendering function (`render_lines(full: bool)`) feeds the compact
+`vd tick` panel and the full `ticks/<ts>.md`/`vd plan run` output, so they can't drift.
+
 **Phase 3 — most planet-local entities reachable.** Before this change the
 planner could only ever propose 13 of the entities `ids.py` knows about (three mines,
 Solar Plant, three storages, one ship, one hardcoded defense, "whichever technology has

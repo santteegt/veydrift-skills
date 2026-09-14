@@ -44,6 +44,7 @@ enough to check it by hand.
 - [11. Checklist: sanity-checking a proposal by hand](#11-checklist-sanity-checking-a-proposal-by-hand)
 - [12. Working out the build-up: the unlock-chain rung](#12-working-out-the-build-up-the-unlock-chain-rung)
 - [13. Fair rotation across multiple planets](#13-fair-rotation-across-multiple-planets)
+- [14. Reading a proposal's brief](#14-reading-a-proposals-brief)
 
 ---
 
@@ -662,6 +663,10 @@ Given a `vd plan run` proposal, in order:
    drove the decision (this is by design — every candidate generator in `candidates.py`
    writes required/produced/satellite-energy into the rationale string precisely so a
    human doesn't have to re-run the code to check it).
+5b. **The brief (§14), if present.** `Action.brief` separates what `plan run`/`vd tick`
+   read from the live API (`observed`) from what the planner computed (`inferred`) —
+   check an `observed` fact against the same field on the snapshot the way §14 shows,
+   rather than trusting it by construction.
 6. **Alternatives (Phase 2) make sense, if present.** `Action.alternatives` lists the
    runner-ups from the same generate/filter/score/select pass, each with a `why_not` —
    either a payback-hours comparison against the winner, or a `techtree.describe()` lock
@@ -820,3 +825,51 @@ See `StrategyCfg.planet_rotation` and `AgentState.last_attended_planet_id`'s own
 docstrings for the exact mechanics, and `AGENTS.md` §10 for the entity-level sibling
 problem (`research_priority`/`building_priority` never ceding their slot) this does not
 also fix.
+
+## 14. Reading a proposal's brief
+
+Every on-chain proposal — a planner-chosen `Action` or a `vd tick --action` manual
+override — carries `Action.brief` (`brief.py`), built once after the decision is already
+made. It is purely informational, exactly like `Action.alternatives`: `guard.py` never
+reads it, and nothing here feeds back into `plan.py`'s own ladder logic. It exists to
+answer two things a bare `rationale` string doesn't cleanly separate:
+
+**What this action is for.** `goal` (one line, keyed by `Action.rule`), `prerequisites`
+(`techtree.unmet()` on the entity being acted on — "all prerequisites met" for anything
+this planner would actually propose, since an unmet entity is filtered out before it
+ever becomes a candidate), `queue_impact` (which queue this occupies and its current
+state), and `timing` (how long, once queued).
+
+**Observed vs. inferred.** This is the part worth reading carefully:
+
+- `brief.observed` — values read straight off the `Snapshot` this tick fetched. Each
+  fact's `source` names the field it came from (`"planets[664].energy"`,
+  `"research_queue"`), so it's checkable against `vd read snapshot`'s own output for the
+  same moment without re-deriving anything. A value the API didn't report renders as the
+  literal string `"unknown"` — never a substituted `0` — and drives a `data_unavailable`
+  risk (below), never a silently-passed check.
+- `brief.inferred` — the planner's own math or judgement. Each fact's `source` names the
+  derivation: the winning `Candidate`'s own `score_basis` (the same ROI/deadline
+  reasoning that justified picking this candidate over its alternatives — see §11 item
+  6), or a `calc.py` function call (`calc.build_seconds`, `calc.research_seconds`,
+  `calc.ship_seconds`) used only when the API itself didn't report a duration for this
+  entity. Never a cost figure — live cost always comes from the API's own `cost` field
+  (`formulas.md`'s header explains why), so `brief.py` never recomputes one.
+
+**Risks**, sorted highest severity first (`risks[0]`, if any, is the "major risk"):
+`hostile_fleet_incoming`/`combat_loss` (high), `spend_share`/`below_reserve`/
+`snapshot_stale`/`data_unavailable` (medium), `storage_overflow_while_busy`/
+`raidable_after_spend` (low). `spend_share`/`below_reserve` are computed from
+`Action.cost` directly — a lighter, honestly-labeled check, not a re-derivation of
+`guard.py`'s own independent fleet-mission spend/energy math (`_derive_fleet_mission_
+spend`, the post-upgrade energy re-check): a third copy of either formula here would be
+exactly the kind of drift `AGENTS.md` §5 warns about. A high-severity risk also gets its
+own `strategy.md` line every tick it's present, the same never-suppressed treatment
+radar/coordination findings already get — never a `Decision` input, but worth noticing
+without reading the full brief.
+
+The printed `vd tick` panel and JSON output show a compact form — `goal`/`queue`/`time`
+and the top risk only. The full form — every observed/inferred fact, every risk, every
+prerequisite — is in `ticks/<ts>.md`'s "Full brief" section, `vd plan run`'s own panel,
+and every `--json` output (`Action.brief` is a plain field, so it's always in
+`model_dump_json()`).

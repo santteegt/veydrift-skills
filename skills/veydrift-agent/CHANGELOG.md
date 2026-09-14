@@ -11,6 +11,39 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-09-14
+
+### Added
+- **Structured proposal briefings, `Action.brief` (new module, `brief.py`).** Every
+  on-chain proposal now carries a goal, prerequisites, queue impact, timing, and a
+  severity-ranked risk list, plus `Briefing.observed` (values read straight off
+  `Snapshot`, each naming its source field) kept separate from `Briefing.inferred` (the
+  planner's own math, each naming its derivation — a `Candidate.score_basis`, or a
+  `calc.py` duration formula used only when the API didn't report one). Purely
+  informational, exactly like `Action.alternatives` — never read by `guard.py` or any
+  `Decision` logic. Missing snapshot data renders `"unknown"`, never a substituted `0`,
+  and raises a `data_unavailable` risk. Attached from every path that can produce an
+  on-chain `Action`: `plan._finalize`, rung 3's `resolveFleetMission` return, and
+  `tick.py`'s manual-override path. `vd tick`'s panel/`--format json` show a compact form
+  (goal/queue/timing/top risk); `ticks/<ts>.md`'s new "Full brief" section and
+  `vd plan run`/`--json` show every fact and risk (`brief.render_lines`, shared so the
+  outputs can't drift). A high-severity risk also gets an unconditional `strategy.md`
+  line. `brief` excluded from `_fingerprint_proposal`'s hash (its observed facts vary
+  every tick even for a genuine content-identical repeat). `schemas/action.schema.json`
+  regenerated. See `references/strategy-playbook.md` §14 and docs/SPEC.md correction 76.
+
+### Fixed
+- **`log.print_tick_report`/`plan.py`'s `vd plan run` panel silently dropped any
+  bracketed tag** (pre-existing: `_proposal_lines`'s "alts:" `[family]` prefix; newly
+  relevant for this release's own `[severity]`/`[source]`) — a `str` passed to
+  `rich.Panel`/`console.print` is parsed as Rich markup regardless of the console's own
+  settings, and an unrecognized tag like `[research]` is dropped rather than erroring.
+  Both call sites now escape the body text (`rich.markup.escape`) before wrapping it in
+  a `Panel`. `proposals.jsonl`/`ticks/<ts>.md`/`--json` were never affected.
+- **`schemas/policy.schema.json` was stale** — `1.20.0`'s `planet_rotation` field landed
+  in `models.py`/`policy.example.json` but the schema regeneration step was missed for
+  that commit. Regenerated (mechanical catch-up, no new content).
+
 ## [1.21.0] - 2026-09-13
 
 ### Fixed

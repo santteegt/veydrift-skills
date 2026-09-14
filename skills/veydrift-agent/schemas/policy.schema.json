@@ -271,6 +271,11 @@
           "title": "Max Alternatives",
           "type": "integer"
         },
+        "planet_rotation": {
+          "default": false,
+          "title": "Planet Rotation",
+          "type": "boolean"
+        },
         "research_priority": {
           "items": {
             "type": "string"

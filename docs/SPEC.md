@@ -2258,6 +2258,81 @@ result. New tests: `_rotate_for_fairness` unit tests, `plan_next_action` rotatio
 `tick.py`-level tests for the `executed`/`confirm_hint` gating and the two-tick persistence
 round-trip, and `AgentState` backward-compatibility tests (20 new, 1040 total).
 
+**Correction 76 (2026-09-14): structured proposal briefings, `Action.brief`.** Additive,
+no contract surface touched: a new `Briefing`/`BriefFact`/`BriefRisk` model set and a new
+`brief: Briefing | None = None` field on the frozen `Action` (§4), populated by a new
+module, `brief.py`, called from `plan._finalize` (every scored/selected candidate), the
+rung-3 `resolveFleetMission` return, and `tick.py`'s manual-override path — every path
+that can produce an on-chain `Action`. `None` for every off-chain kind (noop/escalate/
+halt) and for old log lines predating this field. Purely informational, exactly like the
+Phase 2 `Action.alternatives` field: never read by `guard.py` or `plan.py`'s own ladder
+logic, verified by a grep test (`test_brief.py::test_guard_never_reads_brief`).
+
+Closes two gaps found comparing this codebase against an external agent-skill definition
+for the same game (a competing implementation's `veydrift-commander`, reviewed for ideas
+worth adopting): that skill's recommendations name a goal, prerequisites, queue impact,
+timing and a "major risk" per proposal, none of which `Action.rationale`/
+`expected_effect` cleanly separate from the rest of the sentence; and a `rationale` string
+mixes a live API value with the planner's own math in one clause, with no way to tell
+which is which without re-reading the code that produced it.
+
+`Briefing.observed` lists facts read straight off `Snapshot`, each with a `source` naming
+the field it came from (`"planets[664].energy"`); `Briefing.inferred` lists the planner's
+own derivations, each naming the calculation (a `Candidate.score_basis`, or a `calc.py`
+duration formula used only when the API itself didn't report one for this entity — never
+a cost figure, `calc.py`'s no-cost-scaling invariant, §5, holds unchanged). A value the
+API omitted renders as the literal string `"unknown"`, never a substituted `0`, and
+raises a `data_unavailable` risk — the same fail-closed-on-absent-data discipline
+`guard.py`/`techtree.unmet()` already apply, extended to a reporting-only module.
+`Briefing.risks` (`hostile_fleet_incoming`/`combat_loss` high;
+`spend_share`/`below_reserve`/`snapshot_stale`/`data_unavailable` medium;
+`storage_overflow_while_busy`/`raidable_after_spend` low) are sorted highest-first; a
+high-severity risk also gets an unconditional `strategy.md` line, the same
+never-suppressed treatment radar/coordination findings already receive. `spend_share`/
+`below_reserve` are deliberately computed from `Action.cost` directly rather than
+re-deriving `guard.py`'s own independent fleet-mission spend/energy math
+(`_derive_fleet_mission_spend`, the post-upgrade energy re-check) a third time — a
+documented, honest scope narrowing, not an oversight: a third copy of either formula is
+exactly the kind of drift `AGENTS.md` §5 warns about (the tier-map/allowlist incident).
+Likewise, fleet-mission travel time is deliberately not recomputed (`calc.travel_seconds`
+needs live ship-speed/universe-speed inputs this module has no independent source for and
+`guard.py` already re-derives at send time) — a fleet action's `timing` names only the
+occupied fleet slot, not an ETA.
+
+Rendering is one function, `brief.render_lines(full: bool)`, shared by every consumer so
+they can't drift: the printed `vd tick` panel and `--format json`/`vd plan run --json`
+get a compact form (goal/queue/time/top-risk); `ticks/<ts>.md`'s new "Full brief" section
+and `vd plan run`'s own panel get every observed/inferred fact and every risk.
+`_FINGERPRINT_EXCLUDED_KEYS` (`tick.py`) gained `"brief"`: its observed facts (live
+resource amounts, queue seconds-remaining) legitimately change every tick even when the
+proposed action is a genuine content-identical repeat, the same reasoning already
+documented for `human_activity_check`. `schemas/action.schema.json` regenerated.
+
+While regenerating schemas for this change, `schemas/policy.schema.json` was found
+already stale — Correction 75's `planet_rotation` field landed in `models.py` and
+`policy.example.json` but the schema regeneration step was missed for that commit.
+Fixed in the same change (an unrelated, mechanical catch-up, not new content).
+
+Also fixed, found live while smoke-testing this feature against the live API and the
+printed `vd tick` panel: any proposal-report line containing a bracketed tag —
+pre-existing for `_proposal_lines`'s "alts:" line (`[family]`), newly relevant for this
+feature's own `[severity]`/`[source]` — was silently swallowed by `rich.Panel`'s markup
+parsing (a `str` passed to `Panel`/`console.print` is parsed as Rich markup regardless of
+the console's own settings, and an unrecognized bracketed "tag" like `[research]` is
+dropped rather than erroring). `log.print_tick_report`/`plan.py`'s `vd plan run` panel now
+escape the body text (`rich.markup.escape`) before wrapping it in a `Panel`.
+`proposals.jsonl`/`ticks/<ts>.md`/`--json` were never affected — plain text, no Rich
+involved — only the two printed console panels were.
+
+New tests (33 total, `tests/test_brief.py`): every `plan.py` on-chain rule string has a
+goal (grepped, not hand-maintained); every observed fact's `source` matches a
+`Snapshot`-field-path pattern; missing snapshot data renders `"unknown"` and raises
+`data_unavailable`, never a substituted `0`; each risk rule fires/doesn't in isolation and
+the list sorts high-to-low; `guard.py` never references `.brief`; `brief` is excluded from
+`_fingerprint_proposal`'s hash; `schemas/action.schema.json` matches
+`Action.model_json_schema()`. Verified end-to-end against the live API (`vd tick
+--dry-run`, `vd plan run`, `--json`) before and after the Rich-markup fix.
+
 ---
 
 ## 10. Risks

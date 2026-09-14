@@ -95,6 +95,13 @@ uv run --directory skills/veydrift-agent vd read snapshot --wallet 0x224a...fa0f
 uv run --directory skills/veydrift-agent vd plan run --snapshot /tmp/snap.json --policy $VEYDRIFT_HOME/policy.json
 ```
 
+Every on-chain proposal also carries `Action.brief`: a goal, prerequisites, queue impact,
+timing, a ranked risk list, and — the part worth reading closely — `observed` facts (read
+straight off the live snapshot, each naming its source field) kept separate from
+`inferred` facts (the planner's own math, each naming its derivation). Purely
+informational, exactly like `alternatives` — `references/strategy-playbook.md` §14 is the
+full read-this-before-trusting-it guide.
+
 `vd plan run` prints the rule that fired, the function name, target, live-quoted cost, and
 a rationale that states the exact numbers behind the decision — read it before trusting
 it; the reasoning is meant to be checkable by hand (`references/strategy-playbook.md` §11
@@ -205,6 +212,7 @@ Defense enum order and the Deathstar/Dreadstar naming wrong (`references/entity-
 | What's the exact formula behind a number `vd calc`/`vd plan` produced — energy, production, duration, distance, fuel, storage cap? | `references/formulas.md` |
 | Building/Technology/Ship/Defense/FleetMissionType/Resource id → name, and the fleet-tuple index shift | `references/entity-ids.md` |
 | Why did the planner propose *this specific* action — the full derivation, worked examples for a cold and a hot planet, what's unobserved | `references/strategy-playbook.md` |
+| How to read `Action.brief` — which facts are observed vs. inferred, the risk codes, what's compact vs. full | `references/strategy-playbook.md` §14 |
 | Which deployed contract function does a given `Action.function` map to, and the traps in calling it (overloads, revert conditions, functions that look like reads but aren't) | `references/contract-writes.md` |
 | Exact guardrail rules, current wiring status, what blocks vs. escalates | `references/guardrails.md` |
 | How `vd tick` is driven under Claude Code, Hermes, and bare launchd | `references/scheduling.md` |
