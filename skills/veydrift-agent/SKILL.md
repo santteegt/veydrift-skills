@@ -25,6 +25,20 @@ Run `vd doctor` first if unsure which subcommands are wired up in the copy you'r
 against — this skill is built across parallel work packages and a partially-built tree is
 expected to still run the parts that exist.
 
+```
+vd read <target>     # Fetch and summarise game state from the read API
+vd calc <formula>    # Deterministic game calculators (no network)
+vd plan run          # Decide the next action from a snapshot + policy
+vd guard <cmd>       # Evaluate guardrails against a proposed action
+vd tick              # Run one loop iteration -- the orchestrator, see below
+vd log <cmd>         # Read and summarise the action and strategy logs
+vd radar check       # Standalone incoming-attack/resolved-battle/debris check
+vd doctor            # Report which sub-commands are wired up and where state lives
+```
+
+Each sub-app's own `--help` has its full command list; `vd tick` itself is the one worth
+understanding in depth, covered next.
+
 ## The tier model — the single most important thing to get right
 
 Tier lives in one field, `policy.json`'s `tier`. **No code path in this skill ever
@@ -106,6 +120,18 @@ full read-this-before-trusting-it guide.
 a rationale that states the exact numbers behind the decision — read it before trusting
 it; the reasoning is meant to be checkable by hand (`references/strategy-playbook.md` §11
 is a checklist for exactly that).
+
+Beyond the one proposal above, `vd tick` also runs an opportunity scan unconditionally —
+what's available on every band regardless of which one actually won this tick: every
+per-planet raid/colonize/foreign-debris/transport target reachable, plus the single pick
+each of the ladder's own storage/building/research/shipyard/unlock-chain bands would make
+right now — and, when `policy.radar.enabled` (default `true`), a radar check for incoming
+fleets, resolved attacks, and debris. When radar is on and `policy.actions.allow_alliance`
+is also on, a further ACS-defense coordination suggestion is derived from the radar
+check's own findings. Each shows up as its own report line (`opportunities:`, `radar:`,
+`coordination:`) only when there's something to say — see `references/opportunities.md`,
+`references/radar.md`, and `references/coordination.md` (routing table below) for the
+full mechanics of each.
 
 `--dry-run` is the default at tier 1 and cannot be disabled there once `tick` is wired.
 Nothing this skill produces ever reaches the chain without `walletctl send --confirm`,

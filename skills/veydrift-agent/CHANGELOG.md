@@ -11,6 +11,26 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.23.1] - 2026-09-14
+
+### Docs
+- **`SKILL.md`: `vd tick`'s automatic radar/opportunities/coordination signals, and the
+  `vd radar`/`vd log` sub-apps, were only discoverable via the routing table's reactive,
+  troubleshooting-phrased rows — never stated in `## The tick contract`, the section that
+  actually describes what a tick does, and never in any top-level subcommand list (there
+  wasn't one). A user asking directly whether these were "explicitly listed as available
+  tools" surfaced this: an agent reading only SKILL.md's main body had no way to know
+  `vd tick` produces `opportunities:`/`radar:`/`coordination:` report lines, or that
+  `vd radar check` exists as its own command, unless their question happened to match one
+  of those three routing-table rows exactly. Fixed with a new fenced subcommand overview
+  (mirroring `veydrift-wallet/SKILL.md`'s own precedent) right after the single-entrypoint
+  paragraph, and a new paragraph in `## The tick contract` naming all three signals
+  precisely (opportunities unconditional; radar gated on `policy.radar.enabled`,
+  default `true`; coordination gated on **both** `policy.actions.allow_alliance` and
+  radar being on — not `allow_alliance` alone). No behavior change, no new reference
+  file, no `description`/routing-table content change — those already correctly point to
+  `references/opportunities.md`/`radar.md`/`coordination.md`.
+
 ## [1.23.0] - 2026-09-14
 
 ### Added
