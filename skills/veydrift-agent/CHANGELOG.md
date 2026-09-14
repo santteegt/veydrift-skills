@@ -11,6 +11,27 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-09-13
+
+### Fixed
+- **`tick.py`: a send whose outcome is unclear is no longer treated as "nothing was
+  submitted".** `_walletctl_send` timing out, or failing after the provider started signing,
+  returned no hash and was logged as `send_failed` with no pending entry — so the next tick
+  could propose and send the same action again. `_send_and_await` now reads the signer's
+  nonce (`walletctl nonce`) before every send and skips the send if it can't
+  (`walletctl_nonce` ESCALATE). A send that returns no hash without a pre-signing refusal
+  (`REFUSED:`/`NOT SENT`/exit 4, marked by `_SEND_REFUSED_PREFIX`) records a
+  `PendingTx(broadcast_uncertain=True, nonce, sender)` and reports the new `send_uncertain`
+  outcome. `_reconcile_pending` resolves it from the nonce alone: mined → wait for the index
+  to reach the chain head read at that moment, outcome recorded as unknown (never success or
+  revert); still in the mempool or nonce unreadable → stay blocked; never broadcast → clear.
+
+### Docs
+- **`SKILL.md`**: the tier table and combat paragraph still called AcsDefend/Intercept/
+  `DefenseHold` code-blocked, and "Non-goals" still listed combat, ACS and alliances as never
+  proposed — stale since the ACS defense coordination and alliance features. Both now match
+  the code; the tick contract mentions uncertain-send handling.
+
 ## [1.20.1] - 2026-09-13
 
 ### Docs

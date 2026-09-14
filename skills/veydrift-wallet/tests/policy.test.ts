@@ -7,9 +7,11 @@ import {
   resolveAllowAcsDefense,
   resolveAllowAlliance,
   resolveAllowCombat,
+  resolveExpectedWallet,
   resolveTier,
   resolveVeydriftHome,
   TierResolutionError,
+  WalletBindingResolutionError,
 } from "../src/policy.js";
 
 function enoent(path: string): NodeJS.ErrnoException {
@@ -378,5 +380,41 @@ describe("resolveAllowAcsDefense -- ACS defense coordination feature: no CLI fla
     expect(resolveAllowCombat({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(true);
     expect(resolveAllowAlliance({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
     expect(resolveAllowAcsDefense({ env: { VEYDRIFT_HOME: "/fake" }, readFile })).toBe(false);
+  });
+});
+
+describe("resolveExpectedWallet", () => {
+  const env = { VEYDRIFT_HOME: "/fake" };
+  const wallet = "0x224aba5d489675a7bd3ce07786fada466b46fa0f";
+
+  it("returns null when no policy file exists (standalone use)", () => {
+    const readFile = (p: string) => {
+      throw enoent(p);
+    };
+    expect(resolveExpectedWallet({ env, readFile })).toBeNull();
+  });
+
+  it("returns policy.json's wallet", () => {
+    const readFile = () => JSON.stringify({ tier: "economy", wallet });
+    expect(resolveExpectedWallet({ env, readFile })).toBe(wallet);
+  });
+
+  it.each([
+    ["missing", {}],
+    ["not a string", { wallet: 42 }],
+    ["not an address", { wallet: "0x1234" }],
+  ])("refuses when wallet is %s", (_label, policy) => {
+    const readFile = () => JSON.stringify({ tier: "economy", ...policy });
+    expect(() => resolveExpectedWallet({ env, readFile })).toThrow(WalletBindingResolutionError);
+  });
+
+  it("refuses on unparseable or unreadable policy", () => {
+    expect(() => resolveExpectedWallet({ env, readFile: () => "{nope" })).toThrow(WalletBindingResolutionError);
+    const eacces = () => {
+      const err = new Error("EACCES") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    };
+    expect(() => resolveExpectedWallet({ env, readFile: eacces })).toThrow(WalletBindingResolutionError);
   });
 });

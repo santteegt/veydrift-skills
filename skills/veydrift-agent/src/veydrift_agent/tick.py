@@ -1155,19 +1155,51 @@ def _walletctl_receipt(tx_hash: str) -> dict[str, Any] | None:
         return None
 
 
+#: Prefix `_walletctl_send` puts on an error only when nothing can have been signed or
+#: broadcast. Any other send error is an uncertain broadcast -- see `_send_and_await`.
+_SEND_REFUSED_PREFIX = "walletctl send refused before signing: "
+
+
 def _walletctl_send(tx_path: Path, *, tier: Tier, provider: str) -> tuple[str | None, str | None]:
     """Returns `(tx_hash, error)`. Only reachable when guard ALLOWed, tier>=2,
     `policy.wallet_engine.require_confirmation` is false, and --dry-run is false -- see
-    `run()` below. Never called during this WP's own verification pass (no tier>=2 policy,
-    no wallet credentials were configured)."""
+    `run()` below.
+
+    `error` starts with `_SEND_REFUSED_PREFIX` only when the tx was certainly never
+    broadcast: the process could not start, `walletctl` printed `REFUSED:`/`NOT SENT`, or
+    it exited 4 (policy tier/wallet resolution failure). A timeout, `BROADCAST UNCERTAIN:`,
+    or any unrecognized failure is left unprefixed -- the tx may be on the network."""
     try:
         result = _run_walletctl("send", "--tx", str(tx_path), "--confirm", "--tier", tier.value, "--provider", provider, timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, f"walletctl send could not be run: {exc}"
+    except subprocess.TimeoutExpired as exc:
+        return None, f"walletctl send timed out after broadcast may have started: {exc}"
+    except OSError as exc:
+        return None, f"{_SEND_REFUSED_PREFIX}could not run walletctl: {exc}"
     for line in result.stdout.splitlines():
         if line.strip().startswith("SUBMITTED:"):
             return line.split(":", 1)[1].strip(), None
-    return None, f"walletctl send did not report SUBMITTED: {(result.stderr or result.stdout).strip()[:500]}"
+    output = (result.stderr or result.stdout).strip()
+    refused = result.returncode == 4 or any(
+        line.strip().startswith(("REFUSED:", "NOT SENT")) for line in f"{result.stdout}\n{result.stderr}".splitlines()
+    )
+    prefix = _SEND_REFUSED_PREFIX if refused else "walletctl send did not report SUBMITTED: "
+    return None, f"{prefix}{output[:500]}"
+
+
+def _walletctl_nonce(address: str, *, timeout: int = 30) -> tuple[int, int, int] | None:
+    """`walletctl nonce --address <address>` -> `(latest, pending, block_number)`, or
+    `None` on any failure. Callers treat `None` as unknown, never as "unchanged"."""
+    try:
+        result = _run_walletctl("nonce", "--address", address, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+        return int(data["latest"]), int(data["pending"]), int(data["blockNumber"])
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
 
 
 def _parse_hex_or_int(raw: Any) -> int | None:
@@ -1307,6 +1339,8 @@ def _reconcile_pending(agent_state: AgentState, *, indexed_block: int | None, no
         # to wait on for this entry.
         agent_state.pending = None
         return False
+    if pending.broadcast_uncertain and pending.block is None:
+        return _reconcile_uncertain_broadcast(agent_state, pending, now=now)
     if pending.block is None and pending.tx_hash:
         receipt = _walletctl_receipt(pending.tx_hash)
         if receipt is not None:
@@ -1351,6 +1385,50 @@ def _reconcile_pending(agent_state: AgentState, *, indexed_block: int | None, no
         agent_state.pending = None
         return False
     return True
+
+
+def _reconcile_uncertain_broadcast(agent_state: AgentState, pending: PendingTx, *, now: datetime) -> bool:
+    """Resolve a send whose hash never came back, from the sender's nonce alone.
+    Returns True while it stays unreconciled (plan.py rung 2 keeps every new action
+    blocked).
+
+    - nonce unreadable, or `pending > n >= latest` (still in the mempool) -> keep waiting.
+    - `latest > n` -> nonce `n` was mined. The hash is unknown, and a hand-sent tx could
+      have used the same nonce, so the outcome is never recorded as success or revert.
+      `block` is set to the chain head read here, so the normal index wait clears the
+      entry once the snapshot reflects whatever landed.
+    - `latest <= n` and `pending <= n` -> never broadcast (or dropped). Cleared. Even if
+      the node's mempool view lagged, any later send reuses nonce `n`, so at most one of
+      the two can ever be mined.
+    """
+    if pending.nonce is None or not pending.sender:
+        # Never written without both by _send_and_await; an entry missing either cannot
+        # be resolved automatically.
+        return True
+    nonces = _walletctl_nonce(pending.sender)
+    if nonces is None:
+        return True
+    latest, pending_nonce, block_number = nonces
+    n = pending.nonce
+    if latest > n:
+        pending.block = block_number
+        pending.receipt_at = now
+        log.append_strategy(
+            f"UNCERTAIN SEND RESOLVED: nonce {n} for {pending.key} was mined (by block {block_number}), but its "
+            f"tx hash was never received -- outcome unknown, NOT counted as executed; check the wallet on BaseScan. "
+            f"Waiting for the index to reach block {block_number} before planning again.",
+            now=now,
+        )
+        return True
+    if pending_nonce > n:
+        return True
+    log.append_strategy(
+        f"UNCERTAIN SEND RESOLVED: nonce {n} for {pending.key} is unused and not in the mempool -- the tx was "
+        f"never broadcast (or was dropped). Pending cleared.",
+        now=now,
+    )
+    agent_state.pending = None
+    return False
 
 
 def _maybe_check_human_activity(
@@ -2290,6 +2368,11 @@ def _proposal_lines(
         lines.append("  ?? outcome UNKNOWN -- could not confirm success/revert in time; NOT counted as executed.")
     elif send_outcome == "send_failed":
         lines.append("  !! walletctl send failed -- nothing was submitted. See logs/strategy.md.")
+    elif send_outcome == "send_uncertain":
+        lines.append(
+            "  ?? send outcome UNCERTAIN -- walletctl returned no tx hash but may have broadcast; new actions "
+            "are blocked until the sender's nonce is reconciled. See logs/strategy.md."
+        )
     elif send_outcome == "simulation_failed":
         # The simulate-before-send fix: no gas was spent -- this is the free pre-flight
         # check catching what `send` alone would have burned real gas to discover. Detail
@@ -2736,7 +2819,8 @@ def _send_and_await(
 ) -> tuple[bool, str, str | None]:
     """Step 7's build(already done) -> simulate -> send -> status-await -> indexed-wait.
     Returns `(executed, outcome, tx_hash)` where `outcome` is one of `"success"`,
-    `"reverted"`, `"unknown"`, `"send_failed"`, or `"simulation_failed"`. `executed` is
+    `"reverted"`, `"unknown"`, `"send_failed"`, `"send_uncertain"`, or
+    `"simulation_failed"`. `executed` is
     True **only** for `"success"` -- Fix 2's core rule: a reverted, unknown, or blocked
     send is never reported, or counted in `AgentState.executions_count`, as a success.
 
@@ -2795,13 +2879,51 @@ def _send_and_await(
         log.append_strategy(f"simulate blocked send for {key}: {detail}", now=now)
         return False, "simulation_failed", None
 
+    # Read the sender's nonce before sending, so a send whose hash never comes back can be
+    # resolved later instead of guessed at (or blindly re-sent). No nonce, no send.
+    sender = wallet_address or policy_model.wallet
+    nonces = _walletctl_nonce(sender)
+    if nonces is None:
+        detail = f"could not read the nonce for {sender} before sending; send skipped"
+        if guard_report is not None:
+            guard_report.verdicts.append(GuardVerdict(gate="walletctl_nonce", status=GuardStatus.ESCALATE, detail=detail))
+            if guard_report.decision is Decision.ALLOW:
+                guard_report.decision = Decision.ESCALATE
+        log.append_strategy(f"send failed for {key}: {detail}", now=now)
+        return False, "send_failed", None
+    nonce_before = nonces[1]
+
     tx_hash, error = _walletctl_send(tx_file, tier=policy_model.tier, provider=policy_model.wallet_engine.provider)
     if tx_hash is None:
-        log.append_strategy(f"send failed for {key}: {error}", now=now)
-        return False, "send_failed", None
+        if error is not None and error.startswith(_SEND_REFUSED_PREFIX):
+            log.append_strategy(f"send failed for {key}: {error}", now=now)
+            return False, "send_failed", None
+        agent_state.pending = PendingTx(
+            key=key,
+            planet_id=action.planet_id,
+            function=action.function,
+            entity_id=action.entity_id,
+            sent_at=now,
+            nonce=nonce_before,
+            sender=sender,
+            broadcast_uncertain=True,
+        )
+        log.append_strategy(
+            f"UNCERTAIN SEND for {key}: {error}. The tx may have been broadcast with nonce {nonce_before}; "
+            f"every new action stays blocked until that nonce is reconciled on a later tick.",
+            now=now,
+        )
+        return False, "send_uncertain", None
 
     agent_state.pending = PendingTx(
-        key=key, tx_hash=tx_hash, planet_id=action.planet_id, function=action.function, entity_id=action.entity_id, sent_at=now
+        key=key,
+        tx_hash=tx_hash,
+        planet_id=action.planet_id,
+        function=action.function,
+        entity_id=action.entity_id,
+        sent_at=now,
+        nonce=nonce_before,
+        sender=sender,
     )
 
     receipt = _await_receipt(tx_hash)

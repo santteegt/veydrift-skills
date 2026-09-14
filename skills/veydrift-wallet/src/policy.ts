@@ -269,3 +269,62 @@ export function resolveAllowAlliance(opts: ResolveAllowAllianceOptions = {}): bo
 export function resolveAllowAcsDefense(opts: ResolveAllowAcsDefenseOptions = {}): boolean {
   return resolveBooleanActionFlag("allow_acs_defense", AllowAcsDefenseResolutionError, opts);
 }
+
+export class WalletBindingResolutionError extends Error {}
+
+export interface ResolveExpectedWalletOptions {
+  env?: NodeJS.ProcessEnv;
+  /** Injectable so tests never touch the real filesystem. Same contract as
+   *  `ResolveTierOptions.readFile`. */
+  readFile?: (path: string) => string;
+}
+
+/**
+ * Resolve the address `send` must sign as: `policy.json`'s top-level `wallet` -- the same
+ * account `veydrift-agent` reads state for and simulates as. `sendTx` refuses when the
+ * provider's key derives a different address, so a stray keystore or env key for another
+ * account can never sign a transaction that was planned and simulated for this one.
+ *
+ * Rules (same shape as `resolveTier`):
+ *   1. Policy file does not exist (ENOENT) -> `null`: standalone use, no binding to check.
+ *   2. Policy file unreadable/unparseable, or `wallet` missing/not a 20-byte hex address ->
+ *      refuse (throw). A malformed policy is never treated as absent.
+ *   3. Otherwise -> that address (as written; comparison is case-insensitive).
+ *
+ * No CLI flag or env var can override it.
+ */
+export function resolveExpectedWallet(opts: ResolveExpectedWalletOptions = {}): `0x${string}` | null {
+  const env = opts.env ?? process.env;
+  const readFile = opts.readFile ?? ((p: string) => readFileSync(p, "utf8"));
+  const path = policyPath(env);
+
+  let raw: string;
+  try {
+    raw = readFile(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new WalletBindingResolutionError(
+      `could not read policy file at "${path}": ${(err as Error).message}. Refusing rather than ` +
+        `skipping the signer-address check on an unreadable security policy.`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new WalletBindingResolutionError(
+      `policy file at "${path}" is not valid JSON: ${(err as Error).message}. Refusing rather than ` +
+        `skipping the signer-address check on a malformed security policy.`,
+    );
+  }
+
+  const wallet = (parsed as { wallet?: unknown } | null)?.wallet;
+  if (typeof wallet !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+    throw new WalletBindingResolutionError(
+      `policy file at "${path}" has no valid "wallet" field (got ${JSON.stringify(wallet)}; must be ` +
+        `a 0x-prefixed 20-byte address). Refusing rather than skipping the signer-address check.`,
+    );
+  }
+  return wallet as `0x${string}`;
+}

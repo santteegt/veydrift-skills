@@ -11,6 +11,24 @@ lockstep.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-13
+
+### Added
+- **`walletctl nonce --address`**: prints `{address, latest, pending, blockNumber}` as JSON
+  (`tx.ts`'s `getNonces`) — how an uncertain broadcast is resolved without guessing.
+- **`walletctl status`** prints `policy.json`'s `wallet` beside the provider address and flags a
+  mismatch.
+
+### Changed
+- **`send` refuses a signer that isn't `policy.json`'s `wallet`.** `sendTx` takes a required
+  `expectedAddress` (resolved by `policy.ts`'s new `resolveExpectedWallet`; `null` only when no
+  policy file exists) and refuses before the allowlist when the provider's address differs, or
+  can't be derived. A malformed policy or invalid `wallet` exits 4, like tier resolution.
+- **A failure inside `provider.signAndSend` is reported as `BROADCAST UNCERTAIN:`**
+  (`BroadcastUncertainError`), not a generic `send failed:` — the tx may already be on the
+  network. A provider that fails to load is now `REFUSED:`. `REFUSED:`/`NOT SENT`/exit 4 are the
+  only "nothing was signed" signals.
+
 ## [1.1.2] - 2026-09-12
 
 ### Fixed

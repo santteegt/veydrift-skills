@@ -419,12 +419,23 @@ export async function simulateTx(
 // re-runs the allowlist unconditionally.
 // ---------------------------------------------------------------------------------------------
 
+/** Thrown for every refusal that happens before `provider.signAndSend` is invoked -- nothing was
+ *  signed or broadcast. */
 export class SendRefusedError extends Error {}
+
+/** Thrown when `provider.signAndSend` itself fails. The failure may have happened before or after
+ *  the transaction reached the network, so the caller must not assume it was never broadcast --
+ *  check the sender's nonce (`getNonces`) before sending anything else. */
+export class BroadcastUncertainError extends Error {}
 
 export interface SendOptions {
   tier: Tier;
   confirm: boolean;
   provider: WalletProvider;
+  /** The address the provider must sign as (`policy.json`'s `wallet`, via `resolveExpectedWallet`),
+   *  or `null` when there is no policy to bind against. Required, not optional, so no caller can
+   *  skip the check by omission. */
+  expectedAddress: `0x${string}` | null;
   fetchConfig?: () => Promise<RuntimeConfig>;
   /** Injectable for tests; forwarded to `checkAllowlist`'s own option of the same name. See
    *  `allowlist.ts`'s doc comment for why this is resolved lazily rather than eagerly. */
@@ -451,6 +462,22 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
     );
   }
 
+  if (opts.expectedAddress !== null) {
+    let signer: `0x${string}`;
+    try {
+      signer = await opts.provider.getAddress();
+    } catch (err) {
+      throw new SendRefusedError(`could not derive the provider's signer address: ${(err as Error).message}`);
+    }
+    if (signer.toLowerCase() !== opts.expectedAddress.toLowerCase()) {
+      throw new SendRefusedError(
+        `signer address mismatch: provider "${opts.provider.name}" signs as ${signer}, but policy.json's ` +
+          `wallet is ${opts.expectedAddress}. The transaction was planned and simulated for the policy ` +
+          `wallet; fix the provider key or the policy before sending.`,
+      );
+    }
+  }
+
   const allow = await checkAllowlist(tx, opts.tier, {
     fetchConfig: opts.fetchConfig,
     resolveAllowCombat: opts.resolveAllowCombat,
@@ -460,7 +487,38 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
     throw new SendRefusedError(`allowlist rejected this transaction: ${allow.reason}`);
   }
 
-  return opts.provider.signAndSend(tx);
+  try {
+    return await opts.provider.signAndSend(tx);
+  } catch (err) {
+    throw new BroadcastUncertainError(
+      `${(err as Error).message} -- the transaction may or may not have been broadcast; check the ` +
+        `sender's nonce before sending again.`,
+    );
+  }
+}
+
+export interface Nonces {
+  /** Transactions from this address mined as of the latest block. */
+  latest: number;
+  /** `latest` plus this address's transactions the node holds in its mempool. */
+  pending: number;
+  /** The latest block number these were read at. */
+  blockNumber: bigint;
+}
+
+/** The sender's mined and pending transaction counts. A nonce `n` is consumed on-chain once
+ *  `latest > n`; it is in flight while `pending > n >= latest`. */
+export async function getNonces(
+  address: `0x${string}`,
+  opts: { client?: VeydriftPublicClient } = {},
+): Promise<Nonces> {
+  const client = opts.client ?? getPublicClient();
+  const blockNumber = await client.getBlockNumber();
+  const [latest, pending] = await Promise.all([
+    client.getTransactionCount({ address, blockNumber }),
+    client.getTransactionCount({ address, blockTag: "pending" }),
+  ]);
+  return { latest, pending, blockNumber };
 }
 
 // ---------------------------------------------------------------------------------------------

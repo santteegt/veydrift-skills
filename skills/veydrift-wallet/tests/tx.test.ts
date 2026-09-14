@@ -7,6 +7,8 @@ import {
   describeTx,
   getReceipt,
   sendTx,
+  BroadcastUncertainError,
+  getNonces,
   SendRefusedError,
   simulateTx,
   toStoredTx,
@@ -449,7 +451,7 @@ describe("sendTx", () => {
   it("refuses without confirm:true -- no env var or flag makes it implicit", async () => {
     const provider = mockProvider();
     await expect(
-      sendTx(tx, { tier: "economy", confirm: false, provider, fetchConfig: async () => fixtureConfig() }),
+      sendTx(tx, { tier: "economy", confirm: false, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
     ).rejects.toThrow(SendRefusedError);
     expect(provider.signAndSend).not.toHaveBeenCalled();
   });
@@ -460,6 +462,7 @@ describe("sendTx", () => {
       tier: "economy",
       confirm: true,
       provider,
+      expectedAddress: null,
       fetchConfig: async () => fixtureConfig(),
     });
     expect(hash).toBe("0xabc123");
@@ -473,7 +476,7 @@ describe("sendTx", () => {
     const provider = mockProvider();
 
     await expect(
-      sendTx(readTx, { tier: "operator", confirm: true, provider, fetchConfig: async () => fixtureConfig() }),
+      sendTx(readTx, { tier: "operator", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
     ).rejects.toThrow(/semantically a read/);
     expect(provider.signAndSend).not.toHaveBeenCalled();
   });
@@ -481,17 +484,87 @@ describe("sendTx", () => {
   it("refuses when the allowlist rejects (e.g. tier too low)", async () => {
     const provider = mockProvider();
     await expect(
-      sendTx(tx, { tier: "advisor", confirm: true, provider, fetchConfig: async () => fixtureConfig() }),
+      sendTx(tx, { tier: "advisor", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
     ).rejects.toThrow(/allowlist rejected/);
     expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the provider's signer address differs from the policy wallet", async () => {
+    const provider = mockProvider();
+    await expect(
+      sendTx(tx, {
+        tier: "economy",
+        confirm: true,
+        provider,
+        expectedAddress: "0x0000000000000000000000000000000000000bad",
+        fetchConfig: async () => fixtureConfig(),
+      }),
+    ).rejects.toThrow(/signer address mismatch/);
+    expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+
+  it("sends when the signer matches the policy wallet, case-insensitively", async () => {
+    const provider = mockProvider();
+    const hash = await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: "0x0000000000000000000000000000000000000D00",
+      fetchConfig: async () => fixtureConfig(),
+    });
+    expect(hash).toBe("0xabc123");
+  });
+
+  it("refuses (never signs) when the provider cannot derive its address", async () => {
+    const provider = mockProvider();
+    provider.getAddress = vi.fn().mockRejectedValue(new Error("bad keystore password"));
+    await expect(
+      sendTx(tx, {
+        tier: "economy",
+        confirm: true,
+        provider,
+        expectedAddress: "0x0000000000000000000000000000000000000d00",
+        fetchConfig: async () => fixtureConfig(),
+      }),
+    ).rejects.toThrow(SendRefusedError);
+    expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+
+  it("reports a signAndSend failure as BroadcastUncertainError, not a refusal", async () => {
+    const provider = mockProvider();
+    provider.signAndSend.mockRejectedValue(new Error("request timed out"));
+    const err = await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: null,
+      fetchConfig: async () => fixtureConfig(),
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BroadcastUncertainError);
+    expect(err).not.toBeInstanceOf(SendRefusedError);
+    expect((err as Error).message).toMatch(/request timed out.*nonce/);
   });
 
   it("refuses when the destination is not the live Veydrift contract", async () => {
     const otherTx: UnsignedTx = { ...tx, to: getAddress("0x000000000000000000000000000000000000dead") };
     const provider = mockProvider();
     await expect(
-      sendTx(otherTx, { tier: "economy", confirm: true, provider, fetchConfig: async () => fixtureConfig() }),
+      sendTx(otherTx, { tier: "economy", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
     ).rejects.toThrow(SendRefusedError);
     expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("getNonces", () => {
+  it("reads latest at a pinned block and pending from the mempool", async () => {
+    const getTransactionCount = vi.fn(async (args: { blockTag?: string }) => (args.blockTag === "pending" ? 8 : 7));
+    const client = {
+      getBlockNumber: vi.fn().mockResolvedValue(123n),
+      getTransactionCount,
+    } as unknown as VeydriftPublicClient;
+    const address = getAddress("0x0000000000000000000000000000000000000d00");
+    await expect(getNonces(address, { client })).resolves.toEqual({ latest: 7, pending: 8, blockNumber: 123n });
+    expect(getTransactionCount).toHaveBeenCalledWith({ address, blockNumber: 123n });
+    expect(getTransactionCount).toHaveBeenCalledWith({ address, blockTag: "pending" });
   });
 });

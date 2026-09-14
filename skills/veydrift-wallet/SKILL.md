@@ -29,6 +29,7 @@ walletctl build   --action a.json     # -> unsigned {to, data, value, chainId, g
 walletctl simulate --tx tx.json       # eth_call + estimateGas; surfaces reverts
 walletctl send    --tx tx.json --confirm
 walletctl receipt --hash 0x...
+walletctl nonce   --address 0x...   # {latest, pending, blockNumber} -- resolve an uncertain send
 ```
 
 ## The constraint every design decision here answers to
@@ -125,7 +126,13 @@ validated the transaction upstream. Five checks, all evaluated and reported:
    DefenseHold(9) is dead enum space for this function specifically (its own
    `launchDefenseHold` entrypoint above is the real, separate reachable path)
 
-Any failure: non-zero exit, the rejection reason printed, nothing signed. Full mechanics
+Before the allowlist, `send` also refuses unless the provider's address equals `policy.json`'s
+`wallet` (skipped only when no policy file exists) — a key for another account can't sign a
+transaction planned for this one.
+
+Any failure: non-zero exit, the rejection reason printed as `REFUSED:`, nothing signed. A failure
+inside the provider's sign-and-broadcast step prints `BROADCAST UNCERTAIN:` instead — the tx may be
+on the network, so check `walletctl nonce` before sending again. Full mechanics
 and rationale: `references/tx-safety.md`.
 
 ## Two traps the encoder has to get right, both already built and tested
@@ -165,7 +172,7 @@ unchanged; `playerScore` is now on the deployed contract, `firstPlanetOf` was re
 | Question | Read |
 | --- | --- |
 | Provider selection, swap procedure, the address-binding constraint in full | `references/providers.md` |
-| Exact allowlist checks, the `--confirm` invariant, what ethskills recommends that this engine consciously skips (and why) | `references/tx-safety.md` |
+| Exact allowlist checks, the `--confirm` invariant, signer-address binding, uncertain broadcasts, what ethskills recommends that this engine consciously skips (and why) | `references/tx-safety.md` |
 | ABI pin provenance, rebuild recipe, `main`-vs-deployed divergence | `references/abi-pinning.md` |
 
 Every row above is a file bundled with this skill — it travels with the install and is all

@@ -332,6 +332,34 @@ what a function is:
   tries to select it by bare name. By the time a tx reaches `send`, the selector already
   unambiguously identifies one of the two real overloads.
 
+## The signer must be `policy.json`'s wallet
+
+`veydrift-agent` reads state for, and simulates as, `policy.json`'s `wallet`. `send` signs with
+whatever key the provider loads. `sendTx` closes that gap: before the allowlist runs, it derives the
+provider's address and refuses (`REFUSED: signer address mismatch`) unless it equals the policy
+`wallet` (case-insensitive). A stray `VEYDRIFT_KEYSTORE`/`VEYDRIFT_PRIVATE_KEY` for another account
+can therefore never sign a transaction planned for this one.
+
+Resolution (`resolveExpectedWallet`, `src/policy.ts`) follows `resolveTier`'s shape: no
+`policy.json` → no check (standalone use); an unreadable policy or a missing/invalid `wallet` →
+exit 4, nothing signed. There is no flag or env var to override it. A provider whose address can't
+be derived (e.g. a wrong keystore password) is also a refusal. `walletctl status` prints the
+policy wallet next to the provider address and flags a mismatch.
+
+## A failed broadcast is uncertain, not refused
+
+`send`'s stderr markers are a contract with `veydrift-agent`'s tick:
+
+- `REFUSED:` / `NOT SENT` (or exit 4) — nothing was signed or broadcast.
+- `BROADCAST UNCERTAIN:` — `provider.signAndSend` threw (`BroadcastUncertainError`). The failure may
+  have come after the transaction reached the network, so never assume it didn't.
+
+Before re-sending after an uncertain result, check the sender's nonce with `walletctl nonce
+--address 0x...` (`{latest, pending, blockNumber}`): nonce `n` was mined once `latest > n`, is in
+flight while `pending > n`, and was never broadcast (or was dropped) when both are `<= n`.
+`veydrift-agent` records the pre-send `pending` nonce and resolves an uncertain send exactly this
+way, blocking every new action until it does.
+
 ## `simulate`'s `ok` verdict reflects the gas that will actually be sent, not an unlimited-gas hypothetical
 
 `simulateTx` (`src/tx.ts`) caps its `eth_call` at the same gas figure `send` will actually submit —

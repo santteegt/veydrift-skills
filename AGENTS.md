@@ -76,7 +76,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **518 Python tests, 123 TypeScript tests** (121 passed + 2 intentionally
+baseline: **1056 Python tests, 272 TypeScript tests** (270 passed + 2 intentionally
 skipped), both suites green. Run both before calling any change done; they are independent
 projects but cover a system with two enforcement layers that must agree (§6).
 
@@ -141,6 +141,13 @@ touching related code, re-run the check named alongside each one.
   `status: "success" | "reverted"` from the real receipt; `tick.py` calls `record_revert`
   on a revert and never counts it toward `executions_count`. An unknown/unfetchable status
   is treated as unknown, never success.
+- **`send` only signs as `policy.json`'s `wallet`.** `sendTx`'s `expectedAddress` is a
+  required option; the only `null` source is `resolveExpectedWallet` finding no policy file.
+  Never make it optional or add a flag/env override.
+- **An unclear send is never "nothing was submitted".** Only `REFUSED:`/`NOT SENT`/exit 4
+  from `walletctl send` mean nothing was broadcast (`tick._SEND_REFUSED_PREFIX`). Anything
+  else without a hash becomes a `broadcast_uncertain` `PendingTx` resolved by nonce in
+  `_reconcile_pending`. `_send_and_await` does not send without a pre-send nonce.
 - **`send` never becomes implicit.** No env var, policy field, or flag makes `--confirm`
   optional. `policy.wallet_engine.require_confirmation` gates whether `tick` sends
   automatically at all — it does not weaken the CLI-level `--confirm` requirement, ever.

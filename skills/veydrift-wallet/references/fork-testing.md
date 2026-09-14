@@ -131,6 +131,8 @@ If a `policy.json` *does* exist and its `tier` disagrees with `--tier`, `walletc
 (exit 4, naming both values) — it never silently prefers either, so this is not a way to talk your
 way past a real policy file, only a way to run `walletctl` before one exists. Point
 `VEYDRIFT_HOME` at a fresh empty directory each session; never your real `$VEYDRIFT_HOME`.
+When a round does need a scratch `policy.json`, its `wallet` must be the impersonated address —
+`send` refuses a signer that differs from the policy wallet (`references/tx-safety.md`).
 
 Then, per command:
 

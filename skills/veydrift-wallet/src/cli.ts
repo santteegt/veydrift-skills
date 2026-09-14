@@ -8,6 +8,7 @@
  *   walletctl simulate --tx tx.json
  *   walletctl send    --tx tx.json [--confirm]
  *   walletctl receipt --hash 0x...
+ *   walletctl nonce   --address 0x...
  *
  * `send` without --confirm exits non-zero and prints the transaction it *would* have sent.
  * No env var or flag makes --confirm implicit.
@@ -26,10 +27,17 @@ import {
 } from "./abi.js";
 import { TIERS, type Tier } from "./allowlist.js";
 import { AVAILABLE_PROVIDERS, getProvider } from "./providers/index.js";
-import { resolveTier as resolvePolicyTier, TierResolutionError } from "./policy.js";
 import {
+  resolveExpectedWallet,
+  resolveTier as resolvePolicyTier,
+  TierResolutionError,
+  WalletBindingResolutionError,
+} from "./policy.js";
+import {
+  BroadcastUncertainError,
   buildTx,
   describeTx,
+  getNonces,
   getPublicClient,
   getReceipt,
   getRpcUrl,
@@ -56,6 +64,21 @@ function resolveTier(flag: string | undefined): Tier {
       console.error(err.message);
     } else {
       console.error(`tier resolution failed: ${(err as Error).message}`);
+    }
+    process.exit(4);
+  }
+}
+
+/** Resolves the address `send` must sign as from `$VEYDRIFT_HOME/policy.json`'s `wallet` (`null`
+ *  when no policy file exists). Exits 4, like `resolveTier`, on a malformed policy. */
+function resolveWalletBinding(): `0x${string}` | null {
+  try {
+    return resolveExpectedWallet();
+  } catch (err) {
+    if (err instanceof WalletBindingResolutionError) {
+      console.error(err.message);
+    } else {
+      console.error(`wallet binding resolution failed: ${(err as Error).message}`);
     }
     process.exit(4);
   }
@@ -106,6 +129,18 @@ program
 
       console.log(`provider:        ${provider.name}`);
       console.log(`address:         ${address}`);
+      let policyWallet: `0x${string}` | null | undefined;
+      try {
+        policyWallet = resolveExpectedWallet();
+      } catch (err) {
+        console.log(`policy wallet:   *** UNREADABLE -- ${(err as Error).message} ***`);
+      }
+      if (policyWallet === null) {
+        console.log("policy wallet:   (no policy.json -- send will not check the signer address)");
+      } else if (policyWallet !== undefined) {
+        const match = policyWallet.toLowerCase() === address.toLowerCase();
+        console.log(`policy wallet:   ${policyWallet} ${match ? "(MATCH)" : "*** MISMATCH -- send will refuse ***"}`);
+      }
       console.log(`rpcUrl:          ${getRpcUrl()}`);
       console.log(`chainId:         8453 (Base)`);
       console.log(`balance:         ${formatEther(balance)} ETH`);
@@ -278,6 +313,7 @@ program
   .action(async (opts: { tx: string; confirm: boolean; tier?: string; provider?: string }) => {
     const { tx, purpose } = loadTxFile(opts.tx);
     const tier = resolveTier(opts.tier);
+    const expectedAddress = resolveWalletBinding();
 
     const display = await describeTx(tx, { purpose });
     console.log("--- transaction ---");
@@ -299,16 +335,45 @@ program
       return;
     }
 
+    let provider;
     try {
-      const provider = getProvider({ provider: opts.provider });
-      const hash = await sendTx(tx, { tier, confirm: true, provider });
+      provider = getProvider({ provider: opts.provider });
+    } catch (err) {
+      console.error(`\nREFUSED: could not load wallet provider: ${(err as Error).message}`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const hash = await sendTx(tx, { tier, confirm: true, provider, expectedAddress });
       console.log(`\nSUBMITTED: ${hash}`);
     } catch (err) {
+      // Output markers are part of the contract with veydrift-agent's tick: "REFUSED:" means
+      // nothing was signed or broadcast; "BROADCAST UNCERTAIN:" means it may have been.
       if (err instanceof SendRefusedError) {
         console.error(`\nREFUSED: ${err.message}`);
+      } else if (err instanceof BroadcastUncertainError) {
+        console.error(`\nBROADCAST UNCERTAIN: ${err.message}`);
       } else {
         console.error(`\nsend failed: ${(err as Error).message}`);
       }
+      process.exitCode = 1;
+    }
+  });
+
+// ---------------------------------------------------------------------------------------------
+// nonce
+// ---------------------------------------------------------------------------------------------
+program
+  .command("nonce")
+  .description("An address's mined (latest) and mempool-inclusive (pending) nonces, as JSON.")
+  .requiredOption("--address <address>", "0x-prefixed sender address")
+  .action(async (opts: { address: string }) => {
+    try {
+      const address = getAddress(opts.address);
+      const nonces = await getNonces(address);
+      console.log(JSON.stringify({ address, ...nonces }, bigintReplacer, 2));
+    } catch (err) {
+      console.error(`nonce failed: ${(err as Error).message}`);
       process.exitCode = 1;
     }
   });

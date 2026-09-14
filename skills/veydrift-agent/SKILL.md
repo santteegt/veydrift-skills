@@ -35,19 +35,22 @@ different things at each tier.
 | Tier | May propose | May submit (via `walletctl`, separately gated) | Gate to enter |
 | --- | --- | --- | --- |
 | 1 `advisor` (default) | everything in scope | **nothing, ever** | — |
-| 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction`, plus 15 alliance-membership functions (via `vd tick --action` only — never planner-proposed) under `policy.actions.allow_alliance=true` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
-| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) unconditionally, plus Attack(3) with `policy.actions.allow_combat=true`, plus `launchInterplanetaryMissileAttack` under the same flag | ≥7 days clean T2, human edit |
+| 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction`, plus 15 alliance-membership functions under `policy.actions.allow_alliance=true` and `openDefenseIntent` under `policy.actions.allow_acs_defense=true` (both via `vd tick --action` only — never planner-proposed) | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
+| 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) unconditionally, plus Attack(3) with `policy.actions.allow_combat=true`, plus `launchInterplanetaryMissileAttack` under the same flag, plus AcsDefend(5)/Intercept(6) and `launchDefenseHold` under `policy.actions.allow_acs_defense=true` (via `vd tick --action` only) | ≥7 days clean T2, human edit |
 
-**Most of combat is unreachable at every tier by code, not by config.** The
-`FleetMissionType` enum's `AcsDefend`, `Intercept`, `MissileAttack`, `AcsAttack` and
-`DefenseHold` values require editing source, not flipping a flag, regardless of
-`policy.json`. Attack and Missile (`launchInterplanetaryMissileAttack`, a wholly
-separate contract entrypoint sharing nothing with `launchFleetMission`) are the two
-exceptions: `policy.json`'s `allow_combat` key is a real gate for both, at `operator`
-tier, **and** the ladder's two most conservative rungs (`8e:attack`, then `8f:missile`)
-do propose one once that flag is set, each reached only once every earlier rung finds
-nothing at all — this is a real decision to let the agent attack other players on its
-own, by either mechanism, not an inert flag.
+**Some combat is unreachable at every tier by code, not by config.** `launchFleetMission`'s
+`MissileAttack` and `AcsAttack` mission types require editing source, not flipping a flag,
+regardless of `policy.json`; `DefenseHold` is not a valid mission type for that function at
+all (it has its own `launchDefenseHold` entrypoint). The config-gated exceptions:
+
+- **Attack and Missile** (`launchInterplanetaryMissileAttack`, a wholly separate entrypoint
+  sharing nothing with `launchFleetMission`) — `allow_combat`, at `operator` tier. The
+  ladder's two most conservative rungs (`8e:attack`, then `8f:missile`) do propose one once
+  that flag is set, each reached only once every earlier rung finds nothing at all — this is
+  a real decision to let the agent attack other players on its own, not an inert flag.
+- **ACS defense coordination** (AcsDefend/Intercept, `launchDefenseHold`,
+  `openDefenseIntent`) — `allow_acs_defense`, executable only as a manual `vd tick --action`
+  override, never planner-proposed. `references/coordination.md` has the mechanics.
 
 Even at tier 1, `vd plan run` produces a complete, ready-to-submit transaction description
 — that's what makes a T1→T2 promotion decision evidence-based instead of a guess.
@@ -75,7 +78,11 @@ submissions, not just ticks). Never promote on tick count alone, without reading
 One tick runs as: `load policy → killswitch check → reconcile pending txs → snapshot →
 plan → guard → (if allow: walletctl build/simulate/send, tier ≥ 2 only) → log → pretty
 report`. `vd tick` is the entrypoint that runs all of this atomically and idempotently,
-lockfile-protected under `$VEYDRIFT_HOME`. `vd doctor` reports which subcommands are wired
+lockfile-protected under `$VEYDRIFT_HOME`. Before a send it reads the signer's nonce; if
+`walletctl send` then returns no tx hash without refusing, the send is recorded as
+uncertain and every new action stays blocked until a later tick resolves that nonce
+(mined, still in the mempool, or never broadcast) — it is never retried blindly or
+counted as executed. `vd doctor` reports which subcommands are wired
 in the copy you're running — useful if you're working from a partially-updated checkout.
 The read → plan pipeline underneath is also fully usable standalone, without a policy file
 or `$VEYDRIFT_HOME` at all:
@@ -175,12 +182,15 @@ redundancy for its own sake. (If the `veydrift-wallet` skill is also installed, 
 `references/tx-safety.md` has the exact checks; that skill enforces this independently of
 whether it's present, so nothing here depends on it.)
 
-## Non-goals — things this skill will never propose, at any tier
+## Non-goals
 
-Combat and ACS (code-level block, not config), alliances, migration, referrals, NFT
-burns, the ERC-20 market bridge, and any raid-profitability recommendation —
-`protectedResources`' semantics are unconfirmed, so nothing here builds a loot model on it. If asked to plan a raid or an attack, say plainly
-that this skill cannot do that by design, not just "wasn't asked to."
+`MissileAttack`/`AcsAttack` fleet missions (code-level block, not config), migration,
+referrals, NFT burns, the ERC-20 market bridge, and any raid-profitability or loot estimate —
+`protectedResources`' semantics are unconfirmed, so nothing here builds a loot model on it. If
+asked for one, say plainly that this skill cannot do that by design, not just "wasn't asked
+to." The planner also never proposes alliance membership or ACS defense actions; those run
+only as a manual `vd tick --action` override, behind their own policy flags (tier table
+above).
 
 ## Routing table — read these, don't guess
 

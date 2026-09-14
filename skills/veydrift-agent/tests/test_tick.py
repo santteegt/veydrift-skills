@@ -68,6 +68,17 @@ def isolated_home(tmp_path, monkeypatch):
     return home
 
 
+_REAL_WALLETCTL_NONCE = tick._walletctl_nonce
+
+
+@pytest.fixture(autouse=True)
+def _stub_walletctl_nonce(monkeypatch):
+    """`_send_and_await` reads the sender's nonce before every send; never let that shell
+    out to a real RPC from a test. Tests exercising the helper itself use
+    `_REAL_WALLETCTL_NONCE`."""
+    monkeypatch.setattr(tick, "_walletctl_nonce", lambda address, **kw: (7, 7, 100))
+
+
 def _write_policy(**overrides):
     policy = json.loads((Path(__file__).parent.parent / "assets" / "policy.example.json").read_text())
     policy.update(overrides)
@@ -3251,7 +3262,9 @@ def test_send_and_await_send_failure_returns_send_failed_and_writes_nothing(isol
     agent_state = AgentState()
 
     _allow_simulate(monkeypatch)
-    monkeypatch.setattr(tick, "_walletctl_send", lambda tx_path, *, tier, provider: (None, "boom"))
+    monkeypatch.setattr(
+        tick, "_walletctl_send", lambda tx_path, *, tier, provider: (None, tick._SEND_REFUSED_PREFIX + "REFUSED: boom")
+    )
 
     executed, outcome, tx_hash = tick._send_and_await(
         policy, agent_state, action, unsigned_tx, _healthy_snapshot(), datetime.now(UTC), gas_cost_wei_estimate=1_000_000
@@ -3259,6 +3272,165 @@ def test_send_and_await_send_failure_returns_send_failed_and_writes_nothing(isol
     assert (executed, outcome, tx_hash) == (False, "send_failed", None)
     assert agent_state.pending is None
     assert not log.actions_path().exists()
+
+
+def test_send_and_await_uncertain_send_records_a_nonce_tracked_pending(isolated_home, monkeypatch):
+    """A send that neither refused nor returned a hash may have been broadcast: it must
+    block further actions via a pending entry carrying the pre-send nonce, never be
+    treated as 'nothing was submitted'."""
+    policy = _economy_policy()
+    action = _build_action()
+    unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    agent_state = AgentState()
+
+    _allow_simulate(monkeypatch)
+    monkeypatch.setattr(tick, "_walletctl_nonce", lambda address, **kw: (7, 8, 100))
+    monkeypatch.setattr(
+        tick, "_walletctl_send", lambda tx_path, *, tier, provider: (None, "walletctl send timed out after broadcast may have started")
+    )
+
+    executed, outcome, tx_hash = tick._send_and_await(
+        policy, agent_state, action, unsigned_tx, _healthy_snapshot(), datetime.now(UTC), gas_cost_wei_estimate=1_000_000
+    )
+    assert (executed, outcome, tx_hash) == (False, "send_uncertain", None)
+    pending = agent_state.pending
+    assert pending is not None
+    assert pending.broadcast_uncertain is True
+    assert pending.nonce == 8  # pending-inclusive: the nonce this tx would take
+    assert pending.sender == policy.wallet
+    assert pending.key == guard_mod.idempotency_key(action)
+    assert agent_state.executions_count == 0
+    assert not log.actions_path().exists()
+
+
+def test_send_and_await_skips_send_when_nonce_unreadable(isolated_home, monkeypatch):
+    policy = _economy_policy()
+    action = _build_action()
+    unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    agent_state = AgentState()
+    report = GuardReport(verdicts=[], decision=guard_mod.Decision.ALLOW)
+
+    _allow_simulate(monkeypatch)
+    monkeypatch.setattr(tick, "_walletctl_nonce", lambda address, **kw: None)
+    monkeypatch.setattr(tick, "_walletctl_send", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not send")))
+
+    executed, outcome, tx_hash = tick._send_and_await(
+        policy,
+        agent_state,
+        action,
+        unsigned_tx,
+        _healthy_snapshot(),
+        datetime.now(UTC),
+        gas_cost_wei_estimate=1_000_000,
+        guard_report=report,
+    )
+    assert (executed, outcome, tx_hash) == (False, "send_failed", None)
+    assert agent_state.pending is None
+    verdict = next(v for v in report.verdicts if v.gate == "walletctl_nonce")
+    assert verdict.status is GuardStatus.ESCALATE
+    assert report.decision is guard_mod.Decision.ESCALATE
+
+
+def _uncertain_pending(nonce: int = 8) -> PendingTx:
+    return PendingTx(
+        key="664:startBuildingUpgrade:3",
+        planet_id=664,
+        function="startBuildingUpgrade",
+        entity_id=3,
+        sent_at=datetime.now(UTC),
+        nonce=nonce,
+        sender=WALLET,
+        broadcast_uncertain=True,
+    )
+
+
+def test_reconcile_uncertain_send_mined_nonce_waits_for_index_then_clears(isolated_home, monkeypatch):
+    agent_state = AgentState(pending=_uncertain_pending(8))
+    monkeypatch.setattr(tick, "_walletctl_nonce", lambda address, **kw: (9, 9, 500))
+    monkeypatch.setattr(tick, "_walletctl_receipt", lambda h: (_ for _ in ()).throw(AssertionError("no hash to fetch")))
+    now = datetime.now(UTC)
+
+    assert tick._reconcile_pending(agent_state, indexed_block=None, now=now) is True
+    assert agent_state.pending is not None
+    assert agent_state.pending.block == 500
+    assert agent_state.executions_count == 0  # outcome unknown -- never counted as success
+    assert agent_state.revert_counts == {}
+
+    # Index not caught up yet -> still blocked; caught up -> cleared.
+    assert tick._reconcile_pending(agent_state, indexed_block=499, now=now) is True
+    assert tick._reconcile_pending(agent_state, indexed_block=500, now=now) is False
+    assert agent_state.pending is None
+    assert agent_state.executions_count == 0
+
+
+def test_reconcile_uncertain_send_in_mempool_stays_blocked(isolated_home, monkeypatch):
+    agent_state = AgentState(pending=_uncertain_pending(8))
+    monkeypatch.setattr(tick, "_walletctl_nonce", lambda address, **kw: (8, 9, 500))
+    assert tick._reconcile_pending(agent_state, indexed_block=1_000, now=datetime.now(UTC)) is True
+    assert agent_state.pending is not None
+    assert agent_state.pending.block is None
+
+
+def test_reconcile_uncertain_send_unused_nonce_clears(isolated_home, monkeypatch):
+    agent_state = AgentState(pending=_uncertain_pending(8))
+    monkeypatch.setattr(tick, "_walletctl_nonce", lambda address, **kw: (8, 8, 500))
+    assert tick._reconcile_pending(agent_state, indexed_block=1_000, now=datetime.now(UTC)) is False
+    assert agent_state.pending is None
+
+
+def test_reconcile_uncertain_send_unreadable_nonce_stays_blocked(isolated_home, monkeypatch):
+    agent_state = AgentState(pending=_uncertain_pending(8))
+    monkeypatch.setattr(tick, "_walletctl_nonce", lambda address, **kw: None)
+    assert tick._reconcile_pending(agent_state, indexed_block=1_000, now=datetime.now(UTC)) is True
+    assert agent_state.pending is not None
+
+
+def _completed(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(["walletctl"], returncode, stdout, stderr)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "refused"),
+    [
+        (_completed(1, "--- transaction ---", "\nREFUSED: signer address mismatch"), True),
+        (_completed(1, "", "\nNOT SENT -- pass --confirm"), True),
+        (_completed(4, "", "tier disagreement"), True),
+        (_completed(1, "", "\nBROADCAST UNCERTAIN: request timed out"), False),
+        (_completed(1, "", "\nsend failed: something unexpected"), False),
+        (_completed(0, "no submitted line", ""), False),
+        (subprocess.TimeoutExpired(["walletctl"], 120), False),
+        (OSError("npx not found"), True),
+    ],
+)
+def test_walletctl_send_classifies_refused_versus_uncertain(tmp_path, monkeypatch, outcome, refused):
+    def _fake_run(*args, **kwargs):
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run)
+    tx_hash, error = tick._walletctl_send(tmp_path / "tx.json", tier=Tier.ECONOMY, provider="keystore")
+    assert tx_hash is None
+    assert error is not None
+    assert error.startswith(tick._SEND_REFUSED_PREFIX) is refused
+
+
+def test_walletctl_send_returns_submitted_hash(tmp_path, monkeypatch):
+    monkeypatch.setattr(tick, "_run_walletctl", lambda *a, **kw: _completed(0, "--- transaction ---\n\nSUBMITTED: 0xabc\n"))
+    assert tick._walletctl_send(tmp_path / "tx.json", tier=Tier.ECONOMY, provider="keystore") == ("0xabc", None)
+
+
+def test_walletctl_nonce_parses_json_and_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        tick,
+        "_run_walletctl",
+        lambda *a, **kw: _completed(0, json.dumps({"address": WALLET, "latest": 7, "pending": 8, "blockNumber": "123"})),
+    )
+    assert _REAL_WALLETCTL_NONCE(WALLET) == (7, 8, 123)
+    monkeypatch.setattr(tick, "_run_walletctl", lambda *a, **kw: _completed(0, "{not json"))
+    assert _REAL_WALLETCTL_NONCE(WALLET) is None
+    monkeypatch.setattr(tick, "_run_walletctl", lambda *a, **kw: _completed(1, "", "nonce failed"))
+    assert _REAL_WALLETCTL_NONCE(WALLET) is None
 
 
 def test_revert_streak_gate_blocks_after_on_revert_count_reverts(isolated_home, monkeypatch):

@@ -176,6 +176,15 @@ class PendingTx(BaseModel):
     indexed_at: datetime | None = None
     gas_wei: int | None = None
     reverted: bool = False
+    #: The sender's pending-inclusive nonce read just before `walletctl send` -- the nonce
+    #: this tx takes if it was broadcast.
+    nonce: int | None = None
+    #: The address `nonce` was read for.
+    sender: str | None = None
+    #: `walletctl send` returned no hash but did not refuse before signing (timeout,
+    #: `BROADCAST UNCERTAIN`, unrecognized output): the tx may be on the network.
+    #: `tick._reconcile_pending` resolves it from `nonce`, never by assuming either way.
+    broadcast_uncertain: bool = False
 
 
 class UnresolvedProposal(BaseModel):
