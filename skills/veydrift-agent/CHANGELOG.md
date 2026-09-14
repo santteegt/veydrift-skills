@@ -11,6 +11,35 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-09-14
+
+### Added
+- **`opportunities.py` gains five more families — `storage`/`building`/`research`/
+  `shipyard`/`unlock_chain` — diagnosing band-level starvation, the sibling gap to
+  `policy.strategy.planet_rotation`'s planet-level one.** Band 2 (building)
+  unconditionally precedes Bands 3-4 (research, shipyard/defense, unlock-chain) with no
+  policy-configurable weight between them: as long as any target planet has an idle
+  building queue and any mine/energy/infra candidate exists — essentially always true on
+  an active economy — Band 2 wins and the tick ends before research/shipyard/unlock-
+  chain are even evaluated, and no `policy.json` field reorders that (declaring more
+  `research_priority`/`ship_targets`/`defense_targets`/`building_priority` names only
+  changes *which* entity wins within its own band, never the order *between* bands). New
+  `opportunities._scan_ladder_bands` calls the same `select_*` functions `plan.py` itself
+  calls (`select_storage_candidate`/`select_building_candidate`/
+  `select_research_candidate`/`select_shipyard_candidate`/
+  `select_unlock_chain_candidate`) and reports only the winner each would pick right now,
+  replicating `plan.py`'s own external queue-state preconditions where a selector
+  doesn't already self-gate on one (building: per-planet queue-empty; research:
+  account-wide queue-empty). Purely diagnostic, exactly like the five pre-existing
+  per-planet families: zero changes to `plan.py`/`candidates.py`/`guard.py`, no new
+  policy flag, no automatic behavior change — a human or agent who notices one band
+  winning every tick can consult the `opportunities:` report and force an alternative
+  via `vd tick --action` + `allow_agent_action_override` if genuinely warranted.
+  `OpportunityFinding.family`'s `Literal` widens accordingly (additive, per `AGENTS.md`
+  §4). See `AGENTS.md` §10's new bullet and `references/opportunities.md`'s "Bands 1-4"
+  section for the full rationale, and `docs/PLAYER-GUIDE.md`/`docs/
+  TECHNICAL-WALKTHROUGH.md` (and their HTML companions) for the synced explanation.
+
 ## [1.22.0] - 2026-09-14
 
 ### Added

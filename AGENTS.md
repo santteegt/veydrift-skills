@@ -560,6 +560,23 @@ enough to call out here specifically, not a duplicate of that ledger.
   acceptance criterion (`docs/SPEC.md` AC25-31) and needs a ladder-position decision —
   does the fallback outrank mines, or sit behind them like research/ship/defense already
   do.
+- **Band 2 (building) unconditionally precedes Bands 3-4 (research, then shipyard/
+  defense, then unlock-chain), with no policy-configurable weight between them** — the
+  *band-level* starvation sibling to `policy.strategy.planet_rotation`'s *planet-level*
+  one (§5). As long as any target planet has an empty building queue and any mine/
+  energy/infra candidate exists — essentially always true on an active economy whenever
+  the queue happens to idle — Band 2 wins and the tick ends before research/shipyard/
+  unlock-chain are even evaluated; declaring more `research_priority`/`ship_targets`/
+  `defense_targets`/`building_priority` names doesn't help, since those only decide
+  *which entity* wins within its own band, never the relative order *between* bands.
+  Unlike planet-level starvation, this has not been given an automatic fix (that would
+  need its own scoring/rotation design across fundamentally different candidate types,
+  undertaken). What exists instead is a diagnostic: `opportunities.py`'s
+  `storage`/`building`/`research`/`shipyard`/`unlock_chain` families (see `references/
+  opportunities.md`'s "Bands 1-4" section) surface each band's own winner every tick
+  regardless of which one the ladder actually picked, so a human or agent that notices
+  one band winning repeatedly can consult the report and force an alternative via
+  `vd tick --action` + `allow_agent_action_override` if that's genuinely the right call.
 
 ## 11. Pointers into `docs/`
 
@@ -606,16 +623,20 @@ enough to call out here specifically, not a duplicate of that ledger.
   live-verification discipline caught before shipping — `/wallet/{addr}/missions`'
   resolved-attack rows arrive as `kind: "mission"` with a `report` attached, not the
   `kind: "battleReport"` shape the initial implementation assumed.
-- `skills/veydrift-agent/references/opportunities.md` — attack/missile/colonize/
-  foreign-harvest candidates surfaced independent of `plan.py`'s ladder (new module,
-  `opportunities.py`): the ladder is a straight early-return chain, so a lower-priority
-  band's candidate is never even generated once a higher band wins that tick; this
-  module calls the same `candidates.py` generators a second time, unchanged, to surface
-  them anyway. Zero changes to `plan.py`/`candidates.py`/`guard.py`, no new policy flag,
-  no persisted state, `vd tick` only. Since the ACS defense coordination feature, also
-  surfaces a `transport` family (`generate_transport_candidates`, a pre-existing,
-  already-allowlisted/guarded generator — a scope decision to surface it, not new write
-  capability); Deploy remains excluded.
+- `skills/veydrift-agent/references/opportunities.md` — ten families surfaced
+  independent of `plan.py`'s ladder outcome (module `opportunities.py`), in two
+  directions. Five per-planet families (attack/missile/colonize/foreign_harvest/
+  transport) diagnose a *lower* band the ladder never reaches because something earlier
+  wins — the ladder is a straight early-return chain, so a lower-priority band's
+  candidate is never even generated once a higher band wins that tick; these call the
+  same `candidates.py` generators a second time, unchanged, to surface them anyway.
+  Since the ACS defense coordination feature, includes a `transport` family
+  (`generate_transport_candidates`, a pre-existing, already-allowlisted/guarded
+  generator — a scope decision to surface it, not new write capability); Deploy remains
+  excluded. Five more (storage/building/research/shipyard/unlock_chain) diagnose the
+  *opposite* direction — see this file's own §10 bullet on Band 2 unconditionally
+  preceding Bands 3-4. Zero changes to `plan.py`/`candidates.py`/`guard.py` either way,
+  no new policy flag, no persisted state, `vd tick` only.
 - `skills/veydrift-agent/references/coordination.md` — ACS defense coordination:
   AcsDefend(5)/Intercept(6) (`launchFleetMission`), `launchDefenseHold` (its own
   entrypoint), and `openDefenseIntent` (`VeydriftAllianceSystem`) as real,

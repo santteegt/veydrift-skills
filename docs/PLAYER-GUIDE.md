@@ -854,6 +854,22 @@ A few things worth understanding about that block before you trust it:
   means you'll actually see what it found, not just what it happened to win with. Like
   radar, this works at every tier, including `advisor` — enabling `allow_combat` at
   `advisor` tier still submits nothing, but you'll see the opportunity in the report.
+- **The same `opportunities:` line also has the opposite job: telling you when building
+  is winning every single tick and nothing else is getting a turn.** The ladder's own
+  ordering means an idle building queue always wins over research/ships/defense whenever
+  there's anything at all left to upgrade — on an active economy that's essentially
+  always true, so research/ship/defense counts can sit unchanged for a long stretch even
+  though nothing is misconfigured. There is no `policy.json` field that reorders this;
+  naming more entries in `research_priority`/`ship_targets`/`defense_targets` only
+  changes *which* research or ship gets picked once it's that band's turn, never *when*
+  its turn comes. If you notice this happening, the `opportunities:` line now also
+  reports `storage`/`building`/`research`/`shipyard`/`unlock_chain` findings — what each
+  of those bands would propose *right now*, regardless of which one the ladder actually
+  picked this tick — so you can see what's waiting behind whatever keeps winning. If
+  research or a ship/defense build is genuinely more valuable to you right now than
+  another mine level, hand-write that action as `--action` (§9's manual override,
+  `allow_agent_action_override`) to submit it directly for one tick; this doesn't change
+  automatic behavior going forward, only that one tick's pick.
 
 ## 11. Running on a schedule
 

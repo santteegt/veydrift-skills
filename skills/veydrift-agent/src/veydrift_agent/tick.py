@@ -2568,14 +2568,19 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
 
     # opportunities.py: unconditional, no policy flag of its own -- `plan.py`'s ladder is
     # a straight early-return chain, so a lower-priority band's candidate (attack,
-    # missile, colonize, foreign harvest) is never even generated once a higher band
-    # wins that tick, regardless of tier or how long the relevant policy.actions/
-    # strategy flag has been on. This surfaces those candidates independent of ladder
-    # outcome. Every one of the four generators it calls already self-gates on its own
-    # flag internally (allow_combat / allow_fleet_noncombat / strategy.colonize), so a
-    # policy with all three off produces an empty OpportunityReport at negligible cost
-    # -- no extra network call, pure computation over attack_targets/missile_targets/
-    # foreign_debris_targets/colonize_targets already fetched above for the ladder.
+    # missile, colonize, transport, foreign harvest) is never even generated once a
+    # higher band wins that tick, regardless of tier or how long the relevant
+    # policy.actions/strategy flag has been on. Since the priority-starvation gap this
+    # module's own docstring now documents, it also surfaces Bands 1-4's own winner each
+    # (storage/building/research/shipyard/unlock-chain) the same way, for the opposite
+    # direction: diagnosing a HIGHER band (building, most commonly) that's winning every
+    # tick and starving everything after it, not just what a lower band missed. Every
+    # generator/selector it calls already self-gates on its own flag or real-time
+    # precondition internally (or, for building/research, replicates the exact external
+    # gate plan.py itself applies -- see `opportunities._scan_ladder_bands`), so a policy
+    # with every optional flag off still produces a non-empty report for a healthy
+    # economy and an empty one only when nothing anywhere is currently proposable --
+    # negligible cost either way, pure computation over data already fetched above.
     opportunity_report = opportunities_mod.scan_opportunities(
         snapshot,
         policy_model,

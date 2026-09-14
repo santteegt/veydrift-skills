@@ -11,22 +11,37 @@ self-gates on its own policy flag).
 
 from __future__ import annotations
 
-from veydrift_agent import opportunities
+import json
+from pathlib import Path
+
+from veydrift_agent import candidates, ids, opportunities
 from veydrift_agent.models import (
+    Action,
+    ActionKind,
     ActionsCfg,
     Entity,
     Limits,
     PlanetSnapshot,
     Policy,
+    QueueEntry,
+    QueueKind,
     RandomnessReadiness,
     Resources,
     Snapshot,
     StorageCfg,
     StrategyCfg,
 )
-from veydrift_agent import ids
 
 WALLET = "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def load_snapshot(name: str) -> Snapshot:
+    """Mirrors tests/test_candidates.py's/test_plan.py's own helper of the same name --
+    `planet_664.json` is the shared real, live-derived fixture those files already prove
+    `select_building_candidate`/`select_research_candidate` behave correctly against; the
+    ladder-band survey tests below reuse it rather than re-deriving a synthetic one."""
+    return Snapshot.model_validate(json.loads((FIXTURES / name).read_text()))
 
 
 def make_policy(**overrides) -> Policy:
@@ -239,3 +254,213 @@ def test_scan_opportunities_family_with_no_viable_target_contributes_nothing():
     )
 
     assert [f.family for f in report.findings] == ["colonize"]
+
+
+# --------------------------------------------------------------------------------------
+# policy.strategy.planet_rotation's own known gap (2026-09): Band 2 (building)
+# unconditionally precedes Bands 3-4 (research, shipyard/defense, unlock-chain) with no
+# policy-configurable weight between them -- these five families surface each of Bands
+# 1-4's own winner independent of which one the real ladder picked this tick, so a human
+# or agent can see what's queued up behind whatever band is currently winning. See
+# opportunities.py's module docstring and references/opportunities.md's "Bands 1-4"
+# section for the full rationale.
+# --------------------------------------------------------------------------------------
+
+
+def _origin_planet_664() -> tuple[Snapshot, PlanetSnapshot]:
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    return snapshot, planet
+
+
+def test_scan_ladder_bands_building_finding_from_real_fixture():
+    """Same fixture and policy as
+    test_candidates.py::test_select_building_candidate_matches_planet_664s_solar_plant_pick
+    -- the underlying selector is already proven correct there; this only proves the
+    survey wires it up and labels it "building"."""
+    snapshot, _planet664 = _origin_planet_664()
+    policy = make_policy(planets=[664])
+
+    report = opportunities.scan_opportunities(snapshot, policy, **_EMPTY_KWARGS)
+
+    building_findings = [f for f in report.findings if f.family == "building"]
+    assert len(building_findings) == 1
+    assert building_findings[0].origin_planet_id == 664
+    assert "Solar Plant" in building_findings[0].detail or building_findings[0].detail
+
+
+def test_scan_ladder_bands_building_skipped_when_queue_is_busy():
+    """plan.py itself checks `queues.get(QueueKind.BUILDING) is None` before ever calling
+    select_building_candidate (that function has no such precondition of its own) -- the
+    survey must replicate the exact same external gate, or it would surface a "winner"
+    the account could not actually submit right now (ConstructionActive would revert a
+    second startBuildingUpgrade)."""
+    snapshot, planet = _origin_planet_664()
+    busy_planet = planet.model_copy(
+        update={
+            "queues": {
+                QueueKind.BUILDING: QueueEntry(kind=QueueKind.BUILDING, entity_id=ids.Building.METAL_MINE, entity_name="Metal Mine")
+            }
+        }
+    )
+    busy_snapshot = snapshot.model_copy(update={"planets": [busy_planet]})
+    policy = make_policy(planets=[664])
+
+    report = opportunities.scan_opportunities(busy_snapshot, policy, **_EMPTY_KWARGS)
+
+    assert not [f for f in report.findings if f.family == "building"]
+
+
+def test_scan_ladder_bands_research_finding():
+    """Mirrors test_candidates.py::test_research_fallback_is_explicitly_labelled_default
+    exactly (Research Lab bumped to level 1, no research_priority declared -> Energy
+    Technology wins by the lowest-level/id fallback)."""
+    snapshot, planet = _origin_planet_664()
+    lab = next(b for b in planet.buildings if b.id == ids.Building.RESEARCH_LAB)
+    lab.level = 1
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=False, allow_research=True))
+
+    report = opportunities.scan_opportunities(snapshot, policy, **_EMPTY_KWARGS)
+
+    research_findings = [f for f in report.findings if f.family == "research"]
+    assert len(research_findings) == 1
+    assert research_findings[0].origin_planet_id == 664
+
+
+def test_scan_ladder_bands_research_skipped_when_research_queue_is_busy():
+    """plan.py checks `snapshot.research_queue is None` before calling
+    select_research_candidate (an account-wide queue, unlike building's per-planet one)
+    -- the survey replicates that exact gate rather than surfacing a pick the account
+    could not currently submit."""
+    snapshot, planet = _origin_planet_664()
+    lab = next(b for b in planet.buildings if b.id == ids.Building.RESEARCH_LAB)
+    lab.level = 1
+    busy_snapshot = snapshot.model_copy(
+        update={"research_queue": QueueEntry(kind=QueueKind.RESEARCH, entity_id=ids.Technology.ENERGY, entity_name="Energy Technology")}
+    )
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=False, allow_research=True))
+
+    report = opportunities.scan_opportunities(busy_snapshot, policy, **_EMPTY_KWARGS)
+
+    assert not [f for f in report.findings if f.family == "research"]
+
+
+def test_scan_ladder_bands_storage_finding():
+    """Mirrors test_plan.py::test_storage_overflow_with_idle_queue_spends_via_next_building
+    -- a resource within policy.storage.hours_to_cap_trigger of its cap, queue idle, so
+    Band 1 "spends it" via the ordinary next-building pick (Solar Plant, same as the
+    plain building test above)."""
+    snapshot, planet = _origin_planet_664()
+    near_cap_planet = planet.model_copy(
+        update={
+            "resources_as_of_now": Resources(metal=9_900, crystal=1_000, deuterium=0),
+            "production_per_hour": Resources(metal=500, crystal=0, deuterium=0),
+            "storage_caps": Resources(metal=10_000, crystal=10_000, deuterium=10_000),
+        }
+    )
+    at_risk_snapshot = snapshot.model_copy(update={"planets": [near_cap_planet]})
+    policy = make_policy(planets=[664])
+
+    report = opportunities.scan_opportunities(at_risk_snapshot, policy, **_EMPTY_KWARGS)
+
+    storage_findings = [f for f in report.findings if f.family == "storage"]
+    assert len(storage_findings) == 1
+    assert storage_findings[0].origin_planet_id == 664
+
+
+def test_scan_ladder_bands_shipyard_finding(monkeypatch):
+    """select_shipyard_candidate self-gates on `economy_on_track` (research_queue set or
+    some planet's building queue busy) -- mirrors
+    test_candidates.py::test_select_shipyard_candidate_picks_from_whichever_planet_is_first_in_the_given_order's
+    monkeypatch pattern rather than re-deriving a real ship-unlock fixture, since this
+    test is only about the survey's own wiring, not shipyard scoring itself."""
+    planet = _planet(664, "7:181:14")
+    snapshot = _snapshot(
+        [planet], research_queue=QueueEntry(kind=QueueKind.RESEARCH, entity_id=0, entity_name="Energy Technology")
+    )
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_ships=True))
+
+    def _fake_ship_candidates(snap, pol, planet):
+        return [
+            candidates.Candidate(
+                action=Action(kind=ActionKind.SHIP, function="startShipProduction", planet_id=planet.planet_id, quantity=1),
+                family="ship",
+                score=1.0,
+                score_basis="test fixture",
+            )
+        ]
+
+    monkeypatch.setattr(candidates, "generate_ship_candidates", _fake_ship_candidates)
+    monkeypatch.setattr(candidates, "generate_defense_candidates", lambda *a, **kw: [])
+
+    report = opportunities.scan_opportunities(snapshot, policy, **_EMPTY_KWARGS)
+
+    shipyard_findings = [f for f in report.findings if f.family == "shipyard"]
+    assert len(shipyard_findings) == 1
+    assert shipyard_findings[0].origin_planet_id == 664
+
+
+def test_scan_ladder_bands_shipyard_skipped_when_economy_not_on_track():
+    """No research_queue and no planet with a busy building queue -- economy_on_track is
+    False, so select_shipyard_candidate self-gates to (None, []) with no further calls;
+    the survey must not surface a shipyard finding here regardless of ship_targets."""
+    planet = _planet(664, "7:181:14")
+    snapshot = _snapshot([planet])
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_ships=True))
+
+    report = opportunities.scan_opportunities(snapshot, policy, **_EMPTY_KWARGS)
+
+    assert not [f for f in report.findings if f.family == "shipyard"]
+
+
+def test_scan_ladder_bands_unlock_chain_finding(monkeypatch):
+    """Mirrors
+    test_candidates.py::test_select_unlock_chain_candidate_picks_from_whichever_planet_is_first_in_the_given_order's
+    monkeypatch pattern -- this test is only about the survey's own wiring, not
+    unlock-chain step derivation itself."""
+    planet = _planet(664, "7:181:14")
+    snapshot = _snapshot([planet])
+    policy = make_policy(planets=[664])
+
+    def _fake_unlock_candidates(snap, pol, planet):
+        return [
+            candidates.Candidate(
+                action=Action(kind=ActionKind.BUILD, function="startBuildingUpgrade", planet_id=planet.planet_id),
+                family="unlock",
+                score=None,
+                score_basis="test fixture",
+            )
+        ]
+
+    monkeypatch.setattr(candidates, "generate_unlock_chain_candidates", _fake_unlock_candidates)
+
+    report = opportunities.scan_opportunities(snapshot, policy, **_EMPTY_KWARGS)
+
+    unlock_findings = [f for f in report.findings if f.family == "unlock_chain"]
+    assert len(unlock_findings) == 1
+    assert unlock_findings[0].origin_planet_id == 664
+
+
+def test_scan_ladder_bands_findings_coexist_with_late_band_opportunities():
+    """The ladder-band survey and the pre-existing late-band survey are independent and
+    additive -- a tick with both a live raid target (attack, normally invisible because
+    combat is the ladder's most conservative band) and an idle building queue (normally
+    what the real ladder would pick first) should surface both, in the same report."""
+    snapshot, _planet664 = _origin_planet_664()
+    # planet_664.json has no ships of its own combat-capable type by default; graft one
+    # on so generate_attack_candidates has something to launch with, mirroring
+    # test_scan_opportunities_attack_finding's own fixture shape.
+    combat_planet = snapshot.planet(664).model_copy(
+        update={"ships": [Entity(id=ids.Ship.LIGHT_FIGHTER, name="Light Fighter", count=10, cost=Resources(metal=3_000, crystal=1_000))]}
+    )
+    combat_snapshot = snapshot.model_copy(
+        update={"planets": [combat_planet], "randomness_readiness": RandomnessReadiness(ready=True)}
+    )
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=True, allow_research=True, allow_combat=True))
+
+    report = opportunities.scan_opportunities(combat_snapshot, policy, **{**_EMPTY_KWARGS, "attack_targets": _ATTACK_TARGET})
+
+    families = {f.family for f in report.findings}
+    assert "building" in families
+    assert "attack" in families

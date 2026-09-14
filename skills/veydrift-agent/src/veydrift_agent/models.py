@@ -512,14 +512,34 @@ class RadarReport(Base):
 
 
 class OpportunityFinding(Base):
-    """One candidate `opportunities.scan_opportunities` found for a single launch
-    planet, regardless of whether `plan.py`'s ladder ever reached that band this tick.
-    `target_planet_id`/`target_coordinates` mirror `Action`'s own fields of the same
-    name (`candidate.action.target_planet_id`/`.target_coordinates`) -- `None` when the
+    """One candidate `opportunities.scan_opportunities` found, regardless of whether
+    `plan.py`'s ladder ever reached that band this tick. `target_planet_id`/
+    `target_coordinates` mirror `Action`'s own fields of the same name
+    (`candidate.action.target_planet_id`/`.target_coordinates`) -- `None` when the
     underlying `Action` doesn't resolve a numeric target id (mirrors `Action`'s own
-    optionality here, not a new ambiguity)."""
+    optionality here, not a new ambiguity).
 
-    family: Literal["attack", "missile", "colonize", "foreign_harvest", "transport"]
+    Two shapes coexist under one model: `attack`/`missile`/`colonize`/
+    `foreign_harvest`/`transport` report every viable candidate for a single launch
+    planet (`origin_planet_id` is that planet, not necessarily `Action.planet_id`,
+    which is optional on the frozen model). `storage`/`building`/`research`/
+    `shipyard`/`unlock_chain` instead report the single winner Bands 1-4 of the ladder
+    would each independently pick right now -- `origin_planet_id` there is
+    `Action.planet_id` directly, always set for these families. See
+    `opportunities.py`'s module docstring for why the two shapes differ."""
+
+    family: Literal[
+        "attack",
+        "missile",
+        "colonize",
+        "foreign_harvest",
+        "transport",
+        "storage",
+        "building",
+        "research",
+        "shipyard",
+        "unlock_chain",
+    ]
     origin_planet_id: int
     target_planet_id: int | None = None
     target_coordinates: str | None = None
