@@ -9,6 +9,18 @@ reaching the decision ladder, a new wallet provider, a new guardrail) — not pe
 
 ### Added
 
+- **Batch production and single-wallet delegation** (2026-09-29): the game contract was upgraded on-chain
+  (`2b329fb1`) and the skills were re-pinned to it. `startProductionBatch` (up to 15 ship/defense orders in
+  one transaction) is allowlisted at `economy`, reachable through `vd tick --action` and — opt-in behind
+  `policy.strategy.production_batch` — the shipyard rung. Delegation lets a separate `policy.signer` key act
+  as the wallet: `setDelegate` is calldata-only (the tick prints it, the main wallet signs it),
+  `revokeDelegate` is executable behind `policy.actions.allow_delegation`, and `send` proves on-chain that
+  the signer acts as the policy wallet before signing. Two guard gates (`production_batch`, `delegation`),
+  27 in all. Verified against the real contract logic on a fork (`fork-testing.md` §14).
+- **Drift is now judged by the chain**: writes block when a pinned proxy's implementation (or the
+  Randomness/Moon contracts the game calls) differs from the pin, read from the EIP-1967 slots, instead of
+  trusting the backend's self-reported hash — which had gone stale while the contracts were upgraded three
+  times.
 - Initial build of the Veydrift agent infrastructure: two installable skills,
   `veydrift-agent` (Python/uv — reads the game API, runs deterministic calculators,
   proposes zero or one action per tick) and `veydrift-wallet` (TypeScript/Node — the sole

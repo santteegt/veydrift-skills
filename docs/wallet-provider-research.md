@@ -17,6 +17,7 @@ tell what load-bearing weight it can carry:
 | Tag | Meaning |
 | --- | --- |
 | **[VERIFIED — source]** | I read the primary source myself in this pass (contract source, raw HTTP response, GitHub API) and can point at the exact line/byte |
+| **[VERIFIED — fork]** | Observed by running it against the real deployed contract logic on a local fork (`skills/veydrift-wallet/references/fork-testing.md`); reproducible, but at one pinned state |
 | **[READ — vendor]** | From a vendor's own docs or marketing. Directionally useful, not neutral — vendors describe their own products favorably |
 | **[READ — third party]** | From independent docs, blog posts, or search-engine synthesis. More neutral than vendor copy but not independently reproduced |
 | **[UNCONFIRMED]** | I looked and could not pin it down, or found conflicting signals. Listed as an open question in §7, not asserted as fact |
@@ -81,6 +82,37 @@ key custody; it adds capabilities (session keys, spending caps, batching) on top
 holds the signing key. A keystore-held key can sign a 7702 authorization exactly as well as it signs a
 plain transaction today. This reframes §3.2–§3.4 below: they are not competitors to the keystore
 baseline, they are optional additions to it.
+
+### 1.1 Update (2026-09-29): the contract now has its own delegation — a third shape
+
+Everything above was established against the contract at commit `701bed3`. The contract has since been
+upgraded on-chain (deployed commit `2b329fb1`) and gained **single-wallet delegation**: the wallet that owns
+the planets can register one **delegate** address, and the game then treats calls from that address as
+calls from the owner (`setDelegate`, `revokeDelegate`, `delegateOf`, `delegatorOf`, `effectivePlayer`).
+
+**[VERIFIED — fork]** What it does and does not change:
+
+- **Ownership does not move.** The planets stay bound to the main wallet; nothing transfers.
+  `effectivePlayer(delegate)` reads as the main wallet, `effectivePlayer(main)` as itself.
+- **Only the main wallet can register.** `setDelegate` called by a delegate reverts
+  `DelegatedWalletCannotDelegate`. Registering a new delegate while one is set *replaces* it in one
+  transaction; either key can `revokeDelegate` (`NoDelegate` when there is none).
+- The contract does **not** check that the delegate owns no planets; an address that does becomes
+  unreachable through the delegate.
+
+**Consequence for provider choice.** The address-preservation constraint governs who can **own** a planet,
+and that is unchanged — a provider that mints a new address still cannot take one over. But it no longer
+governs who can **operate** one. The key that signs day to day can now be a separate, lower-privilege address,
+with the owning key offline. That is a third shape alongside key adoption (§3.1, §3.5–§3.9) and EIP-7702
+(§3.2–§3.4), and it composes with both. This codebase ships it as the `policy.signer` mode of the wallet
+skill (`veydrift-wallet` ≥ 2.1.0): `setDelegate` is calldata-only and signed by the main wallet, and every
+`send` first proves on-chain that the signer acts as the policy wallet.
+
+**[UNCONFIRMED]** Whether an address that is a *contract account* — a Safe, an ERC-4337 account, a hosted or
+MPC-issued address — works as the delegate. The contract compares addresses (`msg.sender`), so it should,
+and that would put the "new-address" providers back in play as **operators** (never as owners). This was not
+tried, and the wallet skill's providers (`keystore`, `envkey`) sign as an EOA; nothing here recommends it
+beyond noting the option.
 
 ---
 
@@ -590,6 +622,12 @@ provider signs one additional transaction type (a 7702 authorization) and gains 
 path through the delegated code. That's a much smaller step than switching providers outright, and it's
 the one path in this entire survey that plausibly gets closer to "agentic, policy-enforced, still
 self-hosted" over time.
+
+**Update (2026-09-29): a delegate signing key is now the lower-risk way to keep the owning key offline.**
+The contract's own delegation (§1.1) is shipped as `policy.signer`; it needs no new contract, no hosted
+service and no 7702 authorization, and it can be revoked by either key. It does not make the §3.2–§3.4
+prototype redundant (7702 adds smart-account capability, delegation only splits owner from operator), but for
+the concrete goal of not keeping the main key on the machine that runs ticks, it is the simpler path.
 
 **Explicitly not recommended, regardless of future re-evaluation of their address-preservation
 mechanics:** Cobo, Coinbase CDP, Turnkey, OKX OnchainOS. All four are hosted services whose core

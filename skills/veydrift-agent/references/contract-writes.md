@@ -45,6 +45,9 @@ includes each one:
 | Fleet launch (7-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint16,uint256)` | 402 | operator only, and only for mission types Transport(0)/Deploy(1)/**Colonize(2)**/Harvest(4) — §3. Colonize added 2026-08-17 (Phase 5b) |
 | Fleet launch (6-arg) | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` | 354 | operator only, same mission-type restriction |
 | Ship production | `startShipProduction(uint256,uint8,uint32)` | 202 | `economy` — granted 2026-08-12, see §8 |
+| Batch production | `startProductionBatch(uint256,(uint8,uint8,uint32)[])` | — (in the game ABI; module-routed) | economy, operator. 1–15 orders, each `(kind, itemId, quantity)` with kind 0 = ship / 1 = defense; atomic; charged per order (same total as the singles); separate ship and defense lanes with a backlog cap of 16 behind the active head. Reachable via `vd tick --action` and, opt-in, the shipyard rung |
+| Revoke delegate | `revokeDelegate()` | — (fallback-routed, supplemental ABI) | economy, operator, and only under `policy.actions.allow_delegation`. Callable by the main wallet or the delegate |
+| Set delegate | `setDelegate(address)` | — (fallback-routed, supplemental ABI) | **none — calldata-only.** Must be signed by the main wallet; in no allowlist set; `send` refuses it. Built and simulated as the main wallet, printed for a human to sign |
 | Fleet return | `completeFleetMissionReturn(uint256)` | 519 | **none** — not in any tier's table, and not in `allowlist.ts`'s selector sets. `plan.py` never constructs this action |
 
 **`settlePlanet(uint256)` (line 137) was removed from every tier's allowed set
@@ -265,6 +268,12 @@ contract (confirmed by `grep -lE "transferPlanet|sellPlanet|giftPlanet|setPlanet
 across every `.sol` file at this commit), planet 664 cannot leave this EOA by any
 contract-level mechanism — only by handing over the private key itself, which is custody
 transfer, not a game action.
+
+**Delegation does not change that, but it does widen who can call it.** A registered delegate is the
+*acting player* for planet-scoped calls, so a delegate key could `abandonPlanet` a **non-home** planet of
+the main wallet; the home-planet revert still applies to it. `abandonPlanet` remains in no tier's allowlist,
+so this codebase's delegate mode cannot send it — but a delegate key held outside this codebase can, which
+is part of what "a delegate key acts as the owner" means.
 
 ## 8. A gap this pass found — and fixed on 2026-08-12
 

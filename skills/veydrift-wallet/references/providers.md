@@ -76,6 +76,15 @@ that's what actually demonstrates the interface is swappable rather than merely 
 providers derive the *same* address (acceptance criterion 11). `fork-impersonate` (below) is a
 third, different kind of provider entirely — it doesn't hold a key at all.
 
+### Signing as a delegate
+
+Every provider signs as the address it holds a key for. Normally that is `policy.json`'s `wallet`. With
+`policy.json`'s `signer` set, it must be the **delegate** address instead, and `send` checks both that the
+provider's address equals `signer` and that the chain reports `effectivePlayer(signer) == wallet` before
+signing (`tx-safety.md`). The provider itself needs no change — the delegate key is just another key. Keep
+the main wallet's key out of the provider's reach; it is only needed to sign `setDelegate`, which this
+codebase never sends.
+
 ### `keystore` — the default
 
 An encrypted EIP-2335/geth-format JSON keystore, decrypted via `ethers.Wallet.fromEncryptedJson`

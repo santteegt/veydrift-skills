@@ -257,6 +257,16 @@ player-scoped and lives at the row's `queues` sibling — see the real payload's
 (`raidableResources`, `combatPower`, `combatTechLevels`, ship/defense counts+power).
 `vd read universe` uses this route to resolve `--planet-id` → `galaxy`/`system` (§3.16).
 
+The body also carries `stale` (bool) and `indexer` (`safeToServeIndexedState`, `indexedState`,
+`staleReason`, …). For an address that owns nothing, `planets` is `[]` and `homePlanetId` is `null`. The
+`delegation` guard gate reads this route for an address *other than* the policy wallet to learn whether a
+prospective delegate owns planets, and treats anything other than `stale: false` with
+`safeToServeIndexedState: true` as unknown — an undercount there would be a false all-clear.
+
+Neither `planets` nor `shipyard`/`defenses` exposes a production **backlog** (only the active `queue`); the
+chain does — `shipQueueBacklog(planetId)`/`defenseQueueBacklog(planetId)` on the game proxy. The agent does
+not read them: it batches into idle lanes only, where the backlog cannot matter.
+
 ### 3.5 `/wallet/{addr}/queues`
 
 Query: `planetId` (optional). Shape: `{wallet, homePlanetId, building, defense, ship,

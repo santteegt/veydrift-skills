@@ -241,13 +241,30 @@ directly against the deployed contract:
   only thing that can change is who holds the key.
 
 **Consequence for wallet-provider choice:** any provider that mints a *new* address — Safe
-multisig, ERC-4337 smart accounts, most hosted MPC/TEE wallets — categorically cannot hold
-an existing planet. `docs/wallet-provider-research.md` evaluates every alternative against
-this constraint in depth; the short version is that the shipped `keystore` provider (an
-encrypted, locally-held EIP-2335/geth JSON keystore) is the correct default for a
-single-planet hobby account, and EIP-7702 delegation (confirmed live on Base) is the one
-path worth prototyping later, because it's the only mechanism found that adds
-smart-account capability **without** changing the address.
+multisig, ERC-4337 smart accounts, most hosted MPC/TEE wallets — categorically cannot *own* an
+existing planet. `docs/wallet-provider-research.md` evaluates every alternative against this
+constraint in depth; the short version is that the shipped `keystore` provider (an encrypted,
+locally-held EIP-2335/geth JSON keystore) is the correct default for a single-planet hobby account.
+
+**A delegate key changes what the day-to-day key can be, not who owns the planet.** The game
+contract lets a wallet register one **delegate** address that then acts as the owner for gameplay
+(`setDelegate`/`revokeDelegate`; the planets, and the main wallet's key, stay exactly where they
+are). Set `policy.json`'s `signer` to that address and the wallet skill signs with the delegate
+while `wallet` stays the player — the main key can stay offline. What that does and does not buy:
+
+- `setDelegate` must be signed by the **main** wallet, so this codebase never sends it at any
+  tier: the tick builds and simulates it and prints the calldata for you to sign. Either key can
+  `revokeDelegate` (the agent can, behind `policy.actions.allow_delegation`), and re-pointing to
+  a new delegate replaces the old one in one main-signed transaction.
+- Before every send, the wallet skill reads `effectivePlayer(signer)` from the chain and refuses
+  unless it equals `wallet` — an unregistered, revoked or other-account delegate cannot sign.
+- A delegate key can do whatever the allowlist permits at your tier on the main wallet's planets,
+  including irreversible game-state actions (fleets, and alliance actions if you enabled them). There
+  is no fund-transfer path to steal, and `abandonPlanet` is not allowlisted, but this is a *smaller*
+  blast radius, not a zero one. See `docs/PLAYER-GUIDE.md` §7 for the setup and
+  `skills/veydrift-wallet/references/tx-safety.md` for the residual limits.
+- EIP-7702 delegation (confirmed live on Base) remains the other path worth prototyping later: it is
+  the only mechanism found that adds smart-account capability without changing the address.
 
 **Password handling, concretely:** `VEYDRIFT_KEYSTORE_PASSWORD` env var, or an interactive
 non-echoing prompt if unset. Never a CLI flag — a flag lands in shell history and `ps`

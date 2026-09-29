@@ -135,6 +135,13 @@ shield domes; here, `SmallShieldDome` is id 3 and `GaussCannon` is id 4 — the 
 sorts *before* the cannon — and `IonCannon` follows immediately at id 5. Read straight
 from the enum declaration, not inferred.
 
+**A batch order's `kind` is a third, separate number.** `startProductionBatch` takes
+`(uint8 kind, uint8 itemId, uint32 quantity)` orders where `kind` 0 selects the `Ship` id space (0–15) and
+`kind` 1 the `Defense` id space (0–9); any other kind, or an id outside the chosen space, reverts
+`InvalidId()`. Do not pass a `Ship` id with kind 1 or the reverse — both are valid numbers in the other
+space. `ProductionOrder.kind` in this codebase is the string `"ship"`/`"defense"`, converted to 0/1 only at
+the encoder.
+
 ## 5. `FleetMissionType`
 
 Source: [`packages/contracts/src/VeydriftGameStorage.sol:197-208`](https://github.com/Borodutch/veydrift/blob/202d1acd9e35d815bd66cb9bae744341b1b1cf9e/packages/contracts/src/VeydriftGameStorage.sol#L197-L208) (commit `202d1ac`,
