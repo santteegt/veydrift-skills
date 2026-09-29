@@ -73,7 +73,7 @@ output — reads as plain English instead of jargon.
 | Term | Means |
 | --- | --- |
 | **Tick** | One complete, atomic run of the agent's pipeline: load your policy, check for a killswitch, reconcile any pending transaction, read your planet's live state, decide on zero or one next action, run every safety check against it, and — only at tier ≥2 with a real send — submit it. Nothing schedules a tick by itself; something else (you, typing a command; a loop; a scheduler) decides *when* to call one. §8 and §11 cover running them. |
-| **Tier** | How much the agent is trusted to *submit*, not what it's allowed to *think about* — it always proposes the same way regardless of tier. Three tiers: `advisor` (propose only, never send — where you start), `economy` (can submit building/research/production actions), `operator` (also non-combat fleet missions). Advancing tiers is always a manual edit you make, never automatic — §13. |
+| **Tier** | How much the agent is trusted to *submit*, not what it's allowed to *think about* — it always proposes the same way regardless of tier. Three tiers: `advisor` (propose only, never send — where you start), `economy` (can submit building/research/production actions, including batched production), `operator` (also non-combat fleet missions). Advancing tiers is always a manual edit you make, never automatic — §13. |
 | **Guard** | One of 20 independent safety checks the agent runs on every proposal before it's ever allowed to send — things like "can I actually afford this," "will this push energy negative," "does the destination address match the real contract." Every guard is evaluated and reported every tick, even after one has already said no, so a blocked tick is exactly as inspectable as an allowed one. §10 shows what this looks like in real output. |
 | **Snapshot** | The live read of your planet — resources, queues, energy, incoming fleets — that a tick's decision is computed against. Always fetched fresh from Veydrift's own API at the start of the tick; a decision is never made against stale or cached numbers. |
 | **Proposal vs. action** | A *proposal* is what the agent decided it would do. An *action* is a proposal that was actually submitted onchain. At tier 1, every tick produces only proposals — the distinction doesn't matter until tier 2, where it becomes the whole point of `logs/proposals.jsonl` vs. `logs/actions.jsonl` (§12). |
@@ -1024,7 +1024,7 @@ resolved; the digest tells them apart.
 | Tier | What it can propose | What it can actually submit |
 | --- | --- | --- |
 | 1 `advisor` (you start here) | Everything in scope | Nothing, ever |
-| 2 `economy` | Everything in scope | Building upgrades, research, defense/ship production, permissionless mission resolution |
+| 2 `economy` | Everything in scope | Building upgrades, research, defense/ship production (singly, or batched — up to 15 orders in one transaction), permissionless mission resolution; plus, only via `vd tick --action` behind their own flags, alliance actions and `revokeDelegate` (§9) |
 | 3 `operator` | Everything in scope | Everything tier 2 can, plus non-combat fleet missions (Transport/Deploy/Colonize/Harvest) |
 
 Nothing in this codebase ever advances the tier on its own. It is **always** a manual edit
@@ -1065,7 +1065,7 @@ All of these only ever fire at `operator` tier, behind the same guardrail evalua
 everything else — including `mission_type`, which independently re-checks the mission
 type against the same allowed set the wallet engine enforces, and `fleet_slots`, which
 independently re-checks that a fleet slot is actually free (§10 covers what
-`guards: N/20` means).
+`guards: N/27` means).
 
 **Before you promote from `advisor` to `economy`:**
 
@@ -1088,9 +1088,11 @@ The checklist:
    the agent respecting them is real evidence; a run with nothing to check is not.
 4. **Edit `policy.json` yourself**, changing `"tier": "advisor"` to `"tier": "economy"`.
    No command does this for you, on purpose.
-5. **Run `walletctl verify-abi` immediately before your first real send.** ABI drift — the
-   deployed contract getting upgraded — is exactly the kind of thing that can happen
-   silently in the gap between your review and the first live action.
+5. **Run `walletctl verify-abi` immediately before your first real send.** Contract drift — the
+   deployed contracts getting upgraded — is exactly the kind of thing that can happen
+   silently in the gap between your review and the first live action. It reads the chain's own
+   implementation slots, not the backend's self-reported hash (which lags), and every tick and
+   send re-checks the same thing, so a mismatch blocks writes rather than being silently trusted.
 
 **Before `economy` → `operator`:** the same shape, at a higher bar — at least **seven
 days** of clean tier-2 operation (real submissions, not just ticks), read the same way,
@@ -1116,7 +1118,8 @@ It defaults to `true`, and at `true`, a tier ≥2 tick never sends on its own �
 every single time. That's the safe default, and a reasonable place to stay if you want a
 human in the loop on every send. For the agent to actually run unattended, set it to
 `false` yourself, deliberately — which is exactly why the agent prompt below carves that
-field out from what it's allowed to change on its own, right alongside `tier`.
+field out from what it's allowed to change on its own, right alongside `tier`, `signer` and
+`actions.allow_delegation` (the fields that decide which key signs and whether delegation is on).
 
 ### Agent prompt
 
@@ -1151,8 +1154,9 @@ on-chain transactions unless I've explicitly lowered your tier to advisor.
 You're free to update policy.json as your strategy evolves — including
 declaring new ship_targets/defense_targets/research_priority/
 building_priority as infrastructure unlocks new options, so growth doesn't
-stagnate on a config that hasn't kept up — with two exceptions that are
-mine to set, not yours: tier, and wallet_engine.require_confirmation.
+stagnate on a config that hasn't kept up — with these exceptions that are
+mine to set, not yours: tier, wallet_engine.require_confirmation, signer (which key
+signs), and actions.allow_delegation (whether delegation actions are on at all).
 Report any other change you make to policy in the same summary that made
 it — I should never have to diff the file to find out what changed.
 

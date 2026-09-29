@@ -1319,7 +1319,7 @@ vd radar check --alliance-id 29          <span class="c-comment"># every planet 
       <div class="ladder-badge">2</div>
       <div>
         <div class="ladder-name">Economy</div>
-        <div class="ladder-desc">Building upgrades, research, defense/ship production, permissionless mission resolution.</div>
+        <div class="ladder-desc">Building upgrades, research, defense/ship production (singly, or batched — up to 15 orders in one transaction), permissionless mission resolution; plus, only via <code>vd tick --action</code> behind their own flags, alliance actions and <code>revokeDelegate</code>.</div>
         <div class="ladder-meta">
           <div class="ladder-meta-item"><span class="lm-k">Gate to enter</span>≥24h tier-1 ticks, strategy.md read, manual edit</div>
         </div>
@@ -1352,7 +1352,7 @@ vd radar check --alliance-id 29          <span class="c-comment"># every planet 
     <li><span class="check-num">2</span><div><strong>Read <code>strategy.md</code> in full</strong>, not just the latest few ticks.</div></li>
     <li><span class="check-num">3</span><div><strong>Check <code>proposals.jsonl</code> for guardrail fires</strong> — a run where guards fired correctly is real evidence.</div></li>
     <li><span class="check-num">4</span><div><strong>Edit <code>policy.json</code> yourself</strong>, <code>"tier": "advisor"</code> → <code>"economy"</code>. No command does this for you.</div></li>
-    <li><span class="check-num">5</span><div><strong>Run <code>walletctl verify-abi</code></strong> immediately before your first real send.</div></li>
+    <li><span class="check-num">5</span><div><strong>Run <code>walletctl verify-abi</code></strong> immediately before your first real send — it reads the chain's own implementation slots, not the backend's (lagging) self-reported hash, and every tick and send re-checks the same thing.</div></li>
   </ol>
   <p><strong>Never</strong>: promote on tick count alone, promote without having read <code>strategy.md</code>, or promote while a guard fails intermittently rather than consistently passing.</p>
 </section>
@@ -1391,8 +1391,9 @@ on-chain transactions unless I've explicitly lowered your tier to advisor.
 You're free to update policy.json as your strategy evolves — including
 declaring new ship_targets/defense_targets/research_priority/
 building_priority as infrastructure unlocks new options, so growth doesn't
-stagnate on a config that hasn't kept up — with two exceptions that are
-mine to set, not yours: tier, and wallet_engine.require_confirmation.
+stagnate on a config that hasn't kept up — with these exceptions that are
+mine to set, not yours: tier, wallet_engine.require_confirmation, signer (which key
+signs), and actions.allow_delegation (whether delegation actions are on at all).
 Report any other change you make to policy in the same summary that made
 it — I should never have to diff the file to find out what changed.
 

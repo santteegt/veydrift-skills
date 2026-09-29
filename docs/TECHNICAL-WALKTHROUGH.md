@@ -35,7 +35,7 @@ separate program builds the actual transaction for that action, checks it agains
 independent allowlist regardless of what the first program already validated, and only
 submits it if a human (or a tier-2+ policy that a human explicitly configured) types an
 exact confirmation flag. A three-tier policy field — `advisor` (propose only), `economy`
-(also executes building/research/defense/ship actions), `operator` (also executes fleet
+(also executes building/research/defense/ship actions — singly, or as one batch), `operator` (also executes fleet
 logistics) — edited by hand, is the only thing that ever lets more of that pipeline run
 for real.
 
@@ -96,7 +96,14 @@ coordination, as of that feature (see §5/§7 below)**: AcsDefend(5)/Intercept(6
 only way, gated on a new `policy.actions.allow_acs_defense` flag whose tier floor splits
 within itself — `operator` for the three that move a fleet, `economy` for
 `openDefenseIntent`. Diplomacy (`setDiplomacy`: Ally/NAP/War) remains the one thing on
-that contract still fully out of scope, unconditionally. Read
+that contract still fully out of scope, unconditionally. **Batch production and single-wallet
+delegation are in scope as of the 2026-09-28 contract upgrade**: `startProductionBatch` (up to
+15 ship/defense orders in one transaction) is allowlisted at `economy`, reachable through
+`vd tick --action` and, opt-in behind `policy.strategy.production_batch`, the shipyard rung;
+delegation lets a separate `policy.signer` key act as the wallet, with `setDelegate`
+**calldata-only** (only the main wallet can sign it, so no tier may send it) and
+`revokeDelegate` executable behind `policy.actions.allow_delegation`. See §5's `guard.py`/
+`tick.py` rows, §6's `signer-binding.ts` and §8. Read
 `docs/RESEARCH-ADDENDUM.md` §6-7 before assuming otherwise.
 
 ## 4. Repository architecture
@@ -106,19 +113,20 @@ skills/
 ├── veydrift-agent/            Python (uv). Reads, calculates, plans. Never signs.
 │   ├── SKILL.md                progressive-disclosure entry point
 │   ├── pyproject.toml, uv.lock
-│   ├── src/veydrift_agent/     15 modules, ~11,700 lines — see §5
+│   ├── src/veydrift_agent/     20 files, ~17,500 lines — see §5
 │   ├── schemas/                policy.schema.json, action.schema.json — GENERATED, don't hand-edit
-│   ├── references/             7 files, ~3,050 lines, loaded on demand — see §11
+│   ├── references/             11 files, ~4,300 lines, loaded on demand — see §11
 │   ├── assets/                 policy.example.json, launchd plist template
-│   └── tests/                  825 tests
+│   └── tests/                  1233 tests
 └── veydrift-wallet/            TypeScript (npm). Signs. Nothing else does.
     ├── SKILL.md
     ├── package.json, tsconfig.json
     ├── abi/                     pinned ABI + provenance — see §6; write-path traps: AGENTS.md §7
-    ├── scripts/                 gen-keystore.mjs — interactive keystore creation (npm run wallet:new)
-    ├── src/                     11 modules, ~1,970 lines — see §6
-    ├── references/              4 files, ~1,300 lines
-    └── tests/                   218 tests (216 passed + 2 fork-only, skipped outside a live Anvil fork)
+    ├── scripts/                 gen-keystore.mjs — interactive keystore creation (npm run wallet:new);
+    │                            repin.ts — re-pin tool, `npm run repin -- confirm|write` (see AGENTS.md §6)
+    ├── src/                     15 files, ~3,970 lines — see §6
+    ├── references/              4 files, ~2,300 lines
+    └── tests/                   399 tests (396 passed + 3 skipped: 2 need a live Anvil fork, 1 is the opt-in live-chain check)
 ```
 
 Both trees are self-contained on purpose: `npx skills add` copies only `skills/<name>/`
@@ -240,8 +248,10 @@ Anvil fork with an impersonated account; `AGENTS.md` §10's fork-round history).
                                     one, including guard, runs identically either way; see
                                     references/manual-action-override.md)
 6. guard                        →  guard.py: all 27 gates, full verdict list, one Decision
-7. if ALLOW and tier>=2         →  walletctl build -> simulate -> send, await receipt,
-   and not --dry-run               THEN await INDEXED (a confirmed receipt is not the
+7. if ALLOW and tier>=2         →  walletctl build -> simulate -> send (which re-checks the
+   and not --dry-run               allowlist, that the signer acts as the policy wallet, and
+                                    the on-chain pin right before signing), await receipt,
+                                    THEN await INDEXED (a confirmed receipt is not the
                                     same as indexed state -- no dependent action follows
                                     until the index actually reflects it)
 8. log                          →  proposal logged, unless content-identical (excl.
@@ -457,15 +467,24 @@ already established for Missile, one for `launchDefenseHold` and one for
 naive first draft would have folded `openDefenseIntent` into the *existing* 15-function
 alliance sets — which would have broken this section's own cross-layer test by widening
 what `allow_alliance` alone unlocks; see `docs/SPEC.md` correction 74 for the full list of
-what that review found.
+what that review found. **The delegation/batch feature added two more instances**:
+`startProductionBatch` joins `ECONOMY_SIGNATURES` unconditionally, while `revokeDelegate` gets
+its own `_DELEGATION_FUNCTIONS`/`DELEGATION_SIGNATURES` pair (economy-or-above, behind
+`allow_delegation`), diffed independently. `setDelegate` is the mirror-image case — deliberately
+in *no* set on either side (`guard.CALLDATA_ONLY_FUNCTIONS`), and the same test asserts that
+too, so nothing can quietly make it sendable. Two further enforcement points are not a
+duplicated table but are worth naming here: `send` requires `effectivePlayer(signer) ==
+policy.wallet` from the chain (`signer-binding.ts`), and re-checks the on-chain implementation
+pin before signing (`onchain-pin.ts`) — the agent's `abi_hash` gate consumes the same verdict
+from `walletctl build`.
 
 ## 9. How this was built, and what that explains about the code
 
 This repo was built by a multi-agent pipeline: a planning pass wrote `docs/SPEC.md`,
 parallel Sonnet-model builder agents implemented independent work packages against that
-frozen spec, and Fable-model judge passes adversarially reviewed the result twice — see
-`AGENTS.md` §9 for the workflow itself, and its own text for what each pass has caught
-historically. That history is directly visible in the code, and worth knowing before you
+frozen spec, and judge passes adversarially reviewed the result three times (Fable-model
+twice, then Opus 5.5, which is now the judge's model) — see `AGENTS.md` §9 for the workflow
+itself, and its own text for what each pass has caught historically. That history is directly visible in the code, and worth knowing before you
 assume something is either over-engineered or under-tested.
 
 The practical lesson for anyone extending this code: **a config flag or an enforcement
@@ -475,24 +494,34 @@ class a hot-planet `allow_ships` gap turned out to be later (two things that nee
 agree, and nothing forced them to, until a test was added that parses both sides). If you
 add a second path that can produce the same kind of `Action` an existing gate already
 checks, verify the gate actually covers the new path — don't assume it does because it
-covers the first one.
+covers the first one. The most recent pass found exactly this for batch/delegation: the two new
+gates dispatched on `Action.kind` while calldata and spend came from `Action.function`, so a
+mismatched `kind` skipped both. Gates now dispatch on `function`, and `Action` refuses a
+disagreeing `kind` at load.
 
 ## 10. What's tested, what's fixture-only, what's genuinely unverified
 
 Precision matters here more than a clean "it's tested" claim would suggest.
 
-- **1014 Python + 256 TypeScript = 1270 tests, all currently passing** (the TypeScript
-  figure includes 2 fork-only tests, skipped outside a live Anvil fork). Run both before
+- **1233 Python + 399 TypeScript = 1632 tests, all currently passing** (the TypeScript
+  figure includes 3 skipped: 2 fork-only tests that need a live Anvil fork, and 1 opt-in
+  `VEYDRIFT_LIVE_TESTS=1` chain check). Run both before
   calling any change done (`AGENTS.md` §3); they cover a system with two enforcement
   layers that must agree (§8), and neither suite alone would catch a drift between them.
-- **The ACS defense coordination feature's four functions have not yet been exercised on
-  a fork the way Attack/Missile/the 15 alliance functions all were.** Unit-tested
-  thoroughly (both new gates, all three encoder branches, all three live-probe functions),
-  but no `walletctl build → simulate → send` round has yet run against a real chain state
-  for `launchDefenseHold`/`openDefenseIntent`/AcsDefend/Intercept. A natural next fork-
-  testing round, scoped honestly to "launch confirmed" rather than full combined-defense
-  resolution (which needs the same off-chain randomness reveal Attack's own resolution
-  already does) — see `references/coordination.md`'s live-verification-status section.
+- **The ACS defense coordination feature's four functions were exercised on a fork after
+  the fact** (`references/fork-testing.md` §13): `launchDefenseHold`, AcsDefend, Intercept and
+  `openDefenseIntent` were all live-sent, scoped honestly to "launch confirmed" — full
+  combined-defense *resolution* still needs the off-chain randomness reveal Attack's own
+  resolution does, and stays out of reach.
+- **Batch production and delegation were exercised on a fork, not on mainnet**
+  (`references/fork-testing.md` §14): a batch is byte-identical to the same orders placed one by
+  one, atomic on revert, with every input check decoded, the 15-order maximum's gas measured and
+  the per-lane backlog boundary found (16 entries behind the active head); `setDelegate` is
+  refused by `send`, `revokeDelegate` works from the delegate, the four signer-binding refusals
+  fire, and `vd tick` sent delegate-signed batches both from an override and from the planner.
+  **Not verified:** the revoke race (a revoke landing between the signer check and inclusion), a
+  delegate signing alliance actions, whether the backend attributes delegate-sent actions to the
+  main wallet, and behaviour at any state other than the pinned fork block.
 - **The read → plan → guard pipeline is exercised against the live API**, not just
   fixtures — `vd calc verify` re-runs three independent duration formulas against
   `https://api.veydrift.com` and confirms `universe_speed == 1` still holds; a live
@@ -566,11 +595,12 @@ it) that rules most hosted/MPC options out before you start.
 **Re-pinning the ABI after a contract upgrade:** the exact recipe, including the foundry
 settings that affect reproducibility, is in `AGENTS.md` §6 and
 `skills/veydrift-wallet/references/abi-pinning.md`. Never build from `main` on the
-contracts repo — it has already drifted from the deployed implementation once, silently
-adding and removing functions, and there's no reason to expect that stops.
+contracts repo — it has already drifted from the deployed implementation, silently adding and
+removing functions, and the backend's own deployment metadata lags the chain too, so the
+chain (`walletctl verify-abi`, the implementation slots) is the authority on what is deployed.
 
 **Before shipping any change:** both test suites (`AGENTS.md` §3), a live
 `vd tick --dry-run`, and — for anything touching the write path, the tier model, or a
-guardrail — a fresh adversarial review pass. Two judge passes on this codebase have each
+guardrail — a fresh adversarial review pass. Three judge passes on this codebase have each
 found real defects the builder and the test suite both missed; there's no reason to expect
-a third pass on a substantial future change would find nothing.
+a fourth pass on a substantial future change would find nothing.
