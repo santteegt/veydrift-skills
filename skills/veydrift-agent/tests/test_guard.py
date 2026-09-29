@@ -3898,16 +3898,19 @@ def test_single_order_with_quantity_above_one_now_derives_its_spend_from_the_uni
     assert guard._derive_fleet_mission_spend(action, batch_snapshot()) == Resources(metal=8_000)
 
 
-def test_single_order_with_quantity_one_still_uses_action_cost():
-    action = Action(
-        kind=ActionKind.DEFENSE,
-        function="startDefenseProduction",
-        planet_id=664,
-        entity_id=ids.Defense.ROCKET_LAUNCHER,
-        quantity=1,
-        cost=Resources(metal=1234),
-    )
-    assert guard._derive_fleet_mission_spend(action, batch_snapshot()) == Resources(metal=1234)
+def test_single_order_with_quantity_one_also_ignores_action_cost():
+    """`Action.cost` is display only: an override may omit it (or lie), so the spend is always
+    the live unit cost x quantity, quantity 1 included."""
+    for stated in (Resources(metal=1234), Resources()):
+        action = Action(
+            kind=ActionKind.DEFENSE,
+            function="startDefenseProduction",
+            planet_id=664,
+            entity_id=ids.Defense.ROCKET_LAUNCHER,
+            quantity=1,
+            cost=stated,
+        )
+        assert guard._derive_fleet_mission_spend(action, batch_snapshot()) == Resources(metal=2_000)
 
 
 def test_batch_is_allowed_at_economy_and_blocked_at_advisor():
@@ -3986,8 +3989,94 @@ def test_revoke_delegate_needs_only_the_flag():
     assert v.status is GuardStatus.PASS
 
 
-def test_delegation_gate_blocks_an_unknown_function():
-    v = verdict(evaluate(make_delegation_action("abandonPlanet"), make_snapshot(), delegation_policy(), delegate_planet_count=0), "delegation")
+def test_a_delegation_kind_with_a_foreign_function_is_refused_at_load():
+    with pytest.raises(ValueError, match="requires its own function"):
+        make_delegation_action("abandonPlanet")
+
+
+# --------------------------------------------------------------------------------------
+# Judge finding B1: gates dispatch on function, and kind/function must agree.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kind", "function"),
+    [
+        (ActionKind.SHIP, "startProductionBatch"),
+        (ActionKind.DEFENSE, "startProductionBatch"),
+        (ActionKind.BUILD, "startProductionBatch"),
+        (ActionKind.BUILD, "revokeDelegate"),
+        (ActionKind.BUILD, "setDelegate"),
+        (ActionKind.PRODUCTION_BATCH, "startShipProduction"),
+        (ActionKind.DELEGATION, "startProductionBatch"),
+    ],
+)
+def test_a_kind_that_disagrees_with_the_function_is_refused_at_load(kind, function):
+    with pytest.raises(ValueError):
+        Action(kind=kind, function=function, planet_id=664)
+
+
+def _bypassing_the_validator(**fields) -> Action:
+    """`model_construct` skips validation, modelling any future path that builds an `Action`
+    without it: the gates must still not treat a mismatched action as 'not a batch'."""
+    return Action.model_construct(**{"rule": "manual", "rationale": "t", "cost": Resources(), **fields})
+
+
+def test_a_mismatched_kind_cannot_skip_the_batch_gate_even_without_the_validator():
+    orders = [ProductionOrder(kind="defense", item_id=9, quantity=1000), ProductionOrder(kind="ship", item_id=11, quantity=1000)]
+    action = _bypassing_the_validator(kind=ActionKind.SHIP, function="startProductionBatch", planet_id=664, orders=orders, quantity=None, entity_id=None)
+    policy = batch_policy(allow_ships=False, allow_defense=False)
+    report = evaluate(action, batch_snapshot(), policy)
+    assert verdict(report, "production_batch").status is GuardStatus.BLOCK
+    assert "disagree" in verdict(report, "production_batch").detail
+    # and its spend is derived from the orders, not read from the (empty) cost
+    assert guard._derive_fleet_mission_spend(action, batch_snapshot()) is None  # no live unit cost for ids 9/11 here
+
+
+def test_a_mismatched_kind_cannot_skip_the_delegation_gate_even_without_the_validator():
+    action = _bypassing_the_validator(kind=ActionKind.BUILD, function="revokeDelegate")
+    report = evaluate(action, make_snapshot(), make_policy())
+    assert verdict(report, "delegation").status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize(
+    ("function", "entity", "flag"),
+    [
+        ("startShipProduction", ids.Ship.SOLAR_SATELLITE, "allow_ships"),
+        ("startDefenseProduction", ids.Defense.ROCKET_LAUNCHER, "allow_defense"),
+    ],
+)
+def test_single_production_orders_need_their_policy_flag(function, entity, flag):
+    kind = ActionKind.SHIP if function == "startShipProduction" else ActionKind.DEFENSE
+    action = Action(kind=kind, function=function, planet_id=664, entity_id=entity, quantity=1)
+    off = evaluate(action, batch_snapshot(), batch_policy(**{flag: False}))
+    on = evaluate(action, batch_snapshot(), batch_policy())
+    assert verdict(off, "production_batch").status is GuardStatus.BLOCK
+    assert flag in verdict(off, "production_batch").detail
+    assert verdict(on, "production_batch").status is GuardStatus.PASS
+
+
+def test_a_single_order_override_with_no_cost_cannot_spend_through_the_reserve():
+    """Judge finding S2: quantity 1 and `cost` omitted used to pass affordability/reserve/value_ceiling."""
+    action = Action(kind=ActionKind.DEFENSE, function="startDefenseProduction", planet_id=664, entity_id=ids.Defense.ROCKET_LAUNCHER, quantity=1)
+    policy = batch_policy()
+    policy = policy.model_copy(update={"reserves": Resources(metal=99_000)})  # holdings 100_000; a Rocket Launcher costs 2_000
+    report = evaluate(action, batch_snapshot(), policy)
+    assert verdict(report, "reserve").status is GuardStatus.BLOCK
+
+
+def test_an_all_zero_unit_cost_is_unverifiable_not_free():
+    planet = make_batch_planet(defenses=[Entity(id=ids.Defense.ROCKET_LAUNCHER, name="Rocket Launcher", count=0, cost=Resources())])
+    action = Action(kind=ActionKind.DEFENSE, function="startDefenseProduction", planet_id=664, entity_id=ids.Defense.ROCKET_LAUNCHER, quantity=1)
+    assert guard._derive_fleet_mission_spend(action, make_snapshot(planets=[planet])) is None
+
+
+def test_the_dependency_check_does_not_depend_on_the_wallets_applies_to_list():
+    """Judge nit: a verdict that arrives without `applies_to` must not switch the check off."""
+    pin = make_onchain_pin(dependencies_ok=False, applies_to=[])
+    tx = make_unsigned_tx(onchain_pin=pin)
+    action = make_fleet_action()
+    v = guard._gate_abi_hash(action, make_snapshot(), tx)
     assert v.status is GuardStatus.BLOCK
 
 

@@ -3181,6 +3181,19 @@ def _fingerprint_proposal(record: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(comparable, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _calldata_objections(guard_report: GuardReport) -> list[tuple[str, str]]:
+    """Every non-passing verdict except the structural cluster a calldata-only action always
+    produces at tier 1: `tier` BLOCKing by design, and `gas`/`eth_floor` escalating for want of a
+    provider. What is left is a substantive reason not to sign."""
+    return [
+        (v.gate, v.detail)
+        for v in guard_report.verdicts
+        if v.status is not GuardStatus.PASS
+        and v.gate != "tier"
+        and (v.gate, v.status.value) not in guard_mod._TIER1_EXPECTED_ESCALATIONS
+    ]
+
+
 def _calldata_lines(action: Action, unsigned_tx: UnsignedTx | None, policy_model: Policy) -> list[str]:
     """The full built calldata of an on-chain proposal that was not submitted, with who must (or
     may) send it -- the advisor-mode hand-off. `tx:` in the panel abbreviates `data` to its
@@ -3320,10 +3333,19 @@ def _finish_tick(
     if action.is_onchain() and policy_model.signer:
         panel_extras.append(f"signer: delegate {policy_model.signer}, acting for {policy_model.wallet}")
     if action.function in guard_mod.CALLDATA_ONLY_FUNCTIONS:
-        panel_extras.append(f"sign:   calldata-only -- send it yourself from {policy_model.wallet}; the wallet skill never sends it")
-        if calldata_only_note:
-            panel_extras.append(f"check:  {calldata_only_note}")
-        panel_extras.extend(calldata_lines)
+        # The calldata is only handed over when nothing but the by-design `tier` block (and tier 1's
+        # expected gas/eth_floor escalations) stands against it: the `delegation` gate is what makes
+        # it safe to sign, so printing it beside a BLOCK from that gate would defeat the gate.
+        objections = _calldata_objections(guard_report)
+        if objections:
+            panel_extras.append("NOT SAFE TO SIGN -- do not send this calldata; the guard objects:")
+            panel_extras.extend(f"  - {gate}: {detail}" for gate, detail in objections)
+            calldata_lines = []
+        else:
+            panel_extras.append(f"sign:   calldata-only -- send it yourself from {policy_model.wallet}; the wallet skill never sends it")
+            if calldata_only_note:
+                panel_extras.append(f"check:  {calldata_only_note}")
+            panel_extras.extend(calldata_lines)
 
     block_text = log.format_tick_block(
         tick_number=agent_state.tick_count,

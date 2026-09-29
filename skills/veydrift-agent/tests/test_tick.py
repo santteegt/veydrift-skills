@@ -4828,6 +4828,11 @@ def test_describe_override_receives_the_same_rotation_pointer_as_the_real_planne
 _DELEGATE = "0x1111111111111111111111111111111111111111"
 
 
+def _flat(output: str) -> str:
+    """A rendered panel with its box borders and line wraps removed, for substring assertions."""
+    return " ".join(output.replace("│", " ").split())
+
+
 def _batch_action(**overrides) -> Action:
     from veydrift_agent.models import ProductionOrder
 
@@ -4984,7 +4989,7 @@ def _write_delegation_policy(**overrides):
 
 def test_set_delegate_override_is_built_as_the_main_wallet_and_prints_full_calldata(isolated_home, monkeypatch, tmp_path):
     _write_delegation_policy()
-    tx = UnsignedTx(to=_LIVE_ADDR, data="0xca5eb5e1" + "11" * 32, gas=None)
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0xca5eb5e1" + "11" * 32, gas=None, onchain_pin=_PASSING_PIN)
     _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, action=_build_action())
     built_from: list[str | None] = []
     monkeypatch.setattr(
@@ -5042,6 +5047,38 @@ def test_set_delegate_to_a_planet_owner_is_blocked_by_the_delegation_gate(isolat
     verdicts = {v["gate"]: v for v in log.read_proposals()[0]["guard_verdicts"]}
     assert verdicts["delegation"]["status"] == "block"
     assert "4 planet(s)" in verdicts["delegation"]["detail"]
+    # Judge finding S1: the guard's objection replaces the signable calldata, in the panel and the file.
+    flat = _flat(result.output)
+    assert "NOT SAFE TO SIGN" in flat and "4 planet(s)" in flat
+    assert tx.data not in result.output.replace("\n", "")
+    assert "send it yourself" not in flat
+    from veydrift_agent.state import ticks_dir
+
+    md = "\n".join(p.read_text() for p in ticks_dir().glob("*.md"))
+    assert tx.data not in md
+
+
+def test_set_delegate_calldata_is_withheld_when_allow_delegation_is_off(isolated_home, monkeypatch, tmp_path):
+    _write_delegation_policy()
+    import json as _json
+
+    from veydrift_agent.state import policy_path
+
+    pol = _json.loads(policy_path().read_text())
+    pol["actions"]["allow_delegation"] = False
+    policy_path().write_text(_json.dumps(pol))
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0xca5eb5e1" + "11" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, action=_build_action(), built_tx_path=tmp_path / "tx.json")
+    monkeypatch.setattr(tick, "_delegate_planet_count", lambda address: 0)
+    action_file = tmp_path / "set.json"
+    action_file.write_text(json.dumps({"kind": "delegation", "function": "setDelegate", "delegate": _DELEGATE, "rationale": "r"}))
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+
+    assert result.exit_code == 0, result.output
+    assert "NOT SAFE TO SIGN" in _flat(result.output)
+    assert "allow_delegation" in _flat(result.output)
+    assert tx.data not in result.output.replace("\n", "")
 
 
 def test_batch_override_fills_display_cost_and_writes_full_calldata_to_the_tick_markdown(isolated_home, monkeypatch, tmp_path):

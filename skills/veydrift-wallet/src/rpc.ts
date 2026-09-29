@@ -32,3 +32,12 @@ export function getPublicClient(): VeydriftPublicClient {
   }
   return _publicClient;
 }
+
+/** viem's `message` is a multi-line dump (request URL, request body, docs link); its `shortMessage`
+ *  is the one-line cause. Errors end up in tick reports, refusal text and log files, and the RPC URL
+ *  usually embeds an API key -- so anything that leaves this package goes through here, never through
+ *  a raw `.message`. */
+export function briefError(err: unknown): string {
+  const e = err as { shortMessage?: string; message?: string };
+  return (e.shortMessage ?? e.message ?? String(err)).split("\n")[0]!.trim();
+}

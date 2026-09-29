@@ -2761,6 +2761,7 @@ def test_quantities_shrink_to_what_is_affordable():
     snapshot = _ready_snapshot()
     planet = snapshot.planet(700).model_copy(update={"resources_as_of_now": Resources(metal=25_000, crystal=10_000, deuterium=10_000)})
     policy = _batch_policy(ship_targets=[_lf(3)], defense_targets=[_abm(20)])
+    policy = policy.model_copy(update={"limits": policy.limits.model_copy(update={"escalate_above_pct_of_resources": 100})})
 
     (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, planet)
 
@@ -2883,3 +2884,26 @@ def test_a_scored_single_ship_outranks_the_batch(monkeypatch):
     winner, _ = candidates.select_shipyard_candidate(snapshot, policy, snapshot.planets)
 
     assert winner is scored
+
+
+def test_a_large_deficit_is_sized_under_the_value_ceiling_so_the_guard_does_not_escalate_it():
+    """Judge finding S4: a batch sized to everything affordable escalated on `value_ceiling` every
+    tick and, replacing the singles, stalled the rung."""
+    from veydrift_agent import guard
+
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(ship_targets=[_lf(300)], defense_targets=[_abm(2)])
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700))
+
+    holdings = snapshot.planet(700).resources_as_of_now
+    total_holdings = holdings.metal + holdings.crystal + holdings.deuterium
+    cost = candidate.action.cost
+    assert (cost.metal + cost.crystal + cost.deuterium) <= total_holdings * policy.limits.escalate_above_pct_of_resources / 100
+    assert guard._gate_value_ceiling(candidate.action, snapshot, policy).status.value == "pass"
+
+
+def test_no_batch_when_a_holding_is_already_below_its_reserve_floor():
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(ship_targets=[_lf(5)], defense_targets=[_abm(2)])
+    policy = policy.model_copy(update={"reserves": Resources(deuterium=2_000_000)})  # holdings are 1_000_000
+    assert candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700)) == []

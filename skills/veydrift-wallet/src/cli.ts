@@ -37,6 +37,7 @@ import {
   WalletBindingResolutionError,
   type SignerBinding,
 } from "./policy.js";
+import { briefError } from "./rpc.js";
 import { checkEffectivePlayer } from "./signer-binding.js";
 import {
   BroadcastUncertainError,
@@ -64,7 +65,7 @@ async function onchainPinOrFailed(opts: Parameters<typeof checkOnchainPin>[0]): 
   try {
     return await checkOnchainPin(opts);
   } catch (err) {
-    return failedOnchainPin(`on-chain pin check could not run: ${(err as Error).message}`);
+    return failedOnchainPin(`on-chain pin check could not run: ${briefError(err)}`);
   }
 }
 
@@ -207,7 +208,7 @@ program
         `capabilities:    canSign=${caps.canSign} canSimulate=${caps.canSimulate} remotePolicy=${caps.remotePolicy}`,
       );
     } catch (err) {
-      console.error(`status failed: ${(err as Error).message}`);
+      console.error(`status failed: ${briefError(err)}`);
       process.exitCode = 1;
     }
   });
@@ -277,7 +278,7 @@ program
         console.log("\non-chain pin: MATCH");
       }
     } catch (err) {
-      console.error(`verify-abi failed: ${(err as Error).message}`);
+      console.error(`verify-abi failed: ${briefError(err)}`);
       process.exitCode = 1;
     }
   });
@@ -333,7 +334,7 @@ program
         console.log(json);
       }
     } catch (err) {
-      console.error(`build failed: ${(err as Error).message}`);
+      console.error(`build failed: ${briefError(err)}`);
       process.exitCode = 1;
     }
   });
@@ -388,7 +389,7 @@ program
       }
     } catch (err) {
       if (opts.json) {
-        console.log(JSON.stringify({ ok: false, revertReason: null, error: (err as Error).message, decoded: null }));
+        console.log(JSON.stringify({ ok: false, revertReason: null, error: briefError(err), decoded: null }));
       } else {
         console.error(`simulate failed: ${(err as Error).message}`);
       }

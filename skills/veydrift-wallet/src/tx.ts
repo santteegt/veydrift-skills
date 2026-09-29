@@ -29,7 +29,7 @@ import {
 import { checkAllowlist, type Tier } from "./allowlist.js";
 import { checkOnchainPin, needsDependencyPin, type OnchainPinResult } from "./onchain-pin.js";
 import type { UnsignedTx, WalletProvider } from "./providers/types.js";
-import { getPublicClient, type VeydriftPublicClient } from "./rpc.js";
+import { briefError, getPublicClient, type VeydriftPublicClient } from "./rpc.js";
 import { checkEffectivePlayer, type EffectivePlayerCheck } from "./signer-binding.js";
 
 export type { UnsignedTx, WalletProvider } from "./providers/types.js";
@@ -140,7 +140,7 @@ async function fetchMaxFeePerGas(
   try {
     return { maxFeePerGas: await client.getGasPrice() };
   } catch (err) {
-    return { error: (err as Error).message };
+    return { error: briefError(err) };
   }
 }
 
@@ -208,7 +208,7 @@ export async function buildTx(action: Action, opts: BuildOptions = {}): Promise<
         // pinned errors so the reason reads `InsufficientResources(...)` rather than viem's
         // generic "unknown reason". Non-revert failures (RPC down) keep their own message.
         const described = describeRevert(err);
-        gasEstimateError = described.decoded ? described.message : (err as Error).message;
+        gasEstimateError = described.decoded ? described.message : briefError(err);
       }
     }
     const fee = await fetchMaxFeePerGas(client);
@@ -505,7 +505,7 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
     try {
       signerAddress = await opts.provider.getAddress();
     } catch (err) {
-      throw new SendRefusedError(`could not derive the provider's signer address: ${(err as Error).message}`);
+      throw new SendRefusedError(`could not derive the provider's signer address: ${briefError(err)}`);
     }
     if (signerAddress.toLowerCase() !== opts.expectedAddress.toLowerCase()) {
       throw new SendRefusedError(
@@ -538,7 +538,7 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
     try {
       acting = await (opts.checkEffectivePlayer ?? ((o) => checkEffectivePlayer(o)))({ signer: signerAddress, player });
     } catch (err) {
-      throw new SendRefusedError(`could not verify which player the signer acts as: ${(err as Error).message}`);
+      throw new SendRefusedError(`could not verify which player the signer acts as: ${briefError(err)}`);
     }
     if (!acting.ok) {
       throw new SendRefusedError(`signer binding failed: ${acting.problem ?? "the signer does not act as the policy wallet"}`);
@@ -553,7 +553,7 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
   try {
     pin = await (opts.checkOnchainPin ?? ((o) => checkOnchainPin(o)))({ to: tx.to, verifyCode: true });
   } catch (err) {
-    throw new SendRefusedError(`could not verify the on-chain pin before signing: ${(err as Error).message}`);
+    throw new SendRefusedError(`could not verify the on-chain pin before signing: ${briefError(err)}`);
   }
   if (!pin.ok) {
     throw new SendRefusedError(
@@ -572,7 +572,7 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
     return await opts.provider.signAndSend(tx);
   } catch (err) {
     throw new BroadcastUncertainError(
-      `${(err as Error).message} -- the transaction may or may not have been broadcast; check the ` +
+      `${briefError(err)} -- the transaction may or may not have been broadcast; check the ` +
         `sender's nonce before sending again.`,
     );
   }

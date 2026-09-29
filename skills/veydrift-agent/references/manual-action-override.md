@@ -172,7 +172,8 @@ transaction. Hand-written (`kind: "production_batch"`), it is an override like a
   transactions, not gas per item: gas grows with the order count, and a *single* order of any
   quantity costs about the same as a one-order batch — use a batch for **distinct** items.
 - Needs `policy.actions.allow_ships`/`allow_defense` for the kinds it contains (the gate checks
-  both; the single-order override path never did). `cost` may be omitted: the guard re-derives
+  both; since the same gate now also requires the matching flag for a single-order
+  `startShipProduction`/`startDefenseProduction`, sending orders one at a time is no way around it). `cost` may be omitted: the guard re-derives
   the spend from live unit costs and the report shows it.
 - `economy` tier or above. The `production_batch` gate checks each order's prerequisites and the
   defense caps aggregated across the batch. The per-lane backlog cap (16 entries behind the active head — fork-measured) is enforced

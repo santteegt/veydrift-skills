@@ -679,12 +679,13 @@ class ActionsCfg(Base):
     #: src/policy.ts`'s `resolveAllowAcsDefense`. See `references/coordination.md` for the
     #: full contract mechanics and the honest verification-status caveats.
     allow_acs_defense: bool = False
-    #: Single-wallet delegation (`revokeDelegate` only -- executable at `economy` tier or above,
-    #: via `vd tick --action`, never planner-proposed). Default `False`. Gates only the removal of
-    #: authority: `revokeDelegate` may be called by the main wallet OR the delegate, so it also acts
-    #: as an agent-side kill-switch for a delegated signing key. `setDelegate` is NOT governed by
-    #: this flag and is never executable by this codebase at any tier or under any policy -- it
-    #: must be signed by the main wallet itself, so it is calldata-only (built, simulated and
+    #: Single-wallet delegation, via `vd tick --action` only, never planner-proposed. Default
+    #: `False`. `revokeDelegate` -- executable at `economy` tier or above -- may be called by the
+    #: main wallet OR the delegate, so it also acts as an agent-side kill-switch for a delegated
+    #: signing key. `setDelegate` is only ever *built* when this is `True` (`guard._gate_delegation_
+    #: action` refuses it otherwise), yet it is never executable by this codebase at any tier or
+    #: under any policy -- it must be signed by the main wallet itself, so it is calldata-only
+    #: (built, simulated and
     #: printed for a human to sign). Checked independently at both enforcement layers
     #: (`guard.py`'s `_MIN_TIER_FOR_FUNCTION`/`_gate_delegation_action` and `veydrift-wallet`'s
     #: `checkAllowlist`); no CLI flag or environment variable for this at the wallet layer, ever --
@@ -1173,6 +1174,22 @@ class Action(Base):
     # for any Action no code path has attached one to yet -- see `brief.py`.
     # ----------------------------------------------------------------------------------
     brief: Briefing | None = None
+
+    @model_validator(mode="after")
+    def _kind_and_function_agree(self) -> Action:
+        """Calldata is built from `function`, gates historically dispatched on `kind`; a file whose
+        two disagree for the batch/delegation functions would be judged as one thing and sent as
+        another. Refused at load."""
+        expected = {
+            "startProductionBatch": ActionKind.PRODUCTION_BATCH,
+            "setDelegate": ActionKind.DELEGATION,
+            "revokeDelegate": ActionKind.DELEGATION,
+        }
+        if self.function in expected and self.kind is not expected[self.function]:
+            raise ValueError(f"function {self.function!r} requires kind {expected[self.function].value!r}, got {self.kind.value!r}")
+        if self.kind in (ActionKind.PRODUCTION_BATCH, ActionKind.DELEGATION) and self.function not in expected:
+            raise ValueError(f"kind {self.kind.value!r} requires its own function, got {self.function!r}")
+        return self
 
     def is_onchain(self) -> bool:
         return self.function is not None

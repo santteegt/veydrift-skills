@@ -27,7 +27,7 @@
 
 import { getAddress, keccak256, parseAbi } from "viem";
 import { fetchLiveRuntimeConfig, loadPinnedMeta, type RuntimeConfig } from "./abi.js";
-import { getPublicClient, type VeydriftPublicClient } from "./rpc.js";
+import { briefError, getPublicClient, type VeydriftPublicClient } from "./rpc.js";
 
 /** EIP-1967: bytes32(uint256(keccak256("eip1967.proxy.implementation")) - 1). */
 export const EIP1967_IMPLEMENTATION_SLOT =
@@ -78,13 +78,6 @@ export interface CheckOnchainPinOptions {
 }
 
 const RANDOMNESS_GETTER = parseAbi(["function randomnessEngine() view returns (address)"]);
-
-/** viem's `message` is a multi-line dump (URL, request body, docs link); its `shortMessage` is the
- *  one-line cause. Problems end up in tick reports and refusal text, so keep them to one line. */
-function briefError(err: unknown): string {
-  const e = err as { shortMessage?: string; message?: string };
-  return (e.shortMessage ?? e.message ?? String(err)).split("\n")[0]!.trim();
-}
 
 function sameAddress(a: string | undefined | null, b: string | undefined | null): boolean {
   return !!a && !!b && a.toLowerCase() === b.toLowerCase();

@@ -11,6 +11,26 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.27.1] - 2026-09-29
+
+### Fixed
+- The `production_batch` and `delegation` gates dispatched on `Action.kind` while calldata and spend
+  were built from `function`, so an override such as `{"kind": "ship", "function": "startProductionBatch"}`
+  skipped both gates and spent through `reserves`, the value ceiling and `allow_ships`/`allow_defense`.
+  They now dispatch on `function`, and `Action` refuses a `kind` that disagrees with
+  `startProductionBatch`/`setDelegate`/`revokeDelegate`.
+- A single-order `startShipProduction`/`startDefenseProduction` now needs `allow_ships`/`allow_defense`
+  (the batch gate covers it) and its spend is always re-derived from the live unit cost, quantity 1
+  included — an override with `cost` omitted used to pass `affordability`/`reserve`/`value_ceiling`.
+  An all-zero unit cost is unverifiable, not free.
+- `setDelegate` calldata and the "send it yourself" line are withheld, with the guard's reason, when any
+  gate other than `tier` (and tier 1's expected gas/eth_floor escalations) objects.
+- The planner's batch is sized under `limits.escalate_above_pct_of_resources` (shared across its orders)
+  and is not proposed when a holding is already below its reserve floor, so it no longer escalates every
+  tick and stalls the shipyard rung.
+- `_gate_abi_hash` no longer depends on the wallet reporting `applies_to`; `VEYDRIFT_RPC_URL` is in the
+  default secret list.
+
 ## [1.27.0] - 2026-09-28
 
 ### Added

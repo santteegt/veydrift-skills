@@ -53,6 +53,9 @@ _HEX64_RE = re.compile(r"0x[0-9a-fA-F]{64}")
 DEFAULT_SECRET_ENV_VARS: tuple[str, ...] = (
     "VEYDRIFT_PRIVATE_KEY",
     "VEYDRIFT_KEYSTORE_PASSWORD",
+    # An RPC URL usually embeds the provider's API key. `walletctl` keeps it out of the errors it
+    # reports, but this is the backstop for anything that slips through.
+    "VEYDRIFT_RPC_URL",
 )
 
 

@@ -827,6 +827,31 @@ _MAX_PRODUCTION_BATCH_ORDERS = 15
 _UINT32_MAX = 2**32 - 1
 
 
+_BATCH_FUNCTION = "startProductionBatch"
+_SINGLE_PRODUCTION_FUNCTIONS = {"startShipProduction": "ship", "startDefenseProduction": "defense"}
+_DELEGATION_FUNCTION_NAMES = frozenset({"setDelegate", "revokeDelegate"})
+
+
+def _is_batch(action: Action) -> bool:
+    """Decided by `function` **or** `kind`, never `kind` alone: calldata is built from `function`, so
+    a hand-written override whose `kind` disagrees (`{"kind": "ship", "function":
+    "startProductionBatch"}`) must not slip past the batch gate as "not a batch"."""
+    return action.function == _BATCH_FUNCTION or action.kind is ActionKind.PRODUCTION_BATCH
+
+
+def _is_delegation(action: Action) -> bool:
+    return action.function in _DELEGATION_FUNCTION_NAMES or action.kind is ActionKind.DELEGATION
+
+
+def _single_production_kind(action: Action) -> str | None:
+    """`"ship"`/`"defense"` for a single-order production action (by function, falling back to kind)."""
+    if action.function in _SINGLE_PRODUCTION_FUNCTIONS:
+        return _SINGLE_PRODUCTION_FUNCTIONS[action.function]
+    if action.function is None and action.kind in (ActionKind.SHIP, ActionKind.DEFENSE):
+        return "ship" if action.kind is ActionKind.SHIP else "defense"
+    return None
+
+
 def _order_unit_cost(planet: PlanetSnapshot, kind: str, item_id: int) -> Resources | None:
     """Live unit cost of one ship/defense as the API reports it, `None` when the planet's
     snapshot does not carry that entity. Ship and defense prices are flat per unit (the contract
@@ -834,7 +859,11 @@ def _order_unit_cost(planet: PlanetSnapshot, kind: str, item_id: int) -> Resourc
     single-order actions use -- not a cost-scaling formula (AGENTS.md §5)."""
     entities = planet.ships if kind == "ship" else planet.defenses
     entity = next((e for e in entities if e.id == item_id), None)
-    return entity.cost if entity is not None else None
+    if entity is None or (entity.cost.metal, entity.cost.crystal, entity.cost.deuterium) == (0, 0, 0):
+        # An all-zero unit cost is what a row that omitted `cost` parses to, not a free unit:
+        # unverifiable, never zero.
+        return None
+    return entity.cost
 
 
 def _scaled(cost: Resources, quantity: int) -> Resources:
@@ -849,14 +878,14 @@ def production_spend(action: Action, snapshot: Snapshot) -> Resources | None:
     """Independently re-derive a production action's total spend from live unit costs and its
     own quantities, never from `action.cost` (which a manual override may leave unset, making
     `affordability`/`reserve`/`value_ceiling` pass vacuously on a real spend). Covers a batch
-    (sum over its orders) and a single ship/defense order with quantity > 1. `None` when it cannot
+    (sum over its orders) and every single ship/defense order, whatever its quantity. `None` when it cannot
     be verified -- unverifiable, never zero."""
     if action.planet_id is None:
         return None
     planet = snapshot.planet(action.planet_id)
     if planet is None:
         return None
-    if action.kind is ActionKind.PRODUCTION_BATCH:
+    if _is_batch(action):
         total = Resources()
         for order in action.orders:
             unit = _order_unit_cost(planet, order.kind, order.item_id)
@@ -866,7 +895,9 @@ def production_spend(action: Action, snapshot: Snapshot) -> Resources | None:
         return total if action.orders else None
     if action.entity_id is None:
         return None
-    kind = "ship" if action.kind is ActionKind.SHIP else "defense"
+    kind = _single_production_kind(action)
+    if kind is None:
+        return None
     unit = _order_unit_cost(planet, kind, action.entity_id)
     if unit is None:
         return None
@@ -917,20 +948,35 @@ def _batch_defense_violation(planet: PlanetSnapshot, orders: list[ProductionOrde
 
 def _gate_production_batch(action: Action, snapshot: Snapshot, policy: Policy) -> GuardVerdict:
     """`startProductionBatch` re-validated independently of whoever built it (the planner, or a
-    hand-written `--action` file). Passes trivially for every other action.
+    hand-written `--action` file), plus `allow_ships`/`allow_defense` for a single-order
+    `startShipProduction`/`startDefenseProduction` -- the override path never checked those, and a
+    batch's per-kind check would otherwise be sidestepped by sending the orders one at a time.
+    Passes trivially for every other action. Dispatches on `function` (or `kind`), never `kind`
+    alone.
 
     Each order is checked as its single-order equivalent would be -- kind/id in range,
-    quantity, `allow_ships`/`allow_defense` (the single-order override path never checked these;
-    a batch must not become the way around them), the tech-tree prerequisites, defense caps
+    quantity, `allow_ships`/`allow_defense`, the tech-tree prerequisites, defense caps
     aggregated across the batch -- plus the batch-level bound of 1..15 orders. The contract is
     atomic, so one bad order reverts the lot; failing here is cheaper than a reverted send.
 
     What this gate cannot see and does not claim: the per-lane backlog cap (16 entries behind the active head). The API
     exposes no ship backlog, so it is enforced on-chain only and surfaces in `simulate`."""
-    if action.kind is not ActionKind.PRODUCTION_BATCH:
-        return _verdict("production_batch", GuardStatus.PASS, "not a production batch")
-    if action.function != "startProductionBatch":
-        return _verdict("production_batch", GuardStatus.BLOCK, f"a batch action must call startProductionBatch, not {action.function}")
+    single = _single_production_kind(action)
+    if single is not None:
+        flag = policy.actions.allow_ships if single == "ship" else policy.actions.allow_defense
+        name = "allow_ships" if single == "ship" else "allow_defense"
+        if not flag:
+            return _verdict("production_batch", GuardStatus.BLOCK, f"{action.function} needs policy.actions.{name}=true")
+        return _verdict("production_batch", GuardStatus.PASS, f"single {single} order: policy.actions.{name} is set")
+    if not _is_batch(action):
+        return _verdict("production_batch", GuardStatus.PASS, "not a production action")
+    if action.function != _BATCH_FUNCTION or action.kind is not ActionKind.PRODUCTION_BATCH:
+        return _verdict(
+            "production_batch",
+            GuardStatus.BLOCK,
+            f"kind {action.kind.value!r} and function {action.function!r} disagree: a batch is kind "
+            f"'production_batch' calling {_BATCH_FUNCTION}",
+        )
     if action.planet_id is None:
         return _verdict("production_batch", GuardStatus.BLOCK, "batch has no target planet")
     planet = snapshot.planet(action.planet_id)
@@ -995,10 +1041,15 @@ def _gate_delegation_action(action: Action, policy: Policy, *, delegate_planet_c
 
     `revokeDelegate()`: no arguments; a revert with `NoDelegate` (nothing to revoke) surfaces in
     `simulate`, not here."""
-    if action.kind is not ActionKind.DELEGATION:
+    if not _is_delegation(action):
         return _verdict("delegation", GuardStatus.PASS, "not a delegation action")
-    if action.function not in ("setDelegate", "revokeDelegate"):
-        return _verdict("delegation", GuardStatus.BLOCK, f"unknown delegation function {action.function}")
+    if action.function not in _DELEGATION_FUNCTION_NAMES or action.kind is not ActionKind.DELEGATION:
+        return _verdict(
+            "delegation",
+            GuardStatus.BLOCK,
+            f"kind {action.kind.value!r} and function {action.function!r} disagree: delegation is kind "
+            "'delegation' calling setDelegate or revokeDelegate",
+        )
     if not policy.actions.allow_delegation:
         return _verdict("delegation", GuardStatus.BLOCK, "policy.actions.allow_delegation is false")
     if action.function == "revokeDelegate":
@@ -1936,6 +1987,15 @@ def _gate_address(action: Action, *, live_addresses: set[str] | None, unsigned_t
     return _verdict("address", GuardStatus.PASS, f"{unsigned_tx.to} is a live Veydrift contract address")
 
 
+#: The functions that reach the Randomness/Moon contracts the game calls -- mirrors PINNED.json's
+#: `dependencies.appliesTo`. The wallet's verdict names them too (`OnchainPin.applies_to`); this
+#: constant is the agent's own copy so a verdict that arrives without the list cannot switch the
+#: dependency check off.
+_DEPENDENCY_FUNCTIONS = frozenset(
+    {"launchFleetMission", "launchInterplanetaryMissileAttack", "resolveFleetMission", "launchDefenseHold"}
+)
+
+
 def _gate_abi_hash(action: Action, snapshot: Snapshot, unsigned_tx: UnsignedTx | None = None) -> GuardVerdict:
     """Is the deployed contract system still the one this skill is pinned to?
 
@@ -1976,7 +2036,7 @@ def _gate_abi_hash(action: Action, snapshot: Snapshot, unsigned_tx: UnsignedTx |
             f"on-chain pin check failed -- the deployed contracts differ from what this skill is pinned to "
             f"(or the chain could not be read): {detail}. Re-pin before writing",
         )
-    if action.function in pin.applies_to and not pin.dependencies_ok:
+    if (action.function in pin.applies_to or action.function in _DEPENDENCY_FUNCTIONS) and not pin.dependencies_ok:
         detail = "; ".join(pin.problems) or "no detail reported"
         return _verdict(
             "abi_hash",
@@ -2183,9 +2243,7 @@ def _derive_fleet_mission_spend(
     technology data) -- **unverifiable, never zero** (AGENTS.md §5's "a guardrail must
     never pass vacuously on absent data," applied to this derivation's own inputs, not
     just to snapshot data)."""
-    if action.kind is ActionKind.PRODUCTION_BATCH or (
-        action.kind in (ActionKind.SHIP, ActionKind.DEFENSE) and (action.quantity or 1) > 1
-    ):
+    if _is_batch(action) or _single_production_kind(action) is not None:
         return production_spend(action, snapshot)
     if action.kind is ActionKind.FLEET_MISSION and action.mission_type in _ACS_MISSION_TYPES:
         if net_holding_fuel_cost is None:

@@ -11,6 +11,13 @@ lockstep.
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-09-29
+
+### Fixed
+- Errors that leave `walletctl` (gas/fee estimate errors in `build --out`, refusals, CLI failures) use the
+  one-line `briefError` instead of a raw viem `.message`, which embeds the RPC URL — and with it the
+  provider's API key — into tick reports and logs.
+
 ## [2.2.0] - 2026-09-28
 
 ### Changed

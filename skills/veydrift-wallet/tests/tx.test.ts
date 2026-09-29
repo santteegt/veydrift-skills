@@ -106,6 +106,25 @@ describe("buildTx", () => {
     expect(single.gas).toBe(1_000_000n);
   });
 
+  it("never puts the RPC URL (which carries the API key) into an estimate error", async () => {
+    const httpFailure = Object.assign(
+      new Error("HTTP request failed.\n\nURL: https://base-mainnet.example/v2/SECRETAPIKEY\nRequest body: {}"),
+      { shortMessage: "HTTP request failed." },
+    );
+    const client = mockClient({
+      estimateGas: vi.fn().mockRejectedValue(httpFailure),
+      getGasPrice: vi.fn().mockRejectedValue(httpFailure),
+      estimateFeesPerGas: vi.fn().mockRejectedValue(httpFailure),
+    });
+    const built = await buildTx(
+      { function: "startResearch(uint256,uint8)", args: [664, 0] },
+      { fetchConfig: async () => fixtureConfig(), from: "0x0000000000000000000000000000000000000d00", client },
+    );
+    expect(built.gasEstimateError).toBe("HTTP request failed.");
+    expect(built.feeEstimateError).toBe("HTTP request failed.");
+    expect(JSON.stringify(built, (_k, v) => (typeof v === "bigint" ? v.toString() : v))).not.toContain("SECRETAPIKEY");
+  });
+
   it("omits gas (with an error note) rather than throwing when estimation fails", async () => {
     const client = mockClient({ estimateGas: vi.fn().mockRejectedValue(new Error("execution reverted")) });
     const built = await buildTx(

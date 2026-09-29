@@ -54,6 +54,13 @@ def test_scrub_known_tx_hash_match_is_case_insensitive():
     assert FAKE_TX_HASH.upper() in scrubbed
 
 
+def test_scrub_redacts_the_rpc_url_because_it_carries_an_api_key(monkeypatch):
+    monkeypatch.setenv("VEYDRIFT_RPC_URL", "https://base-mainnet.example/v2/SECRETAPIKEY")
+    out = log.scrub_text("estimate failed\nURL: https://base-mainnet.example/v2/SECRETAPIKEY")
+    assert "SECRETAPIKEY" not in out
+    assert "REDACTED:VEYDRIFT_RPC_URL" in out
+
+
 def test_scrub_preserve_keeps_calldata_whole_but_still_masks_other_hex64():
     calldata = "0xa1de3f6a" + "ab" * 64
     secret = "0x" + "cd" * 32

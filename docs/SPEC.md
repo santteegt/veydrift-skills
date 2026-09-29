@@ -2385,7 +2385,7 @@ planner proposes neither. The guard grows from 25 to 27 gates: `production_batch
 ids and quantities, per-kind `allow_ships`/`allow_defense`, prerequisites, defense caps aggregated
 across the batch) and `delegation` (`allow_delegation`; for `setDelegate`, a valid non-zero address
 other than the policy wallet that owns no planets — checked live, fail-closed). A production
-action's spend is re-derived from live unit costs × quantity and never read from `Action.cost`.
+action's spend (a batch, and every single ship/defense order) is re-derived from live unit costs × quantity and never read from `Action.cost`; single orders also need `allow_ships`/`allow_defense`. The gates dispatch on `function`, and `Action` refuses a `kind` that disagrees with `startProductionBatch`/`setDelegate`/`revokeDelegate` (judge finding, same day).
 `setDelegate` is calldata-only at every tier: `tier` BLOCKs it, the tick builds and simulates it as
 `policy.wallet`, and the full calldata is printed for the human to sign. `buildTx` gives
 `startProductionBatch` 1.5x gas headroom (fork-measured: the raw estimate was already sufficient at the

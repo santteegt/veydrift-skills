@@ -2076,9 +2076,11 @@ def generate_production_batch_candidates(snapshot: Snapshot, policy: Policy, pla
     - **Distinct items, at least two orders.** One order per (kind, item), merged across duplicate
       targets. Gas is per order, not per unit, so a batch of one item gains nothing over a single
       order and is left to the single-order path.
-    - **Sized to what is affordable** above `policy.reserves`, greedily in declared order (ships,
-      then defense), so the guard's `affordability`/`reserve` gates are not asked to reject a
-      batch this function could have shrunk.
+    - **Sized to what is affordable** above `policy.reserves` and within the value ceiling
+      (`limits.escalate_above_pct_of_resources` of holdings), greedily in declared order (ships,
+      then defense), so the guard's `affordability`/`reserve`/`value_ceiling` gates are not asked
+      to reject a batch this function could have shrunk. Nothing is proposed when a holding is
+      already below its reserve floor.
     - **Locked and capped items are skipped, not batched.** Prerequisites via `techtree.unmet`;
       defense caps via `_defense_capacity_reason` against a working copy of the planet in which
       earlier orders of this same batch already count (two missile types share silo slots).
@@ -2095,10 +2097,16 @@ def generate_production_batch_candidates(snapshot: Snapshot, policy: Policy, pla
     technology_levels = _level_vector(snapshot.technologies)
     holdings, reserves = planet.resources_as_of_now, policy.reserves
     available = [holdings.metal - reserves.metal, holdings.crystal - reserves.crystal, holdings.deuterium - reserves.deuterium]
+    if any(a < 0 for a in available):
+        # A holding is already below its reserve floor: the guard's `reserve` gate would block any
+        # spend at all, so proposing a batch (or shrinking it to nothing) only stalls the rung.
+        return []
+    # `guard._gate_value_ceiling` escalates a spend above this share of holdings, and an escalated
+    # batch would crowd out the cheaper single orders every tick. Size the whole batch under it.
+    ceiling_left = (holdings.metal + holdings.crystal + holdings.deuterium) * policy.limits.escalate_above_pct_of_resources // 100
 
     orders: list[ProductionOrder] = []
     spend = Resources()
-    seen: set[tuple[str, int]] = set()
     working = planet
 
     lanes: list[tuple[str, list[EntityTarget], object, EntityFamily]] = []
@@ -2107,36 +2115,49 @@ def generate_production_batch_candidates(snapshot: Snapshot, policy: Policy, pla
     if defense_lane:
         lanes.append(("defense", policy.strategy.defense_targets, ids.defense_id, EntityFamily.DEFENSE))
 
+    # Pass 1: which declared targets are eligible at all (deduplicated, below count, unlocked).
+    eligible: list[tuple[str, int, EntityTarget]] = []
     for kind, targets, id_fn, family in lanes:
         for target in targets:
-            if len(orders) >= _MAX_BATCH_ORDERS:
-                break
             entity_id = _resolve_target_id(target, id_fn)  # type: ignore[arg-type]
-            if (kind, entity_id) in seen or (kind == "ship" and entity_id in _BATCH_EXCLUDED_SHIPS):
+            if any(k == kind and i == entity_id for k, i, _ in eligible):
                 continue
-            entity = _entity(working.ships if kind == "ship" else working.defenses, entity_id)
+            if kind == "ship" and entity_id in _BATCH_EXCLUDED_SHIPS:
+                continue
+            entity = _entity(planet.ships if kind == "ship" else planet.defenses, entity_id)
             if entity is None or entity.count is None or entity.count >= target.count:
                 continue
             if unmet(family, entity_id, building_levels=building_levels, technology_levels=technology_levels):
                 continue
-            quantity = min(target.count - entity.count, _max_affordable(entity.cost, available), _UINT32_MAX)
-            if kind == "defense":
-                while quantity > 0 and _defense_capacity_reason(working, entity_id, quantity) is not None:
-                    quantity //= 2
-            if quantity <= 0:
-                continue
-            seen.add((kind, entity_id))
-            orders.append(ProductionOrder(kind=kind, item_id=entity_id, quantity=quantity))  # type: ignore[arg-type]
-            order_cost = Resources(
-                metal=entity.cost.metal * quantity, crystal=entity.cost.crystal * quantity, deuterium=entity.cost.deuterium * quantity
-            )
-            spend = Resources(
-                metal=spend.metal + order_cost.metal, crystal=spend.crystal + order_cost.crystal, deuterium=spend.deuterium + order_cost.deuterium
-            )
-            available = [available[0] - order_cost.metal, available[1] - order_cost.crystal, available[2] - order_cost.deuterium]
-            if kind == "defense":
-                bumped = [e.model_copy(update={"count": (e.count or 0) + quantity}) if e.id == entity_id else e for e in working.defenses]
-                working = working.model_copy(update={"defenses": bumped})
+            eligible.append((kind, entity_id, target))
+    eligible = eligible[:_MAX_BATCH_ORDERS]
+
+    # Pass 2: size each order. The value ceiling is shared out over the orders still to place, so
+    # one large ship target cannot eat all of it and leave a lone order (which is no batch).
+    for index, (kind, entity_id, target) in enumerate(eligible):
+        entity = _entity(working.ships if kind == "ship" else working.defenses, entity_id)
+        assert entity is not None and entity.count is not None
+        unit_total = entity.cost.metal + entity.cost.crystal + entity.cost.deuterium
+        share = ceiling_left // (len(eligible) - index)
+        within_ceiling = share // unit_total if unit_total > 0 else 0
+        quantity = min(target.count - entity.count, _max_affordable(entity.cost, available), within_ceiling, _UINT32_MAX)
+        if kind == "defense":
+            while quantity > 0 and _defense_capacity_reason(working, entity_id, quantity) is not None:
+                quantity //= 2
+        if quantity <= 0:
+            continue
+        orders.append(ProductionOrder(kind=kind, item_id=entity_id, quantity=quantity))  # type: ignore[arg-type]
+        order_cost = Resources(
+            metal=entity.cost.metal * quantity, crystal=entity.cost.crystal * quantity, deuterium=entity.cost.deuterium * quantity
+        )
+        spend = Resources(
+            metal=spend.metal + order_cost.metal, crystal=spend.crystal + order_cost.crystal, deuterium=spend.deuterium + order_cost.deuterium
+        )
+        available = [available[0] - order_cost.metal, available[1] - order_cost.crystal, available[2] - order_cost.deuterium]
+        ceiling_left -= order_cost.metal + order_cost.crystal + order_cost.deuterium
+        if kind == "defense":
+            bumped = [e.model_copy(update={"count": (e.count or 0) + quantity}) if e.id == entity_id else e for e in working.defenses]
+            working = working.model_copy(update={"defenses": bumped})
 
     if len(orders) < 2:
         return []
