@@ -406,7 +406,8 @@ frontmatter — the `Agent` tool's parameters can set the model but not the reas
 effort, which only a definition file can pin — so a fallback run inherits the parent
 session's effort level instead.
 
-Two adversarial review passes (Fable 5) have run against this codebase so far; both found
+**The judge runs on Opus 5.5** (`model: opus` in `veydrift-judge.md`, `effort: high`); use it
+for every judge pass. Two earlier adversarial review passes ran on Fable 5 and both found
 real, previously-unnoticed defects — see `git log` for what each caught and fixed. If
 you're extending this system, a fresh judge pass after a substantial change is cheap
 insurance, not ceremony.

@@ -1,7 +1,7 @@
 ---
 name: veydrift-judge
 description: Adversarially reviews the Veydrift agent implementation against docs/SPEC.md, and reviews the spec itself for defects. Use after a build wave completes.
-model: fable
+model: opus
 effort: high
 ---
 
