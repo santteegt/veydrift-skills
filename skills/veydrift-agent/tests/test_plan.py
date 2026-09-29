@@ -1008,3 +1008,42 @@ def test_research_rung_ignores_rotation_and_always_funds_via_the_first_declared_
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_production_batch_flag_replaces_a_single_stock_order_with_one_batch():
+    """`policy.strategy.production_batch` on, two distinct declared targets on an idle
+    shipyard: rung 8 proposes one `startProductionBatch` instead of one single order."""
+    from veydrift_agent.models import EntityTarget, StrategyCfg
+
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    for b in planet.buildings:
+        if b.id == ids.Building.SHIPYARD:
+            b.level = 12
+    for t in snapshot.technologies:
+        t.level = 12
+    planet.resources_as_of_now = Resources(metal=10_000_000, crystal=10_000_000, deuterium=10_000_000)
+    snapshot.research_queue = QueueEntry(
+        kind=QueueKind.RESEARCH, entity_id=ids.Technology.ENERGY, entity_name="Energy Technology"
+    )
+    strategy = StrategyCfg(
+        production_batch=True,
+        ship_targets=[EntityTarget(name="Light Fighter", count=4)],
+        defense_targets=[EntityTarget(name="Rocket Launcher", count=6)],
+    )
+    policy = make_policy(
+        planets=[664],
+        actions=ActionsCfg(allow_building=False, allow_research=False, allow_defense=True, allow_ships=True),
+        strategy=strategy,
+    )
+
+    action = plan_next_action(snapshot, policy)
+
+    assert action.rule == "8:shipyard-idle"
+    assert action.kind == ActionKind.PRODUCTION_BATCH
+    assert [(o.kind, o.quantity) for o in action.orders] == [("ship", 4), ("defense", 6)]
+    assert action.brief is not None
+    assert {a.family for a in action.alternatives} <= {"ship", "defense"}
+
+    off = policy.model_copy(update={"strategy": strategy.model_copy(update={"production_batch": False})})
+    assert plan_next_action(snapshot, off).kind == ActionKind.SHIP

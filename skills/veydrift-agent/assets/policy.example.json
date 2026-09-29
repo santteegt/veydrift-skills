@@ -40,6 +40,7 @@
     "allow_agent_action_override": false,
     "colonize": false,
     "fleet_home_planet_id": null,
-    "planet_rotation": false
+    "planet_rotation": false,
+    "production_batch": false
   }
 }

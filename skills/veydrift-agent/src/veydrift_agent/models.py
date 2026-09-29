@@ -831,6 +831,17 @@ class StrategyCfg(Base):
     #: left un-rotated: each is opt-in, single-fire and high-stakes, where planet
     #: fairness is a much smaller concern than for routine building/ship/defense work.
     planet_rotation: bool = False
+    #: Opt-in: let the shipyard rung (`8:shipyard-idle`) propose one `startProductionBatch` in place
+    #: of a single ship/defense order when `ship_targets`/`defense_targets` leave two or more
+    #: distinct items to produce on a planet whose lanes are idle -- several orders, one
+    #: transaction. Default `False` reproduces pre-existing behaviour exactly.
+    #: What it does not do: it never batches Solar Satellite or Crawler (each keeps its own
+    #: dedicated path), never uses a lane that already has work queued, never batches one item
+    #: (that is already a single order -- gas is per order, not per unit, so quantity alone gains
+    #: nothing), and never outranks a *scored* single (the energy-driven Solar Satellite,
+    #: Crawler). Quantities are sized to what the planet can afford above `policy.reserves` and to
+    #: the defense caps. Still needs `actions.allow_ships`/`allow_defense` for the kinds involved.
+    production_batch: bool = False
 
 
 class Policy(Base):

@@ -281,6 +281,11 @@
           "title": "Planet Rotation",
           "type": "boolean"
         },
+        "production_batch": {
+          "default": false,
+          "title": "Production Batch",
+          "type": "boolean"
+        },
         "research_priority": {
           "items": {
             "type": "string"

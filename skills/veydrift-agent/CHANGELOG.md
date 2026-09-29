@@ -11,6 +11,16 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-09-28
+
+### Added
+- **`policy.strategy.production_batch`** (default `false`): the shipyard rung proposes one
+  `startProductionBatch` in place of a single stock-keeping order when `ship_targets`/`defense_targets`
+  leave two or more distinct items to produce (`candidates.generate_production_batch_candidates`).
+  Idle lanes only; quantities sized to affordability above `reserves` and to the defense caps;
+  Solar Satellite and Crawler never batch; a scored single always outranks it; the replaced singles
+  appear as alternatives. In `assets/policy.example.json` and the regenerated policy schema.
+
 ## [1.26.0] - 2026-09-28
 
 ### Added

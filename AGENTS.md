@@ -76,7 +76,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1198 Python tests, 398 TypeScript tests** (395 passed + 3 intentionally
+baseline: **1215 Python tests, 398 TypeScript tests** (395 passed + 3 intentionally
 skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain check),
 both suites green. Run both before calling any change done; they are independent
 projects but cover a system with two enforcement layers that must agree (§6).
@@ -233,6 +233,13 @@ touching related code, re-run the check named alongside each one.
   account. See `skills/veydrift-agent/references/strategy-playbook.md` §13 for the full
   mechanics and why cross-planet economic scoring (the obvious-looking alternative) would
   make the starvation problem worse, not better.
+- **`policy.strategy.production_batch` (default `false`) only ever swaps a single stock-keeping
+  order for one batch of the same declared targets.** Idle lanes only, at least two *distinct*
+  items, quantities sized to affordability above `reserves` and to the defense caps (earlier orders
+  of the batch counted), Solar Satellite and Crawler never batched, and a *scored* single (the
+  energy-driven Solar Satellite) always outranks it. `candidates.py`'s generator and `guard.py`'s
+  `production_batch` gate are independent implementations of the same limits; the round-trip test
+  (`test_a_generated_batch_passes_the_guards_production_batch_gate…`) is what keeps them agreeing.
 - **Drift is judged by the chain, never by the backend's hash.** `guard._gate_abi_hash` consumes
   the on-chain pin verdict `walletctl build` stores on the tx (`UnsignedTx.onchain_pin`); no verdict
   (offline, older wallet) is a BLOCK, and `/runtime-config`'s `deploymentAbiHash` is advisory only.

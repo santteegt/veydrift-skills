@@ -155,7 +155,9 @@ see `references/strategy-playbook.md` for the full derivation):
 5-12. generate → filter → score → select, eight bands in order:
      1. deadline-driven — storage overflow: spend it, or build the matching storage
      2. economically scored — building upgrade, ascending payback hours
-     3. policy-declared — research, then ships/defense, gated on economy-on-track
+     3. policy-declared — research, then ships/defense (one `startProductionBatch` for several
+        distinct declared targets when `policy.strategy.production_batch` is on), gated on
+        economy-on-track
      4. unlock-chain (rung 8b) — the shallowest buildable prerequisite toward a locked
         `ship_targets`/`defense_targets`/`research_priority` entry, only when nothing
         above found anything at all — see `references/strategy-playbook.md` §12

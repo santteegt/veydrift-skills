@@ -2390,6 +2390,15 @@ action's spend is re-derived from live unit costs × quantity and never read fro
 `policy.wallet`, and the full calldata is printed for the human to sign. `buildTx` gives
 `startProductionBatch` a 2x gas headroom, a heuristic pending a measured bound.
 
+**Correction 80 (2026-09-28): the shipyard rung can propose a batch, opt-in.** With
+`policy.strategy.production_batch` on, `select_shipyard_candidate` proposes one
+`startProductionBatch` in place of a single stock-keeping order when `ship_targets`/`defense_targets`
+leave two or more distinct items to produce. Idle lanes only (the API exposes no backlog, so an idle
+lane is the only state in which the per-lane cap of 16 cannot be hit); quantities sized to what is
+affordable above `reserves` and to the defense caps; Solar Satellite and Crawler never batch; a
+scored single always wins. Gas is per order, so a batch of one item gains nothing and is never built.
+Default off reproduces the previous ladder exactly.
+
 ---
 
 ## 10. Risks

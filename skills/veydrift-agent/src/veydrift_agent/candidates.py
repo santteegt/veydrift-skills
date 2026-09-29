@@ -58,6 +58,7 @@ from veydrift_agent.models import (
     EntityTarget,
     PlanetSnapshot,
     Policy,
+    ProductionOrder,
     QueueKind,
     Resources,
     Snapshot,
@@ -82,7 +83,7 @@ from veydrift_agent.techtree import (
 @dataclass(frozen=True)
 class Candidate:
     action: Action
-    #: mine | energy | storage | infrastructure | research | ship | defense | crawler.
+    #: mine | energy | storage | infrastructure | research | ship | defense | crawler | batch.
     #: "infrastructure" and "crawler" were reserved/unused before Phase 3 of the
     #: general-strategy-engine program (docs/SPEC.md §5.4) and are populated by
     #: `generate_infrastructure_candidates` / `generate_crawler_candidates` below.
@@ -2044,6 +2045,123 @@ def generate_defense_candidates(snapshot: Snapshot, policy: Policy, planet: Plan
     return _generate_default_rocket_launcher_candidate(snapshot, policy, planet)
 
 
+#: Ships a batch never carries: each has its own dedicated, scored path (`_generate_satellite_
+#: ship_candidate`'s energy-driven choice, `generate_crawler_candidates`' capped boost), and a
+#: batch is only ever a way to bundle *policy-declared stock targets*.
+_BATCH_EXCLUDED_SHIPS = frozenset({ids.Ship.SOLAR_SATELLITE, ids.Ship.CRAWLER})
+
+#: `startProductionBatch` takes at most this many orders. Mirrors `guard._MAX_PRODUCTION_BATCH_ORDERS`
+#: and the wallet's `MAX_PRODUCTION_BATCH_ORDERS` -- duplicated on purpose (three independent copies).
+_MAX_BATCH_ORDERS = 15
+_UINT32_MAX = 2**32 - 1
+
+
+def _max_affordable(unit: Resources, available: list[int]) -> int:
+    """Whole units of `unit` the `available` (metal, crystal, deuterium) budget covers -- `0` for
+    a unit with no cost at all, which is a data problem, not a free lunch."""
+    costs = (unit.metal, unit.crystal, unit.deuterium)
+    limits = [max(have, 0) // cost for have, cost in zip(available, costs) if cost > 0]
+    return min(limits) if limits else 0
+
+
+def generate_production_batch_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
+    """One `startProductionBatch` for `planet`, bundling the deficits of `policy.strategy.
+    ship_targets`/`defense_targets`, or `[]`. Only when `policy.strategy.production_batch` is on.
+
+    Deliberately conservative, v1:
+
+    - **Idle lanes only.** A ship order is included only if the ship lane is idle, a defense order
+      only if the defense lane is. The API exposes no backlog, so an idle lane is the only state in
+      which the contract's per-lane backlog cap (16) provably cannot be hit.
+    - **Distinct items, at least two orders.** One order per (kind, item), merged across duplicate
+      targets. Gas is per order, not per unit, so a batch of one item gains nothing over a single
+      order and is left to the single-order path.
+    - **Sized to what is affordable** above `policy.reserves`, greedily in declared order (ships,
+      then defense), so the guard's `affordability`/`reserve` gates are not asked to reject a
+      batch this function could have shrunk.
+    - **Locked and capped items are skipped, not batched.** Prerequisites via `techtree.unmet`;
+      defense caps via `_defense_capacity_reason` against a working copy of the planet in which
+      earlier orders of this same batch already count (two missile types share silo slots).
+    - Solar Satellite and Crawler never batch (`_BATCH_EXCLUDED_SHIPS`).
+    - At most 15 orders."""
+    if not policy.strategy.production_batch:
+        return []
+    ship_lane = policy.actions.allow_ships and planet.queues.get(QueueKind.SHIP) is None and bool(policy.strategy.ship_targets)
+    defense_lane = policy.actions.allow_defense and planet.queues.get(QueueKind.DEFENSE) is None and bool(policy.strategy.defense_targets)
+    if not (ship_lane or defense_lane):
+        return []
+
+    building_levels = _level_vector(planet.buildings)
+    technology_levels = _level_vector(snapshot.technologies)
+    holdings, reserves = planet.resources_as_of_now, policy.reserves
+    available = [holdings.metal - reserves.metal, holdings.crystal - reserves.crystal, holdings.deuterium - reserves.deuterium]
+
+    orders: list[ProductionOrder] = []
+    spend = Resources()
+    seen: set[tuple[str, int]] = set()
+    working = planet
+
+    lanes: list[tuple[str, list[EntityTarget], object, EntityFamily]] = []
+    if ship_lane:
+        lanes.append(("ship", policy.strategy.ship_targets, ids.ship_id, EntityFamily.SHIP))
+    if defense_lane:
+        lanes.append(("defense", policy.strategy.defense_targets, ids.defense_id, EntityFamily.DEFENSE))
+
+    for kind, targets, id_fn, family in lanes:
+        for target in targets:
+            if len(orders) >= _MAX_BATCH_ORDERS:
+                break
+            entity_id = _resolve_target_id(target, id_fn)  # type: ignore[arg-type]
+            if (kind, entity_id) in seen or (kind == "ship" and entity_id in _BATCH_EXCLUDED_SHIPS):
+                continue
+            entity = _entity(working.ships if kind == "ship" else working.defenses, entity_id)
+            if entity is None or entity.count is None or entity.count >= target.count:
+                continue
+            if unmet(family, entity_id, building_levels=building_levels, technology_levels=technology_levels):
+                continue
+            quantity = min(target.count - entity.count, _max_affordable(entity.cost, available), _UINT32_MAX)
+            if kind == "defense":
+                while quantity > 0 and _defense_capacity_reason(working, entity_id, quantity) is not None:
+                    quantity //= 2
+            if quantity <= 0:
+                continue
+            seen.add((kind, entity_id))
+            orders.append(ProductionOrder(kind=kind, item_id=entity_id, quantity=quantity))  # type: ignore[arg-type]
+            order_cost = Resources(
+                metal=entity.cost.metal * quantity, crystal=entity.cost.crystal * quantity, deuterium=entity.cost.deuterium * quantity
+            )
+            spend = Resources(
+                metal=spend.metal + order_cost.metal, crystal=spend.crystal + order_cost.crystal, deuterium=spend.deuterium + order_cost.deuterium
+            )
+            available = [available[0] - order_cost.metal, available[1] - order_cost.crystal, available[2] - order_cost.deuterium]
+            if kind == "defense":
+                bumped = [e.model_copy(update={"count": (e.count or 0) + quantity}) if e.id == entity_id else e for e in working.defenses]
+                working = working.model_copy(update={"defenses": bumped})
+
+    if len(orders) < 2:
+        return []
+    names = ids.SHIP_NAMES, ids.DEFENSE_NAMES
+    summary = ", ".join(f"{o.quantity}x {(names[0] if o.kind == 'ship' else names[1]).get(o.item_id, o.item_id)}" for o in orders)
+    return [
+        Candidate(
+            action=Action(
+                kind=ActionKind.PRODUCTION_BATCH,
+                function="startProductionBatch",
+                planet_id=planet.planet_id,
+                orders=orders,
+                cost=spend,
+                rationale=(
+                    f"policy.strategy.production_batch: {len(orders)} policy-declared stock-target orders on planet "
+                    f"{planet.planet_id} in one transaction ({summary}); idle lanes only."
+                ),
+            ),
+            family="batch",
+            score=None,
+            score_basis=f"policy-declared stock targets, {len(orders)} orders batched (saves {len(orders) - 1} transaction(s))",
+        )
+    ]
+
+
 def select_shipyard_candidate(
     snapshot: Snapshot, policy: Policy, target_planets: list[PlanetSnapshot]
 ) -> tuple[Candidate | None, list[Candidate]]:
@@ -2065,6 +2183,14 @@ def select_shipyard_candidate(
     for planet in target_planets:
         ships = generate_ship_candidates(snapshot, policy, planet)
         selectable_ships = [c for c in ships if not c.score_basis.startswith("locked:")]
+        # `policy.strategy.production_batch`: one batch in place of a single stock-keeping order --
+        # but never in place of a *scored* single (the energy-driven Solar Satellite, a Crawler),
+        # which is a more urgent kind of work than topping up a declared stock target.
+        if not any(c.score is not None for c in selectable_ships):
+            batch = generate_production_batch_candidates(snapshot, policy, planet)
+            if batch:
+                singles = ships + generate_defense_candidates(snapshot, policy, planet)
+                return batch[0], rank_candidates(alternatives + singles)
         if selectable_ships:
             winner = rank_candidates(selectable_ships)[0]
             defenses = generate_defense_candidates(snapshot, policy, planet)

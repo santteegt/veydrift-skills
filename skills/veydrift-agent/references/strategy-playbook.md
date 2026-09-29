@@ -490,6 +490,21 @@ where it moved.
      comment describes. Left unset, the old default fires exactly as before — an
      asymmetry from `ship_targets`, which is simply off when empty, worth knowing before
      assuming "empty list" means the same thing on both fields.
+   - **`policy.strategy.production_batch`** (`candidates.generate_production_batch_candidates`,
+     default `false`) — one `startProductionBatch` in place of a single stock-keeping order,
+     when `ship_targets`/`defense_targets` leave **two or more distinct items** to produce on a
+     planet. Gas is per order, not per unit, so the batch pays only for distinct items; one item
+     in bulk is already a single order and is left alone. Idle lanes only (the ship lane for ship
+     orders, the defense lane for defense orders — the API exposes no backlog, so an idle lane is
+     the only state in which the contract's per-lane cap of 16 cannot be hit). Quantities are
+     sized greedily, ships then defense in declared order, to what the planet can afford above
+     `policy.reserves`, and defense orders shrink to fit the shield-dome and missile-silo caps
+     with the batch's earlier orders already counted. Solar Satellite and Crawler never batch,
+     locked and capped items are skipped, at most 15 orders. It never displaces a *scored* single
+     (the energy-driven Solar Satellite, a scored Crawler) — that is more urgent than topping up
+     a declared stock target — and the singles it replaces appear as alternatives. Same rung
+     (`8:shipyard-idle`), same first-planet-wins/`planet_rotation` walk; `opportunities`' `shipyard`
+     finding lists the batch's orders.
 8b. **(Phase 4, 2026-08-16) Nothing above fired -> propose the unlock chain.** New rung,
    `candidates.select_unlock_chain_candidate`, checked only after rungs 5-8 above have all
    found nothing at all for every target planet. For every *locked* declared

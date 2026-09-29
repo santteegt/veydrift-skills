@@ -401,6 +401,38 @@ def test_scan_ladder_bands_shipyard_finding(monkeypatch):
     assert shipyard_findings[0].origin_planet_id == 664
 
 
+def test_scan_ladder_bands_shipyard_finding_lists_a_batchs_orders(monkeypatch):
+    """With `production_batch` on, the shipyard winner can be a batch; its finding's detail is the
+    batch's own rationale, which names every order."""
+    from veydrift_agent.models import ProductionOrder, StrategyCfg
+
+    planet = _planet(664, "7:181:14")
+    snapshot = _snapshot(
+        [planet], research_queue=QueueEntry(kind=QueueKind.RESEARCH, entity_id=0, entity_name="Energy Technology")
+    )
+    policy = make_policy(planets=[664], strategy=StrategyCfg(production_batch=True))
+    batch = candidates.Candidate(
+        action=Action(
+            kind=ActionKind.PRODUCTION_BATCH,
+            function="startProductionBatch",
+            planet_id=664,
+            orders=[ProductionOrder(kind="ship", item_id=1, quantity=3), ProductionOrder(kind="defense", item_id=0, quantity=5)],
+            rationale="2 orders: 3x Light Fighter, 5x Rocket Launcher",
+        ),
+        family="batch",
+        score=None,
+        score_basis="test fixture",
+    )
+    monkeypatch.setattr(candidates, "generate_ship_candidates", lambda *a, **kw: [])
+    monkeypatch.setattr(candidates, "generate_defense_candidates", lambda *a, **kw: [])
+    monkeypatch.setattr(candidates, "generate_production_batch_candidates", lambda *a, **kw: [batch])
+
+    report = opportunities.scan_opportunities(snapshot, policy, **_EMPTY_KWARGS)
+
+    (finding,) = [f for f in report.findings if f.family == "shipyard"]
+    assert "3x Light Fighter" in finding.detail and "5x Rocket Launcher" in finding.detail
+
+
 def test_scan_ladder_bands_shipyard_skipped_when_economy_not_on_track():
     """No research_queue and no planet with a busy building queue -- economy_on_track is
     False, so select_shipyard_candidate self-gates to (None, []) with no further calls;

@@ -2691,3 +2691,195 @@ def test_select_unlock_chain_candidate_picks_from_whichever_planet_is_first_in_t
 
     assert winner_ab.action.planet_id == 664
     assert winner_ba.action.planet_id == 665
+
+
+# --------------------------------------------------------------------------------------
+# `policy.strategy.production_batch`: one startProductionBatch in place of a single order.
+# --------------------------------------------------------------------------------------
+
+
+def _batch_policy(**strategy) -> Policy:
+    strategy.setdefault("production_batch", True)
+    return make_policy(
+        planets=[700],
+        actions=ActionsCfg(allow_ships=True, allow_defense=True),
+        strategy=StrategyCfg(**strategy),
+    )
+
+
+def _lf(count: int) -> EntityTarget:
+    return EntityTarget(name="Light Fighter", count=count)
+
+
+def _abm(count: int) -> EntityTarget:
+    return EntityTarget(name="Anti-Ballistic Missile", count=count)
+
+
+def test_batch_is_off_by_default():
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(production_batch=False, ship_targets=[_lf(5)], defense_targets=[_abm(2)])
+    assert candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700)) == []
+
+
+def test_batch_bundles_ship_and_defense_deficits_into_one_action():
+    from veydrift_agent.models import ProductionOrder
+
+    snapshot = _ready_snapshot(ship_counts={ids.Ship.LIGHT_FIGHTER: 2})
+    policy = _batch_policy(ship_targets=[_lf(5)], defense_targets=[_abm(2)])
+
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700))
+
+    action = candidate.action
+    assert action.kind is ActionKind.PRODUCTION_BATCH
+    assert action.function == "startProductionBatch"
+    assert action.planet_id == 700
+    assert action.orders == [
+        ProductionOrder(kind="ship", item_id=ids.Ship.LIGHT_FIGHTER, quantity=3),
+        ProductionOrder(kind="defense", item_id=ids.Defense.ANTI_BALLISTIC_MISSILE, quantity=2),
+    ]
+    assert action.cost == Resources(metal=3 * 3_000 + 2 * 8_000, crystal=3 * 1_000, deuterium=2 * 2_000)
+    assert candidate.family == "batch"
+    assert candidate.score is None
+
+
+def test_a_single_order_is_not_a_batch():
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(ship_targets=[_lf(5)])
+    assert candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700)) == []
+
+
+def test_a_busy_lane_contributes_no_orders():
+    snapshot = _ready_snapshot()
+    planet = snapshot.planet(700)
+    busy = planet.model_copy(update={"queues": {QueueKind.SHIP: QueueEntry(kind=QueueKind.SHIP, entity_id=0, entity_name="x", quantity=1)}})
+    policy = _batch_policy(ship_targets=[_lf(5)], defense_targets=[_abm(2)])
+    # only one defense order remains -> below the two-order minimum
+    assert candidates.generate_production_batch_candidates(snapshot, policy, busy) == []
+
+
+def test_quantities_shrink_to_what_is_affordable():
+    snapshot = _ready_snapshot()
+    planet = snapshot.planet(700).model_copy(update={"resources_as_of_now": Resources(metal=25_000, crystal=10_000, deuterium=10_000)})
+    policy = _batch_policy(ship_targets=[_lf(3)], defense_targets=[_abm(20)])
+
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, planet)
+
+    orders = {(o.kind, o.item_id): o.quantity for o in candidate.action.orders}
+    assert orders[("ship", ids.Ship.LIGHT_FIGHTER)] == 3  # deficit 3, affordable
+    assert orders[("defense", ids.Defense.ANTI_BALLISTIC_MISSILE)] == 2  # (25_000 - 9_000) // 8_000
+    cost = candidate.action.cost
+    assert (cost.metal, cost.crystal, cost.deuterium) == (9_000 + 16_000, 3_000, 4_000)
+
+
+def test_policy_reserves_are_left_untouched():
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(ship_targets=[_lf(1)], defense_targets=[_abm(3)])
+    policy = policy.model_copy(update={"reserves": Resources(metal=985_000)})  # 15_000 metal spendable
+
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700))
+
+    assert candidate.action.cost.metal == 3_000 + 8_000  # one Light Fighter, one ABM; a second ABM would breach the reserve
+
+
+def test_crawler_and_solar_satellite_never_batch():
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(
+        ship_targets=[EntityTarget(name="Crawler", count=3), EntityTarget(name="Solar Satellite", count=3)],
+        defense_targets=[_abm(2), EntityTarget(name="Small Shield Dome", count=1)],
+    )
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700))
+    assert {o.kind for o in candidate.action.orders} == {"defense"}
+
+
+def test_locked_target_is_skipped_not_batched():
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(ship_targets=[EntityTarget(name="Destroyer", count=1), _lf(2)], defense_targets=[_abm(1)])
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700))
+    assert ids.Ship.DESTROYER not in {o.item_id for o in candidate.action.orders if o.kind == "ship"}
+
+
+def test_duplicate_targets_merge_into_one_order():
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(ship_targets=[_lf(5), _lf(9)], defense_targets=[_abm(1)])
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700))
+    lf_orders = [o for o in candidate.action.orders if o.kind == "ship"]
+    assert len(lf_orders) == 1 and lf_orders[0].quantity == 5
+
+
+def test_missile_slots_are_shared_across_the_batch():
+    from veydrift_agent.techtree import MISSILE_SLOTS, missile_silo_capacity
+
+    snapshot = _ready_snapshot()
+    policy = _batch_policy(
+        defense_targets=[_abm(1000), EntityTarget(name="Interplanetary Missile", count=1000)],
+        ship_targets=[_lf(2)],
+    )
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700))
+    slots = sum(MISSILE_SLOTS[o.item_id] * o.quantity for o in candidate.action.orders if o.kind == "defense")
+    assert 0 < slots <= missile_silo_capacity(4)
+
+
+def test_neither_lane_enabled_yields_nothing():
+    snapshot = _ready_snapshot()
+    policy = make_policy(
+        planets=[700],
+        actions=ActionsCfg(allow_ships=False, allow_defense=False),
+        strategy=StrategyCfg(production_batch=True, ship_targets=[_lf(5)], defense_targets=[_abm(2)]),
+    )
+    assert candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700)) == []
+
+
+def test_a_generated_batch_passes_the_guards_production_batch_gate_and_its_own_spend_matches():
+    from veydrift_agent import guard
+
+    snapshot = _ready_snapshot(ship_counts={ids.Ship.LIGHT_FIGHTER: 1})
+    policy = _batch_policy(ship_targets=[_lf(4)], defense_targets=[_abm(3)])
+    (candidate,) = candidates.generate_production_batch_candidates(snapshot, policy, snapshot.planet(700))
+    verdict = guard._gate_production_batch(candidate.action, snapshot, policy)
+    assert verdict.status.value == "pass", verdict.detail
+    assert guard.production_spend(candidate.action, snapshot) == candidate.action.cost
+
+
+def _on_track(snapshot: Snapshot) -> Snapshot:
+    """`select_shipyard_candidate` only fires once something is already building/researching."""
+    planet = snapshot.planet(700).model_copy(
+        update={"queues": {QueueKind.BUILDING: QueueEntry(kind=QueueKind.BUILDING, entity_id=0, entity_name="Metal Mine", target_level=2)}}
+    )
+    return snapshot.model_copy(update={"planets": [planet]})
+
+
+def test_shipyard_selector_prefers_the_batch_and_keeps_the_singles_as_alternatives():
+    snapshot = _on_track(_ready_snapshot(ship_counts={ids.Ship.LIGHT_FIGHTER: 2}))
+    policy = _batch_policy(ship_targets=[_lf(5)], defense_targets=[_abm(2)])
+
+    winner, alternatives = candidates.select_shipyard_candidate(snapshot, policy, snapshot.planets)
+
+    assert winner is not None and winner.action.kind is ActionKind.PRODUCTION_BATCH
+    assert {a.action.kind for a in alternatives} == {ActionKind.SHIP, ActionKind.DEFENSE}
+
+
+def test_shipyard_selector_is_unchanged_with_the_flag_off():
+    snapshot = _on_track(_ready_snapshot(ship_counts={ids.Ship.LIGHT_FIGHTER: 2}))
+    policy = _batch_policy(production_batch=False, ship_targets=[_lf(5)], defense_targets=[_abm(2)])
+
+    winner, _ = candidates.select_shipyard_candidate(snapshot, policy, snapshot.planets)
+
+    assert winner is not None and winner.action.kind is ActionKind.SHIP
+
+
+def test_a_scored_single_ship_outranks_the_batch(monkeypatch):
+    """The energy-driven Solar Satellite / a scored Crawler is more urgent than topping up a
+    declared stock target, so the batch must not displace it."""
+    snapshot = _on_track(_ready_snapshot(ship_counts={ids.Ship.LIGHT_FIGHTER: 2}))
+    policy = _batch_policy(ship_targets=[_lf(5)], defense_targets=[_abm(2)])
+    scored = candidates.Candidate(
+        action=Action(kind=ActionKind.SHIP, function="startShipProduction", planet_id=700, entity_id=ids.Ship.SOLAR_SATELLITE, quantity=1),
+        family="ship",
+        score=12.0,
+        score_basis="scored",
+    )
+    monkeypatch.setattr(candidates, "generate_ship_candidates", lambda *a, **kw: [scored])
+
+    winner, _ = candidates.select_shipyard_candidate(snapshot, policy, snapshot.planets)
+
+    assert winner is scored
