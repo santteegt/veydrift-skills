@@ -100,8 +100,8 @@ describe("buildTx", () => {
       },
       opts,
     );
-    expect(batch.gas).toBe(2_000_000n);
-    expect(GAS_HEADROOM_BPS.startProductionBatch).toBe(20_000);
+    expect(batch.gas).toBe(1_500_000n);
+    expect(GAS_HEADROOM_BPS.startProductionBatch).toBe(15_000);
     const single = await buildTx({ function: "startResearch(uint256,uint8)", args: [664, 0] }, opts);
     expect(single.gas).toBe(1_000_000n);
   });

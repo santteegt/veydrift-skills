@@ -633,6 +633,11 @@ enough to call out here specifically, not a duplicate of that ledger.
   transfer, kick, leave — using three fresh, alliance-free accounts, every step confirmed
   against real on-chain state (`allianceOf`/`allianceMembers`/`allianceProfile`/
   `allianceInvite`/`allianceJoinRequests` reads), not just emitted events.
+  **Round 7 (§14, 2026-09-29)** live-sent the batch and delegation surface: a 4-order batch byte-identical
+  to the same orders placed singly, atomic revert, every input revert decoded, the 15-order maximum
+  (measured gas) and the backlog boundary (16 behind the active head), `setDelegate` refused by `send`,
+  `revokeDelegate` by the delegate, all four signer-binding refusals, and full `vd tick` sends both from
+  an override and from the planner, signed by a delegate key.
 - `skills/veydrift-agent/references/radar.md` — the attack/resolved-battle/debris radar
   (new module, `radar.py`, read-only, no `veydrift-wallet` involvement): why
   `incoming_fleets` alone missed a real live attack during this feature's own planning,

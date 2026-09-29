@@ -151,11 +151,16 @@ async function fetchMaxFeePerGas(
  * catches it, but a batch is the function most exposed -- every order re-settles the planet, and
  * its cost grows with the order count -- so it gets margin up front. The unused part of the limit
  * is refunded; only the ceiling comparison (`gas * maxFeePerGas`) sees the larger figure, which
- * errs toward escalating. A heuristic, not a measured bound: change it from fork data, not by
- * feel (`references/fork-testing.md`).
+ * errs toward escalating.
+ *
+ * 15_000 for a batch: on a fork at a pinned state, a 15-order batch used 3,228,680 gas against an
+ * estimate of 3,342,917 and succeeded at a limit of 1.00x the estimate but not at 0.99x
+ * (`references/fork-testing.md` §14), so the estimate is tight but sufficient there. The 1.5x
+ * covers state that moves between estimating and inclusion, which the fork cannot show. Change it
+ * from measurement, not by feel.
  */
 export const GAS_HEADROOM_BPS: Readonly<Record<string, number>> = {
-  startProductionBatch: 20_000,
+  startProductionBatch: 15_000,
 };
 
 export async function buildTx(action: Action, opts: BuildOptions = {}): Promise<BuiltTx> {

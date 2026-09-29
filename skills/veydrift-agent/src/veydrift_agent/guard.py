@@ -925,7 +925,7 @@ def _gate_production_batch(action: Action, snapshot: Snapshot, policy: Policy) -
     aggregated across the batch -- plus the batch-level bound of 1..15 orders. The contract is
     atomic, so one bad order reverts the lot; failing here is cheaper than a reverted send.
 
-    What this gate cannot see and does not claim: the per-lane backlog cap of 16. The API
+    What this gate cannot see and does not claim: the per-lane backlog cap (16 entries behind the active head). The API
     exposes no ship backlog, so it is enforced on-chain only and surfaces in `simulate`."""
     if action.kind is not ActionKind.PRODUCTION_BATCH:
         return _verdict("production_batch", GuardStatus.PASS, "not a production batch")

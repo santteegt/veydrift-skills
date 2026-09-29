@@ -175,7 +175,7 @@ transaction. Hand-written (`kind: "production_batch"`), it is an override like a
   both; the single-order override path never did). `cost` may be omitted: the guard re-derives
   the spend from live unit costs and the report shows it.
 - `economy` tier or above. The `production_batch` gate checks each order's prerequisites and the
-  defense caps aggregated across the batch. The 16-order per-lane backlog cap is enforced
+  defense caps aggregated across the batch. The per-lane backlog cap (16 entries behind the active head — fork-measured) is enforced
   on-chain only; if a lane is that full, `simulate` reports the revert and nothing is sent.
 
 ### Delegation actions

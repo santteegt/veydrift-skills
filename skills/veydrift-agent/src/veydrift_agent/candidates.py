@@ -2072,7 +2072,7 @@ def generate_production_batch_candidates(snapshot: Snapshot, policy: Policy, pla
 
     - **Idle lanes only.** A ship order is included only if the ship lane is idle, a defense order
       only if the defense lane is. The API exposes no backlog, so an idle lane is the only state in
-      which the contract's per-lane backlog cap (16) provably cannot be hit.
+      which the contract's per-lane backlog cap (16 behind the active head) provably cannot be hit.
     - **Distinct items, at least two orders.** One order per (kind, item), merged across duplicate
       targets. Gas is per order, not per unit, so a batch of one item gains nothing over a single
       order and is left to the single-order path.

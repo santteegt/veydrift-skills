@@ -496,7 +496,7 @@ where it moved.
      planet. Gas is per order, not per unit, so the batch pays only for distinct items; one item
      in bulk is already a single order and is left alone. Idle lanes only (the ship lane for ship
      orders, the defense lane for defense orders — the API exposes no backlog, so an idle lane is
-     the only state in which the contract's per-lane cap of 16 cannot be hit). Quantities are
+     the only state in which the contract's per-lane backlog cap of 16 cannot be hit: a 15-order batch leaves 1 active + 14 queued). Quantities are
      sized greedily, ships then defense in declared order, to what the planet can afford above
      `policy.reserves`, and defense orders shrink to fit the shield-dome and missile-silo caps
      with the batch's earlier orders already counted. Solar Satellite and Crawler never batch,

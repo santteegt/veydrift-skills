@@ -14,10 +14,15 @@ lockstep.
 ## [2.2.0] - 2026-09-28
 
 ### Changed
-- `build` adds gas headroom to `startProductionBatch` (`GAS_HEADROOM_BPS`, 2x the estimate): every
+- `build` adds gas headroom to `startProductionBatch` (`GAS_HEADROOM_BPS`, 1.5x the estimate): every
   order re-settles the planet, so its estimate is the one most likely to be too tight to send at.
   The unused part of the limit is refunded; the `gas * maxFeePerGas` ceiling figure grows with it.
-  A heuristic, to be replaced by a measured bound from fork testing.
+  Fork testing found the raw estimate already sufficient at a pinned state (a 15-order batch needs
+  ~1.00x); the 1.5x is margin for state that moves between estimate and inclusion.
+
+### Verified
+- Fork round 7 (`references/fork-testing.md` §14): batch production, delegation and delegate-signed sends
+  exercised against the real contract logic, including the four signer-binding refusals.
 
 ## [2.1.0] - 2026-09-28
 

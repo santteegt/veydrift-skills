@@ -52,6 +52,16 @@
   - [13.7 `openDefenseIntent` — live-sent, and a real gap this round found and fixed](#137-opendefenseintent--live-sent-and-a-real-gap-this-round-found-and-fixed)
   - [13.8 Negative case: a non-Attack hostile mission is rejected live](#138-negative-case-a-non-attack-hostile-mission-is-rejected-live)
   - [13.9 What this closes, precisely](#139-what-this-closes-precisely)
+- [14. Round 7 (2026-09-29) — batch production and single-wallet delegation on a pinned fork](#14-round-7-2026-09-29--batch-production-and-single-wallet-delegation-on-a-pinned-fork)
+  - [14.1 Setup](#141-setup)
+  - [14.2 `setDelegate` — calldata-only, confirmed](#142-setdelegate--calldata-only-confirmed)
+  - [14.3 The signer binding — four refusal paths](#143-the-signer-binding--four-refusal-paths)
+  - [14.4 A batch is byte-identical to the same orders placed one by one](#144-a-batch-is-byte-identical-to-the-same-orders-placed-one-by-one)
+  - [14.5 Atomicity and the input checks](#145-atomicity-and-the-input-checks)
+  - [14.6 Gas, the 15-order batch and the backlog cap](#146-gas-the-15-order-batch-and-the-backlog-cap)
+  - [14.7 `revokeDelegate`, and replacing a delegate](#147-revokedelegate-and-replacing-a-delegate)
+  - [14.8 The whole agent tick, delegate-signed](#148-the-whole-agent-tick-delegate-signed)
+  - [14.9 What this closes, precisely](#149-what-this-closes-precisely)
 
 ---
 
@@ -1379,3 +1389,130 @@ AcsDefend/Intercept fleet's help changes a battle's outcome) — behind the same
 randomness reveal that has kept Attack's own resolution out of reach since round 4.
 Mainnet: still untouched by this fork-testing effort specifically, same as every round
 before this one.
+
+---
+
+## 14. Round 7 (2026-09-29) — batch production and single-wallet delegation on a pinned fork
+
+Anvil forked at block 51934284, `--chain-id 8453`. Everything below ran against the real deployed
+contract logic (`2b329fb1`), never mainnet.
+
+### 14.1 Setup
+
+- **Main account**: `0x4e15e664…3aa1`, the impersonated 11-planet account from rounds 2–3. Planet 23
+  (Shipyard 10, both lanes idle, ~788k metal) took the batch tests; planet 634 (Shipyard 4) took the
+  15-order and backlog tests; planet 184 took the planner-driven tick.
+- **Delegates**: two impersonated addresses (`0x…0d0001`, `0x…0d0002`) for the wallet-level checks, and
+  one **throwaway key generated with `cast wallet new`** for the agent tick. `policy.wallet_engine.
+  provider` only accepts `keystore`/`envkey`, so the tick cannot use `fork-impersonate`; a fork-only
+  key passed through `VEYDRIFT_PRIVATE_KEY` (never written to a file in the repo) is the way to run the
+  real `vd tick` send path. Fund each with `anvil_setBalance`; a delegate must own no planets.
+- A scratch `VEYDRIFT_HOME` per policy variant, `policy.wallet` = the main account, `policy.signer` =
+  the delegate.
+- `setDelegate` itself was sent by the impersonated main account with `cast send --unlocked` — the human's
+  step, since the wallet skill never sends it.
+
+### 14.2 `setDelegate` — calldata-only, confirmed
+
+`walletctl build --action set.json --from <MAIN>` and `simulate --from <MAIN>` succeed (estimate 87,332;
+the real send used 85,647). `walletctl send … --tier operator` on that file is refused: `selector
+0xca5eb5e1 is not in the "operator" tier's allowed set`. After registration `delegateOf(main)`,
+`delegatorOf(delegate)` and `effectivePlayer(delegate)` all read back as expected, and `effectivePlayer
+(main)` is the main account itself. A delegate calling `setDelegate` reverts
+`DelegatedWalletCannotDelegate(address,address)` (selector `0xb45b43de`) — the reason a `setDelegate`
+must be built and simulated as the main wallet.
+
+### 14.3 The signer binding — four refusal paths
+
+Each was tried with `walletctl send --confirm` against a valid batch tx, and each refused before signing;
+nothing reached the chain:
+
+| Setup | Refusal |
+| --- | --- |
+| provider signs as a stranger, `policy.signer` is the delegate | `signer address mismatch` |
+| signer = provider = an unregistered address | `signer binding failed: … acts as <itself> on-chain, not as the policy wallet` |
+| `policy.wallet` is itself a delegate (no `signer`) | `signer binding failed: … acts as <other main> on-chain` |
+| provider is the main wallet while the policy names the delegate | `signer address mismatch` |
+
+`walletctl status` for the registered delegate prints `policy signer: … (a delegate) (MATCH)` and `acts as:
+<main> (the policy wallet)`.
+
+### 14.4 A batch is byte-identical to the same orders placed one by one
+
+Four orders (ship 0×2, ship 1×3, defense 0×5, defense 1×2) on planet 23, once as one
+`startProductionBatch` and once as four single calls — every transaction of a run mined into one block at
+one forced timestamp (`evm_setAutomine false`, explicit nonces, `evm_setNextBlockTimestamp`, `evm_mine`),
+each run reverted with `evm_snapshot`/`evm_revert`. Result: `previewResources(23)`, both queue backlogs and
+both queue heads hashed **identical**, resources `(762235, 335560, 456564)` in both. So the batch charges
+exactly the sum of the singles and queues the same work. (Without the single-block trick this comparison is
+noisy — production accrues between blocks — the same reason §8.3 avoids balance deltas.)
+
+### 14.5 Atomicity and the input checks
+
+`[defense 0 ×1, defense 0 ×10,000,000]` sent raw (bypassing `simulate`) reverted `status 0`, and the
+defense queue head, backlog and Rocket Launcher count were **unchanged** — the valid first order did not
+survive. The revert data, decoded by `simulate`, is `InsufficientResources(760158, 335525, 456553)`: the
+balances *at the failing order*, i.e. after the first order was charged. `simulate` decodes the rest:
+
+| Input | Revert |
+| --- | --- |
+| 0 orders, 16 orders, quantity 0 | `InvalidQuantity()` |
+| kind 3, defense id 10, ship id 16 | `InvalidId()` |
+| a defense whose prerequisite is unmet | `MissingDependency(bytes32)` — the argument is an ASCII name, e.g. `MISSILE_SILO_4`, `PLASMA_7` |
+
+Dependencies are checked before cost, so an unaffordable *and* locked order reports the dependency.
+
+### 14.6 Gas, the 15-order batch and the backlog cap
+
+`estimateGas`, small-cargo orders of quantity 1 on planet 634: 1 / 3 / 8 / 15 orders = 519,503 / 927,923 /
+1,934,167 / 3,342,917. The 15-order batch, sent for real, used **3,228,680**. On a snapshot, the same call
+succeeded at a limit of 3,342,917 and 3,350,000 and failed at 3,300,000 and 3,200,000: the estimate is tight
+but sufficient at this state, and the minimum limit is ≈ 1.00× the estimate. `buildTx` still adds 1.5×
+(`GAS_HEADROOM_BPS`) as margin for state that moves between estimate and inclusion, which a fork cannot
+show. (Four orders on planet 23: estimate 1,185,831, used 1,136,381.)
+
+**The per-lane cap is on the backlog, which excludes the active head.** A 15-order batch into an idle ship
+lane leaves 1 active + 14 backlog (`shipQueueBacklog(634)` has 14 entries). Two more orders then simulate
+`ok` (14 + 2 = 16); three revert `InvalidQuantity()` (17 > 16). A lane therefore holds up to 17 orders, and a
+15-order batch always fits an idle one. `shipQueueBacklog(uint256)`/`defenseQueueBacklog(uint256)` are
+readable on-chain even though the API exposes no backlog — a possible input for a future, stricter guard.
+
+### 14.7 `revokeDelegate`, and replacing a delegate
+
+With `allow_delegation: false` the send is refused (`selector 0x55d1ef38 requires policy.actions.allow_
+delegation=true`). With it true, the **delegate itself** sent `revokeDelegate()`: `delegateOf(main)` read
+zero and `effectivePlayer(delegate)` read the delegate itself, and the next delegate-signed send was
+refused by the signer binding. Revoking again simulates `NoDelegate(address)`. Separately, calling
+`setDelegate(new)` while another delegate was registered **replaced it in one transaction** — no revoke
+needed, and the old delegate lost its authority at once.
+
+### 14.8 The whole agent tick, delegate-signed
+
+With the throwaway key as `policy.signer` and `wallet_engine.provider: envkey`:
+
+- `vd tick --action` with a hand-written two-order batch (planet 23): guards 27/27 pass, `EXECUTE`,
+  `status: success`, `from` = the delegate, gas used 743,734, the report names the signer and the main
+  wallet it acts for.
+- `vd tick` with **no** override, `production_batch: true`, `ship_targets` = Light Fighter 5 and
+  `defense_targets` = Rocket Launcher 10 on planet 184: the planner proposed and sent one batch (5× Light
+  Fighter, 1× Rocket Launcher — the defense deficit was 1), guards 27/27, `status: success`, with the
+  replaced singles listed as alternatives.
+
+One transient worth knowing: `walletctl receipt` run immediately after `walletctl send` once reported the
+receipt "could not be found" although the transaction was mined; a second call found it. The agent polls
+(`_await_receipt`), so this only matters for hand-run sequences.
+
+### 14.9 What this closes, precisely
+
+**Verified live on the real contract logic:** `startProductionBatch` (equivalence to singles, atomicity,
+every input revert, the 15-order maximum, the backlog boundary, measured gas), `setDelegate` (registered
+and replaced by the main wallet; refused by `send`), `revokeDelegate` (by the delegate, flag-gated),
+delegate-signed sends, all four signer-binding refusals, and the full `vd tick` path both from an override
+and from the planner.
+
+**Not verified:** the revoke race (a revoke landing between the signer-binding read and inclusion) — the
+effect is analysed in `tx-safety.md`, not reproduced; alliance actions signed by a delegate (the calls with
+no planet argument are the ones exposed to that race); the backend's attribution of a delegate-sent action
+to the main wallet (the fork has no indexer, so `indexed: true` here only reflects the mainnet API being
+ahead of the fork block); and any behaviour at a state other than the pinned block. Mainnet was read
+(simulation, planet lookups) and never written.
