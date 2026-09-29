@@ -27,6 +27,11 @@
           "title": "Allow Defense",
           "type": "boolean"
         },
+        "allow_delegation": {
+          "default": false,
+          "title": "Allow Delegation",
+          "type": "boolean"
+        },
         "allow_fleet_noncombat": {
           "default": false,
           "title": "Allow Fleet Noncombat",
@@ -358,6 +363,18 @@
     },
     "reserves": {
       "$ref": "#/$defs/Resources"
+    },
+    "signer": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Signer"
     },
     "storage": {
       "$ref": "#/$defs/StorageCfg"

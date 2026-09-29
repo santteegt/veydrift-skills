@@ -76,7 +76,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1121 Python tests, 342 TypeScript tests** (339 passed + 3 intentionally
+baseline: **1128 Python tests, 397 TypeScript tests** (394 passed + 3 intentionally
 skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain check),
 both suites green. Run both before calling any change done; they are independent
 projects but cover a system with two enforcement layers that must agree (§6).
@@ -142,9 +142,12 @@ touching related code, re-run the check named alongside each one.
   `status: "success" | "reverted"` from the real receipt; `tick.py` calls `record_revert`
   on a revert and never counts it toward `executions_count`. An unknown/unfetchable status
   is treated as unknown, never success.
-- **`send` only signs as `policy.json`'s `wallet`.** `sendTx`'s `expectedAddress` is a
-  required option; the only `null` source is `resolveExpectedWallet` finding no policy file.
-  Never make it optional or add a flag/env override.
+- **`send` only signs as `policy.json`'s `signer` (else `wallet`), and the signer must act as
+  `wallet` on-chain.** `sendTx`'s `expectedAddress` is a required option (its `expectedPlayer`
+  defaults to it); the only `null` source is `resolveExpectedSigner` finding no policy file. After
+  the allowlist it requires `effectivePlayer(signer) == wallet`, fail-closed. Never make either
+  optional or add a flag/env override. **`setDelegate` never enters an allowlist set**: only the main
+  wallet can sign it, so it stays calldata-only.
 - **An unclear send is never "nothing was submitted".** Only `REFUSED:`/`NOT SENT`/exit 4
   from `walletctl send` mean nothing was broadcast (`tick._SEND_REFUSED_PREFIX`). Anything
   else without a hash becomes a `broadcast_uncertain` `PendingTx` resolved by nonce in

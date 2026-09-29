@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { encodeErrorResult, encodeFunctionData, getAddress } from "viem";
 import { getPinnedAbi, resolveFunctionAbi, type RuntimeConfig } from "../src/abi.js";
 import type { OnchainPinResult } from "../src/onchain-pin.js";
+import type { EffectivePlayerCheck } from "../src/signer-binding.js";
 import type { UnsignedTx, WalletProvider } from "../src/providers/types.js";
 import { passingPin } from "./helpers/onchainPin.js";
 import {
@@ -535,7 +536,15 @@ describe("sendTx", () => {
   // Every test that reaches the pre-sign on-chain pin check gets a passing stub by default, so no
   // sendTx test touches the network; the pin-specific tests below override it.
   const passingCheck = async (): Promise<OnchainPinResult> => passingPin();
-  const send = (t: UnsignedTx, o: SendOptions) => sendTx(t, { checkOnchainPin: passingCheck, ...o });
+  // The signer-binding check reads `effectivePlayer` from the chain too: same default stub.
+  const passingEffective = async (o: { signer: string; player: string }): Promise<EffectivePlayerCheck> => ({
+    ok: true,
+    signer: o.signer,
+    expectedPlayer: o.player,
+    effectivePlayer: o.player,
+  });
+  const send = (t: UnsignedTx, o: SendOptions) =>
+    sendTx(t, { checkOnchainPin: passingCheck, checkEffectivePlayer: passingEffective, ...o });
 
   const fn = resolveFunctionAbi("startBuildingUpgrade(uint256,uint8)");
   const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, 3] });
@@ -747,6 +756,151 @@ describe("sendTx", () => {
       expectedAddress: null,
       fetchConfig: async () => fixtureConfig(),
       checkOnchainPin: async () => driftedDeps,
+    });
+    expect(hash).toBe("0xabc123");
+  });
+
+  // --- the signer binding: the signer must ACT AS the policy wallet on-chain --------------------
+  const SIGNER = "0x0000000000000000000000000000000000000D00"; // what mockProvider() signs as
+  const PLAYER = "0x00000000000000000000000000000000000000a1";
+
+  it("in delegate mode checks that the signer acts as the PLAYER, not merely that it matches the signer address", async () => {
+    const provider = mockProvider();
+    const check = vi.fn(passingEffective);
+    const hash = await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: SIGNER,
+      expectedPlayer: PLAYER,
+      fetchConfig: async () => fixtureConfig(),
+      checkOnchainPin: passingCheck,
+      checkEffectivePlayer: check,
+    });
+    expect(hash).toBe("0xabc123");
+    expect(check).toHaveBeenCalledWith({ signer: getAddress(SIGNER), player: PLAYER });
+  });
+
+  it("without expectedPlayer the player defaults to expectedAddress (the non-delegated case cannot be weakened by omission)", async () => {
+    const provider = mockProvider();
+    const check = vi.fn(passingEffective);
+    await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: SIGNER,
+      fetchConfig: async () => fixtureConfig(),
+      checkOnchainPin: passingCheck,
+      checkEffectivePlayer: check,
+    });
+    expect(check).toHaveBeenCalledWith({ signer: getAddress(SIGNER), player: SIGNER });
+  });
+
+  it("refuses, never signing, when the signer does not act as the policy wallet on-chain", async () => {
+    const provider = mockProvider();
+    await expect(
+      sendTx(tx, {
+        tier: "economy",
+        confirm: true,
+        provider,
+        expectedAddress: SIGNER,
+        expectedPlayer: PLAYER,
+        fetchConfig: async () => fixtureConfig(),
+        checkOnchainPin: passingCheck,
+        checkEffectivePlayer: async (o) => ({
+          ok: false,
+          signer: o.signer,
+          expectedPlayer: o.player,
+          effectivePlayer: o.signer,
+          problem: `signer ${o.signer} acts as ${o.signer} on-chain, not as the policy wallet ${o.player}`,
+        }),
+      }),
+    ).rejects.toThrow(/signer binding failed: .* acts as .* not as the policy wallet/);
+    expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses with SendRefusedError -- NOT a broadcast-uncertain error -- when the effectivePlayer check cannot run", async () => {
+    const provider = mockProvider();
+    const err = await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: SIGNER,
+      fetchConfig: async () => fixtureConfig(),
+      checkOnchainPin: passingCheck,
+      checkEffectivePlayer: async () => {
+        throw new Error("rpc down");
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SendRefusedError);
+    expect(err).not.toBeInstanceOf(BroadcastUncertainError);
+    expect((err as Error).message).toMatch(/could not verify which player the signer acts as: rpc down/);
+    expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+
+  it("skips the effectivePlayer check entirely when there is no policy to bind against (expectedAddress null)", async () => {
+    const provider = mockProvider();
+    const check = vi.fn(passingEffective);
+    await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: null,
+      fetchConfig: async () => fixtureConfig(),
+      checkOnchainPin: passingCheck,
+      checkEffectivePlayer: check,
+    });
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("checks the signer address BEFORE any network read: a wrong key never reaches the chain", async () => {
+    const provider = mockProvider();
+    const check = vi.fn(passingEffective);
+    const pin = vi.fn(passingCheck);
+    await expect(
+      sendTx(tx, {
+        tier: "economy",
+        confirm: true,
+        provider,
+        expectedAddress: "0x0000000000000000000000000000000000000bad",
+        fetchConfig: async () => fixtureConfig(),
+        checkOnchainPin: pin,
+        checkEffectivePlayer: check,
+      }),
+    ).rejects.toThrow(/signer address mismatch/);
+    expect(check).not.toHaveBeenCalled();
+    expect(pin).not.toHaveBeenCalled();
+  });
+
+  it("names the policy `signer` (not `wallet`) in the mismatch message when a delegate signer is configured", async () => {
+    const provider = mockProvider();
+    await expect(
+      send(tx, {
+        tier: "economy",
+        confirm: true,
+        provider,
+        expectedAddress: "0x0000000000000000000000000000000000000bad",
+        expectedPlayer: PLAYER,
+        fetchConfig: async () => fixtureConfig(),
+      }),
+    ).rejects.toThrow(/policy.json's signer is 0x0000000000000000000000000000000000000bad/);
+  });
+
+  it("forwards the delegation and ACS flag resolvers to the allowlist (revokeDelegate is flag-gated at send time)", async () => {
+    const fn = resolveFunctionAbi("revokeDelegate()");
+    const revoke: UnsignedTx = { to: GAME_ADDRESS, data: encodeFunctionData({ abi: [fn], functionName: fn.name }), value: 0n, chainId: 8453 };
+    const provider = mockProvider();
+    await expect(
+      send(revoke, { tier: "economy", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig(), resolveAllowDelegation: () => false }),
+    ).rejects.toThrow(/allow_delegation=true/);
+    expect(provider.signAndSend).not.toHaveBeenCalled();
+    const hash = await send(revoke, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: null,
+      fetchConfig: async () => fixtureConfig(),
+      resolveAllowDelegation: () => true,
     });
     expect(hash).toBe("0xabc123");
   });

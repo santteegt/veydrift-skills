@@ -95,6 +95,15 @@ _MIN_TIER_FOR_FUNCTION: dict[str, Tier] = {
     "startBuildingUpgrade": Tier.ECONOMY,
     "startResearch": Tier.ECONOMY,
     "resolveFleetMission": Tier.ECONOMY,
+    # Batch production: same risk profile and the same economy floor as the single-order
+    # functions below (each order runs that same path; cost is charged per order). Mirrors
+    # allowlist.ts's ECONOMY_SIGNATURES entry.
+    "startProductionBatch": Tier.ECONOMY,
+    # Delegation: only ever removes authority, so economy-or-above -- but behind its own
+    # `policy.actions.allow_delegation` flag (`_DELEGATION_FUNCTIONS` below). `setDelegate` is
+    # deliberately absent from this map: it must be signed by the main wallet itself, so no tier
+    # may send it (calldata-only; allowlist.ts has it in no set either).
+    "revokeDelegate": Tier.ECONOMY,
     # `settlePlanet` removed 2026-08-17 (Phase 5, docs/SPEC.md §5.4/§9 -- a breaking
     # allowlist change). Its body at the pinned commit is byte-identical to
     # `collectResources`, a disguised read `veydrift-wallet`'s `abi.ts` already refuses in
@@ -217,6 +226,14 @@ _ALLIANCE_FUNCTIONS: frozenset[str] = frozenset(
         "transferAllianceOwnership",
     }
 )
+
+#: `revokeDelegate` -- the game's single-wallet delegation. `economy` in the tier map above, but
+#: allowlist.ts keeps its selector out of the UNCONDITIONAL `ECONOMY_SIGNATURES` in its own
+#: always-conditional `DELEGATION_SIGNATURES` (gated on `policy.actions.allow_delegation`), the
+#: same carve-out shape as alliance/ACS/combat, so the cross-layer test excludes it from the
+#: unconditional economy diff and diffs it against that array instead. `setDelegate` is in
+#: neither map nor set on either side, on purpose.
+_DELEGATION_FUNCTIONS: frozenset[str] = frozenset({"revokeDelegate"})
 
 #: `openDefenseIntent` (VeydriftAllianceSystem, ACS coordination feature) is a 16th
 #: function on the same contract as `_ALLIANCE_FUNCTIONS`' 15 -- but it is gated on

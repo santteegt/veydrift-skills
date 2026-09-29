@@ -11,6 +11,25 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-09-28
+
+### Added
+- **`Policy.signer`** (optional, default `None`): the delegate key the wallet engine signs as when it
+  is not `wallet`. `wallet` stays the game player (reads, simulation, who the signer must act as).
+  Validated as a 20-byte address that differs from `wallet`. Read independently by `veydrift-wallet`,
+  which proves on-chain that the signer acts as `wallet` before it signs.
+- **`ActionsCfg.allow_delegation`** (default `false`): gates `revokeDelegate` at both layers.
+  `setDelegate` is never executable at any tier or under any policy — it must be signed by the main
+  wallet itself, so it stays calldata-only.
+- Both fields are in `assets/policy.example.json` and the regenerated `schemas/policy.schema.json`.
+
+### Changed
+- `guard._MIN_TIER_FOR_FUNCTION` gained `startProductionBatch` and `revokeDelegate` (both `economy`),
+  with `_DELEGATION_FUNCTIONS` as the carve-out mirroring the wallet's `DELEGATION_SIGNATURES`. The
+  cross-layer test now diffs it and asserts `setDelegate` is in no set on either side. The planner,
+  encoder and guard gates for these functions follow in later releases; until then they cannot be
+  built or proposed.
+
 ## [1.24.0] - 2026-09-28
 
 ### Changed

@@ -168,6 +168,14 @@ policy it wants read. The one genuine difference is which tier the resulting sel
 at -- `economy` **or above**, not `operator` only -- and that difference lives entirely in
 `allowlist.ts`'s selector-check branch, not in `resolveAllowAlliance` itself.
 
+### The same residual limit applies to `allow_delegation`
+
+`resolveAllowDelegation` (`src/policy.ts`) reads `policy.json`'s `actions.allow_delegation` with the
+identical shape and the identical residual limit as the sibling flag resolvers above: no CLI flag or
+env var, `false` on a missing policy file, a refusal on anything malformed. It defends against a
+misconfigured caller, not one that controls its own `$VEYDRIFT_HOME`. It governs only
+`revokeDelegate`; no policy value can enable `setDelegate`, which is in no allowlist set.
+
 ## Defense in depth: the allowlist doesn't trust the agent skill
 
 `src/allowlist.ts`'s `checkAllowlist` is re-run unconditionally inside `sendTx` regardless of what
@@ -333,34 +341,47 @@ what a function is:
   tries to select it by bare name. By the time a tx reaches `send`, the selector already
   unambiguously identifies one of the two real overloads.
 
-## The signer must be `policy.json`'s wallet
+## The signer must act as `policy.json`'s wallet
 
-`veydrift-agent` reads state for, and simulates as, `policy.json`'s `wallet`. `send` signs with
-whatever key the provider loads. `sendTx` closes that gap: before the allowlist runs, it derives the
-provider's address and refuses (`REFUSED: signer address mismatch`) unless it equals the policy
-`wallet` (case-insensitive). A stray `VEYDRIFT_KEYSTORE`/`VEYDRIFT_PRIVATE_KEY` for another account
-can therefore never sign a transaction planned for this one.
+`veydrift-agent` reads state for, and simulates as, `policy.json`'s `wallet` (the game *player*).
+`send` signs with whatever key the provider loads. `sendTx` closes that gap in two steps.
 
-Resolution (`resolveExpectedWallet`, `src/policy.ts`) follows `resolveTier`'s shape: no
-`policy.json` → no check (standalone use); an unreadable policy or a missing/invalid `wallet` →
-exit 4, nothing signed. There is no flag or env var to override it. A provider whose address can't
-be derived (e.g. a wrong keystore password) is also a refusal. `walletctl status` prints the
-policy wallet next to the provider address and flags a mismatch.
+**1. The provider's address must be the expected signer** — `policy.json`'s `signer` if set, else its
+`wallet` — checked before the allowlist runs (`REFUSED: signer address mismatch`, case-insensitive). A
+stray `VEYDRIFT_KEYSTORE`/`VEYDRIFT_PRIVATE_KEY` for another account can therefore never sign a
+transaction planned for this one.
 
-## The chain must still match the pin
+**2. The signer must act as the wallet on-chain.** The game's single-wallet delegation lets a
+separate key act as an owner, so "same address" is no longer the whole invariant. After the allowlist,
+`sendTx` reads `effectivePlayer(signer)` from the game proxy and requires it to equal the policy
+`wallet` (`REFUSED: signer binding failed`). One check covers every case:
 
-Immediately before signing (after the signer binding and the allowlist, so every cheap local
-refusal happens first), `sendTx` re-reads the chain: each pinned proxy's EIP-1967 implementation and
-its runtime-code hash must equal the pin, `tx.to` must be one of the two pinned proxies, and the
-functions that reach the Randomness/Moon contracts (`fleet launches`, `missile`, `resolveFleetMission`)
-also require those pinned dependencies to match. The verdict comes from the chain, never from the
-backend's self-reported hash, which can lag an upgrade.
+| Situation | `effectivePlayer(signer)` | Result |
+| --- | --- | --- |
+| signer is the wallet, no delegation | the wallet | sends |
+| signer is a delegate registered for the wallet | the wallet | sends |
+| a delegate that was never registered, or was revoked | itself | refused |
+| a delegate registered for a different main wallet | that other wallet | refused |
+| the wallet is itself someone's delegate | that other wallet | refused |
 
-Every failure path is a `SendRefusedError` (`REFUSED:`) — a mismatch, an empty slot, and an
-unreachable RPC alike. It must never surface as a generic error: `veydrift-agent` records anything
-that is not `REFUSED:`/`NOT SENT` as a possible broadcast and blocks every later action until the
-sender's nonce is reconciled. `checkOnchainPin` is injectable in tests so no `sendTx` test reaches
-the network. See `references/abi-pinning.md` for what is and is not covered.
+It is fail-closed like the pin check: an unreadable chain is a refusal (`SendRefusedError`), never a
+pass, and no flag or env var skips it. It is a point-in-time read; a revoke or re-point landing
+between it and inclusion is not excluded. The effect is bounded — the delegate then acts as itself, so
+planet-scoped calls revert `NotPlanetOwner` and cost only gas — except calls with no planet argument
+(alliance membership), which would execute as the delegate address's own empty account.
+
+Resolution (`resolveExpectedSigner`, `src/policy.ts`) follows `resolveTier`'s shape: no `policy.json` →
+no check (standalone use); an unreadable policy, a missing/invalid `wallet`, or an invalid `signer`
+(not a 20-byte address, or equal to `wallet` — omit it to sign as the wallet itself) → exit 4, nothing
+signed. There is no flag or env var to override it. A provider whose address can't be derived (e.g. a
+wrong keystore password) is also a refusal. `walletctl status` prints the wallet, the signer, and what
+the signer acts as on-chain, and flags a mismatch.
+
+**`setDelegate` can never be sent from here.** It grants control of the whole account to another key and
+must be signed by the main wallet itself, so it is in no allowlist set at any tier; this engine builds
+and simulates it (from the main wallet) and a human signs the calldata. `revokeDelegate` — callable by
+the main wallet or the delegate, so also a kill-switch for a delegated key — is sendable at economy or
+above under `policy.actions.allow_delegation`.
 
 ## A failed broadcast is uncertain, not refused
 

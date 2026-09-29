@@ -15,11 +15,12 @@ Conventions
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # --------------------------------------------------------------------------------------
 # Enums — canonical, from packages/contracts/src/libraries/VeydriftTypes.sol and
@@ -665,6 +666,17 @@ class ActionsCfg(Base):
     #: src/policy.ts`'s `resolveAllowAcsDefense`. See `references/coordination.md` for the
     #: full contract mechanics and the honest verification-status caveats.
     allow_acs_defense: bool = False
+    #: Single-wallet delegation (`revokeDelegate` only -- executable at `economy` tier or above,
+    #: via `vd tick --action`, never planner-proposed). Default `False`. Gates only the removal of
+    #: authority: `revokeDelegate` may be called by the main wallet OR the delegate, so it also acts
+    #: as an agent-side kill-switch for a delegated signing key. `setDelegate` is NOT governed by
+    #: this flag and is never executable by this codebase at any tier or under any policy -- it
+    #: must be signed by the main wallet itself, so it is calldata-only (built, simulated and
+    #: printed for a human to sign). Checked independently at both enforcement layers
+    #: (`guard.py`'s `_MIN_TIER_FOR_FUNCTION`/`_gate_delegation_action` and `veydrift-wallet`'s
+    #: `checkAllowlist`); no CLI flag or environment variable for this at the wallet layer, ever --
+    #: see `veydrift-wallet/src/policy.ts`'s `resolveAllowDelegation`.
+    allow_delegation: bool = False
 
 
 class EscalationCfg(Base):
@@ -814,6 +826,15 @@ class Policy(Base):
     version: Literal[1] = 1
     tier: Tier = Tier.ADVISOR
     wallet: str
+    #: The address the wallet engine signs as, when it is NOT `wallet`: a **delegate** key acting
+    #: for `wallet` through the game's single-wallet delegation. `wallet` stays the game player
+    #: (whose planets are read and simulated, and who the signer must act as); `signer` only says
+    #: which key signs. `None` (default) means the provider signs as `wallet` itself -- the
+    #: behaviour before delegation existed. Read independently by `veydrift-wallet`'s
+    #: `resolveExpectedSigner`, which refuses to sign unless the provider's address equals this
+    #: and `effectivePlayer(signer)` equals `wallet` on-chain. Must be a 20-byte address and must
+    #: differ from `wallet`.
+    signer: str | None = None
     #: Empty list means: discover via /wallet/{addr}/planets.
     planets: list[int] = Field(default_factory=list)
     chain_id: int = 8453
@@ -826,6 +847,19 @@ class Policy(Base):
     wallet_engine: WalletEngineCfg = Field(default_factory=WalletEngineCfg)
     strategy: StrategyCfg = Field(default_factory=StrategyCfg)
     radar: RadarCfg = Field(default_factory=RadarCfg)
+
+    @field_validator("signer")
+    @classmethod
+    def _signer_is_an_address(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"0x[0-9a-fA-F]{40}", value):
+            raise ValueError(f"signer must be a 0x-prefixed 20-byte address (got {value!r}), or omitted")
+        return value
+
+    @model_validator(mode="after")
+    def _signer_differs_from_wallet(self) -> Policy:
+        if self.signer is not None and self.signer.lower() == self.wallet.lower():
+            raise ValueError("signer equals wallet: omit signer to sign as the wallet itself")
+        return self
 
 
 # --------------------------------------------------------------------------------------

@@ -2312,7 +2312,12 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
     # ts_alliance_signature_names` equality below, since it deliberately isn't in
     # ALLIANCE_SIGNATURES either). Excluded here, diffed against ACS_ALLIANCE_SIGNATURES
     # below.
-    py_economy_unconditional = py_economy - guard._ALLIANCE_FUNCTIONS - guard._ACS_ALLIANCE_FUNCTIONS
+    # Delegation: `revokeDelegate` is the same shape again -- `economy` in guard.py's tier map,
+    # its own always-conditional `DELEGATION_SIGNATURES` on the TS side. `setDelegate` appears
+    # on neither side by design (calldata-only); asserted absent below.
+    py_economy_unconditional = (
+        py_economy - guard._ALLIANCE_FUNCTIONS - guard._ACS_ALLIANCE_FUNCTIONS - guard._DELEGATION_FUNCTIONS
+    )
 
     assert py_economy_unconditional == ts_economy, (
         "economy-tier functions disagree between guard.py and allowlist.ts.\n"
@@ -2386,8 +2391,35 @@ def test_tier_map_agrees_with_the_wallet_engines_allowlist():
         f"guard._ACS_ALLIANCE_FUNCTIONS contains a function not mapped to Tier.ECONOMY in "
         f"_MIN_TIER_FOR_FUNCTION: {sorted(guard._ACS_ALLIANCE_FUNCTIONS - py_economy)}"
     )
-    # And the two carve-outs must never collide with the 15/1 sets they sit alongside --
+    # Delegation: the same pair of assertions, for `revokeDelegate`'s own carve-out.
+    ts_delegation_signature_names = names_in("DELEGATION_SIGNATURES")
+    assert guard._DELEGATION_FUNCTIONS == ts_delegation_signature_names, (
+        "delegation (allow_delegation-gated) functions disagree between guard.py's "
+        "_DELEGATION_FUNCTIONS and allowlist.ts's DELEGATION_SIGNATURES.\n"
+        f"  only in guard.py:    {sorted(guard._DELEGATION_FUNCTIONS - ts_delegation_signature_names)}\n"
+        f"  only in allowlist.ts:{sorted(ts_delegation_signature_names - guard._DELEGATION_FUNCTIONS)}"
+    )
+    assert guard._DELEGATION_FUNCTIONS <= py_economy, (
+        f"guard._DELEGATION_FUNCTIONS contains a function not mapped to Tier.ECONOMY in "
+        f"_MIN_TIER_FOR_FUNCTION: {sorted(guard._DELEGATION_FUNCTIONS - py_economy)}"
+    )
+    # `setDelegate` must be in NO set on EITHER side: it has to be signed by the main wallet
+    # itself, so neither layer may ever let a tier send it.
+    every_ts_signature_name = (
+        ts_economy
+        | ts_operator_extra
+        | ts_combat_signature_names
+        | ts_alliance_signature_names
+        | ts_defense_hold_signature_names
+        | ts_acs_alliance_signature_names
+        | ts_delegation_signature_names
+    )
+    assert "setDelegate" not in every_ts_signature_name
+    assert "setDelegate" not in guard._MIN_TIER_FOR_FUNCTION
+    # And the carve-outs must never collide with the sets they sit alongside --
     # a name in both would be silently double-gated by two different flags.
+    assert not (guard._DELEGATION_FUNCTIONS & guard._ALLIANCE_FUNCTIONS)
+    assert not (guard._DELEGATION_FUNCTIONS & guard._ACS_ALLIANCE_FUNCTIONS)
     assert not (guard._ACS_ALLIANCE_FUNCTIONS & guard._ALLIANCE_FUNCTIONS)
     assert not (guard._DEFENSE_HOLD_ONLY_FUNCTIONS & guard._COMBAT_ONLY_FUNCTIONS)
 

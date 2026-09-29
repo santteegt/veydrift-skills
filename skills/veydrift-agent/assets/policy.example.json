@@ -2,6 +2,7 @@
   "version": 1,
   "tier": "advisor",
   "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",
+  "signer": null,
   "planets": [664],
   "chain_id": 8453,
   "cadence": { "economy_minutes": 10, "research_minutes": 10, "fleet_minutes": 10, "universe_hours": 24 },
@@ -19,7 +20,8 @@
     "allow_building": true, "allow_research": true,
     "allow_defense": false, "allow_ships": false,
     "allow_fleet_noncombat": false, "allow_combat": false, "allow_alliance": false,
-    "allow_acs_defense": false
+    "allow_acs_defense": false,
+    "allow_delegation": false
   },
   "escalation": {
     "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,

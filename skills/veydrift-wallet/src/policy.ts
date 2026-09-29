@@ -43,6 +43,8 @@ export class AllowAllianceResolutionError extends Error {}
 
 export class AllowAcsDefenseResolutionError extends Error {}
 
+export class AllowDelegationResolutionError extends Error {}
+
 const DEFAULT_VEYDRIFT_HOME = "~/.veydrift";
 
 /** Mirrors veydrift-agent's `veydrift_home()` (state.py): $VEYDRIFT_HOME env, else ~/.veydrift.
@@ -147,6 +149,7 @@ export interface ResolveActionFlagOptions {
 export type ResolveAllowCombatOptions = ResolveActionFlagOptions;
 export type ResolveAllowAllianceOptions = ResolveActionFlagOptions;
 export type ResolveAllowAcsDefenseOptions = ResolveActionFlagOptions;
+export type ResolveAllowDelegationOptions = ResolveActionFlagOptions;
 
 function resolveBooleanActionFlag(
   fieldName: string,
@@ -270,6 +273,21 @@ export function resolveAllowAcsDefense(opts: ResolveAllowAcsDefenseOptions = {})
   return resolveBooleanActionFlag("allow_acs_defense", AllowAcsDefenseResolutionError, opts);
 }
 
+/**
+ * Resolve whether `revokeDelegate` (`allowlist.ts`'s `DELEGATION_SIGNATURES`) is permitted. Same
+ * shape and threat model as the sibling resolvers above -- read `policy.json`'s
+ * `actions.allow_delegation`, no CLI flag or env var ever, `false` on ENOENT, throw on anything
+ * malformed/ambiguous. Called lazily, only once a transaction's selector is actually
+ * `revokeDelegate`, so a malformed or absent field never blocks an unrelated transaction.
+ *
+ * `setDelegate` is deliberately NOT governed by this flag: it is in no allowlist set at any tier
+ * (it must be signed by the main wallet itself, so this engine builds and simulates it but never
+ * sends it) -- no policy value can enable it.
+ */
+export function resolveAllowDelegation(opts: ResolveAllowDelegationOptions = {}): boolean {
+  return resolveBooleanActionFlag("allow_delegation", AllowDelegationResolutionError, opts);
+}
+
 export class WalletBindingResolutionError extends Error {}
 
 export interface ResolveExpectedWalletOptions {
@@ -279,21 +297,7 @@ export interface ResolveExpectedWalletOptions {
   readFile?: (path: string) => string;
 }
 
-/**
- * Resolve the address `send` must sign as: `policy.json`'s top-level `wallet` -- the same
- * account `veydrift-agent` reads state for and simulates as. `sendTx` refuses when the
- * provider's key derives a different address, so a stray keystore or env key for another
- * account can never sign a transaction that was planned and simulated for this one.
- *
- * Rules (same shape as `resolveTier`):
- *   1. Policy file does not exist (ENOENT) -> `null`: standalone use, no binding to check.
- *   2. Policy file unreadable/unparseable, or `wallet` missing/not a 20-byte hex address ->
- *      refuse (throw). A malformed policy is never treated as absent.
- *   3. Otherwise -> that address (as written; comparison is case-insensitive).
- *
- * No CLI flag or env var can override it.
- */
-export function resolveExpectedWallet(opts: ResolveExpectedWalletOptions = {}): `0x${string}` | null {
+function readPolicyForBinding(opts: ResolveExpectedWalletOptions): { path: string; parsed: unknown } | null {
   const env = opts.env ?? process.env;
   const readFile = opts.readFile ?? ((p: string) => readFileSync(p, "utf8"));
   const path = policyPath(env);
@@ -318,7 +322,10 @@ export function resolveExpectedWallet(opts: ResolveExpectedWalletOptions = {}): 
         `skipping the signer-address check on a malformed security policy.`,
     );
   }
+  return { path, parsed };
+}
 
+function parseWallet(path: string, parsed: unknown): `0x${string}` {
   const wallet = (parsed as { wallet?: unknown } | null)?.wallet;
   if (typeof wallet !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
     throw new WalletBindingResolutionError(
@@ -327,4 +334,66 @@ export function resolveExpectedWallet(opts: ResolveExpectedWalletOptions = {}): 
     );
   }
   return wallet as `0x${string}`;
+}
+
+/**
+ * Resolve the address `send` must sign as: `policy.json`'s top-level `wallet` -- the same
+ * account `veydrift-agent` reads state for and simulates as. `sendTx` refuses when the
+ * provider's key derives a different address, so a stray keystore or env key for another
+ * account can never sign a transaction that was planned and simulated for this one.
+ *
+ * Rules (same shape as `resolveTier`):
+ *   1. Policy file does not exist (ENOENT) -> `null`: standalone use, no binding to check.
+ *   2. Policy file unreadable/unparseable, or `wallet` missing/not a 20-byte hex address ->
+ *      refuse (throw). A malformed policy is never treated as absent.
+ *   3. Otherwise -> that address (as written; comparison is case-insensitive).
+ *
+ * No CLI flag or env var can override it.
+ */
+export function resolveExpectedWallet(opts: ResolveExpectedWalletOptions = {}): `0x${string}` | null {
+  const policy = readPolicyForBinding(opts);
+  if (policy === null) return null;
+  return parseWallet(policy.path, policy.parsed);
+}
+
+export interface SignerBinding {
+  /** The game "player": whose planets are read and simulated, and who the signer must act as. */
+  wallet: `0x${string}`;
+  /** The address the provider must sign as. Equals `wallet` unless `policy.signer` names a delegate. */
+  signer: `0x${string}`;
+  /** True when `policy.signer` is set: the provider signs as a delegate acting for `wallet`. */
+  delegated: boolean;
+}
+
+/**
+ * Resolve the signer binding: who `send` must sign as (`signer`) and which game player that
+ * signer must act as (`wallet`). Without `policy.signer` this is exactly `resolveExpectedWallet`
+ * (signer == wallet). With it, the provider signs as a **delegate** of `wallet` -- the contract's
+ * single-wallet delegation lets a separate key act as the owner -- and `sendTx` additionally
+ * proves, on-chain, that the signer really does act as `wallet` before it signs
+ * (`signer-binding.ts`).
+ *
+ * `policy.signer` must be a 20-byte address and must differ from `wallet` (to sign as the wallet
+ * itself, omit it). Same refusal rules as `resolveExpectedWallet`; no flag or env var overrides it.
+ * Returns `null` when there is no policy file (standalone use).
+ */
+export function resolveExpectedSigner(opts: ResolveExpectedWalletOptions = {}): SignerBinding | null {
+  const policy = readPolicyForBinding(opts);
+  if (policy === null) return null;
+  const wallet = parseWallet(policy.path, policy.parsed);
+  const rawSigner = (policy.parsed as { signer?: unknown } | null)?.signer;
+  if (rawSigner === undefined || rawSigner === null) return { wallet, signer: wallet, delegated: false };
+  if (typeof rawSigner !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(rawSigner)) {
+    throw new WalletBindingResolutionError(
+      `policy file at "${policy.path}" has an invalid "signer" field (got ${JSON.stringify(rawSigner)}; ` +
+        `must be a 0x-prefixed 20-byte address, or omitted). Refusing rather than guessing who signs.`,
+    );
+  }
+  if (rawSigner.toLowerCase() === wallet.toLowerCase()) {
+    throw new WalletBindingResolutionError(
+      `policy file at "${policy.path}" sets "signer" equal to "wallet". Omit "signer" to sign as the ` +
+        `wallet itself; it exists only to name a different, delegated key.`,
+    );
+  }
+  return { wallet, signer: rawSigner as `0x${string}`, delegated: true };
 }

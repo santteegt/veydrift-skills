@@ -3,10 +3,13 @@ import {
   AllowAcsDefenseResolutionError,
   AllowAllianceResolutionError,
   AllowCombatResolutionError,
+  AllowDelegationResolutionError,
   policyPath,
   resolveAllowAcsDefense,
   resolveAllowAlliance,
   resolveAllowCombat,
+  resolveAllowDelegation,
+  resolveExpectedSigner,
   resolveExpectedWallet,
   resolveTier,
   resolveVeydriftHome,
@@ -416,5 +419,90 @@ describe("resolveExpectedWallet", () => {
       throw err;
     };
     expect(() => resolveExpectedWallet({ env, readFile: eacces })).toThrow(WalletBindingResolutionError);
+  });
+});
+
+describe("resolveAllowDelegation -- no CLI flag, no env var, ever (same shape as the sibling flag resolvers)", () => {
+  const env = { VEYDRIFT_HOME: "/fake" };
+  const policy = (actions: unknown) => () => JSON.stringify({ version: 1, tier: "economy", actions });
+
+  it("returns true / false as the policy file's actions.allow_delegation says", () => {
+    expect(resolveAllowDelegation({ env, readFile: policy({ allow_delegation: true }) })).toBe(true);
+    expect(resolveAllowDelegation({ env, readFile: policy({ allow_delegation: false }) })).toBe(false);
+  });
+
+  it("returns false (never refuses) when no policy file exists -- there is no flag to fall back to", () => {
+    const readFile = (p: string) => {
+      throw enoent(p);
+    };
+    expect(resolveAllowDelegation({ env, readFile })).toBe(false);
+  });
+
+  it.each([
+    ["unparseable JSON", () => "{ not valid json"],
+    ["a missing field", policy({})],
+    ["a non-boolean field", policy({ allow_delegation: "true" })],
+    ["a missing actions block", () => JSON.stringify({ version: 1, tier: "economy" })],
+  ])("refuses (never a permissive default) on %s", (_label, readFile) => {
+    expect(() => resolveAllowDelegation({ env, readFile })).toThrow(AllowDelegationResolutionError);
+  });
+
+  it("refuses on an unreadable (non-ENOENT) policy file", () => {
+    const eacces = () => {
+      const err = new Error("EACCES") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    };
+    expect(() => resolveAllowDelegation({ env, readFile: eacces })).toThrow(AllowDelegationResolutionError);
+  });
+
+  it("its options interface has no CLI-flag or env-override field (the exact footgun --tier has)", () => {
+    const opts: Parameters<typeof resolveAllowDelegation>[0] = { env, readFile: policy({ allow_delegation: true }) };
+    expect(Object.keys(opts).sort()).toEqual(["env", "readFile"]);
+  });
+});
+
+describe("resolveExpectedSigner -- who send must sign as, and which player that signer must act as", () => {
+  const env = { VEYDRIFT_HOME: "/fake" };
+  const wallet = "0x224aba5d489675a7bd3ce07786fada466b46fa0f";
+  const delegate = "0x00000000000000000000000000000000000000d1";
+  const read = (extra: Record<string, unknown>) => () => JSON.stringify({ tier: "economy", wallet, ...extra });
+
+  it("returns null when no policy file exists (standalone use)", () => {
+    const readFile = (p: string) => {
+      throw enoent(p);
+    };
+    expect(resolveExpectedSigner({ env, readFile })).toBeNull();
+  });
+
+  it("without policy.signer the signer IS the wallet (unchanged behaviour), not delegated", () => {
+    expect(resolveExpectedSigner({ env, readFile: read({}) })).toEqual({ wallet, signer: wallet, delegated: false });
+    expect(resolveExpectedSigner({ env, readFile: read({ signer: null }) })).toEqual({ wallet, signer: wallet, delegated: false });
+  });
+
+  it("with policy.signer the signer is that delegate and the wallet stays the player", () => {
+    expect(resolveExpectedSigner({ env, readFile: read({ signer: delegate }) })).toEqual({ wallet, signer: delegate, delegated: true });
+  });
+
+  it.each([
+    ["not a string", { signer: 42 }],
+    ["not an address", { signer: "0x1234" }],
+    ["equal to wallet (omit it to sign as the wallet)", { signer: wallet.toUpperCase().replace("0X", "0x") }],
+  ])("refuses when signer is %s", (_label, extra) => {
+    expect(() => resolveExpectedSigner({ env, readFile: read(extra) })).toThrow(WalletBindingResolutionError);
+  });
+
+  it("keeps resolveExpectedWallet's refusals: a missing wallet, unparseable or unreadable policy", () => {
+    expect(() => resolveExpectedSigner({ env, readFile: () => JSON.stringify({ tier: "economy" }) })).toThrow(WalletBindingResolutionError);
+    expect(() => resolveExpectedSigner({ env, readFile: () => "{nope" })).toThrow(WalletBindingResolutionError);
+  });
+
+  it("resolveExpectedWallet is unaffected by policy.signer (still just the wallet)", () => {
+    expect(resolveExpectedWallet({ env, readFile: read({ signer: delegate }) })).toBe(wallet);
+  });
+
+  it("has no CLI-flag or env override", () => {
+    const opts: Parameters<typeof resolveExpectedSigner>[0] = { env, readFile: read({}) };
+    expect(Object.keys(opts).sort()).toEqual(["env", "readFile"]);
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { encodeFunctionData, getAddress } from "viem";
 import type { RuntimeConfig } from "../src/abi.js";
 import { getSelector, resolveFunctionAbi } from "../src/abi.js";
-import { checkAllowlist, tierSelectors } from "../src/allowlist.js";
+import { checkAllowlist, MAX_PRODUCTION_BATCH_ORDERS, tierSelectors, validateProductionBatch } from "../src/allowlist.js";
 import { ShipId, shipCountsToFleetTuple } from "../src/fleet.js";
 import type { UnsignedTx } from "../src/providers/types.js";
 
@@ -588,17 +588,172 @@ describe("checkAllowlist", () => {
     });
   });
 
+
+  // ---------------------------------------------------------------------------------------------
+  // startProductionBatch -- in the unconditional ECONOMY set, no flag. Its orders are calldata, so
+  // the engine validates them independently of the agent (count, kind, quantity, item-id range).
+  // ---------------------------------------------------------------------------------------------
+  const BATCH_SIG = "startProductionBatch(uint256,(uint8,uint8,uint32)[])";
+  function batchTx(orders: Array<{ kind: number; itemId: number; quantity: number }>): UnsignedTx {
+    const fn = resolveFunctionAbi(BATCH_SIG);
+    const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, orders] });
+    return { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 };
+  }
+  const oneShip = { kind: 0, itemId: 9, quantity: 3 };
+
+  describe("startProductionBatch (batch production)", () => {
+    it("is allowed at economy and operator, with no policy flag involved", async () => {
+      for (const tier of ["economy", "operator"] as const) {
+        const result = await checkAllowlist(batchTx([oneShip, { kind: 1, itemId: 0, quantity: 10 }]), tier, {
+          fetchConfig: async () => fixtureConfig(),
+        });
+        expect(result.ok).toBe(true);
+        expect(result.checks.find((c) => c.name === "startProductionBatch.orders")?.ok).toBe(true);
+      }
+    });
+
+    it("is refused at advisor -- the empty tier still refuses every send", async () => {
+      const result = await checkAllowlist(batchTx([oneShip]), "advisor", { fetchConfig: async () => fixtureConfig() });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+    });
+
+    it("accepts exactly the contract's maximum of 15 orders and refuses 16", async () => {
+      const fifteen = Array.from({ length: MAX_PRODUCTION_BATCH_ORDERS }, () => oneShip);
+      expect((await checkAllowlist(batchTx(fifteen), "economy", { fetchConfig: async () => fixtureConfig() })).ok).toBe(true);
+      const sixteen = [...fifteen, oneShip];
+      const refused = await checkAllowlist(batchTx(sixteen), "economy", { fetchConfig: async () => fixtureConfig() });
+      expect(refused.ok).toBe(false);
+      expect(refused.reason).toMatch(/expected 1\.\.15 orders, got 16/);
+    });
+
+    it.each([
+      ["an empty batch", [], /expected 1\.\.15 orders, got 0/],
+      ["kind 2 (neither ship nor defense)", [{ kind: 2, itemId: 0, quantity: 1 }], /kind 2 is neither/],
+      ["a zero quantity", [{ kind: 0, itemId: 0, quantity: 0 }], /quantity must be > 0/],
+      ["a ship id above the Ship enum (16)", [{ kind: 0, itemId: 16, quantity: 1 }], /ship id 16 is outside 0\.\.15/],
+      ["a defense id above the Defense enum (10)", [{ kind: 1, itemId: 10, quantity: 1 }], /defense id 10 is outside 0\.\.9/],
+    ])("refuses %s independently of the agent", async (_label, orders, pattern) => {
+      const result = await checkAllowlist(batchTx(orders), "economy", { fetchConfig: async () => fixtureConfig() });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(pattern);
+    });
+
+    it("accepts the boundary ids: ship 15 (Crawler) and defense 9 (InterplanetaryMissile)", () => {
+      const ok = validateProductionBatch(
+        batchTx([{ kind: 0, itemId: 15, quantity: 1 }, { kind: 1, itemId: 9, quantity: 1 }]).data,
+      );
+      expect(ok.ok).toBe(true);
+    });
+
+    it("refuses calldata that does not decode rather than passing it", () => {
+      const bad = validateProductionBatch(`${batchTx([oneShip]).data.slice(0, 20)}` as `0x${string}`);
+      expect(bad.ok).toBe(false);
+      expect(bad.detail).toMatch(/could not decode calldata/);
+    });
+
+    it("runs no batch check on an ordinary function (the check is selector-scoped)", async () => {
+      const result = await checkAllowlist(startBuildingUpgradeTx(), "economy", { fetchConfig: async () => fixtureConfig() });
+      expect(result.checks.some((c) => c.name === "startProductionBatch.orders")).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // Delegation. revokeDelegate is flag-gated at economy-or-above; setDelegate is in NO set.
+  // ---------------------------------------------------------------------------------------------
+  function delegationTx(sig: string, args: unknown[] = []): UnsignedTx {
+    const fn = resolveFunctionAbi(sig);
+    return { to: GAME_ADDRESS, data: encodeFunctionData({ abi: [fn], functionName: fn.name, args }), value: 0n, chainId: 8453 };
+  }
+  const revokeTx = () => delegationTx("revokeDelegate()");
+  const setTx = () => delegationTx("setDelegate(address)", ["0x00000000000000000000000000000000000000a1"]);
+
+  describe("revokeDelegate -- conditional on policy.actions.allow_delegation at economy tier or above", () => {
+    it("is refused at advisor regardless of the flag", async () => {
+      const result = await checkAllowlist(revokeTx(), "advisor", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowDelegation: () => true,
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("is refused at economy when allow_delegation resolves false", async () => {
+      const result = await checkAllowlist(revokeTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowDelegation: () => false,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/allow_delegation=true/);
+    });
+
+    it.each(["economy", "operator"] as const)("is allowed at %s when allow_delegation resolves true (a floor, not a ceiling)", async (tier) => {
+      const result = await checkAllowlist(revokeTx(), tier, {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowDelegation: () => true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("is NOT unlocked by allow_alliance or allow_acs_defense -- the flags are independent", async () => {
+      const result = await checkAllowlist(revokeTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowAlliance: () => true,
+        resolveAllowAcsDefense: () => true,
+        resolveAllowDelegation: () => false,
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("fails closed, naming the cause, when the flag cannot be resolved", async () => {
+      const result = await checkAllowlist(revokeTx(), "economy", {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowDelegation: () => {
+          throw new Error("malformed policy");
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/could not be resolved: malformed policy/);
+    });
+  });
+
+  describe("setDelegate -- calldata-only: it must be signed by the main wallet itself, so no tier and no flag lets this engine send it", () => {
+    it.each(["advisor", "economy", "operator"] as const)("is refused at %s even with every delegation-adjacent flag true", async (tier) => {
+      const result = await checkAllowlist(setTx(), tier, {
+        fetchConfig: async () => fixtureConfig(),
+        resolveAllowDelegation: () => true,
+        resolveAllowAlliance: () => true,
+        resolveAllowAcsDefense: () => true,
+        resolveAllowCombat: () => true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.checks.find((c) => c.name === "selector")?.ok).toBe(false);
+      expect(result.reason).toMatch(/is not in the .* tier's allowed set/);
+    });
+
+    it("is not in any tier's unconditional selector set", () => {
+      const selector = getSelector(resolveFunctionAbi("setDelegate(address)"));
+      for (const tier of ["advisor", "economy", "operator"] as const) {
+        expect(tierSelectors(tier).has(selector)).toBe(false);
+      }
+    });
+
+    it("still builds and resolves (it is calldata-only, not unknown): the supplemental ABI knows it", () => {
+      expect(resolveFunctionAbi("setDelegate(address)").name).toBe("setDelegate");
+    });
+  });
+
   // Was 5 until 2026-08-12 (startShipProduction added: plan.py's rung 8 proposes ships when
   // policy.actions.allow_ships is set, but no tier granted the selector, making that knob dead
   // config). Was 6 until 2026-08-17 (Phase 5, docs/SPEC.md §5.4/§9): settlePlanet removed -- its
   // body at the pinned commit is byte-identical to collectResources, a disguised read this
   // engine already refuses to send, and no planner rung ever produced the action.
-  it("tierSelectors('economy') contains exactly the five spec'd selectors", () => {
+  // Six since startProductionBatch (batch production) joined the unconditional economy set.
+  it("tierSelectors('economy') contains exactly the six spec'd selectors", () => {
     const selectors = tierSelectors("economy");
-    expect(selectors.size).toBe(5);
+    expect(selectors.size).toBe(6);
   });
 
-  it("tierSelectors('operator') is economy's five plus both launchFleetMission overloads", () => {
+  it("tierSelectors('operator') is economy's six plus both launchFleetMission overloads", () => {
     const economy = tierSelectors("economy");
     const operator = tierSelectors("operator");
     expect(operator.size).toBe(economy.size + 2);

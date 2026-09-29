@@ -2365,6 +2365,19 @@ matches every reachable contract before pinning — the router, every module, ne
 library, and the external dependencies — because the logic that changes lives in the modules: a
 router-only bytecode comparison would confirm a commit without touching it.
 
+**Correction 78 (2026-09-28): the wallet allowlists batch production and delegation, and the
+signer binding is `effectivePlayer`, not address equality.** `startProductionBatch` joins the
+`economy` set with a calldata check of its own (1–15 orders, kind 0/1, quantity > 0, item id in
+range for the kind), independent of the agent. `revokeDelegate()` is executable at `economy` or
+above under `policy.actions.allow_delegation`, resolved from `policy.json` alone. `setDelegate` is
+in no set: it must be signed by the main wallet, so `send` refuses it at every tier and it exists
+only as calldata from `build`/`simulate`. `policy.signer` names a delegate key; `send` requires the
+provider's address to equal it and the chain's `effectivePlayer(signer)` to equal `policy.wallet`,
+and refuses on any other answer or an unreadable chain. That read is a point in time — a revoke
+between the check and inclusion makes the delegate act as itself: planet-scoped calls revert
+`NotPlanetOwner`, and calls with no planet argument (alliance membership) would execute for the
+delegate address's own empty account.
+
 ---
 
 ## 10. Risks

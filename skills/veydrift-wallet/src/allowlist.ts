@@ -38,6 +38,7 @@ import {
   resolveAllowAcsDefense as resolveAllowAcsDefenseFromPolicy,
   resolveAllowAlliance as resolveAllowAllianceFromPolicy,
   resolveAllowCombat as resolveAllowCombatFromPolicy,
+  resolveAllowDelegation as resolveAllowDelegationFromPolicy,
 } from "./policy.js";
 import type { UnsignedTx } from "./providers/types.js";
 
@@ -78,6 +79,12 @@ const ECONOMY_SIGNATURES = [
   // launchFleetMission (operator only, types 0 Transport / 1 Deploy / 2 Colonize / 4 Harvest --
   // see OPERATOR_ALLOWED_MISSION_TYPES below; Colonize added 2026-08-17, Phase 5b).
   "startShipProduction(uint256,uint8,uint32)",
+  // Batch production: up to 15 ship/defense orders in one atomic transaction. Each order runs
+  // the same single-order path as `startShipProduction`/`startDefenseProduction` above (same
+  // resources, same caller checks, cost charged per order), so it carries the same risk
+  // profile and the same economy floor, with no policy flag of its own. The orders themselves are
+  // calldata, so `validateProductionBatch` below re-checks them independently of the agent.
+  "startProductionBatch(uint256,(uint8,uint8,uint32)[])",
 ] as const;
 
 /** Both overloaded forms of launchFleetMission on the deployed ABI (trap #2). Both are allowed at
@@ -270,6 +277,75 @@ function acsAllianceSelectorSet(): ReadonlySet<`0x${string}`> {
   return selectors;
 }
 
+/**
+ * `revokeDelegate` -- the game's single-wallet delegation. Gated on `policy.actions.
+ * allow_delegation` at an inclusive economy-or-above tier (it only ever REMOVES authority, and
+ * either the main wallet or the delegate may call it, so it doubles as a kill-switch for the
+ * agent's own delegated key).
+ *
+ * **`setDelegate` is deliberately in NO set here, at any tier, under any policy.** It grants
+ * control of the whole account to another key and must be signed by the main wallet itself, so
+ * this engine builds and simulates it (a human signs the printed calldata with their own wallet)
+ * but never sends it: `send` refuses it as "not in the tier's allowed set". A test pins that.
+ * The delegation views (`delegateOf`/`delegatorOf`/`effectivePlayer`) are reads, not sends.
+ *
+ * These functions are served from the game proxy's `fallback()`, so they resolve through the
+ * supplemental pinned ABI (`resolveFunctionAbi` merges it for the game contract).
+ */
+const DELEGATION_SIGNATURES = ["revokeDelegate()"] as const;
+
+function delegationSelectorSet(): ReadonlySet<`0x${string}`> {
+  const selectors = new Set<`0x${string}`>();
+  for (const sig of DELEGATION_SIGNATURES) {
+    const fn = resolveFunctionAbi(sig);
+    selectors.add(getSelector(fn));
+  }
+  return selectors;
+}
+
+// ---------------------------------------------------------------------------------------------
+// startProductionBatch's orders are calldata, not part of the selector, so the selector check
+// above cannot see them. The contract enforces all of this itself (`InvalidQuantity` / `InvalidId`);
+// re-checking here means a malformed or oversized batch is refused by this engine before signing
+// regardless of what the agent claims to have validated. The limits are the contract's, and the
+// strict on-chain pin means a contract that raises them is caught by the pin first.
+// ---------------------------------------------------------------------------------------------
+
+/** Contract: 1..15 orders per call. */
+export const MAX_PRODUCTION_BATCH_ORDERS = 15;
+/** `kind` 0 = ship, 1 = defense. Ship ids run 0..15 (Crawler last); defense ids run 0..9
+ *  (InterplanetaryMissile last) -- anything above routes to `InvalidId` on-chain. */
+const MAX_SHIP_ITEM_ID = 15;
+const MAX_DEFENSE_ITEM_ID = 9;
+const PRODUCTION_BATCH_SIGNATURE = "startProductionBatch(uint256,(uint8,uint8,uint32)[])";
+
+function productionBatchSelector(): `0x${string}` {
+  return getSelector(resolveFunctionAbi(PRODUCTION_BATCH_SIGNATURE));
+}
+
+/** Decode a `startProductionBatch` calldata blob and check the contract's own rules. */
+export function validateProductionBatch(data: `0x${string}`): { ok: boolean; detail: string } {
+  let orders: readonly { kind: number | bigint; itemId: number | bigint; quantity: number | bigint }[];
+  try {
+    const decoded = decodeFunctionData({ abi: [resolveFunctionAbi(PRODUCTION_BATCH_SIGNATURE)], data });
+    orders = decoded.args?.[1] as typeof orders;
+  } catch (err) {
+    return { ok: false, detail: `could not decode calldata: ${(err as Error).message}` };
+  }
+  if (!Array.isArray(orders) || orders.length === 0 || orders.length > MAX_PRODUCTION_BATCH_ORDERS) {
+    return { ok: false, detail: `expected 1..${MAX_PRODUCTION_BATCH_ORDERS} orders, got ${Array.isArray(orders) ? orders.length : "none"}` };
+  }
+  for (const [i, order] of orders.entries()) {
+    const kind = Number(order.kind);
+    const itemId = Number(order.itemId);
+    if (kind !== 0 && kind !== 1) return { ok: false, detail: `order ${i}: kind ${kind} is neither 0 (ship) nor 1 (defense)` };
+    if (order.quantity <= 0) return { ok: false, detail: `order ${i}: quantity must be > 0` };
+    const max = kind === 0 ? MAX_SHIP_ITEM_ID : MAX_DEFENSE_ITEM_ID;
+    if (itemId < 0 || itemId > max) return { ok: false, detail: `order ${i}: ${kind === 0 ? "ship" : "defense"} id ${itemId} is outside 0..${max}` };
+  }
+  return { ok: true, detail: `${orders.length} order(s)` };
+}
+
 /** Tier -> allowed 4-byte selectors, computed from the pinned ABI (never a hardcoded hex list).
  *  `advisor` is deliberately empty: it may build and simulate, but the empty set means the
  *  allowlist itself refuses every `send`, independent of any other guard. */
@@ -336,12 +412,14 @@ export async function checkAllowlist(
     resolveAllowCombat?: () => boolean;
     resolveAllowAlliance?: () => boolean;
     resolveAllowAcsDefense?: () => boolean;
+    resolveAllowDelegation?: () => boolean;
   } = {},
 ): Promise<AllowlistResult> {
   const fetchConfig = opts.fetchConfig ?? fetchLiveRuntimeConfig;
   const resolveAllowCombat = opts.resolveAllowCombat ?? resolveAllowCombatFromPolicy;
   const resolveAllowAlliance = opts.resolveAllowAlliance ?? resolveAllowAllianceFromPolicy;
   const resolveAllowAcsDefense = opts.resolveAllowAcsDefense ?? resolveAllowAcsDefenseFromPolicy;
+  const resolveAllowDelegation = opts.resolveAllowDelegation ?? resolveAllowDelegationFromPolicy;
   const checks: AllowlistCheck[] = [];
   const fail = (name: string, detail: string) => checks.push({ name, ok: false, detail });
   const pass = (name: string, detail?: string) => checks.push({ name, ok: true, detail });
@@ -404,12 +482,14 @@ export async function checkAllowlist(
   let allianceSelectors: ReadonlySet<`0x${string}`>;
   let defenseHoldSelectors: ReadonlySet<`0x${string}`>;
   let acsAllianceSelectors: ReadonlySet<`0x${string}`>;
+  let delegationSelectors: ReadonlySet<`0x${string}`>;
   try {
     allowedSelectors = tierSelectors(tier);
     combatSelectors = combatSelectorSet();
     allianceSelectors = allianceSelectorSet();
     defenseHoldSelectors = defenseHoldSelectorSet();
     acsAllianceSelectors = acsAllianceSelectorSet();
+    delegationSelectors = delegationSelectorSet();
   } catch (err) {
     fail("selector", `could not compute "${tier}" tier's selector set: ${(err as Error).message}`);
     allowedSelectors = new Set();
@@ -417,6 +497,7 @@ export async function checkAllowlist(
     allianceSelectors = new Set();
     defenseHoldSelectors = new Set();
     acsAllianceSelectors = new Set();
+    delegationSelectors = new Set();
   }
   if (allowedSelectors.has(selector)) {
     pass("selector", `${selector} allowed at tier "${tier}"`);
@@ -488,8 +569,37 @@ export async function checkAllowlist(
         `${selector} requires policy.actions.allow_acs_defense, but it could not be resolved: ${(err as Error).message}`,
       );
     }
+  } else if (delegationSelectors.has(selector) && (tier === "economy" || tier === "operator")) {
+    // revokeDelegate -- lazy, inclusive economy-or-above tier, own flag. setDelegate is in no set
+    // and so falls through to the refusal below at every tier, with or without the flag.
+    try {
+      if (resolveAllowDelegation()) {
+        pass("selector", `${selector} allowed at tier "${tier}" (delegation, policy.actions.allow_delegation=true)`);
+      } else {
+        fail("selector", `${selector} requires policy.actions.allow_delegation=true; it is not`);
+      }
+    } catch (err) {
+      fail(
+        "selector",
+        `${selector} requires policy.actions.allow_delegation, but it could not be resolved: ${(err as Error).message}`,
+      );
+    }
   } else {
     fail("selector", `${selector} is not in the "${tier}" tier's allowed set`);
+  }
+
+  // Extra: startProductionBatch's orders are calldata, so the selector check above cannot see
+  // them -- validate them independently (count, kind, quantity, item-id ranges).
+  let batchSelector: `0x${string}` | undefined;
+  try {
+    batchSelector = productionBatchSelector();
+  } catch {
+    // Unresolvable against the pin: the selector check above has already failed for it.
+  }
+  if (batchSelector !== undefined && selector === batchSelector) {
+    const batch = validateProductionBatch(tx.data);
+    if (batch.ok) pass("startProductionBatch.orders", batch.detail);
+    else fail("startProductionBatch.orders", batch.detail);
   }
 
   // Extra: operator's launchFleetMission is restricted to mission types 0 Transport / 1 Deploy /

@@ -94,6 +94,56 @@ def test_init_policy_copies_example_and_validates(isolated_home):
     assert policy.wallet.startswith("0x")
 
 
+def test_the_shipped_example_policy_carries_the_delegation_fields_at_their_safe_defaults(isolated_home):
+    """AGENTS.md §4: every new Policy/ActionsCfg field lands in assets/policy.example.json, the
+    literal file `vd init` copies. Both delegation fields default to "off / not delegated"."""
+    from veydrift_agent.models import Policy
+
+    raw = json.loads(state.bundled_asset("policy.example.json").read_text())
+    assert raw["signer"] is None
+    assert raw["actions"]["allow_delegation"] is False
+    policy = Policy.model_validate(raw)
+    assert policy.signer is None
+    assert policy.actions.allow_delegation is False
+
+
+_WALLET = "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
+_DELEGATE = "0x00000000000000000000000000000000000000d1"
+
+
+def _example_with(**overrides):
+    raw = json.loads(state.bundled_asset("policy.example.json").read_text())
+    raw.update(overrides)
+    return raw
+
+
+def test_policy_signer_accepts_a_distinct_delegate_address():
+    from veydrift_agent.models import Policy
+
+    assert Policy.model_validate(_example_with(wallet=_WALLET, signer=_DELEGATE)).signer == _DELEGATE
+
+
+@pytest.mark.parametrize("bad", ["0x1234", "not-an-address", "0x" + "g" * 40, 42])
+def test_policy_signer_must_be_a_20_byte_address(bad):
+    from pydantic import ValidationError
+
+    from veydrift_agent.models import Policy
+
+    with pytest.raises(ValidationError):
+        Policy.model_validate(_example_with(signer=bad))
+
+
+def test_policy_signer_may_not_equal_the_wallet_in_any_letter_case():
+    """Omit `signer` to sign as the wallet itself -- an explicit equal value is a misconfiguration
+    (the wallet engine refuses it too)."""
+    from pydantic import ValidationError
+
+    from veydrift_agent.models import Policy
+
+    with pytest.raises(ValidationError, match="signer equals wallet"):
+        Policy.model_validate(_example_with(wallet=_WALLET, signer=_WALLET.upper().replace("0X", "0x")))
+
+
 def test_init_policy_refuses_to_overwrite_without_force(isolated_home):
     state.init_policy()
     with pytest.raises(state.PolicyInitError):

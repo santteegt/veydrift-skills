@@ -101,7 +101,7 @@ and the actual command being run.
 ## Defense in depth: the allowlist, enforced here independently of the agent skill
 
 `checkAllowlist` re-runs unconditionally inside `send`, regardless of what already
-validated the transaction upstream. Five checks, all evaluated and reported:
+validated the transaction upstream. Five checks (plus a calldata check on a batch's orders), all evaluated and reported:
 
 1. `tx.to` ∈ addresses from a **live** `/runtime-config` fetch — never hardcoded; since the
    alliance feature, includes `allianceContractAddress` alongside the game contract's
@@ -114,7 +114,12 @@ validated the transaction upstream. Five checks, all evaluated and reported:
    same lazy way against `policy.actions.allow_alliance`, and `openDefenseIntent` (its
    own selector, kept separate from those 15) against the different
    `policy.actions.allow_acs_defense` — an inclusive tier check throughout, unlike
-   combat's, since `economy` is the floor for all of these, not the ceiling
+   combat's, since `economy` is the floor for all of these, not the ceiling;
+   `startProductionBatch` sits in the unconditional economy set (its orders are then re-validated
+   from calldata: 1–15, kind 0/1, quantity > 0, item ids in range); `revokeDelegate` is checked
+   lazily against `policy.actions.allow_delegation` at economy-or-above; **`setDelegate` is in no set
+   at any tier** — it must be signed by the main wallet itself, so this engine builds and simulates it
+   but never sends it
 3. `tx.value == 0` — no payable action is whitelisted at any tier reachable here
 4. `tx.chainId == 8453` (Base)
 5. `operator`-only: `launchFleetMission`'s mission-type argument (decoded from calldata,
@@ -126,9 +131,13 @@ validated the transaction upstream. Five checks, all evaluated and reported:
    DefenseHold(9) is dead enum space for this function specifically (its own
    `launchDefenseHold` entrypoint above is the real, separate reachable path)
 
-Before the allowlist, `send` also refuses unless the provider's address equals `policy.json`'s
-`wallet` (skipped only when no policy file exists) — a key for another account can't sign a
-transaction planned for this one.
+Before the allowlist, `send` also refuses unless the provider's address equals the policy's
+`signer` (else its `wallet`; skipped only when no policy file exists) — a key for another account
+can't sign a transaction planned for this one. Then, after the allowlist, it proves on-chain that
+the signer **acts as** the policy `wallet`: `effectivePlayer(signer)` must equal `wallet`. That is
+one check for every case — the wallet signing as itself, a registered delegate signing for it, an
+unregistered or revoked delegate (refused), and a wallet that is itself someone's delegate
+(refused). Fail-closed: an unreadable chain refuses.
 
 After the allowlist and immediately before signing, `send` re-reads the chain: every pinned proxy's
 implementation (and its code hash) must still match the pin, `tx.to` must be a pinned proxy, and the

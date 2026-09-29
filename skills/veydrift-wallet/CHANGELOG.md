@@ -11,6 +11,34 @@ lockstep.
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-28
+
+### Added
+- **`startProductionBatch` allowlisted** at economy tier or above, in the unconditional set with the
+  single-order production functions (it runs the same path per order; no policy flag). Because the
+  orders are calldata, `checkAllowlist` also validates them independently of the agent
+  (`validateProductionBatch`): 1–15 orders, `kind` 0 (ship) or 1 (defense), quantity > 0, item ids
+  within the Ship (0–15) / Defense (0–9) enums.
+- **`revokeDelegate` allowlisted** at economy tier or above behind the new
+  `policy.actions.allow_delegation` flag (`resolveAllowDelegation`, same shape as the sibling
+  resolvers: no CLI flag or env var, `false` on a missing policy, refusal on a malformed one). It only
+  removes authority and either the main wallet or the delegate may call it, so it doubles as a
+  kill-switch for a delegated key.
+- **`setDelegate` is deliberately in no allowlist set, at any tier, under any policy.** It grants
+  control of the whole account and must be signed by the main wallet itself, so `walletctl` builds and
+  simulates it but `send` always refuses it. A test pins this.
+- **Delegate-signer mode.** An optional `policy.json` `signer` names a delegate key that signs for
+  `wallet`. `resolveExpectedSigner` resolves `{wallet, signer}`; `sendTx` requires the provider's
+  address to equal the signer and, after the allowlist, proves on-chain that the signer acts as the
+  wallet — `effectivePlayer(signer) == wallet` (`src/signer-binding.ts`). The one check covers a
+  registered delegate, an unregistered/revoked one (refused), a delegate of another main (refused), and
+  a wallet that is itself someone's delegate (refused). Fail-closed; every failure is a
+  `SendRefusedError`. `walletctl status` prints the wallet, the signer and what the signer acts as.
+- `SendOptions` forwards `resolveAllowAcsDefense` (it was missing) and `resolveAllowDelegation`.
+
+### Changed
+- The economy set has six functions (was five).
+
 ## [2.0.0] - 2026-09-28
 
 Major: the ABI pin moved and drift detection changed authority (both are breaking per this

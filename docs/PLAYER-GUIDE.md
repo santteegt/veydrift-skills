@@ -246,6 +246,7 @@ change called out:
   "version": 1,
   "tier": "advisor",                 // <-- start here. See §13 before ever changing this.
   "wallet": "0x224aba5d489675a7bd3ce07786fada466b46fa0f",   // <-- YOUR wallet address
+  "signer": null,                    // optional: a delegate key that signs FOR the wallet -- see §7
   "planets": [664],                  // <-- YOUR planet id(s). [] auto-discovers all of them
   "chain_id": 8453,                  // Base mainnet. Leave this alone.
   "cadence": {
@@ -269,7 +270,8 @@ change called out:
     "allow_fleet_noncombat": false,   // gates Transport/Deploy/Harvest proposals -- operator tier, see §13
     "allow_combat": false,            // gates Attack + Missile -- operator tier, see §16
     "allow_alliance": false,          // gates 15 alliance actions -- economy tier or above, override-only, see §16
-    "allow_acs_defense": false        // gates AcsDefend/Intercept/launchDefenseHold (operator) + openDefenseIntent (economy) -- override-only, see §16
+    "allow_acs_defense": false,       // gates AcsDefend/Intercept/launchDefenseHold (operator) + openDefenseIntent (economy) -- override-only, see §16
+    "allow_delegation": false         // gates revokeDelegate (economy or above) -- override-only; setDelegate is never sendable, see §7
   },
   "escalation": {
     "on_incoming_fleet": true, "on_game_paused": true, "on_abi_hash_change": true,
@@ -406,6 +408,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `version` | int (literal) | only the integer `1` | `1` |
 | `tier` | string enum | exactly `"advisor"`, `"economy"`, `"operator"` (lowercase) | `"advisor"` |
 | `wallet` | string | any string — **no address format or checksum validation at the schema level.** A malformed address is not caught until something downstream tries to use it. | required, no default |
+| `signer` | string or null | a 20-byte address different from `wallet`, or `null`/omitted. **Optional: the key that signs on the wallet's behalf.** The game's single-wallet delegation lets a separate *delegate* key act as the owner; `wallet` stays the player (whose planets are read and simulated) and `signer` says which key signs. The wallet engine refuses to send unless the provider's address equals this **and** `effectivePlayer(signer)` equals `wallet` on-chain. Omit it to sign as the wallet itself. See §7. | `null` |
 | `planets` | list of int | any list of planet ids; `[]` is a special case meaning "auto-discover every planet this wallet owns," **not** "no planets" | `[]` |
 | `chain_id` | int | **completely unconstrained by the schema** — any integer validates in `policy.json` itself. It's the separate `veydrift-wallet` skill's own allowlist that actually requires `8453` and refuses every write otherwise. Leave it at `8453`: there's no upside to changing it, only a wallet skill that then refuses to work. | `8453` |
 
@@ -462,6 +465,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `allow_combat` | bool | `true`/`false` — gates BOTH combat actions this codebase supports: Attack (`launchFleetMission` mission type 3) and Missile (`launchInterplanetaryMissileAttack`, a separate contract entrypoint), at `operator` tier (`allow_fleet_noncombat` is irrelevant to either — both are checked independently of it). `MissileAttack`/`AcsAttack` (as `launchFleetMission` mission-type values) are still **read and unconditionally ignored by every code path**; enabling either requires an actual source change, not a config edit. AcsDefend/Intercept are a separate story — see `allow_acs_defense` below; `allow_combat` alone never unlocks them. Setting this true makes both launch-encodable/allowlist-permitted AND lets the ladder's two most conservative rungs propose one: `8e:attack` attacks the highest-raidable reachable target via `/highscores`, using every combat-capable ship built on the origin planet, only once every other rung (including Colonize) has found nothing at all; `8f:missile`, reached only once Attack itself has found nothing, fires every owned Interplanetary Missile at the target's most-numerous eligible defense type. Also unlocks the attack/missile `opportunities:` signal (§10) at every tier, including `advisor` — you'll see a raid target even on a tick that proposed something else. See §16. | `false` |
 | `allow_alliance` | bool | `true`/`false` — gates 15 alliance-membership actions on `VeydriftAllianceSystem` (create/invite/accept/leave/kick/roles/ownership-transfer — a wholly separate deployed contract, its own address, its own pinned ABI), at `economy` tier **or above** (unlike combat, not `operator`-only — membership carries no fund/combat risk). **Never planner-proposed** — no ladder rung emits one; reachable only via `vd tick --action`, additionally gated on `policy.strategy.allow_agent_action_override`. `vd tick` reports current membership and pending invites/join-requests on every tick whenever this is `true`, regardless of what action that tick proposes. Also gates whether `coordination.py`'s ACS defense suggestions are surfaced at all (a visibility gate, independent of `allow_acs_defense` below, which gates acting on one). Diplomacy (Ally/NAP/War) remains out of scope, unconditionally. See §16. | `false` |
 | `allow_acs_defense` | bool | `true`/`false` — gates AcsDefend/Intercept (`launchFleetMission` mission types 5/6), `launchDefenseHold` (its own entrypoint), and `openDefenseIntent` (on `VeydriftAllianceSystem`) as one feature. Tier floor splits within this one flag: AcsDefend/Intercept/`launchDefenseHold` need `operator` (real fleet/loss risk); `openDefenseIntent` needs only `economy` (it opens a coordination record; moves no fleet, spends no resource). **Never planner-proposed** — reachable only via `vd tick --action`, additionally gated on `policy.strategy.allow_agent_action_override`, same posture as `allow_alliance`. `vd tick` (when `allow_alliance` is also on) and `vd radar check` both surface real, live `hostile_mission_id` values worth acting on via `coordination.py`'s suggestions. See §16 and `references/coordination.md` for the full contract mechanics. | `false` |
+| `allow_delegation` | bool | `true`/`false` — gates `revokeDelegate` (removes a delegate; callable by the main wallet or the delegate, so it also works as a kill-switch for a delegated key) at `economy` tier or above, via `vd tick --action` only, never planner-proposed. **`setDelegate` is not governed by this flag and is never sendable by this codebase at any tier or under any policy** — it must be signed by your main wallet itself, so it is calldata-only (built and printed for you to sign). | `false` |
 
 **`escalation`**
 
@@ -729,6 +733,41 @@ endpoints impose unless you point each at its own via `VEYDRIFT_RPC_URL` above �
 throughput consideration, not a data-collision one.
 
 </details>
+
+### Optional: a delegate signing key
+
+The game lets one wallet appoint a single **delegate** key that acts as the owner for gameplay —
+building, research, production, fleets, alliance actions. That lets the agent sign with a low-privilege
+hot key while your main wallet, the one that owns the planets and holds your funds, stays offline.
+Ownership does not change: planets stay bound to the main wallet, and a delegate cannot appoint or
+replace itself.
+
+**`setDelegate` must be signed by your main wallet, and this codebase never sends it at any tier** —
+it builds and checks the calldata, and you sign it yourself.
+
+1. Create the delegate key as its own keystore (as above) and note its address. **Use an address with
+   no planets of its own**: the contract does not check, and a delegate that owns planets makes them
+   unreachable through the delegate.
+2. Build and check the calldata. Nothing is sent:
+
+   ```bash
+   echo '{"function":"setDelegate(address)","args":["0xDELEGATE_ADDRESS"]}' > set.json
+   npx tsx src/cli.ts build    --action set.json --from 0xYOUR_MAIN_WALLET --out tx.json
+   npx tsx src/cli.ts simulate --tx tx.json --from 0xYOUR_MAIN_WALLET     # expect ok: true
+   ```
+
+3. Sign and send `tx.json`'s `to` and `data` from your **main wallet** with your own tooling (wallet
+   app, hardware wallet, `cast send`). It costs a little gas (about 90k).
+4. Point the policy at the delegate: set `"signer": "0xDELEGATE_ADDRESS"` in `policy.json` (keep
+   `wallet` as your main wallet) and run the wallet skill with the delegate's keystore.
+   `walletctl status` shows `acts as: <your main wallet> (the policy wallet)` once the delegation is
+   registered; until then it names the problem, and `send` refuses.
+5. To remove the delegate, send `revokeDelegate()` from your main wallet (the same build-and-sign flow),
+   or — with `"allow_delegation": true` at `economy` tier or above — from the delegate key itself.
+
+Risk: a delegate key can do whatever this skill's allowlist permits at your tier on the main wallet's
+planets (there are no fund transfers to steal; the exposure is game state — fleets, and alliance
+actions if you enabled them). It cannot re-point itself, and either key can revoke it.
 
 ## 8. Your first tick
 

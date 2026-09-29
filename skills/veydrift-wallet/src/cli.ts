@@ -31,11 +31,13 @@ import { TIERS, type Tier } from "./allowlist.js";
 import { checkOnchainPin, failedOnchainPin, type OnchainPinResult } from "./onchain-pin.js";
 import { AVAILABLE_PROVIDERS, getProvider } from "./providers/index.js";
 import {
-  resolveExpectedWallet,
+  resolveExpectedSigner,
   resolveTier as resolvePolicyTier,
   TierResolutionError,
   WalletBindingResolutionError,
+  type SignerBinding,
 } from "./policy.js";
+import { checkEffectivePlayer } from "./signer-binding.js";
 import {
   BroadcastUncertainError,
   buildTx,
@@ -95,11 +97,12 @@ function resolveTier(flag: string | undefined): Tier {
   }
 }
 
-/** Resolves the address `send` must sign as from `$VEYDRIFT_HOME/policy.json`'s `wallet` (`null`
- *  when no policy file exists). Exits 4, like `resolveTier`, on a malformed policy. */
-function resolveWalletBinding(): `0x${string}` | null {
+/** Resolves who `send` must sign as (`signer`, else `wallet`) and which player that signer must act
+ *  as (`wallet`), from `$VEYDRIFT_HOME/policy.json` (`null` when no policy file exists). Exits 4,
+ *  like `resolveTier`, on a malformed policy. */
+function resolveWalletBinding(): SignerBinding | null {
   try {
-    return resolveExpectedWallet();
+    return resolveExpectedSigner();
   } catch (err) {
     if (err instanceof WalletBindingResolutionError) {
       console.error(err.message);
@@ -156,17 +159,27 @@ program
 
       console.log(`provider:        ${provider.name}`);
       console.log(`address:         ${address}`);
-      let policyWallet: `0x${string}` | null | undefined;
+      let binding: SignerBinding | null | undefined;
       try {
-        policyWallet = resolveExpectedWallet();
+        binding = resolveExpectedSigner();
       } catch (err) {
         console.log(`policy wallet:   *** UNREADABLE -- ${(err as Error).message} ***`);
       }
-      if (policyWallet === null) {
+      if (binding === null) {
         console.log("policy wallet:   (no policy.json -- send will not check the signer address)");
-      } else if (policyWallet !== undefined) {
-        const match = policyWallet.toLowerCase() === address.toLowerCase();
-        console.log(`policy wallet:   ${policyWallet} ${match ? "(MATCH)" : "*** MISMATCH -- send will refuse ***"}`);
+      } else if (binding !== undefined) {
+        const match = binding.signer.toLowerCase() === address.toLowerCase();
+        if (binding.delegated) {
+          console.log(`policy wallet:   ${binding.wallet} (the player)`);
+          console.log(`policy signer:   ${binding.signer} (a delegate) ${match ? "(MATCH)" : "*** MISMATCH -- send will refuse ***"}`);
+        } else {
+          console.log(`policy wallet:   ${binding.wallet} ${match ? "(MATCH)" : "*** MISMATCH -- send will refuse ***"}`);
+        }
+        const acting = await checkEffectivePlayer({ signer: address, player: binding.wallet });
+        console.log(
+          `acts as:         ${acting.effectivePlayer ?? "(unreadable)"} ` +
+            `${acting.ok ? "(the policy wallet)" : `*** ${acting.problem ?? "does not act as the policy wallet"} ***`}`,
+        );
       }
       console.log(`rpcUrl:          ${getRpcUrl()}`);
       console.log(`chainId:         8453 (Base)`);
@@ -399,7 +412,7 @@ program
   .action(async (opts: { tx: string; confirm: boolean; tier?: string; provider?: string }) => {
     const { tx, purpose } = loadTxFile(opts.tx);
     const tier = resolveTier(opts.tier);
-    const expectedAddress = resolveWalletBinding();
+    const binding = resolveWalletBinding();
 
     const display = await describeTx(tx, { purpose });
     console.log("--- transaction ---");
@@ -430,7 +443,13 @@ program
       return;
     }
     try {
-      const hash = await sendTx(tx, { tier, confirm: true, provider, expectedAddress });
+      const hash = await sendTx(tx, {
+        tier,
+        confirm: true,
+        provider,
+        expectedAddress: binding?.signer ?? null,
+        expectedPlayer: binding?.wallet ?? null,
+      });
       console.log(`\nSUBMITTED: ${hash}`);
     } catch (err) {
       // Output markers are part of the contract with veydrift-agent's tick: "REFUSED:" means

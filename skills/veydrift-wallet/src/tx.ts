@@ -30,6 +30,7 @@ import { checkAllowlist, type Tier } from "./allowlist.js";
 import { checkOnchainPin, needsDependencyPin, type OnchainPinResult } from "./onchain-pin.js";
 import type { UnsignedTx, WalletProvider } from "./providers/types.js";
 import { getPublicClient, type VeydriftPublicClient } from "./rpc.js";
+import { checkEffectivePlayer, type EffectivePlayerCheck } from "./signer-binding.js";
 
 export type { UnsignedTx, WalletProvider } from "./providers/types.js";
 // The RPC helpers live in rpc.ts (so onchain-pin.ts can read the chain without a runtime import
@@ -435,10 +436,14 @@ export interface SendOptions {
   tier: Tier;
   confirm: boolean;
   provider: WalletProvider;
-  /** The address the provider must sign as (`policy.json`'s `wallet`, via `resolveExpectedWallet`),
-   *  or `null` when there is no policy to bind against. Required, not optional, so no caller can
-   *  skip the check by omission. */
+  /** The address the provider must sign as (`policy.json`'s `signer`, else its `wallet`, via
+   *  `resolveExpectedSigner`), or `null` when there is no policy to bind against. Required, not
+   *  optional, so no caller can skip the check by omission. */
   expectedAddress: `0x${string}` | null;
+  /** The game player the signer must act as on-chain (`policy.json`'s `wallet`). Omitted means "the
+   *  same address as `expectedAddress`" -- the non-delegated case -- so a caller cannot weaken the
+   *  binding by leaving it out. Ignored when `expectedAddress` is `null`. */
+  expectedPlayer?: `0x${string}` | null;
   fetchConfig?: () => Promise<RuntimeConfig>;
   /** Injectable for tests; forwarded to `checkAllowlist`'s own option of the same name. See
    *  `allowlist.ts`'s doc comment for why this is resolved lazily rather than eagerly. */
@@ -446,6 +451,12 @@ export interface SendOptions {
   /** Injectable for tests; forwarded to `checkAllowlist`'s own option of the same name -- the
    *  alliance-feature counterpart to `resolveAllowCombat` above, same lazy-resolution rationale. */
   resolveAllowAlliance?: () => boolean;
+  /** Injectable for tests; forwarded to `checkAllowlist` (`allow_acs_defense`). */
+  resolveAllowAcsDefense?: () => boolean;
+  /** Injectable for tests; forwarded to `checkAllowlist` (`allow_delegation`, for `revokeDelegate`). */
+  resolveAllowDelegation?: () => boolean;
+  /** Injectable for tests; defaults to the real `checkEffectivePlayer` (an on-chain `eth_call`). */
+  checkEffectivePlayer?: (o: { signer: string; player: string }) => Promise<EffectivePlayerCheck>;
   /** Injectable for tests; defaults to the real `checkOnchainPin`. Runs LAST, right before signing
    *  (it is the only network-dependent refusal, so every cheap local refusal happens first). */
   checkOnchainPin?: (o: { to: string; verifyCode: boolean }) => Promise<OnchainPinResult>;
@@ -468,17 +479,18 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
     );
   }
 
+  let signerAddress: `0x${string}` | undefined;
   if (opts.expectedAddress !== null) {
-    let signer: `0x${string}`;
     try {
-      signer = await opts.provider.getAddress();
+      signerAddress = await opts.provider.getAddress();
     } catch (err) {
       throw new SendRefusedError(`could not derive the provider's signer address: ${(err as Error).message}`);
     }
-    if (signer.toLowerCase() !== opts.expectedAddress.toLowerCase()) {
+    if (signerAddress.toLowerCase() !== opts.expectedAddress.toLowerCase()) {
       throw new SendRefusedError(
-        `signer address mismatch: provider "${opts.provider.name}" signs as ${signer}, but policy.json's ` +
-          `wallet is ${opts.expectedAddress}. The transaction was planned and simulated for the policy ` +
+        `signer address mismatch: provider "${opts.provider.name}" signs as ${signerAddress}, but policy.json's ` +
+          `${opts.expectedPlayer && opts.expectedPlayer.toLowerCase() !== opts.expectedAddress.toLowerCase() ? "signer" : "wallet"} ` +
+          `is ${opts.expectedAddress}. The transaction was planned and simulated for the policy ` +
           `wallet; fix the provider key or the policy before sending.`,
       );
     }
@@ -488,9 +500,28 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
     fetchConfig: opts.fetchConfig,
     resolveAllowCombat: opts.resolveAllowCombat,
     resolveAllowAlliance: opts.resolveAllowAlliance,
+    resolveAllowAcsDefense: opts.resolveAllowAcsDefense,
+    resolveAllowDelegation: opts.resolveAllowDelegation,
   });
   if (!allow.ok) {
     throw new SendRefusedError(`allowlist rejected this transaction: ${allow.reason}`);
+  }
+
+  // The signer must act as the policy wallet ON-CHAIN, not merely share its address: the game's
+  // delegation lets a separate key act as an owner, and a wallet that is itself someone's delegate
+  // would act as that other account. Network-dependent, so it runs after every local refusal, and
+  // fail-closed like the pin check below.
+  if (opts.expectedAddress !== null && signerAddress !== undefined) {
+    const player = opts.expectedPlayer ?? opts.expectedAddress;
+    let acting: EffectivePlayerCheck;
+    try {
+      acting = await (opts.checkEffectivePlayer ?? ((o) => checkEffectivePlayer(o)))({ signer: signerAddress, player });
+    } catch (err) {
+      throw new SendRefusedError(`could not verify which player the signer acts as: ${(err as Error).message}`);
+    }
+    if (!acting.ok) {
+      throw new SendRefusedError(`signer binding failed: ${acting.problem ?? "the signer does not act as the policy wallet"}`);
+    }
   }
 
   // The on-chain pin: the contract system behind the pinned proxies must still be the one this
