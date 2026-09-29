@@ -800,7 +800,7 @@ it off at this tier. Real output, captured against this repo's reference planet:
 │     alts:   1 considered and not selected --                                │
 │              [energy] Solar Satellite (unscored) -- locked: needs Shipyard   │
 │ 1 (have 0)                                                                   │
-│     guards: 17/20 pass (block)                                               │
+│     guards: 24/27 pass (block)                                               │
 │     tx:     to 0xf397910F005151b09644228573a4353818D3755d  data              │
 │ 0x165715e3... (NOT SUBMITTED -- tier advisor)                                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -851,16 +851,31 @@ The short version:
   entirely — that bypasses every one of the guarantees above and leaves no audit trail.
   If you ever see that pattern suggested, prefer `--action` instead.
 
+Two override shapes that have no planner rung:
+
+- **A production batch** (`"kind": "production_batch"`, `"function": "startProductionBatch"`, an
+  `orders` list of `{"kind": "ship"|"defense", "item_id", "quantity"}`): up to 15 ship and defense
+  orders queued on one planet in one atomic transaction. It needs `allow_ships`/`allow_defense` for
+  the kinds it contains, and the guard re-derives its cost from live prices, so `cost` can be
+  omitted. Gas grows with the order count, so use it for *distinct* items, not one item in bulk.
+- **A delegation action** (`"kind": "delegation"`, `"function": "setDelegate"` with a `"delegate"`
+  address, or `"revokeDelegate"`), behind `allow_delegation`. `setDelegate` is calldata-only: the
+  tick simulates it as your main wallet, prints the full calldata and who must sign it, and never
+  sends it. See §7's "Optional: a delegate signing key" for the whole flow.
+
+Every unsent on-chain proposal's full calldata is written to `ticks/<timestamp>.md` (the panel's
+`tx:` line shows only the selector), and `vd tick --format json` carries it under `tx`.
+
 ## 10. Reading what the agent tells you
 
 A few things worth understanding about that block before you trust it:
 
-- **`guards: 17/20 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
+- **`guards: 24/27 pass (block)`** at tier 1 is expected, not a problem. The `tier` gate
   itself blocks — every onchain proposal is blocked at tier 1 by design, since advisor
   mode may never submit. That's what makes tier 1 safe *by construction*, not by
   discipline: the decision genuinely is `BLOCK`, so nothing past that point ever runs.
-  (Two of the 20 are `mission_type` and `fleet_slots`, which only ever have anything to
-  check on a fleet-mission proposal — see §13's note on operator tier below. Both pass
+  (Several of the 27 — `mission_type`, `fleet_slots`, `production_batch`, `delegation` — only ever
+  have anything to check on their own kind of proposal — see §13's note on operator tier below. Both pass
   trivially for everything else, so a routine building or research tick simply shows them
   among the passes.)
 - **`why:`** states the actual numbers behind the decision, not a canned explanation. If
@@ -1180,7 +1195,7 @@ asks it to invent numbers it doesn't have.
 | `/health` reports `ok: false`, but the tick still runs normally | Expected: `ok:false` caused *solely* by a combat-related backend readiness issue (a "New attacks are temporarily paused"-style condition) no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy, so that specific condition can't affect what it would propose. Any other cause of `ok:false` still blocks/escalates as before. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
 | `walletctl verify-abi` shows a mismatch | A pinned contract's implementation on the chain has changed since this repo's pin (or the chain could not be read — the output says which). **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe (`npm run repin`). |
-| Guards read `22/25 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
+| Guards read `24/27 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 | `incoming: none` but you were attacked | Expected — that field only ever lists *future* arrivals; it can't show an attack that has already resolved. Check the `radar:` line instead (§10), or run `vd radar check` (§11a) directly — its second signal reads your mission archive specifically to catch this case. |

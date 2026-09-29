@@ -67,6 +67,7 @@ def scrub_text(
     *,
     known_tx_hashes: Iterable[str] = (),
     secret_env_vars: Iterable[str] | None = None,
+    preserve: Iterable[str] = (),
 ) -> str:
     """Strip anything that looks like a private key from `text`.
 
@@ -79,14 +80,26 @@ def scrub_text(
     2. The literal current value of every configured secret env var (with/without a `0x`
        prefix) is redacted wherever it appears verbatim, independent of the regex above --
        this also catches secrets that are not 32 bytes (e.g. a keystore password).
+
+    `preserve` lists exact strings that must survive step 1 untouched -- the calldata of the
+    transaction being reported. Calldata is public, about-to-be-broadcast data, but any argument
+    that is 32 bytes wide (every `uint256`, `address` padded to a word, a tuple-array offset)
+    makes a run of 64 hex characters that step 1 would mask, corrupting the one artifact a human
+    needs to copy. `_json_line` gives `tx.data` the same exemption for the JSONL logs; this is the
+    equivalent for the text/markdown outputs. Step 2 still applies to preserved text.
     """
     known = {h.lower() for h in known_tx_hashes if h}
+    keep = sorted({p for p in preserve if p}, key=len, reverse=True)
+    for i, value in enumerate(keep):
+        text = text.replace(value, f"@@VD_KEEP_{i}@@")
 
     def _mask_hex(match: re.Match[str]) -> str:
         value = match.group(0)
         return value if value.lower() in known else "0x" + "*" * 64
 
     scrubbed = _HEX64_RE.sub(_mask_hex, text)
+    for i, value in enumerate(keep):
+        scrubbed = scrubbed.replace(f"@@VD_KEEP_{i}@@", value)
 
     for var in secret_env_vars if secret_env_vars is not None else configured_secret_env_vars():
         value = os.environ.get(var)
@@ -266,17 +279,20 @@ def print_tick_report(block_text: str, *, tick_number: int) -> None:
     _console.print(Panel(_escape_markup(block_text), title=f"vd tick #{tick_number}", border_style="cyan", expand=False))
 
 
-def write_tick_markdown(block_text: str, *, taken_at: datetime, extra_markdown: str | None = None) -> Path:
+def write_tick_markdown(
+    block_text: str, *, taken_at: datetime, extra_markdown: str | None = None, preserve: Iterable[str] = ()
+) -> Path:
     """`extra_markdown` (optional): appended as its own section after the fenced block,
     for detail that belongs in the saved record but would make the printed panel
     (`print_tick_report`, which shares `block_text` with this function) too long --
     currently `brief.py`'s full observed-vs-inferred rendering, `tick._finish_tick`'s
     only caller of this parameter. Scrubbed exactly like `block_text` -- this file is
-    the on-disk audit artifact, so nothing bypasses `scrub_text`."""
+    the on-disk audit artifact, so nothing bypasses `scrub_text`. `preserve` is `scrub_text`'s
+    own parameter of that name: the built calldata, which must reach the file whole."""
     path = ticks_dir() / f"{taken_at.strftime('%Y-%m-%dT%H-%M-%SZ')}.md"
-    text = f"# Tick {taken_at.isoformat()}\n\n```text\n{scrub_text(block_text)}\n```\n"
+    text = f"# Tick {taken_at.isoformat()}\n\n```text\n{scrub_text(block_text, preserve=preserve)}\n```\n"
     if extra_markdown:
-        text += f"\n## Full brief\n\n```text\n{scrub_text(extra_markdown)}\n```\n"
+        text += f"\n## Full brief\n\n```text\n{scrub_text(extra_markdown, preserve=preserve)}\n```\n"
     path.write_text(text)
     return path
 

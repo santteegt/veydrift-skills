@@ -11,6 +11,33 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-09-28
+
+### Added
+- **`ActionKind.PRODUCTION_BATCH`** (`startProductionBatch`) with `Action.orders` (`ProductionOrder`:
+  `kind` ship/defense, `item_id`, `quantity`). Reachable through `vd tick --action`; encoded as
+  `[kind, item, quantity]` triples with kind 0 = ship, 1 = defense.
+- **`ActionKind.DELEGATION`** (`setDelegate`/`revokeDelegate`) with `Action.delegate`. Override-only,
+  both behind `policy.actions.allow_delegation`.
+- Guard gates **`production_batch`** and **`delegation`** (25 → 27 gates). `production_batch`
+  validates 1–15 orders, ids, quantities, per-kind `allow_ships`/`allow_defense`, prerequisites and
+  defense caps aggregated over the batch. `delegation` refuses a `setDelegate` address that owns
+  planets (live `/wallet/{addr}/planets`, fail-closed on stale or unreadable data), the zero address
+  and the policy wallet.
+- `setDelegate` is calldata-only: `tier` BLOCKs it at every tier, the tick builds and simulates it as
+  `policy.wallet`, and prints the full calldata with who must send it.
+- Advisor output: `--format json` carries `tx`; `ticks/<ts>.md` carries the full calldata of every
+  unsent on-chain proposal; the panel names the configured delegate signer. `log.scrub_text` gained
+  `preserve` so calldata containing a 32-byte word is no longer masked in those outputs.
+- A `signer` verdict escalates when the provider's address is not `policy.signer`.
+
+### Changed
+- A production action's spend is re-derived from live unit costs × quantity, never from
+  `Action.cost` — for batches and for single orders with quantity above 1. A batch's idempotency key
+  is its sorted `(kind, item)` set, not its quantities.
+- The send nonce falls back to `policy.signer` before `policy.wallet`.
+- `brief.py` describes batch and delegation actions.
+
 ## [1.25.0] - 2026-09-28
 
 ### Added

@@ -275,6 +275,23 @@ def _queue_and_timing(
         ActionKind.SHIP: (QueueKind.SHIP, "ship"),
         ActionKind.DEFENSE: (QueueKind.DEFENSE, "defense"),
     }
+    if action.kind is ActionKind.PRODUCTION_BATCH:
+        ships = sum(1 for o in action.orders if o.kind == "ship")
+        defenses = len(action.orders) - ships
+        busy = [
+            f"{label} ({q.entity_name}, {q.seconds_remaining if q.seconds_remaining is not None else _UNKNOWN}s left)"
+            for label, q in (
+                ("ship", planet.queues.get(QueueKind.SHIP)),
+                ("defense", planet.queues.get(QueueKind.DEFENSE)),
+            )
+            if q is not None
+        ]
+        note = f"; already busy: {', '.join(busy)}" if busy else "; both lanes currently idle"
+        queue_impact = (
+            f"queues {len(action.orders)} order(s) on planet {planet.planet_id} ({ships} ship, {defenses} defense) "
+            f"-- separate lanes, each order behind its lane's current work{note}."
+        )
+        return observed, inferred, queue_impact, "one atomic transaction: every order is charged and queued together, or none is."
     if action.kind is ActionKind.RESEARCH:
         current = snapshot.research_queue
         queue_label = "research"
@@ -354,6 +371,8 @@ def _fleet_or_account_queue_and_timing(action: Action, snapshot: Snapshot) -> tu
         return "no queue -- resolveFleetMission is permissionless and free.", "resolves immediately once mined."
     if action.kind is ActionKind.ALLIANCE:
         return "no queue -- alliance membership actions are account-level, not queued.", "synchronous once mined."
+    if action.kind is ActionKind.DELEGATION:
+        return "no queue -- delegation is account-level.", "synchronous once mined; takes effect for the next transaction."
     if action.kind is ActionKind.MISSILE_ATTACK:
         return "no fleet slot, no queue -- fully synchronous.", "resolves in the same transaction that sends it."
     if action.kind in (ActionKind.FLEET_MISSION, ActionKind.DEFENSE_HOLD):
@@ -438,6 +457,19 @@ def _planet_risks(action: Action, planet: PlanetSnapshot, policy: Policy) -> lis
 
 
 def _kind_risks(action: Action) -> list[BriefRisk]:
+    if action.kind is ActionKind.DELEGATION:
+        if action.function == "setDelegate":
+            return [
+                BriefRisk(
+                    code="delegation_grant",
+                    severity="high",
+                    detail=(
+                        f"lets {action.delegate} act as this wallet for gameplay (never for funds); calldata-only -- it "
+                        "must be signed from the main wallet, and either key can revoke it."
+                    ),
+                )
+            ]
+        return [BriefRisk(code="delegation_revoke", severity="low", detail="removes the registered delegate's authority; the main wallet is unaffected.")]
     if action.kind is ActionKind.MISSILE_ATTACK:
         return [BriefRisk(code="combat_loss", severity="high", detail="fires a weapon at another player; no fleet risked, but this is an act of combat.")]
     if action.kind in (ActionKind.FLEET_MISSION, ActionKind.DEFENSE_HOLD) and action.mission_type in _COMBAT_MISSION_TYPES:

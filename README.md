@@ -33,7 +33,7 @@ path in this codebase advances the tier on its own; only a human editing
 | Tier | May propose | May submit | Gate to enter |
 | --- | --- | --- | --- |
 | 1 `advisor` | everything in scope | **nothing** | default |
-| 2 `economy` (current) | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction`, plus 15 alliance-membership functions (via `--action` only) under `policy.actions.allow_alliance=true` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
+| 2 `economy` (current) | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction`, `startProductionBatch` (via `--action` only), `revokeDelegate` (via `--action`, under `policy.actions.allow_delegation=true`), plus 15 alliance-membership functions (via `--action` only) under `policy.actions.allow_alliance=true` | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
 | 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) unconditionally, plus Attack(3) with `policy.actions.allow_combat=true`, plus `launchInterplanetaryMissileAttack` under the same flag | ≥7 days clean T2, human edit |
 
 The `FleetMissionType` enum's `AcsDefend`/`Intercept`/`MissileAttack`/`AcsAttack`/

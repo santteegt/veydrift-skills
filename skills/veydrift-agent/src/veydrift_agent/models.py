@@ -97,6 +97,19 @@ class ActionKind(str, Enum):
     #: docstring for why the cross-layer test needs them kept separate). See
     #: `references/manual-action-override.md` for worked examples of both kinds of gating.
     ALLIANCE = "alliance"
+    #: startProductionBatch(uint256,(uint8,uint8,uint32)[]) -- up to 15 ship/defense orders in
+    #: one atomic transaction (`Action.orders`). Same `economy` floor and same risk profile as
+    #: the single-order kinds above; each order is validated independently by
+    #: `guard._gate_production_batch`. Reachable via `vd tick --action` always, and from the
+    #: planner only behind `policy.strategy.production_batch`.
+    PRODUCTION_BATCH = "production_batch"
+    #: The game's single-wallet delegation (`Action.function` is `setDelegate` or
+    #: `revokeDelegate`, delegate address in `Action.delegate`). **Never planner-produced.**
+    #: `setDelegate` must be signed by the main wallet itself, so it is calldata-only: the
+    #: wallet refuses to send it at every tier and this codebase only builds, simulates and
+    #: prints it. `revokeDelegate` is executable at `economy` under
+    #: `policy.actions.allow_delegation`. See `guard._gate_delegation_action`.
+    DELEGATION = "delegation"
     NOOP = "noop"
     ESCALATE = "escalate"
     HALT = "halt"
@@ -934,6 +947,18 @@ class Briefing(Base):
     indexed_block: int | None = None
 
 
+class ProductionOrder(Base):
+    """One entry of a `startProductionBatch` call: `(kind, itemId, quantity)` on the wire.
+
+    `kind` 0 = ship, 1 = defense (`ids.Ship` / `ids.Defense` id spaces respectively).
+    Bounds are re-checked by `guard._gate_production_batch` and, independently, by the
+    wallet's `validateProductionBatch` -- this model only fixes the shape."""
+
+    kind: Literal["ship", "defense"]
+    item_id: int
+    quantity: int
+
+
 class Action(Base):
     """Zero or one of these per tick. `function` is None for noop/escalate/halt."""
 
@@ -1120,6 +1145,17 @@ class Action(Base):
     alliance_tag: str | None = None
     alliance_name: str | None = None
     alliance_description: str | None = None
+
+    # ----------------------------------------------------------------------------------
+    # Batch production and delegation. `None`/empty for every other `ActionKind`.
+    # ----------------------------------------------------------------------------------
+    #: `PRODUCTION_BATCH` only. Order matters: the contract charges and queues each order
+    #: sequentially, and a failing order reverts the whole batch. `planet_id` is the planet
+    #: the batch is produced on.
+    orders: list[ProductionOrder] = Field(default_factory=list)
+    #: `DELEGATION` only: `setDelegate`'s single `address` argument. Unused by
+    #: `revokeDelegate` (no arguments), where it is informational at most.
+    delegate: str | None = None
 
     # ----------------------------------------------------------------------------------
     # Briefing (additive). `None` for every off-chain Action (noop/escalate/halt) and

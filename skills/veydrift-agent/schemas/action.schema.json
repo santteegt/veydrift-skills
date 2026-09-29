@@ -12,6 +12,8 @@
         "defense_hold",
         "missile_attack",
         "alliance",
+        "production_batch",
+        "delegation",
         "noop",
         "escalate",
         "halt"
@@ -190,6 +192,34 @@
       "title": "Briefing",
       "type": "object"
     },
+    "ProductionOrder": {
+      "description": "One entry of a `startProductionBatch` call: `(kind, itemId, quantity)` on the wire.\n\n`kind` 0 = ship, 1 = defense (`ids.Ship` / `ids.Defense` id spaces respectively).\nBounds are re-checked by `guard._gate_production_batch` and, independently, by the\nwallet's `validateProductionBatch` -- this model only fixes the shape.",
+      "properties": {
+        "item_id": {
+          "title": "Item Id",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "ship",
+            "defense"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "quantity": {
+          "title": "Quantity",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "item_id",
+        "quantity"
+      ],
+      "title": "ProductionOrder",
+      "type": "object"
+    },
     "Resources": {
       "description": "A metal/crystal/deuterium triple. Used for holdings, costs, caps and reserves.",
       "properties": {
@@ -287,6 +317,18 @@
     "cost": {
       "$ref": "#/$defs/Resources"
     },
+    "delegate": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Delegate"
+    },
     "entity_id": {
       "anyOf": [
         {
@@ -366,6 +408,13 @@
       ],
       "default": null,
       "title": "Mission Type"
+    },
+    "orders": {
+      "items": {
+        "$ref": "#/$defs/ProductionOrder"
+      },
+      "title": "Orders",
+      "type": "array"
     },
     "origin_planet_id": {
       "anyOf": [

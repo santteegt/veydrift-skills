@@ -2378,6 +2378,18 @@ between the check and inclusion makes the delegate act as itself: planet-scoped 
 `NotPlanetOwner`, and calls with no planet argument (alliance membership) would execute for the
 delegate address's own empty account.
 
+**Correction 79 (2026-09-28): batch production and delegation reach the agent as override-only
+actions, behind two new gates.** `ActionKind.PRODUCTION_BATCH` (`Action.orders`) and
+`ActionKind.DELEGATION` (`Action.delegate`) are reachable only through `vd tick --action`; the
+planner proposes neither. The guard grows from 25 to 27 gates: `production_batch` (1–15 orders,
+ids and quantities, per-kind `allow_ships`/`allow_defense`, prerequisites, defense caps aggregated
+across the batch) and `delegation` (`allow_delegation`; for `setDelegate`, a valid non-zero address
+other than the policy wallet that owns no planets — checked live, fail-closed). A production
+action's spend is re-derived from live unit costs × quantity and never read from `Action.cost`.
+`setDelegate` is calldata-only at every tier: `tier` BLOCKs it, the tick builds and simulates it as
+`policy.wallet`, and the full calldata is printed for the human to sign. `buildTx` gives
+`startProductionBatch` a 2x gas headroom, a heuristic pending a measured bound.
+
 ---
 
 ## 10. Risks

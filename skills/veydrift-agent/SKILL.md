@@ -49,7 +49,7 @@ different things at each tier.
 | Tier | May propose | May submit (via `walletctl`, separately gated) | Gate to enter |
 | --- | --- | --- | --- |
 | 1 `advisor` (default) | everything in scope | **nothing, ever** | — |
-| 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction`, plus 15 alliance-membership functions under `policy.actions.allow_alliance=true` and `openDefenseIntent` under `policy.actions.allow_acs_defense=true` (both via `vd tick --action` only — never planner-proposed) | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
+| 2 `economy` | everything in scope | `startBuildingUpgrade`, `startResearch`, `resolveFleetMission`, `startDefenseProduction`, `startShipProduction`, `startProductionBatch` (up to 15 ship/defense orders in one transaction), `revokeDelegate` under `policy.actions.allow_delegation=true`, plus 15 alliance-membership functions under `policy.actions.allow_alliance=true` and `openDefenseIntent` under `policy.actions.allow_acs_defense=true` (both via `vd tick --action` only — never planner-proposed) | ≥24h of T1 ticks, human review of `strategy.md`, human edit of `policy.json` |
 | 3 `operator` | everything in scope | T2 + `launchFleetMission` for Transport(0)/Deploy(1)/Colonize(2)/Harvest(4) unconditionally, plus Attack(3) with `policy.actions.allow_combat=true`, plus `launchInterplanetaryMissileAttack` under the same flag, plus AcsDefend(5)/Intercept(6) and `launchDefenseHold` under `policy.actions.allow_acs_defense=true` (via `vd tick --action` only) | ≥7 days clean T2, human edit |
 
 **Some combat is unreachable at every tier by code, not by config.** `launchFleetMission`'s
@@ -206,7 +206,7 @@ live `/runtime-config`) · `abi_hash` (deployed contracts, read from the chain, 
 on missing data) · `index_lag` · `affordability` (live `cost` vs `resourcesAsOfNow`) · `energy`
 (post-action `produced ≥ required`) · `storage_overflow` · `fields` · `reserve` ·
 `gas_per_tx` / `gas_per_day` · `eth_floor` · `value_ceiling` (spend over
-`escalate_above_pct_of_resources` → ESCALATE, not BLOCK) · `idempotency` · `revert_streak`
+`escalate_above_pct_of_resources` → ESCALATE, not BLOCK) · `idempotency` · `revert_streak` · `production_batch` (a batch's orders, flags, prerequisites and aggregated defense caps) · `delegation` (`setDelegate`/`revokeDelegate`: flag, address, delegate owns no planets)
 
 Two of these are re-checked independently by `veydrift-wallet`'s own allowlist — `tier`/
 selector and `address` — on purpose: a fully compromised copy of this skill still cannot

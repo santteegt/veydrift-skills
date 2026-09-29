@@ -144,6 +144,20 @@ async function fetchMaxFeePerGas(
   }
 }
 
+/**
+ * Extra gas, in basis points of the node's estimate (10_000 = none), applied to `gas` for the
+ * functions whose estimate has proven too tight to send at. An `OutOfGas` revert at exactly the
+ * estimated limit is a known failure class here (see `references/tx-safety.md`); `simulate` now
+ * catches it, but a batch is the function most exposed -- every order re-settles the planet, and
+ * its cost grows with the order count -- so it gets margin up front. The unused part of the limit
+ * is refunded; only the ceiling comparison (`gas * maxFeePerGas`) sees the larger figure, which
+ * errs toward escalating. A heuristic, not a measured bound: change it from fork data, not by
+ * feel (`references/fork-testing.md`).
+ */
+export const GAS_HEADROOM_BPS: Readonly<Record<string, number>> = {
+  startProductionBatch: 20_000,
+};
+
 export async function buildTx(action: Action, opts: BuildOptions = {}): Promise<BuiltTx> {
   const contract: Contract = action.contract ?? "game";
   const fn = resolveFunctionAbi(action.function, contract);
@@ -182,6 +196,8 @@ export async function buildTx(action: Action, opts: BuildOptions = {}): Promise<
     if (opts.from) {
       try {
         gas = await client.estimateGas({ account: opts.from, to, data, value });
+        const headroomBps = GAS_HEADROOM_BPS[fn.name];
+        if (headroomBps !== undefined) gas = (gas * BigInt(headroomBps)) / 10_000n;
       } catch (err) {
         // A revert during estimation carries the raw custom-error data; decode it against the
         // pinned errors so the reason reads `InsufficientResources(...)` rather than viem's

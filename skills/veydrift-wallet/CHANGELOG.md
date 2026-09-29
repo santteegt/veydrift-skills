@@ -11,6 +11,14 @@ lockstep.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-28
+
+### Changed
+- `build` adds gas headroom to `startProductionBatch` (`GAS_HEADROOM_BPS`, 2x the estimate): every
+  order re-settles the planet, so its estimate is the one most likely to be too tight to send at.
+  The unused part of the limit is refunded; the `gas * maxFeePerGas` ceiling figure grows with it.
+  A heuristic, to be replaced by a measured bound from fork testing.
+
 ## [2.1.0] - 2026-09-28
 
 ### Added

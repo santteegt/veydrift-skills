@@ -1,4 +1,4 @@
-"""Tests for veydrift_agent.guard — the 23-gate guardrail evaluator.
+"""Tests for veydrift_agent.guard — the 27-gate guardrail evaluator.
 
 The most important tests here are the "missing data must not vacuously pass" ones (one
 per gate where that risk is real: `address`, `abi_hash`, `affordability`, `energy`,
@@ -216,15 +216,15 @@ def verdict(report, gate: str):
 # --------------------------------------------------------------------------------------
 
 
-def test_all_nineteen_gates_always_present_even_when_blocked():
+def test_all_gates_always_present_even_when_blocked():
     action = make_build_action()
     report = evaluate(action, make_snapshot(health_ok=False), make_policy())
-    assert report.total == 25
+    assert report.total == 27
     gates = {v.gate for v in report.verdicts}
     assert gates == {
         "killswitch", "tier", "mission_type", "prerequisites", "fleet_slots", "missile_target",
         "acs_defend_target", "defense_hold_target",
-        "alliance_action", "attack_protection",
+        "alliance_action", "production_batch", "delegation", "attack_protection",
         "address",
         "abi_hash", "health",
         "game_paused", "index_lag", "affordability", "energy", "storage_overflow", "fields", "reserve",
@@ -241,6 +241,9 @@ def test_all_nineteen_gates_always_present_even_when_blocked():
     # alliance_action PASSes trivially for the same reason -- scoped to the 15 alliance
     # functions only.
     assert verdict(report, "alliance_action").status is GuardStatus.PASS
+    # production_batch/delegation PASS trivially for every other action kind.
+    assert verdict(report, "production_batch").status is GuardStatus.PASS
+    assert verdict(report, "delegation").status is GuardStatus.PASS
     # game_paused PASSes given make_snapshot's default not-paused game_maintenance.
     assert verdict(report, "game_paused").status is GuardStatus.PASS
 
@@ -3719,3 +3722,300 @@ def test_idempotency_key_defense_hold_does_not_collide_with_fleet_mission_from_s
     fleet_key = guard.idempotency_key(make_fleet_action())
     hold_key = guard.idempotency_key(make_defense_hold_action())
     assert fleet_key != hold_key
+
+
+# --------------------------------------------------------------------------------------
+# Batch production (`startProductionBatch`) and single-wallet delegation
+# (`setDelegate` / `revokeDelegate`): the two gates added after the 2b329fb1 re-pin.
+# --------------------------------------------------------------------------------------
+
+from veydrift_agent.models import ProductionOrder
+
+DELEGATE = "0x1111111111111111111111111111111111111111"
+BATCH_FN = "startProductionBatch"
+
+
+def _unit(metal=0, crystal=0, deuterium=0) -> Resources:
+    return Resources(metal=metal, crystal=crystal, deuterium=deuterium)
+
+
+def make_batch_planet(**overrides) -> PlanetSnapshot:
+    base = {
+        "resources_as_of_now": Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        "ships": [
+            Entity(id=ids.Ship.SOLAR_SATELLITE, name="Solar Satellite", count=0, cost=_unit(0, 2000, 500)),
+        ],
+        "defenses": [
+            Entity(id=ids.Defense.ROCKET_LAUNCHER, name="Rocket Launcher", count=0, cost=_unit(2000)),
+        ],
+    }
+    base.update(overrides)
+    return make_planet(**base)
+
+
+def make_batch_action(orders=None, **overrides) -> Action:
+    base = {
+        "kind": ActionKind.PRODUCTION_BATCH,
+        "function": BATCH_FN,
+        "planet_id": 664,
+        "orders": orders
+        if orders is not None
+        else [
+            ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=3),
+            ProductionOrder(kind="defense", item_id=ids.Defense.ROCKET_LAUNCHER, quantity=5),
+        ],
+        "rule": "manual",
+        "rationale": "test",
+    }
+    base.update(overrides)
+    return Action(**base)
+
+
+def batch_policy(**actions) -> Policy:
+    actions.setdefault("allow_ships", True)
+    actions.setdefault("allow_defense", True)
+    return make_policy(actions=ActionsCfg(**actions))
+
+
+def batch_snapshot(**planet_overrides) -> Snapshot:
+    return make_snapshot(planets=[make_batch_planet(**planet_overrides)])
+
+
+def test_batch_gate_passes_trivially_for_a_non_batch_action():
+    assert verdict(evaluate(make_build_action(), make_snapshot(), make_policy()), "production_batch").status is GuardStatus.PASS
+
+
+def test_batch_gate_passes_a_valid_batch():
+    report = evaluate(make_batch_action(), batch_snapshot(), batch_policy())
+    assert verdict(report, "production_batch").status is GuardStatus.PASS
+
+
+@pytest.mark.parametrize("n", [0, 16])
+def test_batch_gate_blocks_an_order_count_outside_1_to_15(n):
+    orders = [ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=1) for _ in range(n)]
+    v = verdict(evaluate(make_batch_action(orders=orders), batch_snapshot(), batch_policy()), "production_batch")
+    assert v.status is GuardStatus.BLOCK
+    assert "1..15" in v.detail
+
+
+def test_batch_gate_accepts_exactly_15_orders():
+    orders = [ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=1) for _ in range(15)]
+    v = verdict(evaluate(make_batch_action(orders=orders), batch_snapshot(), batch_policy()), "production_batch")
+    assert v.status is GuardStatus.PASS
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ProductionOrder(kind="ship", item_id=16, quantity=1),
+        ProductionOrder(kind="defense", item_id=10, quantity=1),
+        ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=0),
+        ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=-1),
+        ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=2**32),
+    ],
+)
+def test_batch_gate_blocks_a_malformed_order(order):
+    v = verdict(evaluate(make_batch_action(orders=[order]), batch_snapshot(), batch_policy()), "production_batch")
+    assert v.status is GuardStatus.BLOCK
+
+
+def test_batch_gate_blocks_ships_when_allow_ships_is_false():
+    v = verdict(evaluate(make_batch_action(), batch_snapshot(), batch_policy(allow_ships=False)), "production_batch")
+    assert v.status is GuardStatus.BLOCK
+    assert "allow_ships" in v.detail
+
+
+def test_batch_gate_blocks_defense_when_allow_defense_is_false():
+    v = verdict(evaluate(make_batch_action(), batch_snapshot(), batch_policy(allow_defense=False)), "production_batch")
+    assert v.status is GuardStatus.BLOCK
+    assert "allow_defense" in v.detail
+
+
+def test_batch_gate_blocks_an_order_with_unmet_prerequisites():
+    orders = [ProductionOrder(kind="defense", item_id=ids.Defense.ION_CANNON, quantity=1)]
+    v = verdict(evaluate(make_batch_action(orders=orders), batch_snapshot(), batch_policy()), "production_batch")
+    assert v.status is GuardStatus.BLOCK
+    assert "order 1" in v.detail
+
+
+def test_batch_gate_blocks_when_the_planet_is_not_in_the_snapshot():
+    v = verdict(evaluate(make_batch_action(planet_id=999), batch_snapshot(), batch_policy()), "production_batch")
+    assert v.status is GuardStatus.BLOCK
+
+
+def test_batch_gate_blocks_a_batch_with_no_planet():
+    v = verdict(evaluate(make_batch_action(planet_id=None), batch_snapshot(), batch_policy()), "production_batch")
+    assert v.status is GuardStatus.BLOCK
+
+
+def test_batch_gate_aggregates_a_shield_dome_cap_across_two_orders_for_the_same_item():
+    """Two orders for one item are legal on-chain and both count toward the per-planet cap."""
+    dome = ids.Defense.SMALL_SHIELD_DOME
+    planet = make_batch_planet(
+        defenses=[Entity(id=dome, name="Small Shield Dome", count=0, cost=_unit(10_000, 10_000))],
+        buildings=make_batch_planet().buildings,
+    )
+    snapshot = make_snapshot(planets=[planet], technologies=[Entity(id=ids.Technology.SHIELDING, name="Shielding", level=2, cost=_unit())])
+    orders = [ProductionOrder(kind="defense", item_id=dome, quantity=1), ProductionOrder(kind="defense", item_id=dome, quantity=1)]
+    v = verdict(evaluate(make_batch_action(orders=orders), snapshot, batch_policy()), "production_batch")
+    assert v.status is GuardStatus.BLOCK
+    assert "capped at 1" in v.detail
+
+
+def test_batch_spend_is_derived_from_the_orders_not_from_action_cost():
+    """An override that leaves `cost` unset must not make affordability pass vacuously: 3 x
+    (0/2000/500) + 5 x (2000/0/0) = M10000 C6000 D1500, which this planet cannot cover."""
+    poor = Resources(metal=5_000, crystal=100_000, deuterium=100_000)
+    report = evaluate(make_batch_action(), batch_snapshot(resources_as_of_now=poor), batch_policy())
+    v = verdict(report, "affordability")
+    assert v.status is GuardStatus.BLOCK
+    assert "M10000 C6000 D1500" in v.detail
+
+
+def test_batch_spend_covered_passes_affordability_and_reports_the_sum():
+    spend = guard._derive_fleet_mission_spend(make_batch_action(), batch_snapshot())
+    assert spend == Resources(metal=10_000, crystal=6_000, deuterium=1_500)
+    assert verdict(evaluate(make_batch_action(), batch_snapshot(), batch_policy()), "affordability").status is GuardStatus.PASS
+
+
+def test_batch_spend_is_unverifiable_when_an_order_has_no_live_unit_cost():
+    snapshot = batch_snapshot(defenses=[])
+    assert guard._derive_fleet_mission_spend(make_batch_action(), snapshot) is None
+    report = evaluate(make_batch_action(), snapshot, batch_policy())
+    assert verdict(report, "affordability").status is GuardStatus.BLOCK
+    assert verdict(report, "reserve").status is GuardStatus.BLOCK
+    assert verdict(report, "value_ceiling").status is GuardStatus.BLOCK
+
+
+def test_single_order_with_quantity_above_one_now_derives_its_spend_from_the_unit_cost():
+    action = Action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        planet_id=664,
+        entity_id=ids.Defense.ROCKET_LAUNCHER,
+        quantity=4,
+    )
+    assert guard._derive_fleet_mission_spend(action, batch_snapshot()) == Resources(metal=8_000)
+
+
+def test_single_order_with_quantity_one_still_uses_action_cost():
+    action = Action(
+        kind=ActionKind.DEFENSE,
+        function="startDefenseProduction",
+        planet_id=664,
+        entity_id=ids.Defense.ROCKET_LAUNCHER,
+        quantity=1,
+        cost=Resources(metal=1234),
+    )
+    assert guard._derive_fleet_mission_spend(action, batch_snapshot()) == Resources(metal=1234)
+
+
+def test_batch_is_allowed_at_economy_and_blocked_at_advisor():
+    snapshot = batch_snapshot()
+    tx = make_unsigned_tx()
+    economy = evaluate(make_batch_action(), snapshot, make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_ships=True, allow_defense=True)), unsigned_tx=tx, live_addresses={LIVE_ADDR}, gas_cost_wei=1, eth_balance_wei=10**18)
+    advisor = evaluate(make_batch_action(), snapshot, make_policy(tier=Tier.ADVISOR, actions=ActionsCfg(allow_ships=True, allow_defense=True)))
+    assert verdict(economy, "tier").status is GuardStatus.PASS
+    assert verdict(advisor, "tier").status is GuardStatus.BLOCK
+
+
+def test_idempotency_key_for_a_batch_ignores_quantities_but_not_the_item_set():
+    a = make_batch_action()
+    b = make_batch_action(
+        orders=[
+            ProductionOrder(kind="defense", item_id=ids.Defense.ROCKET_LAUNCHER, quantity=99),
+            ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=1),
+        ]
+    )
+    c = make_batch_action(orders=[ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=3)])
+    assert guard.idempotency_key(a) == guard.idempotency_key(b)
+    assert guard.idempotency_key(a) != guard.idempotency_key(c)
+    assert guard.idempotency_key(a) != guard.idempotency_key(make_build_action())
+
+
+def make_delegation_action(function="setDelegate", delegate=DELEGATE, **overrides) -> Action:
+    base = {"kind": ActionKind.DELEGATION, "function": function, "delegate": delegate, "rule": "manual", "rationale": "test"}
+    base.update(overrides)
+    return Action(**base)
+
+
+def delegation_policy(**kwargs) -> Policy:
+    return make_policy(actions=ActionsCfg(allow_delegation=True), **kwargs)
+
+
+def test_delegation_gate_passes_trivially_for_a_non_delegation_action():
+    assert verdict(evaluate(make_build_action(), make_snapshot(), make_policy()), "delegation").status is GuardStatus.PASS
+
+
+@pytest.mark.parametrize("function", ["setDelegate", "revokeDelegate"])
+def test_delegation_gate_blocks_when_allow_delegation_is_false(function):
+    report = evaluate(make_delegation_action(function), make_snapshot(), make_policy(), delegate_planet_count=0)
+    v = verdict(report, "delegation")
+    assert v.status is GuardStatus.BLOCK
+    assert "allow_delegation" in v.detail
+
+
+def test_set_delegate_passes_for_a_planetless_address():
+    v = verdict(evaluate(make_delegation_action(), make_snapshot(), delegation_policy(), delegate_planet_count=0), "delegation")
+    assert v.status is GuardStatus.PASS
+
+
+def test_set_delegate_blocks_an_address_that_owns_planets():
+    v = verdict(evaluate(make_delegation_action(), make_snapshot(), delegation_policy(), delegate_planet_count=3), "delegation")
+    assert v.status is GuardStatus.BLOCK
+    assert "unreachable" in v.detail
+
+
+def test_set_delegate_fails_closed_when_the_planet_count_is_unknown():
+    v = verdict(evaluate(make_delegation_action(), make_snapshot(), delegation_policy(), delegate_planet_count=None), "delegation")
+    assert v.status is GuardStatus.BLOCK
+    assert "refusing to assume" in v.detail
+
+
+@pytest.mark.parametrize(
+    "delegate",
+    [None, "", "0x1234", "1111111111111111111111111111111111111111", "0x" + "zz" * 20, "0x" + "0" * 40, WALLET, WALLET.upper().replace("0X", "0x")],
+)
+def test_set_delegate_blocks_a_malformed_zero_or_self_address(delegate):
+    v = verdict(evaluate(make_delegation_action(delegate=delegate), make_snapshot(), delegation_policy(), delegate_planet_count=0), "delegation")
+    assert v.status is GuardStatus.BLOCK
+
+
+def test_revoke_delegate_needs_only_the_flag():
+    v = verdict(evaluate(make_delegation_action("revokeDelegate", delegate=None), make_snapshot(), delegation_policy()), "delegation")
+    assert v.status is GuardStatus.PASS
+
+
+def test_delegation_gate_blocks_an_unknown_function():
+    v = verdict(evaluate(make_delegation_action("abandonPlanet"), make_snapshot(), delegation_policy(), delegate_planet_count=0), "delegation")
+    assert v.status is GuardStatus.BLOCK
+
+
+@pytest.mark.parametrize("tier", [Tier.ADVISOR, Tier.ECONOMY, Tier.OPERATOR])
+def test_set_delegate_is_calldata_only_at_every_tier(tier):
+    policy = make_policy(tier=tier, actions=ActionsCfg(allow_delegation=True))
+    v = verdict(evaluate(make_delegation_action(), make_snapshot(), policy, delegate_planet_count=0), "tier")
+    assert v.status is GuardStatus.BLOCK
+    assert "calldata-only" in v.detail
+    assert WALLET in v.detail
+
+
+def test_revoke_delegate_is_allowed_at_economy_not_advisor():
+    econ = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_delegation=True))
+    adv = make_policy(tier=Tier.ADVISOR, actions=ActionsCfg(allow_delegation=True))
+    assert verdict(evaluate(make_delegation_action("revokeDelegate"), make_snapshot(), econ), "tier").status is GuardStatus.PASS
+    assert verdict(evaluate(make_delegation_action("revokeDelegate"), make_snapshot(), adv), "tier").status is GuardStatus.BLOCK
+
+
+def test_idempotency_key_for_delegation_varies_by_function_and_address():
+    a = guard.idempotency_key(make_delegation_action())
+    b = guard.idempotency_key(make_delegation_action(delegate="0x2222222222222222222222222222222222222222"))
+    c = guard.idempotency_key(make_delegation_action("revokeDelegate", delegate=None))
+    assert len({a, b, c}) == 3
+    assert guard.idempotency_key(make_delegation_action()) == guard.idempotency_key(make_delegation_action(delegate=DELEGATE.upper().replace("0X", "0x")))
+
+
+def test_calldata_only_functions_are_in_no_tier_map_and_delegation_carve_out_is_exact():
+    assert guard.CALLDATA_ONLY_FUNCTIONS == {"setDelegate"}
+    assert guard.CALLDATA_ONLY_FUNCTIONS.isdisjoint(guard._MIN_TIER_FOR_FUNCTION)
+    assert guard._DELEGATION_FUNCTIONS <= set(guard._MIN_TIER_FOR_FUNCTION)

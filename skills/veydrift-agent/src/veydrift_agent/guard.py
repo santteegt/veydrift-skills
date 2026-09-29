@@ -1,10 +1,10 @@
-"""`vd guard` — the 23-gate guardrail evaluator (docs/SPEC.md §5.5).
+"""`vd guard` — the 27-gate guardrail evaluator (docs/SPEC.md §5.5).
 
 `evaluate_guardrails()` is the pure core: given an `Action`, the `Snapshot` it was
 planned from, the `Policy`, the persisted `AgentState`, and a handful of caller-supplied
 facts that don't live on any of those frozen/local models (live contract addresses, the
 live ABI hash, a built `UnsignedTx` + gas estimate, the wallet's ETH balance), it returns
-a `GuardReport` with **all 23 gates evaluated, never short-circuited** — the full
+a `GuardReport` with **all 27 gates evaluated, never short-circuited** — the full
 `GuardReport.verdicts` list is the audit artifact (docs/SPEC.md §5.5), so a passing tick
 is exactly as informative as a blocked one.
 
@@ -43,6 +43,7 @@ from veydrift_agent.models import (
     GuardVerdict,
     PlanetSnapshot,
     Policy,
+    ProductionOrder,
     QueueKind,
     Resources,
     Snapshot,
@@ -234,6 +235,14 @@ _ALLIANCE_FUNCTIONS: frozenset[str] = frozenset(
 #: unconditional economy diff and diffs it against that array instead. `setDelegate` is in
 #: neither map nor set on either side, on purpose.
 _DELEGATION_FUNCTIONS: frozenset[str] = frozenset({"revokeDelegate"})
+
+#: Functions this codebase builds and simulates but no tier may ever send: in no allowlist set on
+#: either side, by design (`allowlist.ts` has `setDelegate` in none). The reason is on-chain --
+#: `setDelegate` must be signed by the *main* wallet, and the whole point of the delegation
+#: feature is that the key this skill signs with is NOT the main wallet. The tick still prints the
+#: full calldata so the human can sign it themselves. The cross-layer test asserts this set is
+#: absent from every allowlist array and from `_MIN_TIER_FOR_FUNCTION`.
+CALLDATA_ONLY_FUNCTIONS: frozenset[str] = frozenset({"setDelegate"})
 
 #: `openDefenseIntent` (VeydriftAllianceSystem, ACS coordination feature) is a 16th
 #: function on the same contract as `_ALLIANCE_FUNCTIONS`' 15 -- but it is gated on
@@ -438,6 +447,18 @@ def idempotency_key(action: Action) -> str:
         # Fixed the same way, before this action family could ever actually be proposed
         # (no generator existed for it until this same commit).
         key = f"{key}:{action.target_planet_id}:{action.primary_target}"
+    elif action.kind is ActionKind.PRODUCTION_BATCH:
+        # `entity_id` is always `None` for a batch, so every batch on one planet would share one
+        # key. Keyed on the sorted set of (kind, item) pairs and deliberately NOT on quantities:
+        # the planner's quantities drift every tick with holdings, and a key that drifted with
+        # them would reset `revert_streak` on each attempt, defeating it for a batch that keeps
+        # reverting. (`last_proposal_fingerprint`'s dedup drifts the same way; that is only a
+        # dedup of repeated proposals, never a safety check.)
+        items = sorted({(o.kind, o.item_id) for o in action.orders})
+        key = f"{key}:{','.join(f'{k}{i}' for k, i in items)}"
+    elif action.kind is ActionKind.DELEGATION:
+        # No planet/entity on either function; the address is the only thing that varies.
+        key = f"{action.function}:{(action.delegate or '').lower()}"
     elif action.kind is ActionKind.ALLIANCE:
         if action.function == "openDefenseIntent":
             # ACS defense coordination feature -- see this function's own docstring.
@@ -483,7 +504,7 @@ def is_structural_tier_block(non_passing_gates: list[tuple[str, str]]) -> bool:
 
     This is not a guess: a routine tier-1 proposal on an unlocked entity (the
     `prerequisites` gate PASSes -- nothing about a plain mine upgrade is locked) shows
-    exactly `guards: 22/25 pass (block)`, and the 3 gates that don't pass there are
+    exactly `guards: 24/27 pass (block)`, and the 3 gates that don't pass there are
     precisely `tier` (BLOCK), `gas` (ESCALATE, no estimate), `eth_floor` (ESCALATE,
     balance never checked at tier 1) -- this predicate is written to recognise exactly
     that cluster as carrying zero promotion-relevant information, matching what
@@ -525,6 +546,13 @@ def _gate_killswitch(*, killswitch_active: bool) -> GuardVerdict:
 def _gate_tier(action: Action, policy: Policy) -> GuardVerdict:
     if action.function is None:
         return _verdict("tier", GuardStatus.PASS, "action has no on-chain function (noop/escalate/halt)")
+    if action.function in CALLDATA_ONLY_FUNCTIONS:
+        return _verdict(
+            "tier",
+            GuardStatus.BLOCK,
+            f"{action.function} is calldata-only at every tier: it must be signed by the main wallet "
+            f"({policy.wallet}), and the wallet skill refuses to send it -- sign the printed calldata yourself",
+        )
     min_tier = _MIN_TIER_FOR_FUNCTION.get(action.function)
     if min_tier is None:
         return _verdict("tier", GuardStatus.BLOCK, f"{action.function} is not in any tier's allowed set")
@@ -791,6 +819,213 @@ def _defense_cap_violation(action: Action, planet: PlanetSnapshot) -> str | None
                 f"{capacity} (Missile Silo level {silo_level})"
             )
     return None
+
+
+#: `startProductionBatch` accepts 1..15 orders (`InvalidQuantity` otherwise). Mirrors
+#: `allowlist.ts`'s `MAX_PRODUCTION_BATCH_ORDERS`.
+_MAX_PRODUCTION_BATCH_ORDERS = 15
+_UINT32_MAX = 2**32 - 1
+
+
+def _order_unit_cost(planet: PlanetSnapshot, kind: str, item_id: int) -> Resources | None:
+    """Live unit cost of one ship/defense as the API reports it, `None` when the planet's
+    snapshot does not carry that entity. Ship and defense prices are flat per unit (the contract
+    multiplies the unit cost by the quantity, no bulk discount), so this is the same live figure
+    single-order actions use -- not a cost-scaling formula (AGENTS.md §5)."""
+    entities = planet.ships if kind == "ship" else planet.defenses
+    entity = next((e for e in entities if e.id == item_id), None)
+    return entity.cost if entity is not None else None
+
+
+def _scaled(cost: Resources, quantity: int) -> Resources:
+    return Resources(metal=cost.metal * quantity, crystal=cost.crystal * quantity, deuterium=cost.deuterium * quantity)
+
+
+def _plus(a: Resources, b: Resources) -> Resources:
+    return Resources(metal=a.metal + b.metal, crystal=a.crystal + b.crystal, deuterium=a.deuterium + b.deuterium)
+
+
+def production_spend(action: Action, snapshot: Snapshot) -> Resources | None:
+    """Independently re-derive a production action's total spend from live unit costs and its
+    own quantities, never from `action.cost` (which a manual override may leave unset, making
+    `affordability`/`reserve`/`value_ceiling` pass vacuously on a real spend). Covers a batch
+    (sum over its orders) and a single ship/defense order with quantity > 1. `None` when it cannot
+    be verified -- unverifiable, never zero."""
+    if action.planet_id is None:
+        return None
+    planet = snapshot.planet(action.planet_id)
+    if planet is None:
+        return None
+    if action.kind is ActionKind.PRODUCTION_BATCH:
+        total = Resources()
+        for order in action.orders:
+            unit = _order_unit_cost(planet, order.kind, order.item_id)
+            if unit is None or order.quantity <= 0:
+                return None
+            total = _plus(total, _scaled(unit, order.quantity))
+        return total if action.orders else None
+    if action.entity_id is None:
+        return None
+    kind = "ship" if action.kind is ActionKind.SHIP else "defense"
+    unit = _order_unit_cost(planet, kind, action.entity_id)
+    if unit is None:
+        return None
+    return _scaled(unit, action.quantity if action.quantity is not None else 1)
+
+
+def _batch_defense_violation(planet: PlanetSnapshot, orders: list[ProductionOrder]) -> str | None:
+    """Defense caps for a whole batch: the per-planet shield-dome cap and the missile-silo slot
+    cap, both with quantities aggregated across the batch's orders (two orders for the same
+    item are legal on-chain and both count). Reuses `_defense_cap_violation` per aggregated item;
+    the missile-slot check across *different* missile types in one batch is done here, since that
+    helper only sees one item at a time."""
+    totals: dict[int, int] = {}
+    for order in orders:
+        if order.kind == "defense":
+            totals[order.item_id] = totals.get(order.item_id, 0) + order.quantity
+    for defense_id, quantity in totals.items():
+        pseudo = Action(
+            kind=ActionKind.DEFENSE,
+            function="startDefenseProduction",
+            planet_id=planet.planet_id,
+            entity_id=defense_id,
+            entity_name=ids.defense_name(defense_id),
+            quantity=quantity,
+        )
+        violation = _defense_cap_violation(pseudo, planet)
+        if violation is not None:
+            return violation
+    requested = sum(MISSILE_SLOTS.get(d, 0) * q for d, q in totals.items())
+    if requested and sum(1 for d in totals if MISSILE_SLOTS.get(d, 0)) > 1:
+        silo = next((b for b in planet.buildings if b.id == ids.Building.MISSILE_SILO), None)
+        if silo is None or silo.level is None:
+            return f"Missile Silo level not reported for planet {planet.planet_id}; cannot verify missile slot capacity"
+        used = 0
+        for missile_id, slots in MISSILE_SLOTS.items():
+            count = _defense_count(planet, missile_id)
+            if count is None:
+                return f"{ids.defense_name(missile_id)} count not reported for planet {planet.planet_id}; cannot verify missile slot capacity"
+            used += slots * (count + _queued_defense_quantity(planet, missile_id))
+        capacity = missile_silo_capacity(silo.level)
+        if used + requested > capacity:
+            return (
+                f"this batch's missiles would use {requested} silo slot(s); {used} already used/queued against a "
+                f"capacity of {capacity} (Missile Silo level {silo.level})"
+            )
+    return None
+
+
+def _gate_production_batch(action: Action, snapshot: Snapshot, policy: Policy) -> GuardVerdict:
+    """`startProductionBatch` re-validated independently of whoever built it (the planner, or a
+    hand-written `--action` file). Passes trivially for every other action.
+
+    Each order is checked as its single-order equivalent would be -- kind/id in range,
+    quantity, `allow_ships`/`allow_defense` (the single-order override path never checked these;
+    a batch must not become the way around them), the tech-tree prerequisites, defense caps
+    aggregated across the batch -- plus the batch-level bound of 1..15 orders. The contract is
+    atomic, so one bad order reverts the lot; failing here is cheaper than a reverted send.
+
+    What this gate cannot see and does not claim: the per-lane backlog cap of 16. The API
+    exposes no ship backlog, so it is enforced on-chain only and surfaces in `simulate`."""
+    if action.kind is not ActionKind.PRODUCTION_BATCH:
+        return _verdict("production_batch", GuardStatus.PASS, "not a production batch")
+    if action.function != "startProductionBatch":
+        return _verdict("production_batch", GuardStatus.BLOCK, f"a batch action must call startProductionBatch, not {action.function}")
+    if action.planet_id is None:
+        return _verdict("production_batch", GuardStatus.BLOCK, "batch has no target planet")
+    planet = snapshot.planet(action.planet_id)
+    if planet is None:
+        return _verdict("production_batch", GuardStatus.BLOCK, f"planet {action.planet_id} not found in snapshot")
+    n = len(action.orders)
+    if not 1 <= n <= _MAX_PRODUCTION_BATCH_ORDERS:
+        return _verdict(
+            "production_batch",
+            GuardStatus.BLOCK,
+            f"a batch takes 1..{_MAX_PRODUCTION_BATCH_ORDERS} orders (contract reverts InvalidQuantity); got {n}",
+        )
+
+    building_levels: dict[int, int | None] = {b.id: b.level for b in planet.buildings}
+    technology_levels: dict[int, int | None] = {t.id: t.level for t in snapshot.technologies}
+    problems: list[str] = []
+    for i, order in enumerate(action.orders, start=1):
+        names = ids.SHIP_NAMES if order.kind == "ship" else ids.DEFENSE_NAMES
+        family = EntityFamily.SHIP if order.kind == "ship" else EntityFamily.DEFENSE
+        label = f"order {i} ({order.kind} {names.get(order.item_id, order.item_id)} x{order.quantity})"
+        if order.item_id not in names:
+            problems.append(f"{label}: unknown {order.kind} id (contract reverts InvalidId)")
+            continue
+        if not 0 < order.quantity <= _UINT32_MAX:
+            problems.append(f"{label}: quantity must be 1..{_UINT32_MAX}")
+            continue
+        if order.kind == "ship" and not policy.actions.allow_ships:
+            problems.append(f"{label}: policy.actions.allow_ships is false")
+        if order.kind == "defense" and not policy.actions.allow_defense:
+            problems.append(f"{label}: policy.actions.allow_defense is false")
+        unmet_reqs = unmet(family, order.item_id, building_levels=building_levels, technology_levels=technology_levels)
+        if unmet_reqs:
+            problems.append(f"{label}: prerequisites unmet: {'; '.join(describe(u) for u in unmet_reqs)}")
+    if not problems:
+        violation = _batch_defense_violation(planet, action.orders)
+        if violation is not None:
+            problems.append(violation)
+    if problems:
+        return _verdict("production_batch", GuardStatus.BLOCK, "; ".join(problems))
+    return _verdict("production_batch", GuardStatus.PASS, f"{n} order(s) valid (ids, quantities, flags, prerequisites, defense caps)")
+
+
+def _is_address(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 42 or not value.startswith(("0x", "0X")):
+        return False
+    return all(c in "0123456789abcdefABCDEF" for c in value[2:])
+
+
+def _gate_delegation_action(action: Action, policy: Policy, *, delegate_planet_count: int | None) -> GuardVerdict:
+    """`setDelegate`/`revokeDelegate`. Passes trivially for every other action.
+
+    Both need `policy.actions.allow_delegation`: the feature is off by default, including the
+    calldata-only half, so a fresh policy never grows delegation proposals.
+
+    `setDelegate(delegate)`: the address must be well-formed, non-zero and not the policy wallet
+    itself, and **must own no planets** -- the contract does not check that, and an address that
+    owns planets becomes unreachable through the delegate once registered (every call acts as the
+    main wallet instead). `delegate_planet_count` is `tick.py`'s live fetch of that address's
+    planets; `None` (unreadable or stale) fails closed, never "assume none". The wallet skill
+    refuses to send this function at every tier, so `tier` BLOCKs it by design; this gate is what
+    makes the printed calldata safe to hand to a human to sign.
+
+    `revokeDelegate()`: no arguments; a revert with `NoDelegate` (nothing to revoke) surfaces in
+    `simulate`, not here."""
+    if action.kind is not ActionKind.DELEGATION:
+        return _verdict("delegation", GuardStatus.PASS, "not a delegation action")
+    if action.function not in ("setDelegate", "revokeDelegate"):
+        return _verdict("delegation", GuardStatus.BLOCK, f"unknown delegation function {action.function}")
+    if not policy.actions.allow_delegation:
+        return _verdict("delegation", GuardStatus.BLOCK, "policy.actions.allow_delegation is false")
+    if action.function == "revokeDelegate":
+        return _verdict("delegation", GuardStatus.PASS, "revokeDelegate: only removes authority; allow_delegation is set")
+    delegate = action.delegate
+    if not _is_address(delegate):
+        return _verdict("delegation", GuardStatus.BLOCK, f"setDelegate needs a 0x-prefixed 20-byte address; got {delegate!r}")
+    assert delegate is not None
+    if int(delegate, 16) == 0:
+        return _verdict("delegation", GuardStatus.BLOCK, "the zero address cannot be a delegate")
+    if delegate.lower() == policy.wallet.lower():
+        return _verdict("delegation", GuardStatus.BLOCK, "the policy wallet cannot delegate to itself")
+    if delegate_planet_count is None:
+        return _verdict(
+            "delegation",
+            GuardStatus.BLOCK,
+            f"could not verify that {delegate} owns no planets (the contract does not check; a delegate that owns "
+            "planets is unreachable through the delegation) -- refusing to assume it owns none",
+        )
+    if delegate_planet_count > 0:
+        return _verdict(
+            "delegation",
+            GuardStatus.BLOCK,
+            f"{delegate} owns {delegate_planet_count} planet(s); once registered as a delegate its own planets "
+            "would be unreachable through it. Use an address with no planets",
+        )
+    return _verdict("delegation", GuardStatus.PASS, f"{delegate} is a well-formed delegate address that owns no planets")
 
 
 def _gate_fleet_ship_availability(action: Action, snapshot: Snapshot) -> GuardVerdict:
@@ -1948,6 +2183,10 @@ def _derive_fleet_mission_spend(
     technology data) -- **unverifiable, never zero** (AGENTS.md §5's "a guardrail must
     never pass vacuously on absent data," applied to this derivation's own inputs, not
     just to snapshot data)."""
+    if action.kind is ActionKind.PRODUCTION_BATCH or (
+        action.kind in (ActionKind.SHIP, ActionKind.DEFENSE) and (action.quantity or 1) > 1
+    ):
+        return production_spend(action, snapshot)
     if action.kind is ActionKind.FLEET_MISSION and action.mission_type in _ACS_MISSION_TYPES:
         if net_holding_fuel_cost is None:
             return None
@@ -2340,7 +2579,7 @@ def _gate_revert_streak(action: Action, agent_state: AgentState, policy: Policy)
 
 
 # --------------------------------------------------------------------------------------
-# The full 23-gate evaluation.
+# The full 27-gate evaluation.
 # --------------------------------------------------------------------------------------
 
 
@@ -2362,9 +2601,10 @@ def evaluate_guardrails(
     hostile_mission: dict | None = None,
     coordination_allowed: bool | None = None,
     net_holding_fuel_cost: int | None = None,
+    delegate_planet_count: int | None = None,
     now=None,
 ) -> GuardReport:
-    """Evaluate all 25 gates and return the full `GuardReport`. Never short-circuits: even
+    """Evaluate all 27 gates and return the full `GuardReport`. Never short-circuits: even
     once one gate has already BLOCKed, every remaining gate still runs, because the
     report -- not just the final decision -- is the audit artifact.
 
@@ -2391,6 +2631,9 @@ def evaluate_guardrails(
     same probe's `netHoldingFuelCost` result, meaningful for the same three -- see
     `_gate_acs_defend_target`/`_gate_defense_hold_target`/`_derive_fleet_mission_spend`'s
     docstrings for why each fails closed on `None` rather than assuming zero/false.
+
+    `delegate_planet_count` is `tick.py`'s live count of planets owned by a `setDelegate`
+    action's delegate address, meaningful only for that action -- see `_gate_delegation_action`.
     """
     from datetime import UTC
     from datetime import datetime as _datetime
@@ -2422,6 +2665,8 @@ def evaluate_guardrails(
             coordination_allowed=coordination_allowed,
             now=now,
         ),
+        _gate_production_batch(action, snapshot, policy),
+        _gate_delegation_action(action, policy, delegate_planet_count=delegate_planet_count),
         _gate_attack_protection(
             action,
             attack_protection_allowed=attack_protection_allowed,

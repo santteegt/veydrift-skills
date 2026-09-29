@@ -54,6 +54,27 @@ def test_scrub_known_tx_hash_match_is_case_insensitive():
     assert FAKE_TX_HASH.upper() in scrubbed
 
 
+def test_scrub_preserve_keeps_calldata_whole_but_still_masks_other_hex64():
+    calldata = "0xa1de3f6a" + "ab" * 64
+    secret = "0x" + "cd" * 32
+    out = log.scrub_text(f"data: {calldata}\nother: {secret}", preserve=[calldata])
+    assert calldata in out
+    assert secret not in out
+
+
+def test_scrub_without_preserve_masks_the_hex_run_inside_calldata():
+    """Why `preserve` exists: a 32-byte argument makes 64 hex characters, which the mask eats."""
+    calldata = "0xa1de3f6a" + "ab" * 64
+    assert calldata not in log.scrub_text(calldata)
+
+
+def test_scrub_preserve_does_not_exempt_a_configured_secret(monkeypatch):
+    monkeypatch.setenv("VEYDRIFT_KEYSTORE_PASSWORD", "hunter2-hunter2")
+    out = log.scrub_text("pw hunter2-hunter2 data 0xdeadbeef", preserve=["0xdeadbeef"])
+    assert "hunter2" not in out
+    assert "0xdeadbeef" in out
+
+
 def test_scrub_redacts_configured_secret_env_var(monkeypatch):
     monkeypatch.setenv("VEYDRIFT_KEYSTORE_PASSWORD", "hunter2-super-secret")
     scrubbed = log.scrub_text("password used: hunter2-super-secret")

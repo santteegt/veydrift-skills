@@ -1168,8 +1168,8 @@ npx tsx src/cli.ts simulate --tx tx.json --from 0xYOUR_MAIN_WALLET     <span cla
           <div class="propose-why"><strong>Cost:</strong> M 75 &nbsp;C 30 &nbsp;D 0 &nbsp;·&nbsp; <strong>Why:</strong> Metal Mine 0→1 would need 11 energy against 0 produced. Energy-first invariant: Solar Plant's marginal cost per energy point is cheaper here than one more Solar Satellite.</div>
           <div class="propose-why"><strong>Alternatives (informational only):</strong> Solar Satellite — locked: needs Shipyard 1 (have 0)</div>
           <div class="guard-bar">
-            <div class="guard-track"><div class="guard-fill" style="width:83%"></div></div>
-            <span class="guard-label">16 / 19 guards pass</span>
+            <div class="guard-track"><div class="guard-fill" style="width:89%"></div></div>
+            <span class="guard-label">24 / 27 guards pass</span>
           </div>
           <div class="tx-line">
             <span>to 0xf397…3755d</span><span>·</span><span>data 0x165715e3…</span><span>·</span>
@@ -1218,6 +1218,12 @@ npx tsx src/cli.ts simulate --tx tx.json --from 0xYOUR_MAIN_WALLET     <span cla
     <li>Only substitutes <strong>which</strong> <code>Action</code> is evaluated. Every gate in <code>guard.py</code>, the tier ceiling, <code>wallet_engine.require_confirmation</code>, the tick lockfile, and the full audit trail all still apply exactly as they do to a planner-chosen action — this is not a way to bypass any of them.</li>
     <li>The disagreement with the planner is captured automatically: <code>vd tick</code> also computes what the planner would have proposed, purely for comparison, and reports both choices together in <code>logs/strategy.md</code>, the tick's own printed output, and <code>proposals.jsonl</code>'s <code>"override"</code> key — you don't have to write that comparison down yourself.</li>
   </ul>
+  <p>Two override shapes have no planner rung:</p>
+  <ul>
+    <li><strong>A production batch</strong> (<code>"kind": "production_batch"</code>, <code>"function": "startProductionBatch"</code>, an <code>orders</code> list of <code>{"kind": "ship"|"defense", "item_id", "quantity"}</code>): up to 15 ship and defense orders queued on one planet in one atomic transaction. It needs <code>allow_ships</code>/<code>allow_defense</code> for the kinds it contains, and the guard re-derives its cost from live prices, so <code>cost</code> can be omitted. Gas grows with the order count, so use it for <em>distinct</em> items, not one item in bulk.</li>
+    <li><strong>A delegation action</strong> (<code>"kind": "delegation"</code>, <code>"function": "setDelegate"</code> with a <code>"delegate"</code> address, or <code>"revokeDelegate"</code>), behind <code>allow_delegation</code>. <code>setDelegate</code> is calldata-only: the tick simulates it as your main wallet, prints the full calldata and who must sign it, and never sends it. See §7's "Optional: a delegate signing key".</li>
+  </ul>
+  <p>Every unsent on-chain proposal's full calldata is written to <code>ticks/&lt;timestamp&gt;.md</code> (the panel's <code>tx:</code> line shows only the selector), and <code>vd tick --format json</code> carries it under <code>tx</code>.</p>
   <div class="callout danger">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
     <div><strong class="callout-title">Not the same thing as calling <code>walletctl</code> directly</strong><p>Bypassing <code>vd tick</code> entirely and calling <code>walletctl</code> by hand skips every guarantee above and leaves no audit trail. If you ever see that pattern suggested, prefer <code>--action</code> instead.</p></div>
@@ -1226,7 +1232,7 @@ npx tsx src/cli.ts simulate --tx tx.json --from 0xYOUR_MAIN_WALLET     <span cla
 <section class="chapter" id="s10" data-num="10" data-label="Reading the output">
   <div class="chapter-head"><span class="chapter-num">10</span><h2 class="chapter-title">Reading what the agent tells you</h2></div>
   <ul>
-    <li><strong>16 / 19 guards pass at tier 1 is expected, not a problem.</strong> The tier gate itself blocks every onchain proposal at tier 1 by design — that's what makes tier 1 safe <em>by construction</em>, not by discipline.</li>
+    <li><strong>24 / 27 guards pass at tier 1 is expected, not a problem.</strong> The tier gate itself blocks every onchain proposal at tier 1 by design — that's what makes tier 1 safe <em>by construction</em>, not by discipline.</li>
     <li><strong>The "why" states real numbers</strong>, not a canned explanation — a live comparison against your planet's current state, computed fresh every tick.</li>
     <li><strong>The build order is derived from your planet's actual traits</strong> — temperature, multipliers, current levels — never a generic order copy-pasted for every planet. A cold planet leans toward Deuterium Synthesizer earlier; a hot one gets offered a different energy source (Fusion Reactor or a Solar Satellite) a cold planet never would.</li>
     <li><strong>The transaction shown is real and complete</strong>, not a mockup. That's what makes a later promotion decision evidence-based rather than a guess (§13).</li>
@@ -1425,7 +1431,7 @@ mine target), fall back to the cadence default.</pre></div>
         <tr><td><code>/health</code> reports <code>ok: false</code>, tick still runs</td><td>Expected: a combat-only backend readiness issue no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy</td></tr>
         <tr><td><code>walletctl status</code> refuses to run</td><td>Expected with no provider configured — not a bug</td></tr>
         <tr><td><code>verify-abi</code> shows a mismatch</td><td>A pinned contract's on-chain implementation changed (or the chain was unreadable — the output says which). Every write is blocked until resolved — deliberate</td></tr>
-        <tr><td>Guards read 22/25 at tier 1</td><td>Correct and expected — see §10</td></tr>
+        <tr><td>Guards read 24/27 at tier 1</td><td>Correct and expected — see §10</td></tr>
         <tr><td><code>policy.json</code> edits rejected</td><td>Schema validated strictly — the error names the exact field</td></tr>
         <tr><td><code>incoming: none</code> but you were attacked</td><td>Expected — that field only ever lists <em>future</em> arrivals; it can't show an attack that already resolved. Check the <code>radar:</code> line (§10) or run <code>vd radar check</code> (§11a) directly.</td></tr>
       </tbody>

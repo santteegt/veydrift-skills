@@ -8,6 +8,7 @@ import { passingPin } from "./helpers/onchainPin.js";
 import {
   buildTx,
   describeTx,
+  GAS_HEADROOM_BPS,
   getReceipt,
   sendTx,
   BroadcastUncertainError,
@@ -87,6 +88,22 @@ describe("buildTx", () => {
     );
     expect(built.gas).toBe(50_000n);
     expect(built.gasEstimateError).toBeUndefined();
+  });
+
+  it("adds gas headroom for startProductionBatch only", async () => {
+    const client = mockClient({ estimateGas: vi.fn().mockResolvedValue(1_000_000n) });
+    const opts = { fetchConfig: async () => fixtureConfig(), from: "0x0000000000000000000000000000000000000d00" as const, client };
+    const batch = await buildTx(
+      {
+        function: "startProductionBatch(uint256,(uint8,uint8,uint32)[])",
+        args: [664, [[0, 9, 2]]],
+      },
+      opts,
+    );
+    expect(batch.gas).toBe(2_000_000n);
+    expect(GAS_HEADROOM_BPS.startProductionBatch).toBe(20_000);
+    const single = await buildTx({ function: "startResearch(uint256,uint8)", args: [664, 0] }, opts);
+    expect(single.gas).toBe(1_000_000n);
   });
 
   it("omits gas (with an error note) rather than throwing when estimation fails", async () => {

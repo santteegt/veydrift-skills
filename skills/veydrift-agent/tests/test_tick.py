@@ -4818,3 +4818,282 @@ def test_describe_override_receives_the_same_rotation_pointer_as_the_real_planne
         action_file.unlink(missing_ok=True)
 
     assert captured["last_attended_planet_id"] == 664
+
+
+# --------------------------------------------------------------------------------------
+# Batch production and delegation: encoders, `--from`, planet-count fetch, signer assertion,
+# advisor calldata output.
+# --------------------------------------------------------------------------------------
+
+_DELEGATE = "0x1111111111111111111111111111111111111111"
+
+
+def _batch_action(**overrides) -> Action:
+    from veydrift_agent.models import ProductionOrder
+
+    base = {
+        "kind": ActionKind.PRODUCTION_BATCH,
+        "function": "startProductionBatch",
+        "planet_id": 664,
+        "orders": [
+            ProductionOrder(kind="ship", item_id=ids.Ship.SOLAR_SATELLITE, quantity=3),
+            ProductionOrder(kind="defense", item_id=ids.Defense.ROCKET_LAUNCHER, quantity=5),
+        ],
+        "rationale": "batch test",
+    }
+    base.update(overrides)
+    return Action(**base)
+
+
+def _delegation_action(function="setDelegate", delegate=_DELEGATE, **overrides) -> Action:
+    base = {"kind": ActionKind.DELEGATION, "function": function, "delegate": delegate, "rationale": "delegation test"}
+    base.update(overrides)
+    return Action(**base)
+
+
+def _batch_snapshot() -> Snapshot:
+    from veydrift_agent.models import PlanetSnapshot as _Planet
+
+    planet = _Planet(
+        planet_id=664,
+        coordinates="7:181:14",
+        fields_used=7,
+        fields_total=174,
+        resources_as_of_now=Resources(metal=100_000, crystal=100_000, deuterium=100_000),
+        storage_caps=Resources(metal=1_000_000, crystal=1_000_000, deuterium=1_000_000),
+        energy=EnergyBalance(produced=100, required=0, scale_bps=10_000, solar_satellite_energy=4),
+        buildings=[Entity(id=ids.Building.SHIPYARD, name="Shipyard", level=1, cost=Resources(metal=400, crystal=200, deuterium=100))],
+        ships=[Entity(id=ids.Ship.SOLAR_SATELLITE, name="Solar Satellite", count=0, cost=Resources(crystal=2000, deuterium=500))],
+        defenses=[Entity(id=ids.Defense.ROCKET_LAUNCHER, name="Rocket Launcher", count=0, cost=Resources(metal=2000))],
+    )
+    return _healthy_snapshot(planets=[planet])
+
+
+def test_startProductionBatch_encodes_orders_as_kind_item_quantity_triples():
+    built = tick._action_to_walletctl_json(_batch_action())
+    assert built["function"] == "startProductionBatch(uint256,(uint8,uint8,uint32)[])"
+    assert built["args"] == [664, [[0, ids.Ship.SOLAR_SATELLITE, 3], [1, ids.Defense.ROCKET_LAUNCHER, 5]]]
+
+
+def test_startProductionBatch_orders_survive_the_walletctl_json_boundary():
+    built = tick._action_to_walletctl_json(_batch_action())
+    assert json.loads(json.dumps(built))["args"] == built["args"]
+
+
+def test_startProductionBatch_encoder_refuses_an_empty_or_planetless_batch():
+    with pytest.raises(ValueError, match="no orders"):
+        tick._action_to_walletctl_json(_batch_action(orders=[]))
+    with pytest.raises(ValueError, match="no planet_id"):
+        tick._action_to_walletctl_json(_batch_action(planet_id=None))
+
+
+def test_delegation_encoders():
+    assert tick._action_to_walletctl_json(_delegation_action()) == {
+        "function": "setDelegate(address)",
+        "args": [_DELEGATE],
+        "purpose": "delegation test",
+    }
+    assert tick._action_to_walletctl_json(_delegation_action("revokeDelegate", delegate=None))["function"] == "revokeDelegate()"
+    with pytest.raises(ValueError, match="no delegate"):
+        tick._action_to_walletctl_json(_delegation_action(delegate=None))
+
+
+def _fake_walletctl_build(monkeypatch, captured):
+    def fake(*args, timeout=None):
+        captured.append(list(args))
+        out = Path(args[args.index("--out") + 1])
+        out.write_text(json.dumps({"to": _LIVE_ADDR, "data": "0xca5eb5e1" + "00" * 32, "value": "0", "chainId": 8453}))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", fake)
+
+
+def test_walletctl_build_passes_from_only_when_given(monkeypatch):
+    captured: list[list[str]] = []
+    _fake_walletctl_build(monkeypatch, captured)
+    tick._walletctl_build(_delegation_action(), provider="keystore", from_address=WALLET)
+    tick._walletctl_build(_build_action(), provider="keystore", snapshot=_healthy_snapshot())
+    assert captured[0][captured[0].index("--from") + 1] == WALLET
+    assert "--from" not in captured[1]
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"planets": [], "stale": False, "indexer": {"safeToServeIndexedState": True}}, 0),
+        ({"planets": [{}, {}], "stale": False, "indexer": {"safeToServeIndexedState": True}}, 2),
+        ({"planets": [], "stale": True, "indexer": {"safeToServeIndexedState": True}}, None),
+        ({"planets": [], "stale": False, "indexer": {"safeToServeIndexedState": False}}, None),
+        ({"planets": [], "stale": False}, None),
+        ({"planets": [], "indexer": {"safeToServeIndexedState": True}}, None),
+        ({"stale": False, "indexer": {"safeToServeIndexedState": True}}, None),
+        ([], None),
+    ],
+)
+def test_delegate_planet_count_fails_closed_on_any_doubt(monkeypatch, payload, expected):
+    monkeypatch.setattr(tick.read, "fetch_wallet_planets", lambda address, **kw: payload)
+    assert tick._delegate_planet_count(_DELEGATE) == expected
+
+
+def test_delegate_planet_count_is_none_when_the_fetch_fails(monkeypatch):
+    def boom(address, **kw):
+        raise http.VeydriftAPIError("down")
+
+    monkeypatch.setattr(tick.read, "fetch_wallet_planets", boom)
+    assert tick._delegate_planet_count(_DELEGATE) is None
+
+
+def test_signer_mismatch_only_fires_when_a_signer_is_configured_and_differs():
+    plain = _economy_policy()
+    delegated = _economy_policy(signer=_DELEGATE)
+    assert tick._signer_mismatch(plain, "0x" + "22" * 20) is None
+    assert tick._signer_mismatch(delegated, None) is None
+    assert tick._signer_mismatch(delegated, _DELEGATE.upper().replace("0X", "0x")) is None
+    assert "policy.signer" in tick._signer_mismatch(delegated, "0x" + "22" * 20)
+
+
+def test_send_nonce_falls_back_to_the_signer_not_the_policy_wallet(isolated_home, monkeypatch):
+    seen: list[str] = []
+    _allow_simulate(monkeypatch)
+    monkeypatch.setattr(tick, "_walletctl_nonce", lambda address, **kw: seen.append(address) or None)
+    tick._send_and_await(
+        _economy_policy(signer=_DELEGATE),
+        AgentState(),
+        _build_action(),
+        UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=1),
+        _healthy_snapshot(),
+        datetime.now(UTC),
+        gas_cost_wei_estimate=None,
+        wallet_address=None,
+    )
+    assert seen == [_DELEGATE]
+
+
+def _write_delegation_policy(**overrides):
+    policy = json.loads((Path(__file__).parent.parent / "assets" / "policy.example.json").read_text())
+    policy["strategy"]["allow_agent_action_override"] = True
+    policy["actions"]["allow_delegation"] = True
+    policy["actions"]["allow_ships"] = True
+    policy["actions"]["allow_defense"] = True
+    policy.update(overrides)
+    init_policy()
+    from veydrift_agent.state import policy_path
+
+    policy_path().write_text(json.dumps(policy))
+
+
+def test_set_delegate_override_is_built_as_the_main_wallet_and_prints_full_calldata(isolated_home, monkeypatch, tmp_path):
+    _write_delegation_policy()
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0xca5eb5e1" + "11" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, action=_build_action())
+    built_from: list[str | None] = []
+    monkeypatch.setattr(
+        tick,
+        "_walletctl_build",
+        lambda act, **kw: (built_from.append(kw.get("from_address")) or (tx, None, None, tmp_path / "tx.json")),
+    )
+    simulated: list[str | None] = []
+    monkeypatch.setattr(tick, "_walletctl_simulate", lambda p, *, address, **kw: (simulated.append(address) or (True, None, None)))
+    monkeypatch.setattr(tick, "_delegate_planet_count", lambda address: 0)
+    action_file = tmp_path / "set.json"
+    action_file.write_text(json.dumps({"kind": "delegation", "function": "setDelegate", "delegate": _DELEGATE, "rationale": "r"}))
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+
+    assert result.exit_code == 0, result.output
+    assert built_from == [WALLET]
+    assert simulated == [WALLET]
+    assert "calldata-only" in result.output
+    assert tx.data in result.output.replace("\n", "")
+    assert "simulated as" in result.output
+    proposal = log.read_proposals()[0]
+    assert proposal["kind"] == "delegation"
+    assert proposal["tx"]["data"] == tx.data
+
+
+def test_set_delegate_simulation_failure_is_reported(isolated_home, monkeypatch, tmp_path):
+    _write_delegation_policy()
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0xca5eb5e1" + "11" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, action=_build_action(), built_tx_path=tmp_path / "tx.json")
+    monkeypatch.setattr(tick, "_walletctl_simulate", lambda p, *, address, **kw: (False, "DelegatedWalletCannotDelegate()", None))
+    monkeypatch.setattr(tick, "_delegate_planet_count", lambda address: 0)
+    action_file = tmp_path / "set.json"
+    action_file.write_text(json.dumps({"kind": "delegation", "function": "setDelegate", "delegate": _DELEGATE, "rationale": "r"}))
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+
+    assert result.exit_code == 0, result.output
+    verdicts = {v["gate"]: v for v in log.read_proposals()[0]["guard_verdicts"]}
+    assert verdicts["walletctl_simulate"]["status"] == "escalate"
+    assert "DelegatedWalletCannotDelegate" in verdicts["walletctl_simulate"]["detail"]
+
+
+def test_set_delegate_to_a_planet_owner_is_blocked_by_the_delegation_gate(isolated_home, monkeypatch, tmp_path):
+    _write_delegation_policy()
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0xca5eb5e1" + "11" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, action=_build_action(), built_tx_path=tmp_path / "tx.json")
+    monkeypatch.setattr(tick, "_delegate_planet_count", lambda address: 4)
+    action_file = tmp_path / "set.json"
+    action_file.write_text(json.dumps({"kind": "delegation", "function": "setDelegate", "delegate": _DELEGATE, "rationale": "r"}))
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+
+    assert result.exit_code == 0, result.output
+    verdicts = {v["gate"]: v for v in log.read_proposals()[0]["guard_verdicts"]}
+    assert verdicts["delegation"]["status"] == "block"
+    assert "4 planet(s)" in verdicts["delegation"]["detail"]
+
+
+def test_batch_override_fills_display_cost_and_writes_full_calldata_to_the_tick_markdown(isolated_home, monkeypatch, tmp_path):
+    _write_delegation_policy()
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0xa1de3f6a" + "22" * 96, gas=None)
+    _patch_common(monkeypatch, snapshot=_batch_snapshot(), live_addresses={_LIVE_ADDR}, unsigned_tx=tx, action=_build_action())
+    action_file = tmp_path / "batch.json"
+    action_file.write_text(
+        json.dumps(
+            {
+                "kind": "production_batch",
+                "function": "startProductionBatch",
+                "planet_id": 664,
+                "orders": [
+                    {"kind": "ship", "item_id": ids.Ship.SOLAR_SATELLITE, "quantity": 3},
+                    {"kind": "defense", "item_id": ids.Defense.ROCKET_LAUNCHER, "quantity": 5},
+                ],
+                "rationale": "r",
+            }
+        )
+    )
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file), "--format", "json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output[result.output.index("{") :])
+    assert payload["tx"]["data"] == tx.data
+    assert payload["action"]["cost"] == {"metal": 10_000, "crystal": 6_000, "deuterium": 1_500}
+    verdicts = {v["gate"]: v for v in payload["guard"]["verdicts"]}
+    assert verdicts["production_batch"]["status"] == "pass"
+    from veydrift_agent.state import ticks_dir
+
+    md = "\n".join(p.read_text() for p in ticks_dir().glob("*.md"))
+    assert tx.data in md
+    assert "calldata (from " in md
+
+
+def test_a_configured_signer_is_named_on_every_onchain_proposal(isolated_home, monkeypatch):
+    _write_policy(signer=_DELEGATE)
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx)
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert f"delegate {_DELEGATE}" in result.output.replace("\n", " ")
+
+
+def test_a_provider_that_signs_as_someone_else_than_policy_signer_escalates(isolated_home, monkeypatch):
+    _write_policy(tier="economy", signer=_DELEGATE)
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx)
+    monkeypatch.setattr(tick, "_walletctl_status", lambda **kw: (10**18, "0x" + "22" * 20))
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    verdicts = {v["gate"]: v for v in log.read_proposals()[0]["guard_verdicts"]}
+    assert verdicts["signer"]["status"] == "escalate"

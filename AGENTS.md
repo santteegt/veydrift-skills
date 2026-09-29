@@ -76,7 +76,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1128 Python tests, 397 TypeScript tests** (394 passed + 3 intentionally
+baseline: **1198 Python tests, 398 TypeScript tests** (395 passed + 3 intentionally
 skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain check),
 both suites green. Run both before calling any change done; they are independent
 projects but cover a system with two enforcement layers that must agree (§6).
@@ -238,6 +238,17 @@ touching related code, re-run the check named alongside each one.
   (offline, older wallet) is a BLOCK, and `/runtime-config`'s `deploymentAbiHash` is advisory only.
   `walletctl send` re-checks the chain right before signing and refuses with `SendRefusedError` —
   including when the RPC is down, since any other error would be recorded as a possible broadcast.
+- **`setDelegate` is calldata-only, at every tier, on both layers.** It is in no allowlist set
+  and not in `_MIN_TIER_FOR_FUNCTION` (`guard.CALLDATA_ONLY_FUNCTIONS`); `walletctl send` refuses
+  it. The tick builds and simulates it as `policy.wallet` and prints the calldata; a human signs
+  it. Never give it a tier or a flag. Its `delegation` gate refuses an address that owns planets
+  and fails closed when that cannot be verified.
+- **A production action's spend comes from live unit costs × quantity, never from `Action.cost`.**
+  `guard.production_spend` feeds `affordability`/`reserve`/`value_ceiling` for a batch and for a
+  single order with quantity above 1. A batch's idempotency key is its `(kind, item)` set, never
+  its quantities. `startProductionBatch` gets gas headroom in `buildTx` (`GAS_HEADROOM_BPS`).
+- **Calldata in text output goes through `scrub_text(preserve=…)`.** A 32-byte argument is 64 hex
+  characters, which the private-key mask would otherwise eat.
 - **Secrets never reach a log or a tracked file.** `log.py` scrubs any
   `0x[0-9a-fA-F]{64}` that isn't a known tx hash, and refuses to write a value matching a
   configured secret env var. Before committing, `git diff --cached` anything touching

@@ -596,6 +596,11 @@ _ALLIANCE_ARG_BUILDERS: dict[str, Any] = {
 }
 
 
+#: `startProductionBatch`'s wire encoding of `ProductionOrder.kind` (`VeydriftTypes`: 0 = ship,
+#: 1 = defense). Mirrors `allowlist.ts`'s `validateProductionBatch`.
+_PRODUCTION_ORDER_KIND = {"ship": 0, "defense": 1}
+
+
 def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) -> dict[str, Any]:
     """`Action` (this package's pydantic model) -> the `{function, args, purpose}` shape
     `walletctl build --action` expects (`veydrift-wallet/src/tx.ts`'s `Action` interface).
@@ -613,6 +618,29 @@ def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) 
     if fn == "startShipProduction" or fn == "startDefenseProduction":
         args = [action.planet_id, action.entity_id, action.quantity or 0]
         return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
+    if fn == "startProductionBatch":
+        # Full signature, not the bare name: the tuple-array argument is what the pinned ABI
+        # declares, and a signature that does not resolve fails loudly instead of encoding
+        # something else. Each order crosses the `walletctl` JSON boundary as a plain
+        # `[kind, itemId, quantity]` triple (kind 0 = ship, 1 = defense); every value fits a
+        # JS number exactly (uint8/uint8/uint32) -- no bigint hazard, unlike Colonize's
+        # packed target (AGENTS.md §7 trap 4).
+        if action.planet_id is None:
+            raise ValueError("startProductionBatch action has no planet_id")
+        if not action.orders:
+            raise ValueError("startProductionBatch action has no orders")
+        orders = [[_PRODUCTION_ORDER_KIND[o.kind], o.item_id, o.quantity] for o in action.orders]
+        return {
+            "function": "startProductionBatch(uint256,(uint8,uint8,uint32)[])",
+            "args": [action.planet_id, orders],
+            "purpose": (action.rationale or "")[:200],
+        }
+    if fn == "setDelegate":
+        if not action.delegate:
+            raise ValueError("setDelegate action has no delegate")
+        return {"function": "setDelegate(address)", "args": [action.delegate], "purpose": (action.rationale or "")[:200]}
+    if fn == "revokeDelegate":
+        return {"function": "revokeDelegate()", "args": [], "purpose": (action.rationale or "")[:200]}
     if fn == "resolveFleetMission":
         args = [action.mission_id]
         return {"function": fn, "args": args, "purpose": (action.rationale or "")[:200]}
@@ -729,7 +757,7 @@ def _parse_onchain_pin(raw: object) -> OnchainPin | None:
 
 
 def _walletctl_build(
-    action: Action, *, provider: str, snapshot: Snapshot | None = None
+    action: Action, *, provider: str, snapshot: Snapshot | None = None, from_address: str | None = None
 ) -> tuple[UnsignedTx | None, int | None, str | None, Path | None]:
     """Returns `(unsigned_tx, gas_cost_wei, error, built_tx_path)`. Never raises -- a
     build failure (e.g. `walletctl` unreachable, or a live /runtime-config fetch failing
@@ -779,7 +807,12 @@ def _walletctl_build(
     except ValueError as exc:
         return None, None, str(exc), None
     try:
-        result = _run_walletctl("build", "--action", str(action_file), "--out", str(out_file), "--provider", provider)
+        argv = ["build", "--action", str(action_file), "--out", str(out_file), "--provider", provider]
+        if from_address:
+            # `setDelegate` only: the call reverts unless the *main* wallet makes it, so its gas
+            # estimate must be taken from there, not from the provider's (delegate) address.
+            argv += ["--from", from_address]
+        result = _run_walletctl(*argv)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return None, None, f"walletctl build could not be run: {exc}", None
     if result.returncode != 0 or not out_file.exists():
@@ -2105,6 +2138,26 @@ def _epoch_seconds_to_datetime(raw: object) -> datetime | None:
         return None
 
 
+def _delegate_planet_count(address: str) -> int | None:
+    """How many planets `address` owns, for `guard._gate_delegation_action`'s `setDelegate` check:
+    the contract does not stop a planet owner being registered as someone's delegate, and once it
+    is, its own planets are unreachable through it. `None` -- never `0` -- on any doubt: the fetch
+    failed, the payload has no `planets` list, or the indexer says it is stale or not safe to
+    serve (an undercount there would let a planet-owning address through)."""
+    try:
+        data = read.fetch_wallet_planets(address)
+    except http.VeydriftAPIError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("planets"), list):
+        return None
+    if data.get("stale") is not False:
+        return None
+    indexer = data.get("indexer")
+    if not isinstance(indexer, dict) or indexer.get("safeToServeIndexedState") is not True:
+        return None
+    return len(data["planets"])
+
+
 def _alliance_state(wallet: str) -> AllianceState | None:
     """Live `/wallet/{addr}/alliance` fetch, once per tick -- `guard._gate_alliance_action`'s
     `alliance_state` parameter (alliance feature, commit 4). Best-effort: catches
@@ -2348,6 +2401,7 @@ def _proposal_lines(
     send_outcome: str | None = None,
     confirm_hint: str | None = None,
     override_line: str | None = None,
+    extra_lines: list[str] | None = None,
 ) -> list[str]:
     verb = "EXECUTE" if executed else "PROPOSE"
     if action.kind in (ActionKind.NOOP, ActionKind.ESCALATE, ActionKind.HALT):
@@ -2380,6 +2434,8 @@ def _proposal_lines(
     if unsigned_tx is not None:
         submitted = "" if executed else f" (NOT SUBMITTED -- tier {tier.value})"
         lines.append(f"  tx:     to {unsigned_tx.to}  data {unsigned_tx.data[:10]}...{submitted}")
+    for extra in extra_lines or []:
+        lines.append(f"  {extra}")
     # 2026-09 fix: a build-time issue -- a hard walletctl failure (unsigned_tx is None), or
     # a build that succeeded but whose gas/fee estimate genuinely failed (unsigned_tx is
     # present, e.g. a real on-chain revert -- exactly the "gas: escalate" with no visible
@@ -2633,6 +2689,13 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         # proposals.jsonl entry gets the same goal/queue/timing/risk structure a
         # planner-chosen action gets. `_describe_override` below still compares against
         # `override_action` (pre-brief) -- attaching a brief changes nothing it reads.
+        if override_action.kind is ActionKind.PRODUCTION_BATCH:
+            # Display only: the guard re-derives a batch's spend from its orders and never reads
+            # `cost`, so a hand-written file may omit it -- fill it so the report/brief show the
+            # real total instead of zero.
+            derived_cost = guard_mod.production_spend(override_action, snapshot)
+            if derived_cost is not None:
+                override_action = override_action.model_copy(update={"cost": derived_cost})
         action = brief_mod.attach(override_action, snapshot, policy_model)
         override_record, override_line = _describe_override(
             override_action,
@@ -2679,9 +2742,17 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     hostile_mission: dict[str, Any] | None = None
     coordination_allowed: bool | None = None
     net_holding_fuel_cost: int | None = None
+    delegate_planet_count: int | None = None
+    calldata_only_note: str | None = None
     if action.is_onchain():
+        # `setDelegate` is built (and simulated below) as the MAIN wallet, the only caller it
+        # accepts; every other action is built as whatever the wallet provider signs with.
+        is_calldata_only = action.function in guard_mod.CALLDATA_ONLY_FUNCTIONS
         unsigned_tx, gas_cost_wei, build_error, built_tx_path = _walletctl_build(
-            action, provider=policy_model.wallet_engine.provider, snapshot=snapshot
+            action,
+            provider=policy_model.wallet_engine.provider,
+            snapshot=snapshot,
+            from_address=policy_model.wallet if is_calldata_only else None,
         )
         live_addresses = _live_addresses()
         if policy_model.tier is not Tier.ADVISOR:
@@ -2696,6 +2767,11 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         # network call on every single tick.
         if action.function == "launchFleetMission" and action.mission_type == ids.FleetMissionType.COLONIZE:
             outgoing_colonize_count = _outgoing_colonize_count(policy_model.wallet)
+        # Delegation: `setDelegate` needs a live "does this address own planets" answer, and is
+        # never sent by this codebase, so the pre-flight `simulate` that `_send_and_await` would
+        # otherwise run happens here, as the main wallet (see `_simulate_calldata_only`).
+        if action.function == "setDelegate" and action.delegate:
+            delegate_planet_count = _delegate_planet_count(action.delegate)
         # Commit 6 of the launch-actions plan (extended to Missile in commit 7): only
         # fetched for an actual Attack or Missile proposal -- a live, target-specific
         # re-check at guard-evaluation time, never trusted from generation time (see
@@ -2754,10 +2830,21 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         hostile_mission=hostile_mission,
         coordination_allowed=coordination_allowed,
         net_holding_fuel_cost=net_holding_fuel_cost,
+        delegate_planet_count=delegate_planet_count,
         now=now,
     )
     if build_error:
         guard_report.verdicts.append(GuardVerdict(gate="walletctl_build", status=GuardStatus.ESCALATE, detail=build_error))
+        if guard_report.decision is Decision.ALLOW:
+            guard_report.decision = Decision.ESCALATE
+    if action.function in guard_mod.CALLDATA_ONLY_FUNCTIONS and built_tx_path is not None:
+        calldata_only_note = _simulate_calldata_only(built_tx_path, policy_model.wallet, guard_report)
+    # Delegate-signer mode: the wallet provider must be the key `policy.signer` names. The wallet
+    # skill refuses a mismatch at send time too; this makes the tick say so instead of building
+    # a proposal it can never send.
+    signer_problem = _signer_mismatch(policy_model, wallet_address)
+    if signer_problem:
+        guard_report.verdicts.append(GuardVerdict(gate="signer", status=GuardStatus.ESCALATE, detail=signer_problem))
         if guard_report.decision is Decision.ALLOW:
             guard_report.decision = Decision.ESCALATE
 
@@ -2822,6 +2909,36 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         radar_report=radar_report,
         opportunity_report=opportunity_report,
         coordination_report=coordination_report,
+        calldata_only_note=calldata_only_note,
+    )
+
+
+def _simulate_calldata_only(tx_path: Path, main_wallet: str, guard_report: GuardReport) -> str:
+    """Pre-flight `simulate` for a calldata-only action, as the main wallet. It never goes through
+    `_send_and_await` (nothing here is ever sent), so this is the only chance to catch a revert
+    before a human signs it. A failure appends a `walletctl_simulate` verdict, same as the send
+    path does; either way the returned line goes in the report."""
+    ok, reason, error = _walletctl_simulate(tx_path, address=main_wallet)
+    if ok is True:
+        return f"simulated as {main_wallet}: ok"
+    detail = error or (f"simulated revert: {reason}" if reason else "walletctl simulate reported ok: false with no revert reason")
+    guard_report.verdicts.append(GuardVerdict(gate="walletctl_simulate", status=GuardStatus.ESCALATE, detail=detail))
+    if guard_report.decision is Decision.ALLOW:
+        guard_report.decision = Decision.ESCALATE
+    return f"simulation as {main_wallet} FAILED: {detail}"
+
+
+def _signer_mismatch(policy_model: Policy, wallet_address: str | None) -> str | None:
+    """`policy.signer` names the delegate key this agent signs with. When `walletctl status`
+    reports the provider's address (tier >= 2 only), it must be that key. `None` when there is
+    nothing to compare or they agree."""
+    if not policy_model.signer or not wallet_address:
+        return None
+    if wallet_address.lower() == policy_model.signer.lower():
+        return None
+    return (
+        f"the wallet provider signs as {wallet_address}, but policy.signer is {policy_model.signer} -- "
+        "configure the provider for the delegate key, or fix policy.signer"
     )
 
 
@@ -2922,7 +3039,7 @@ def _send_and_await(
 
     # Read the sender's nonce before sending, so a send whose hash never comes back can be
     # resolved later instead of guessed at (or blindly re-sent). No nonce, no send.
-    sender = wallet_address or policy_model.wallet
+    sender = wallet_address or policy_model.signer or policy_model.wallet
     nonces = _walletctl_nonce(sender)
     if nonces is None:
         detail = f"could not read the nonce for {sender} before sending; send skipped"
@@ -3064,6 +3181,25 @@ def _fingerprint_proposal(record: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(comparable, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def _calldata_lines(action: Action, unsigned_tx: UnsignedTx | None, policy_model: Policy) -> list[str]:
+    """The full built calldata of an on-chain proposal that was not submitted, with who must (or
+    may) send it -- the advisor-mode hand-off. `tx:` in the panel abbreviates `data` to its
+    selector; this is the whole thing, for `ticks/<ts>.md` and, for calldata-only functions, the
+    panel too (a `setDelegate` is only useful if the human can copy it)."""
+    if unsigned_tx is None:
+        return []
+    if action.function in guard_mod.CALLDATA_ONLY_FUNCTIONS:
+        sender = f"{policy_model.wallet} (the main wallet -- the only account this function accepts)"
+    else:
+        sender = policy_model.signer or policy_model.wallet
+    return [
+        f"calldata (from {sender}):",
+        f"  to:    {unsigned_tx.to}",
+        f"  value: {unsigned_tx.value}",
+        f"  data:  {unsigned_tx.data}",
+    ]
+
+
 def _finish_tick(
     policy_model: Policy,
     agent_state: AgentState,
@@ -3086,6 +3222,7 @@ def _finish_tick(
     radar_report: RadarReport | None = None,
     opportunity_report: OpportunityReport | None = None,
     coordination_report: CoordinationReport | None = None,
+    calldata_only_note: str | None = None,
 ) -> None:
     proposal_record = {
         "ts": now.isoformat(),
@@ -3175,6 +3312,19 @@ def _finish_tick(
         proposal_record["tick"] = agent_state.tick_count
     save_agent_state(agent_state)
 
+    # Report extras. A configured delegate signer is stated on every on-chain proposal; a
+    # calldata-only action (`setDelegate`) additionally prints its whole calldata in the panel and
+    # says who must sign it, since the wallet skill will never send it.
+    panel_extras: list[str] = []
+    calldata_lines = _calldata_lines(action, unsigned_tx, policy_model) if action.is_onchain() and not executed else []
+    if action.is_onchain() and policy_model.signer:
+        panel_extras.append(f"signer: delegate {policy_model.signer}, acting for {policy_model.wallet}")
+    if action.function in guard_mod.CALLDATA_ONLY_FUNCTIONS:
+        panel_extras.append(f"sign:   calldata-only -- send it yourself from {policy_model.wallet}; the wallet skill never sends it")
+        if calldata_only_note:
+            panel_extras.append(f"check:  {calldata_only_note}")
+        panel_extras.extend(calldata_lines)
+
     block_text = log.format_tick_block(
         tick_number=agent_state.tick_count,
         taken_at=now,
@@ -3192,6 +3342,7 @@ def _finish_tick(
             send_outcome=send_outcome,
             confirm_hint=confirm_hint,
             override_line=override_line,
+            extra_lines=panel_extras,
         ),
         duplicate_of=duplicate_note,
         human_activity_line=human_activity_line,
@@ -3268,10 +3419,16 @@ def _finish_tick(
     if (action.kind is ActionKind.ESCALATE or guard_report.decision is not Decision.ALLOW) and not structural and not is_duplicate:
         log.append_strategy(f"tick {agent_state.tick_count}: {action.rule} -- {action.rationale} (guard={guard_report.decision.value})", now=now)
 
+    extra_md_parts: list[str] = []
+    if action.brief is not None:
+        extra_md_parts.extend(brief_mod.render_lines(action.brief, full=True))
+    if calldata_lines and action.function not in guard_mod.CALLDATA_ONLY_FUNCTIONS:
+        extra_md_parts.extend(["", *calldata_lines])
     log.write_tick_markdown(
         block_text,
         taken_at=now,
-        extra_markdown="\n".join(brief_mod.render_lines(action.brief, full=True)) if action.brief is not None else None,
+        extra_markdown="\n".join(extra_md_parts) if extra_md_parts else None,
+        preserve=[unsigned_tx.data] if unsigned_tx is not None else (),
     )
 
     if format == "json":
@@ -3285,6 +3442,7 @@ def _finish_tick(
                     "send_outcome": send_outcome,
                     "duplicate": is_duplicate,
                     "override": override_record,
+                    "tx": json.loads(unsigned_tx.model_dump_json()) if unsigned_tx is not None else None,
                 },
                 indent=2,
             )

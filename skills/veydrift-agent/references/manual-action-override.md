@@ -148,13 +148,70 @@ mission being defended against/intercepted, **not** a target planet — see
 repurposing (AGENTS.md §7's third silent-corruption trap) before hand-writing one of
 these.
 
+### Batch production
+
+`startProductionBatch` queues up to 15 ship/defense orders on one planet in a single atomic
+transaction. Hand-written (`kind: "production_batch"`), it is an override like any other:
+
+```json
+{
+  "kind": "production_batch",
+  "function": "startProductionBatch",
+  "planet_id": 664,
+  "orders": [
+    {"kind": "ship", "item_id": 9, "quantity": 3},
+    {"kind": "defense", "item_id": 0, "quantity": 5}
+  ],
+  "rule": "operator override",
+  "rationale": "one transaction for a satellite top-up and rocket launchers"
+}
+```
+
+- `orders` is ordered and the whole batch reverts if any order does; each order is charged in
+  turn, so the total equals what the same orders would cost placed one by one. A batch saves
+  transactions, not gas per item: gas grows with the order count, and a *single* order of any
+  quantity costs about the same as a one-order batch — use a batch for **distinct** items.
+- Needs `policy.actions.allow_ships`/`allow_defense` for the kinds it contains (the gate checks
+  both; the single-order override path never did). `cost` may be omitted: the guard re-derives
+  the spend from live unit costs and the report shows it.
+- `economy` tier or above. The `production_batch` gate checks each order's prerequisites and the
+  defense caps aggregated across the batch. The 16-order per-lane backlog cap is enforced
+  on-chain only; if a lane is that full, `simulate` reports the revert and nothing is sent.
+
+### Delegation actions
+
+The game lets one wallet register a single delegate key that then acts as the owner. Both
+functions are override-only and both need `policy.actions.allow_delegation`.
+
+```json
+{
+  "kind": "delegation",
+  "function": "setDelegate",
+  "delegate": "0x1111111111111111111111111111111111111111",
+  "rule": "operator override",
+  "rationale": "register the hot key the agent will sign with"
+}
+```
+
+- **`setDelegate` is calldata-only, at every tier.** It must be signed by the *main* wallet, so
+  `tier` BLOCKs it by design and the wallet skill refuses to send it. The tick builds and
+  simulates it as `policy.wallet`, then prints the full calldata and who must send it — sign and
+  send it yourself. The guard also refuses an address that owns planets (the contract does not
+  check; that address's own planets would become unreachable through it) and one it cannot
+  verify.
+- **`revokeDelegate`** (`{"kind": "delegation", "function": "revokeDelegate"}`) takes no
+  arguments and removes the delegate. Executable at `economy` tier or above; either the main
+  wallet or the delegate may call it, so it doubles as a kill-switch the agent can pull itself.
+- After registering a delegate, set `policy.signer` to its address (see the wallet skill's
+  `SKILL.md`); the tick states the signer on every on-chain proposal.
+
 ## What still runs — everything
 
 Once your `Action` is loaded, it flows through the **exact same** `_run_tick` pipeline a
 planner-chosen action does. Nothing below is skipped, softened, or specific to an
 override:
 
-- Every one of `guard.py`'s 25 gates (`references/guardrails.md`) — killswitch, tier,
+- Every one of `guard.py`'s 27 gates (`references/guardrails.md`) — killswitch, tier,
   affordability, energy, fields, reserve, gas, eth_floor, value_ceiling, idempotency,
   revert_streak, colony cap, ship-availability, fleet slots, and the rest.
 - `wallet_engine.require_confirmation` — a human still has to run the printed

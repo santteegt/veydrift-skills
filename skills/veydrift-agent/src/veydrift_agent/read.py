@@ -711,6 +711,16 @@ def fetch_alliance_state(wallet: str, *, max_age: float | None = None) -> dict[s
     return http.fetch(f"/wallet/{wallet}/alliance", max_age=max_age)
 
 
+def fetch_wallet_planets(wallet: str, *, max_age: float | None = None) -> dict[str, Any]:
+    """GET /wallet/{addr}/planets, bypassing the CLI/`_emit` layer -- same posture as
+    `fetch_alliance_state`. Used to ask about an address other than the policy wallet (does a
+    prospective delegate own any planets). The payload carries `planets` (a list, empty for an
+    address that owns none), `stale`, and `indexer.safeToServeIndexedState`; the caller must
+    require both freshness flags, since an undercount here is a false all-clear. Does NOT catch
+    `http.VeydriftAPIError` -- the caller decides how to degrade."""
+    return http.fetch(f"/wallet/{wallet}/planets", max_age=max_age)
+
+
 def fetch_alliance_by_id(alliance_id: int | str, *, max_age: float | None = None) -> dict[str, Any]:
     """GET /alliance/{id} -- single-alliance detail BY ID, not wallet-scoped. Unlike
     `fetch_alliance_state` (the CALLER's own alliance only), this resolves an arbitrary
