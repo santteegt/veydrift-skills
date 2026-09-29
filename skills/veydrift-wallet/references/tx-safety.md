@@ -310,9 +310,10 @@ a new signature list:
   of combat's branch shape would have been wrong, and the test suite has a dedicated regression
   for it.
 
-The alliance ABI pin has no live-hash re-verification path at all (`/runtime-config` has no
-`allianceAbiHash`/`allianceDeploymentCommit` field) — see `references/abi-pinning.md`'s "Second
-contract" section for why that's a permanent limit, not a transitional gap.
+The alliance contract has no backend-reported ABI hash at all (`/runtime-config` has no
+`allianceAbiHash`/`allianceDeploymentCommit` field), so its pin is verified on-chain instead —
+the alliance proxy's implementation is checked before every `send` like the game's; see
+`references/abi-pinning.md`.
 
 ## The two other traps `send` refuses outright, independent of the allowlist
 
@@ -345,6 +346,21 @@ Resolution (`resolveExpectedWallet`, `src/policy.ts`) follows `resolveTier`'s sh
 exit 4, nothing signed. There is no flag or env var to override it. A provider whose address can't
 be derived (e.g. a wrong keystore password) is also a refusal. `walletctl status` prints the
 policy wallet next to the provider address and flags a mismatch.
+
+## The chain must still match the pin
+
+Immediately before signing (after the signer binding and the allowlist, so every cheap local
+refusal happens first), `sendTx` re-reads the chain: each pinned proxy's EIP-1967 implementation and
+its runtime-code hash must equal the pin, `tx.to` must be one of the two pinned proxies, and the
+functions that reach the Randomness/Moon contracts (`fleet launches`, `missile`, `resolveFleetMission`)
+also require those pinned dependencies to match. The verdict comes from the chain, never from the
+backend's self-reported hash, which can lag an upgrade.
+
+Every failure path is a `SendRefusedError` (`REFUSED:`) — a mismatch, an empty slot, and an
+unreachable RPC alike. It must never surface as a generic error: `veydrift-agent` records anything
+that is not `REFUSED:`/`NOT SENT` as a possible broadcast and blocks every later action until the
+sender's nonce is reconciled. `checkOnchainPin` is injectable in tests so no `sendTx` test reaches
+the network. See `references/abi-pinning.md` for what is and is not covered.
 
 ## A failed broadcast is uncertain, not refused
 

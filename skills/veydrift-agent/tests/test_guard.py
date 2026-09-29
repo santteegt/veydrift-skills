@@ -11,6 +11,7 @@ defect the work package brief calls out as the most likely real bug in this pack
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -144,10 +145,39 @@ def make_build_action(**overrides) -> Action:
 LIVE_ADDR = "0xf397910F005151b09644228573a4353818D3755d"
 
 
+#: The functions PINNED.json's `dependencies.appliesTo` names -- the ones that reach the
+#: Randomness/Moon contracts the game calls.
+DEPENDENCY_FUNCTIONS = [
+    "launchFleetMission",
+    "launchInterplanetaryMissileAttack",
+    "resolveFleetMission",
+    "launchDefenseHold",
+]
+
+
+def make_onchain_pin(**overrides):
+    """A passing on-chain pin verdict (what `walletctl build` stores when every pinned proxy still
+    points at its pinned implementation). Override fields to model drift or a dependency failure."""
+    from veydrift_agent.models import OnchainPin
+
+    base = {"ok": True, "dependencies_ok": True, "applies_to": list(DEPENDENCY_FUNCTIONS)}
+    base.update(overrides)
+    return OnchainPin(**base)
+
+
 def make_unsigned_tx(**overrides):
     from veydrift_agent.models import UnsignedTx
 
-    base = dict(to=LIVE_ADDR, data="0x165715e3" + "00" * 64, value=0, chain_id=8453, gas=100_000)
+    # Carries a PASSING on-chain pin by default: `abi_hash` BLOCKs an on-chain action whose build
+    # carried no verdict, so every test that isn't about that gate needs one.
+    base = {
+        "to": LIVE_ADDR,
+        "data": "0x165715e3" + "00" * 64,
+        "value": 0,
+        "chain_id": 8453,
+        "gas": 100_000,
+        "onchain_pin": make_onchain_pin(),
+    }
     base.update(overrides)
     return UnsignedTx(**base)
 
@@ -1445,19 +1475,101 @@ def test_address_trivially_passes_for_offchain_action():
 # --------------------------------------------------------------------------------------
 
 
-def test_abi_hash_blocks_when_snapshot_hash_missing():
-    report = evaluate(make_build_action(), make_snapshot(abi_hash=None), make_policy())
-    assert verdict(report, "abi_hash").status is GuardStatus.BLOCK
+# The AUTHORITY is the on-chain pin `walletctl build` stores on the tx (`unsigned_tx.onchain_pin`),
+# read from the chain's EIP-1967 implementation slots. The backend's `deploymentAbiHash` is
+# advisory: it went stale (it still reports the previous pin while the chain moved on), so it can
+# neither detect drift nor be trusted about it.
 
 
-def test_abi_hash_blocks_on_drift():
-    report = evaluate(make_build_action(), make_snapshot(abi_hash="sha256:deadbeef"), make_policy())
-    assert verdict(report, "abi_hash").status is GuardStatus.BLOCK
-
-
-def test_abi_hash_passes_when_pinned_matches_live():
+def test_abi_hash_blocks_when_there_is_no_built_tx_to_carry_a_pin_result():
+    """Offline `vd guard run`, or a tick where nothing was built: no verdict == BLOCK, never a
+    vacuous PASS (AGENTS.md §5)."""
     report = evaluate(make_build_action(), make_snapshot(), make_policy())
+    verdict_ = verdict(report, "abi_hash")
+    assert verdict_.status is GuardStatus.BLOCK
+    assert "no on-chain pin result" in verdict_.detail
+
+
+def test_abi_hash_blocks_when_the_build_carried_no_pin_verdict():
+    report = evaluate(
+        make_build_action(), make_snapshot(), make_policy(), unsigned_tx=make_unsigned_tx(onchain_pin=None)
+    )
+    assert verdict(report, "abi_hash").status is GuardStatus.BLOCK
+
+
+def test_abi_hash_blocks_on_onchain_drift_and_names_the_problem():
+    pin = make_onchain_pin(ok=False, problems=["game: implementation of 0xf397 is 0xbeef, but the pin is 0xcafe"])
+    report = evaluate(make_build_action(), make_snapshot(), make_policy(), unsigned_tx=make_unsigned_tx(onchain_pin=pin))
+    v = verdict(report, "abi_hash")
+    assert v.status is GuardStatus.BLOCK
+    assert "0xbeef" in v.detail and "Re-pin" in v.detail
+
+
+def test_abi_hash_blocks_even_when_the_backend_hash_matches_the_pin_if_the_chain_drifted():
+    """The chain, not the backend, decides: a backend that still reports the pinned hash cannot
+    vouch for an implementation that was swapped underneath it."""
+    pin = make_onchain_pin(ok=False, problems=["game: implementation changed"])
+    report = evaluate(
+        make_build_action(), make_snapshot(abi_hash=guard.PINNED_ABI_HASH), make_policy(), unsigned_tx=make_unsigned_tx(onchain_pin=pin)
+    )
+    assert verdict(report, "abi_hash").status is GuardStatus.BLOCK
+
+
+def test_abi_hash_passes_when_the_onchain_pin_matches_and_the_backend_hash_is_the_pin():
+    report = evaluate(
+        make_build_action(), make_snapshot(abi_hash=guard.PINNED_ABI_HASH), make_policy(), unsigned_tx=make_unsigned_tx()
+    )
+    v = verdict(report, "abi_hash")
+    assert v.status is GuardStatus.PASS
+    assert "backend's deploymentAbiHash also matches" in v.detail
+
+
+def test_abi_hash_passes_silently_on_the_recorded_known_stale_backend_hash():
+    """The backend still reports the previous pin. That is expected, not drift -- and must be a
+    PASS, not a WARN: a WARN every tick would break `is_structural_tier_block`'s noise suppression
+    and poison `--readiness`."""
+    report = evaluate(
+        make_build_action(),
+        make_snapshot(abi_hash=guard.KNOWN_STALE_BACKEND_ABI_HASH),
+        make_policy(),
+        unsigned_tx=make_unsigned_tx(),
+    )
+    v = verdict(report, "abi_hash")
+    assert v.status is GuardStatus.PASS
+    assert "known-stale" in v.detail
+
+
+def test_abi_hash_passes_when_the_backend_reports_no_hash_at_all():
+    report = evaluate(make_build_action(), make_snapshot(abi_hash=None), make_policy(), unsigned_tx=make_unsigned_tx())
     assert verdict(report, "abi_hash").status is GuardStatus.PASS
+
+
+def test_abi_hash_warns_on_a_third_backend_value_but_the_onchain_pin_still_decides():
+    report = evaluate(
+        make_build_action(), make_snapshot(abi_hash="sha256:deadbeef"), make_policy(), unsigned_tx=make_unsigned_tx()
+    )
+    v = verdict(report, "abi_hash")
+    assert v.status is GuardStatus.WARN
+    assert "advisory" in v.detail
+
+
+def test_known_stale_backend_hash_is_the_previous_pin_not_the_current_one():
+    assert guard.KNOWN_STALE_BACKEND_ABI_HASH != guard.PINNED_ABI_HASH
+
+
+@pytest.mark.parametrize("function", DEPENDENCY_FUNCTIONS)
+def test_abi_hash_blocks_dependency_functions_when_a_dependency_drifted(function):
+    pin = make_onchain_pin(dependencies_ok=False, problems=["moonSystem: implementation drifted"])
+    action = make_build_action(kind=ActionKind.RESOLVE_MISSION, function=function, entity_id=None)
+    v = guard._gate_abi_hash(action, make_snapshot(), make_unsigned_tx(onchain_pin=pin))
+    assert v.status is GuardStatus.BLOCK
+    assert "Randomness engine / Moon system" in v.detail
+
+
+def test_abi_hash_lets_economy_functions_through_when_only_a_dependency_drifted():
+    pin = make_onchain_pin(dependencies_ok=False, problems=["moonSystem: implementation drifted"])
+    v = guard._gate_abi_hash(make_build_action(), make_snapshot(), make_unsigned_tx(onchain_pin=pin))
+    assert v.status is GuardStatus.PASS
 
 
 # --------------------------------------------------------------------------------------
@@ -2106,6 +2218,22 @@ def test_decision_is_escalate_when_no_block_but_an_escalate_present():
 # --------------------------------------------------------------------------------------
 # Cross-layer agreement
 # --------------------------------------------------------------------------------------
+
+
+def test_agent_hash_constants_agree_with_the_wallets_pin():
+    """`guard.PINNED_ABI_HASH` and `guard.KNOWN_STALE_BACKEND_ABI_HASH` are copies of values in
+    the wallet skill's `abi/PINNED.json` (the agent may not import from that TypeScript project).
+    A re-pin that updates one and not the other would leave the gate comparing against the wrong
+    hash -- the same silent-drift class the tier-map test below guards -- so diff them here."""
+    import json
+
+    meta_path = Path(__file__).resolve().parents[2] / "veydrift-wallet" / "abi" / "PINNED.json"
+    if not meta_path.is_file():
+        pytest.skip(f"wallet pin not found ({meta_path}) -- wallet skill not alongside this checkout")
+    meta = json.loads(meta_path.read_text())
+    assert guard.PINNED_ABI_HASH == meta["abiHash"]
+    assert guard.KNOWN_STALE_BACKEND_ABI_HASH == meta["backendReported"]["deploymentAbiHash"]
+    assert set(DEPENDENCY_FUNCTIONS) == set(meta["dependencies"]["appliesTo"])
 
 
 def test_tier_map_agrees_with_the_wallet_engines_allowlist():
@@ -2861,13 +2989,36 @@ def test_alliance_functions_pass_the_tier_gate_at_economy_or_above(fn, tier):
     assert verdict(report, "tier").status is GuardStatus.PASS
 
 
-def test_alliance_action_abi_hash_passes_even_when_the_game_hash_mismatches():
-    """The game contract's ABI hash and the alliance contract's are decoupled -- an
-    alliance action must PASS `abi_hash` regardless of the game contract's own live
-    hash, since there is no live-hash verification path for the alliance ABI at all."""
+def test_alliance_action_is_no_longer_exempt_from_the_abi_hash_gate():
+    """The alliance contract used to PASS `abi_hash` unconditionally (no live-hash path existed for
+    it). Its implementation is now verified on-chain like the game's, so an alliance action with no
+    pin verdict BLOCKs, and one whose alliance implementation drifted BLOCKs too."""
     action = make_alliance_action(function="leaveAlliance")
     policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
-    report = evaluate(action, make_snapshot(abi_hash="sha256:not-the-pinned-hash"), policy, alliance_state=make_alliance_state())
+    no_tx = evaluate(action, make_snapshot(), policy, alliance_state=make_alliance_state())
+    assert verdict(no_tx, "abi_hash").status is GuardStatus.BLOCK
+    drifted = evaluate(
+        action,
+        make_snapshot(),
+        policy,
+        alliance_state=make_alliance_state(),
+        unsigned_tx=make_unsigned_tx(onchain_pin=make_onchain_pin(ok=False, problems=["alliance: implementation changed"])),
+    )
+    assert verdict(drifted, "abi_hash").status is GuardStatus.BLOCK
+
+
+def test_alliance_action_passes_abi_hash_on_a_matching_onchain_pin_whatever_the_game_hash_says():
+    """The backend's game hash is advisory and unrelated to the alliance ABI; only the on-chain pin
+    matters."""
+    action = make_alliance_action(function="leaveAlliance")
+    policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_alliance=True))
+    report = evaluate(
+        action,
+        make_snapshot(abi_hash=guard.KNOWN_STALE_BACKEND_ABI_HASH),
+        policy,
+        alliance_state=make_alliance_state(),
+        unsigned_tx=make_unsigned_tx(),
+    )
     assert verdict(report, "abi_hash").status is GuardStatus.PASS
 
 
@@ -3479,21 +3630,22 @@ def test_open_defense_intent_blocks_when_caller_does_not_own_the_defended_planet
     assert "NotPlanetOwner" in v.detail
 
 
-def test_open_defense_intent_abi_hash_passes_even_when_the_game_hash_mismatches():
-    """`openDefenseIntent` is on the alliance contract, same decoupling as the 15
-    membership functions -- confirms `_ACS_ALLIANCE_FUNCTIONS` is unioned into
-    `_gate_abi_hash`'s PASS condition alongside `_ALLIANCE_FUNCTIONS`."""
+def test_open_defense_intent_abi_hash_follows_the_onchain_pin_not_the_backend_hash():
+    """`openDefenseIntent` is on the alliance contract: same on-chain verification as the 15
+    membership functions."""
     action = make_open_defense_intent_action()
     policy = make_policy(tier=Tier.ECONOMY, actions=ActionsCfg(allow_acs_defense=True))
-    report = evaluate(
+    common = dict(alliance_state=make_alliance_state(), hostile_mission=make_hostile_mission(), coordination_allowed=True)
+    ok = evaluate(action, make_snapshot(abi_hash=guard.KNOWN_STALE_BACKEND_ABI_HASH), policy, unsigned_tx=make_unsigned_tx(), **common)
+    assert verdict(ok, "abi_hash").status is GuardStatus.PASS
+    bad = evaluate(
         action,
-        make_snapshot(abi_hash="sha256:not-the-pinned-hash"),
+        make_snapshot(),
         policy,
-        alliance_state=make_alliance_state(),
-        hostile_mission=make_hostile_mission(),
-        coordination_allowed=True,
+        unsigned_tx=make_unsigned_tx(onchain_pin=make_onchain_pin(ok=False, problems=["alliance: implementation changed"])),
+        **common,
     )
-    assert verdict(report, "abi_hash").status is GuardStatus.PASS
+    assert verdict(bad, "abi_hash").status is GuardStatus.BLOCK
 
 
 # --- idempotency_key -- ACS defense coordination feature's two new collision classes ---

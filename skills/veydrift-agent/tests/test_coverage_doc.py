@@ -42,8 +42,23 @@ import pytest
 
 # tests/ -> veydrift-agent/ -> skills/ -> repo root.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_ABI_PATH = _REPO_ROOT / "skills" / "veydrift-wallet" / "abi" / "VeydriftGame.202d1ac.json"
+_ABI_DIR = _REPO_ROOT / "skills" / "veydrift-wallet" / "abi"
 _COVERAGE_DOC = _REPO_ROOT / "docs" / "COVERAGE.md"
+
+
+def _pinned_abi_paths() -> list[Path]:
+    """The pinned game ABI plus the supplemental delegation ABI, found by glob rather than by a
+    hard-coded commit-suffixed filename. The filename changes on every re-pin; a hard-coded one
+    turned this whole test into a silent skip the moment the pin moved (caught in review), which
+    is exactly when it matters most. Returns `[]` only when the wallet skill is not alongside this
+    checkout at all; a directory that exists but lacks exactly one game artifact is a failure."""
+    if not _ABI_DIR.is_dir():
+        return []
+    game = sorted(_ABI_DIR.glob("VeydriftGame.*.json"))
+    assert len(game) == 1, f"expected exactly one pinned VeydriftGame.<sha>.json in {_ABI_DIR}, found {[p.name for p in game]}"
+    # The delegation entrypoints are served from the game proxy's fallback(), so they are absent
+    # from the game artifact and live in a supplemental one (PINNED.json `supplemental`).
+    return game + sorted(_ABI_DIR.glob("VeydriftDelegation.*.json"))
 
 
 def _writable_function_names() -> set[str]:
@@ -53,13 +68,16 @@ def _writable_function_names() -> set[str]:
     deployed ABI) only needs to be *mentioned* once for this test's purposes, even though
     COVERAGE.md documents both overloads as separate rows.
     """
-    raw = json.loads(_ABI_PATH.read_text())
-    entries = raw["abi"] if isinstance(raw, dict) else raw
-    return {
-        entry["name"]
-        for entry in entries
-        if entry.get("type") == "function" and entry.get("stateMutability") in ("nonpayable", "payable")
-    }
+    names: set[str] = set()
+    for path in _pinned_abi_paths():
+        raw = json.loads(path.read_text())
+        entries = raw["abi"] if isinstance(raw, dict) else raw
+        names |= {
+            entry["name"]
+            for entry in entries
+            if entry.get("type") == "function" and entry.get("stateMutability") in ("nonpayable", "payable")
+        }
+    return names
 
 
 def test_every_writable_abi_function_is_mentioned_in_coverage_doc():
@@ -68,13 +86,13 @@ def test_every_writable_abi_function_is_mentioned_in_coverage_doc():
     immediately instead of silently going stale -- see this module's docstring for what a
     pass here does and does not guarantee.
     """
-    if not _ABI_PATH.is_file():
-        pytest.skip(f"pinned ABI not found ({_ABI_PATH}) -- wallet skill not alongside this checkout")
+    if not _ABI_DIR.is_dir():
+        pytest.skip(f"pinned ABI directory not found ({_ABI_DIR}) -- wallet skill not alongside this checkout")
     if not _COVERAGE_DOC.is_file():
         pytest.skip(f"docs/COVERAGE.md not found ({_COVERAGE_DOC})")
 
     names = _writable_function_names()
-    assert names, f"no nonpayable/payable functions found in {_ABI_PATH} -- ABI parsing likely broke"
+    assert names, f"no nonpayable/payable functions found under {_ABI_DIR} -- ABI parsing likely broke"
 
     doc_text = _COVERAGE_DOC.read_text()
     # Whole-identifier match, not `name in doc_text` -- see this module's docstring for the

@@ -66,16 +66,23 @@ app = typer.Typer(no_args_is_help=True, help="Evaluate guardrails against a prop
 # skills/veydrift-wallet, a separate TypeScript project this package must never import
 # from -- SPEC.md §5.5/§9 acceptance criterion 15) but sourced from the exact same pin:
 # skills/veydrift-wallet/abi/PINNED.json, verified against the deployed commit
-# 202d1acd9e35d815bd66cb9bae744341b1b1cf9e (docs/SPEC.md §6.6). Re-pinned 2026-09-07 after
-# the on-chain contract upgrade; prior commit 701bed3578cff4d134657c714c599dbdb55a4b6a.
+# 2b329fb161b921a46966576be4eecd10573c7bef (docs/SPEC.md §6.6). Re-pinned 2026-09-28 after
+# the game and alliance implementations changed on-chain (delegation, batch production);
+# prior commit 202d1acd9e35d815bd66cb9bae744341b1b1cf9e.
 # --------------------------------------------------------------------------------------
 
 #: sha256(JSON.stringify(pinned.abi)) at the deployed commit. Mirrors
 #: skills/veydrift-wallet/abi/PINNED.json's `abiHash` byte-for-byte; if that file is ever
 #: re-pinned, update this constant in the same change. Was
-#: sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99 at commit 701bed3,
-#: before the 2026-09-07 on-chain upgrade.
-PINNED_ABI_HASH = "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4"
+#: sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4 at commit 202d1ac.
+PINNED_ABI_HASH = "sha256:260b70d9a6d8051ef72c80bedc6b2453a75a98df539fd99abac6632f1bef30a9"
+
+#: What the backend's `/runtime-config` (and `/health`) STILL report as `deploymentAbiHash`
+#: even though the chain has moved on: the previous pin, recorded in PINNED.json's
+#: `backendReported` as known-stale. `_gate_abi_hash` treats it as an expected, silent value
+#: rather than drift -- the backend's deployment metadata lags the chain, and the authority is
+#: the on-chain pin `walletctl build` reads from the EIP-1967 implementation slots.
+KNOWN_STALE_BACKEND_ABI_HASH = "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4"
 
 #: Contract function name -> the lowest tier allowed to *submit* it. Mirrors
 #: skills/veydrift-wallet/src/allowlist.ts's ECONOMY_SIGNATURES /
@@ -220,9 +227,10 @@ _ALLIANCE_FUNCTIONS: frozenset[str] = frozenset(
 #: `allow_alliance` alone unlocks, and would break the existing
 #: `guard._ALLIANCE_FUNCTIONS == ts_alliance_signature_names` cross-layer equality (Opus
 #: review finding 1). Kept as its own singleton set instead, unioned into
-#: `_gate_alliance_action`'s dispatch and `_gate_abi_hash`'s alliance-PASS condition
-#: alongside `_ALLIANCE_FUNCTIONS`, and diffed independently against `allowlist.ts`'s own
-#: separate `ACS_ALLIANCE_SIGNATURES` array by the cross-layer test.
+#: `_gate_alliance_action`'s dispatch alongside `_ALLIANCE_FUNCTIONS` (`_gate_abi_hash` no
+#: longer special-cases the alliance contract: it is verified on-chain like the game's), and
+#: diffed independently against `allowlist.ts`'s own separate `ACS_ALLIANCE_SIGNATURES`
+#: array by the cross-layer test.
 _ACS_ALLIANCE_FUNCTIONS: frozenset[str] = frozenset({"openDefenseIntent"})
 
 #: `FleetMissionType` values `launchFleetMission` may submit unconditionally -- no
@@ -1676,38 +1684,69 @@ def _gate_address(action: Action, *, live_addresses: set[str] | None, unsigned_t
     return _verdict("address", GuardStatus.PASS, f"{unsigned_tx.to} is a live Veydrift contract address")
 
 
-def _gate_abi_hash(action: Action, snapshot: Snapshot) -> GuardVerdict:
+def _gate_abi_hash(action: Action, snapshot: Snapshot, unsigned_tx: UnsignedTx | None = None) -> GuardVerdict:
+    """Is the deployed contract system still the one this skill is pinned to?
+
+    **The authority is the on-chain pin**, `unsigned_tx.onchain_pin`: `walletctl build` reads each
+    pinned proxy's EIP-1967 implementation slot from the chain (game, alliance, and the
+    Randomness/Moon contracts the game calls) at the moment it produces the calldata. This
+    replaced a comparison against the backend's self-reported `deploymentAbiHash`, which went
+    stale -- the implementations were swapped on-chain several times while the backend kept
+    reporting its old deployment metadata -- and so could neither detect nor be trusted about
+    drift. It also lifts the old "alliance contract has no live-hash path" carve-out: the
+    alliance implementation is now verified on-chain like the game's.
+
+    Fail-closed on absent data (AGENTS.md §5): no built tx, or a build that carried no verdict
+    (offline `vd guard run`, an older `walletctl`), is a BLOCK -- never a vacuous PASS.
+
+    The backend's hash is **advisory**: equal to the pin, or equal to the recorded known-stale
+    value, is silent (a WARN on every tick would defeat `is_structural_tier_block`'s noise
+    suppression and poison `--readiness`); any *third* value WARNs, since it may mean the backend
+    knows about a deployment we don't -- but the on-chain result still decides.
+
+    Functions in the pin's `applies_to` (those that reach the Randomness/Moon contracts:
+    fleet launches, missile, mission resolution) additionally require `dependencies_ok`."""
     if not action.is_onchain():
         return _verdict("abi_hash", GuardStatus.PASS, "action has no calldata to pin-check")
-    if action.function in _ALLIANCE_FUNCTIONS or action.function in _ACS_ALLIANCE_FUNCTIONS:
-        # Decoupled deliberately, not a gap: `snapshot.deployment_abi_hash` is the GAME
-        # contract's live hash (from GET /health's own runtime-config-derived field) --
-        # comparing it against an alliance action would either BLOCK for the wrong reason
-        # or, worse, coincidentally PASS/fail for reasons unrelated to the alliance ABI's
-        # own state. There is no live-hash equivalent for VeydriftAllianceSystem at all
-        # (/runtime-config exposes allianceContractAddress but no
-        # allianceAbiHash/allianceDeploymentCommit field) -- the alliance ABI pin was
-        # verified once, by construction, at commit time; see
-        # veydrift-wallet/references/abi-pinning.md's "Second contract" section for the
-        # full explanation of why this is a permanent limit, not a transitional gap.
-        return _verdict(
-            "abi_hash",
-            GuardStatus.PASS,
-            "alliance contract has no live-hash verification path (runtime-config exposes "
-            "only the game contract's deploymentAbiHash) -- the alliance ABI pin was "
-            "verified once, by construction, at commit time; see "
-            "veydrift-wallet/references/abi-pinning.md",
-        )
-    live_hash = snapshot.deployment_abi_hash
-    if not live_hash:
-        return _verdict("abi_hash", GuardStatus.BLOCK, "live deploymentAbiHash missing from snapshot; blocking all writes")
-    if live_hash != PINNED_ABI_HASH:
+    pin = unsigned_tx.onchain_pin if unsigned_tx is not None else None
+    if pin is None:
         return _verdict(
             "abi_hash",
             GuardStatus.BLOCK,
-            f"live {live_hash} != pinned {PINNED_ABI_HASH} -- contract upgraded, blocking all writes",
+            "no on-chain pin result (no transaction was built, or `walletctl build` carried no "
+            "verdict, e.g. offline) -- blocking all writes rather than trusting the backend's hash",
         )
-    return _verdict("abi_hash", GuardStatus.PASS, "live deploymentAbiHash matches the pinned commit")
+    if not pin.ok:
+        detail = "; ".join(pin.problems) or "no detail reported"
+        return _verdict(
+            "abi_hash",
+            GuardStatus.BLOCK,
+            f"on-chain pin check failed -- the deployed contracts differ from what this skill is pinned to "
+            f"(or the chain could not be read): {detail}. Re-pin before writing",
+        )
+    if action.function in pin.applies_to and not pin.dependencies_ok:
+        detail = "; ".join(pin.problems) or "no detail reported"
+        return _verdict(
+            "abi_hash",
+            GuardStatus.BLOCK,
+            f"{action.function} reaches a contract the game calls (Randomness engine / Moon system) that no "
+            f"longer matches the pin: {detail}",
+        )
+    live_hash = snapshot.deployment_abi_hash
+    if live_hash == PINNED_ABI_HASH:
+        note = "the backend's deploymentAbiHash also matches"
+    elif live_hash == KNOWN_STALE_BACKEND_ABI_HASH:
+        note = "the backend still reports its recorded known-stale deploymentAbiHash (advisory)"
+    elif not live_hash:
+        note = "the backend reported no deploymentAbiHash (advisory)"
+    else:
+        return _verdict(
+            "abi_hash",
+            GuardStatus.WARN,
+            f"on-chain pin matches, but the backend reports a different deploymentAbiHash ({live_hash}) than "
+            f"either the pin or its recorded known-stale value -- advisory only; the chain is the authority",
+        )
+    return _verdict("abi_hash", GuardStatus.PASS, f"on-chain implementations match the pin; {note}")
 
 
 def _gate_health(action: Action, snapshot: Snapshot) -> GuardVerdict:
@@ -2372,7 +2411,7 @@ def evaluate_guardrails(
             attack_protection_blocked_reason=attack_protection_blocked_reason,
         ),
         _gate_address(action, live_addresses=live_addresses, unsigned_tx=unsigned_tx),
-        _gate_abi_hash(action, snapshot),
+        _gate_abi_hash(action, snapshot, unsigned_tx),
         _gate_health(action, snapshot),
         _gate_game_paused(snapshot),
         _gate_index_lag(policy, agent_state, now=now),

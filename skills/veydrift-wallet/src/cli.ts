@@ -18,14 +18,17 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { Command } from "commander";
 import { formatEther, getAddress } from "viem";
 import {
+  classifyBackendHash,
   computePinnedAbiHash,
   decodeSimulateReturnData,
   fetchLiveRuntimeConfig,
   loadPinnedMeta,
   RUNTIME_CONFIG_URL,
   verifyAbi,
+  type BackendHashStatus,
 } from "./abi.js";
 import { TIERS, type Tier } from "./allowlist.js";
+import { checkOnchainPin, failedOnchainPin, type OnchainPinResult } from "./onchain-pin.js";
 import { AVAILABLE_PROVIDERS, getProvider } from "./providers/index.js";
 import {
   resolveExpectedWallet,
@@ -52,6 +55,29 @@ import type { UnsignedTx } from "./providers/types.js";
 
 const bigintReplacer = (_key: string, value: unknown): unknown =>
   typeof value === "bigint" ? value.toString() : value;
+
+/** The on-chain pin verdict, never throwing: a check that could not run is a FAILED check (every
+ *  consumer fails closed), not an absent one. */
+async function onchainPinOrFailed(opts: Parameters<typeof checkOnchainPin>[0]): Promise<OnchainPinResult> {
+  try {
+    return await checkOnchainPin(opts);
+  } catch (err) {
+    return failedOnchainPin(`on-chain pin check could not run: ${(err as Error).message}`);
+  }
+}
+
+function describeBackendStatus(status: BackendHashStatus): string {
+  switch (status) {
+    case "match":
+      return "MATCH (the backend reports the pinned hash)";
+    case "known-stale":
+      return "KNOWN-STALE (equals the value recorded at pin time; the backend's deployment metadata lags the chain -- advisory only)";
+    case "other":
+      return "DIFFERENT (advisory only -- the on-chain pin is the authority)";
+    default:
+      return "(not reported)";
+  }
+}
 
 /** Resolves the enforcing tier from `$VEYDRIFT_HOME/policy.json`, never from `flag`/`VEYDRIFT_TIER`
  *  alone -- see src/policy.ts. Exits non-zero (never falls back to a permissive default) on a
@@ -117,12 +143,13 @@ program
       const provider = getProvider({ provider: opts.provider });
       const address = await provider.getAddress();
       const client = getPublicClient();
-      const [balance, config] = await Promise.all([
+      const [balance, config, pin] = await Promise.all([
         client.getBalance({ address }),
         fetchLiveRuntimeConfig().catch((err: Error) => {
           console.error(`(warning) could not fetch live ${RUNTIME_CONFIG_URL}: ${err.message}`);
           return undefined;
         }),
+        onchainPinOrFailed({ verifyCode: true }),
       ]);
       const meta = loadPinnedMeta();
       const pinnedHash = computePinnedAbiHash();
@@ -147,11 +174,21 @@ program
       console.log(`pinned ABI hash: ${pinnedHash}`);
       console.log(`pinned commit:   ${meta.commit}`);
       if (config) {
-        const liveHash = config.backend?.build?.deploymentAbiHash;
-        console.log(`live ABI hash:   ${liveHash}`);
-        console.log(`ABI pin match:   ${liveHash === pinnedHash ? "MATCH" : "*** MISMATCH -- see verify-abi ***"}`);
+        const liveHash = config.backend?.build?.deploymentAbiHash ?? "";
+        console.log(`backend ABI hash: ${liveHash || "(not reported)"}`);
+        console.log(
+          `backend vs pin:   ${describeBackendStatus(classifyBackendHash(pinnedHash, liveHash, meta.backendReported?.deploymentAbiHash))}`,
+        );
         console.log(`game contract:   ${config.gameContractAddress ?? config.contractAddress}`);
       }
+      console.log(
+        `on-chain pin:    ${pin.ok ? "MATCH" : "*** MISMATCH -- game writes are unsafe until re-pinned (see verify-abi) ***"}`,
+      );
+      console.log(`  game impl:     ${pin.game.liveImplementation ?? "(unreadable)"}`);
+      console.log(`  alliance impl: ${pin.alliance.liveImplementation ?? "(unreadable)"}`);
+      console.log(
+        `  dependencies:  ${pin.dependenciesOk ? "MATCH" : "*** MISMATCH -- fleet/missile/resolve are unsafe until re-pinned ***"}`,
+      );
       const caps = provider.capabilities();
       console.log(
         `capabilities:    canSign=${caps.canSign} canSimulate=${caps.canSimulate} remotePolicy=${caps.remotePolicy}`,
@@ -167,22 +204,64 @@ program
 // ---------------------------------------------------------------------------------------------
 program
   .command("verify-abi")
-  .description(`Compare the pinned ABI hash to live ${RUNTIME_CONFIG_URL}. Exits 1 on drift.`)
-  .action(async () => {
+  .description(
+    "Verify the deployed contracts against the pin. The AUTHORITY is the on-chain check (each proxy's " +
+      `EIP-1967 implementation, read from the chain); the backend's ${RUNTIME_CONFIG_URL} hash is advisory. ` +
+      "Exits 1 when the on-chain pin (or a pinned dependency) has drifted.",
+  )
+  .option("--json", "emit one JSON object ({ok, dependenciesOk, backend, onchain}) instead of text")
+  .action(async (opts: { json?: boolean }) => {
     try {
-      const result = await verifyAbi();
-      console.log(`pinned commit:          ${result.pinnedCommit}`);
-      console.log(`pinned ABI hash:        ${result.pinnedHash}`);
-      console.log(`live deploymentCommit:  ${result.liveDeploymentCommit}`);
-      console.log(`live deploymentAbiHash: ${result.liveHash}`);
-      console.log(`commit match:           ${result.commitMatch}`);
-      console.log(`ABI hash match:         ${result.match}`);
-      if (!result.match) {
-        console.error(
-          "\nABI HASH MISMATCH. Treat every write path as unsafe until re-pinned. " +
-            "See references/abi-pinning.md for the rebuild recipe.",
+      const [backend, onchain] = await Promise.all([
+        verifyAbi().catch((err: Error) => ({ error: err.message })),
+        onchainPinOrFailed({ verifyCode: true }),
+      ]);
+      const ok = onchain.ok && onchain.dependenciesOk;
+      if (opts.json) {
+        console.log(JSON.stringify({ ok, dependenciesOk: onchain.dependenciesOk, backend, onchain }, bigintReplacer));
+        if (!ok) process.exitCode = 1;
+        return;
+      }
+      const meta = loadPinnedMeta();
+      console.log(`pinned commit:            ${meta.commit}`);
+      console.log(`pinned ABI hash:          ${computePinnedAbiHash()}`);
+      if ("error" in backend) {
+        console.log(`backend runtime-config:   (unavailable: ${backend.error}) -- advisory only`);
+      } else {
+        console.log(`backend deploymentCommit: ${backend.liveDeploymentCommit}`);
+        console.log(`backend deploymentAbiHash:${backend.liveHash}`);
+        console.log(`backend vs pin:           ${describeBackendStatus(backend.backendStatus)}`);
+      }
+      const line = (label: string, c: OnchainPinResult["game"]) =>
+        console.log(
+          `${label} ${c.ok ? "OK      " : "MISMATCH"} proxy ${c.proxy || "?"}  impl ${c.liveImplementation ?? "(unreadable)"}` +
+            `${c.ok ? "" : `  (pinned ${c.pinnedImplementation || "?"})`}`,
         );
+      line("game proxy:        ", onchain.game);
+      line("alliance proxy:    ", onchain.alliance);
+      line("randomness engine: ", onchain.randomnessEngine);
+      line("moon system:       ", onchain.moonSystem);
+      for (const w of onchain.warnings) console.log(`(warning) ${w}`);
+      if (!ok) {
+        // A chain we could not read is a different problem from a chain that changed: only the latter
+        // calls for a re-pin.
+        const unreadable = onchain.problems.every((p) => /could not (read|verify|run)/.test(p));
+        console.error(
+          unreadable
+            ? `\nON-CHAIN PIN COULD NOT BE VERIFIED (the chain was unreadable) -- treated as a failure, every write is blocked:`
+            : `\nON-CHAIN PIN DRIFT. Treat every write path as unsafe until re-pinned:`,
+        );
+        for (const p of onchain.problems) console.error(`  - ${p}`);
+        if (!unreadable) {
+          console.error(
+            "\nRe-pin checklist (references/abi-pinning.md): 1) identify the deployed commit and build it with the " +
+              "pinned foundry settings; 2) match every implementation/module runtime code to the build; 3) replace " +
+              "abi/*.json, PINNED*.json and the guard's PINNED_ABI_HASH together; 4) re-run the suites.",
+          );
+        }
         process.exitCode = 1;
+      } else {
+        console.log("\non-chain pin: MATCH");
       }
     } catch (err) {
       console.error(`verify-abi failed: ${(err as Error).message}`);
@@ -225,7 +304,14 @@ program
         );
       }
 
-      const out: StoredTx = toStoredTx(built);
+      // The on-chain pin verdict is folded into the stored tx (fast mode: slot reads only -- the full
+      // code-hash comparison runs in `send`/`verify-abi`), so the agent's `abi_hash` gate judges the
+      // very moment this calldata was produced. A check that cannot run is recorded as a failure.
+      const onchainPin = await onchainPinOrFailed({ verifyCode: false, to: built.to });
+      if (!onchainPin.ok) {
+        console.error(`(warning) on-chain pin check FAILED: ${onchainPin.problems.join("; ")}`);
+      }
+      const out: StoredTx = toStoredTx(built, onchainPin);
       const json = JSON.stringify(out, null, 2);
       if (opts.out) {
         writeFileSync(opts.out, json + "\n");

@@ -11,6 +11,51 @@ lockstep.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-28
+
+Major: the ABI pin moved and drift detection changed authority (both are breaking per this
+skill's own rule).
+
+### Changed
+- **Re-pinned to commit `2b329fb161b921a46966576be4eecd10573c7bef`** (game ABI hash
+  `sha256:260b70d9a6d8051ef72c80bedc6b2453a75a98df539fd99abac6632f1bef30a9`). The game and alliance
+  proxies' implementations had been swapped on-chain several times since the previous pin
+  (`202d1ac`) while `/runtime-config`'s deployment metadata never changed, so `verify-abi` kept
+  reporting "match". The commit is **confirmed**: the runtime code of all 40 contracts behind the
+  proxies (router, 9 modules, nested modules, libraries, alliance, Randomness, Moon) matches a forge
+  build of it. Game ABI diff: nothing removed or changed; added `startProductionBatch`,
+  `moonShipProductionVersion`, five delegation errors and `DelegateUpdated`. The alliance ABI is
+  byte-identical (same hash); only its implementation changed. Every previously allowlisted selector
+  is unchanged.
+- **Drift is now detected on-chain, not by the backend's hash.** New `src/onchain-pin.ts` reads each
+  pinned proxy's EIP-1967 implementation slot (game, alliance) plus the Randomness/Moon dependencies
+  the game calls, and compares them (and code hashes) to the pin. `walletctl build` stores the verdict
+  in the tx file (`onchainPin`); `walletctl send` re-checks right before signing — fail-closed,
+  always `REFUSED:` (including RPC failure), and `tx.to` must be a pinned proxy; dependency pins are
+  required only for fleet launches, missile and `resolveFleetMission`.
+- **`walletctl verify-abi`** now reports the on-chain result (`--json` added), exits 1 only on
+  on-chain drift, and classifies the backend hash as `match` / `known-stale` / `other` (advisory).
+  `PINNED.json` records what the backend reported at pin time as `backendReported`. `walletctl
+  status` prints the same. The alliance contract is now verified too.
+- **`simulate`** decodes custom errors against the pinned ABIs: `revertReason` reads
+  `InsufficientResources(9035, 44471, 81685) (reverted)` instead of "Execution reverted for an
+  unknown reason", with `errorName` / `errorArgs` / `revertData`. `build`'s `gasEstimateError` is
+  decoded the same way.
+- `abi.ts` reads the ABI filename from `PINNED.json`'s `artifact` field instead of hard-coding it.
+  `getRpcUrl` / `getPublicClient` moved to `src/rpc.ts` (still re-exported from `tx.ts`).
+
+### Added
+- **Supplemental pinned ABI** `abi/VeydriftDelegation.2b329fb.json` for the entrypoints the game proxy
+  serves from `fallback()` (`setDelegate`, `revokeDelegate`, `delegateOf`, `delegatorOf`,
+  `effectivePlayer`), merged for function resolution (`getResolvableAbi`) but never into
+  `getPinnedAbi` / the hash.
+- **`npm run repin -- confirm|write`** (`scripts/repin.ts`, `src/repin.ts`): `confirm` matches every
+  contract reachable from the proxies to a forge build (masking `immutableReferences` and
+  `linkReferences`); `write` refuses unless `confirm` passes, then regenerates the ABI files and both
+  `PINNED*.json`.
+- Opt-in `VEYDRIFT_LIVE_TESTS=1 npm test` reads the real chain to prove the pin still describes what is
+  deployed.
+
 ## [1.2.0] - 2026-09-13
 
 ### Added

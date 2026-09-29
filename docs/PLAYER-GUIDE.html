@@ -1068,17 +1068,24 @@ Wrote keystore to /Users/you/.veydrift/keystore.json</pre></div>
   <div class="codeblock">
     <div class="codeblock-head"><span>shell</span><span>real, verified transcript</span></div>
     <div class="codeblock-body"><pre><span class="c-comment">$</span> npx tsx src/cli.ts status
-provider:        keystore
-address:         0x7Cd117B9a5e8E5e9E11a5Db0C1e489dF899eda9A
+provider:        envkey
+address:         0xa7bed393C3A38ffA30Edd46272CB7e2310C187b7
+policy wallet:   (no policy.json -- send will not check the signer address)
 rpcUrl:          https://mainnet.base.org
 chainId:         8453 (Base)
 balance:         0 ETH
-pinned ABI hash: sha256:986ea81b…1ec4
-live ABI hash:   sha256:986ea81b…1ec4
-ABI pin match:   <span class="c-str">MATCH</span>
+pinned ABI hash: sha256:260b70d9…30a9
+pinned commit:   2b329fb161b921a46966576be4eecd10573c7bef
+backend ABI hash: sha256:986ea81b…1ec4
+backend vs pin:   KNOWN-STALE (advisory only)
+game contract:   0xf397910F005151b09644228573a4353818D3755d
+on-chain pin:    <span class="c-str">MATCH</span>
+  game impl:     0xCeBe176E0b88eF9d134047c3312215425bc96745
+  alliance impl: 0xdD80154a4f9C8dcfC8dDC351CF6DF1a8fF531C0D
+  dependencies:  <span class="c-str">MATCH</span>
 capabilities:    canSign=true canSimulate=false remotePolicy=false</pre></div>
   </div>
-  <p><code>ABI pin match: MATCH</code> confirms the wallet skill's pinned contract ABI still matches what's actually deployed — check this before your first real send.</p>
+  <p>Captured against a throwaway <code>envkey</code> test key, so no keystore password is involved; a keystore setup prints <code>provider: keystore</code> and your own address. The important line is <code>on-chain pin: MATCH</code>: the wallet reads each contract's implementation straight from the chain and confirms it is still what the wallet skill was pinned against — check this before your first real send. The <code>backend vs pin</code> line is advisory: the backend's own deployment metadata can lag the chain, so <code>KNOWN-STALE</code> there is expected.</p>
 
   <h3>envkey — testing only</h3>
   <p>A raw private key in <code>VEYDRIFT_PRIVATE_KEY</code>. It works, and prints a loud warning every time, on purpose — ranked as testing-grade storage, not something to run a real account through. Use it for local testing with a throwaway key, never for a real planet.</p>
@@ -1399,7 +1406,7 @@ mine target), fall back to the cadence default.</pre></div>
         <tr><td>Health nulls, readiness not ready</td><td>Almost always transient backend replica lag, not an outage — already handled correctly</td></tr>
         <tr><td><code>/health</code> reports <code>ok: false</code>, tick still runs</td><td>Expected: a combat-only backend readiness issue no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy</td></tr>
         <tr><td><code>walletctl status</code> refuses to run</td><td>Expected with no provider configured — not a bug</td></tr>
-        <tr><td><code>verify-abi</code> shows a mismatch</td><td>The deployed contract's ABI changed. Every write is blocked until resolved — deliberate</td></tr>
+        <tr><td><code>verify-abi</code> shows a mismatch</td><td>A pinned contract's on-chain implementation changed (or the chain was unreadable — the output says which). Every write is blocked until resolved — deliberate</td></tr>
         <tr><td>Guards read 22/25 at tier 1</td><td>Correct and expected — see §10</td></tr>
         <tr><td><code>policy.json</code> edits rejected</td><td>Schema validated strictly — the error names the exact field</td></tr>
         <tr><td><code>incoming: none</code> but you were attacked</td><td>Expected — that field only ever lists <em>future</em> arrivals; it can't show an attack that already resolved. Check the <code>radar:</code> line (§10) or run <code>vd radar check</code> (§11a) directly.</td></tr>

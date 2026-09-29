@@ -201,7 +201,7 @@ never short-circuited, so a passing tick is as auditable as a blocked one. Full 
 current wiring status: `references/guardrails.md`.
 
 `killswitch` · `tier` (action's function ∈ tier's allowed set) · `address` (destination ∈
-live `/runtime-config`) · `abi_hash` (live hash == pinned, else block every write) ·
+live `/runtime-config`) · `abi_hash` (deployed contracts, read from the chain, still match the pin — else block every write) ·
 `health` · `game_paused` (`gameMaintenance.paused` — BLOCKs unconditionally, fail-closed
 on missing data) · `index_lag` · `affordability` (live `cost` vs `resourcesAsOfNow`) · `energy`
 (post-action `produced ≥ required`) · `storage_overflow` · `fields` · `reserve` ·

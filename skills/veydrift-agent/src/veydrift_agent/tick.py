@@ -111,6 +111,7 @@ from veydrift_agent.models import (
     GuardReport,
     GuardStatus,
     GuardVerdict,
+    OnchainPin,
     OpportunityReport,
     PlanetSnapshot,
     Policy,
@@ -706,6 +707,27 @@ def _action_to_walletctl_json(action: Action, snapshot: Snapshot | None = None) 
     raise ValueError(f"tick.py does not know how to build calldata for function {fn!r}")
 
 
+def _parse_onchain_pin(raw: object) -> OnchainPin | None:
+    """`walletctl build`'s `onchainPin` block -> `OnchainPin`, or `None` when absent/malformed.
+    Never raises and never fabricates a pass: a missing or unparseable verdict stays `None`
+    (which `guard._gate_abi_hash` BLOCKs on), and a present one is taken field by field with
+    `ok`/`dependenciesOk` required to be literally `True` -- anything else is a failure."""
+    if not isinstance(raw, dict):
+        return None
+    problems = raw.get("problems")
+    warnings = raw.get("warnings")
+    applies_to = raw.get("appliesTo")
+    return OnchainPin(
+        ok=raw.get("ok") is True,
+        dependencies_ok=raw.get("dependenciesOk") is True,
+        applies_to=[str(x) for x in applies_to] if isinstance(applies_to, list) else [],
+        problems=[str(x) for x in problems] if isinstance(problems, list) else [],
+        warnings=[str(x) for x in warnings] if isinstance(warnings, list) else [],
+        checked_at=str(raw["checkedAt"]) if raw.get("checkedAt") else None,
+        block=str(raw["block"]) if raw.get("block") else None,
+    )
+
+
 def _walletctl_build(
     action: Action, *, provider: str, snapshot: Snapshot | None = None
 ) -> tuple[UnsignedTx | None, int | None, str | None, Path | None]:
@@ -769,6 +791,7 @@ def _walletctl_build(
         value=int(built.get("value") or 0),
         chain_id=int(built.get("chainId") or 8453),
         gas=int(built["gas"]) if built.get("gas") else None,
+        onchain_pin=_parse_onchain_pin(built.get("onchainPin")),
     )
     cost_raw = built.get("estimatedCostWei")
     gas_cost_wei = int(cost_raw) if cost_raw not in (None, "") else None

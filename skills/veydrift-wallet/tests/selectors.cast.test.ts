@@ -50,6 +50,14 @@ describe.skipIf(!castAvailable)("live `cast sig` cross-check", () => {
     "openDefenseIntent(uint256,uint256)",
     "counterplayDefenseFuelContext(address,uint256,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)",
     "defenseHoldFuelContext(address,uint256,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32),uint256)",
+    // 2026-09-28 re-pin: batch production (in the game ABI) and the fallback-routed delegation
+    // entrypoints (supplemental ABI).
+    "startProductionBatch(uint256,(uint8,uint8,uint32)[])",
+    "setDelegate(address)",
+    "revokeDelegate()",
+    "delegateOf(address)",
+    "delegatorOf(address)",
+    "effectivePlayer(address)",
   ];
 
   it.each(signatures)("%s matches `cast sig` output", (sig) => {

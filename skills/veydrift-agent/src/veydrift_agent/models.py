@@ -1136,9 +1136,33 @@ class GuardReport(Base):
 # --------------------------------------------------------------------------------------
 
 
+class OnchainPin(Base):
+    """`walletctl build`'s on-chain pin verdict (`veydrift-wallet`'s `checkOnchainPin`), taken
+    when the calldata was produced: did the contract system behind the pinned proxies still match
+    what this skill was pinned against, read from the chain's own EIP-1967 implementation slots.
+
+    Deliberately minimal -- only what `guard._gate_abi_hash` and the tick report need. The full
+    per-proxy detail stays in the stored tx file. A pin verdict that could not be obtained is
+    represented as `None` on `UnsignedTx.onchain_pin`, never as an `ok=True` default: this model
+    defaults to `ok=False`/`dependencies_ok=False` so an incomplete payload fails closed."""
+
+    ok: bool = False
+    #: The Randomness/Moon contracts the game CALLs also match the pin -- additionally required
+    #: for the functions named in `applies_to`.
+    dependencies_ok: bool = False
+    applies_to: list[str] = Field(default_factory=list)
+    problems: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    checked_at: str | None = None
+    block: str | None = None
+
+
 class UnsignedTx(Base):
     to: str
     data: str
     value: int = 0
     chain_id: int = 8453
     gas: int | None = None
+    #: See `OnchainPin`. `None` == the check did not run / was not carried by this build; every
+    #: consumer must treat that as a failure.
+    onchain_pin: OnchainPin | None = None

@@ -10,17 +10,15 @@
  */
 
 import {
-  createPublicClient,
   decodeFunctionData,
   encodeFunctionData,
   formatEther,
   getAddress,
-  http,
   toFunctionSignature,
   type AbiParameter,
 } from "viem";
-import { base } from "viem/chains";
 import {
+  describeRevert,
   fetchLiveRuntimeConfig,
   functionsForSelector,
   isNonpayableRead,
@@ -29,32 +27,14 @@ import {
   type RuntimeConfig,
 } from "./abi.js";
 import { checkAllowlist, type Tier } from "./allowlist.js";
+import { checkOnchainPin, needsDependencyPin, type OnchainPinResult } from "./onchain-pin.js";
 import type { UnsignedTx, WalletProvider } from "./providers/types.js";
+import { getPublicClient, type VeydriftPublicClient } from "./rpc.js";
 
 export type { UnsignedTx, WalletProvider } from "./providers/types.js";
-
-export const DEFAULT_RPC_URL = "https://mainnet.base.org";
-
-export function getRpcUrl(): string {
-  return process.env.VEYDRIFT_RPC_URL?.trim() || DEFAULT_RPC_URL;
-}
-
-/** The concrete client type our one createPublicClient call produces. Using this alias (rather
- *  than viem's generic, unparameterized `PublicClient` export) avoids a TS structural-typing trap
- *  where two differently-instantiated `PublicClient<Transport, Chain>` generics are reported as
- *  "unrelated" types even though they're the same shape. */
-export type VeydriftPublicClient = ReturnType<typeof createPublicClient<ReturnType<typeof http>, typeof base>>;
-
-let _publicClient: VeydriftPublicClient | undefined;
-
-/** Lazily-constructed singleton public client. Every function below also accepts an optional
- *  `client` override so tests can inject a mock instead of touching the real network. */
-export function getPublicClient(): VeydriftPublicClient {
-  if (!_publicClient) {
-    _publicClient = createPublicClient({ chain: base, transport: http(getRpcUrl()) });
-  }
-  return _publicClient;
-}
+// The RPC helpers live in rpc.ts (so onchain-pin.ts can read the chain without a runtime import
+// cycle); re-exported here so every existing `from "./tx.js"` import keeps working.
+export { DEFAULT_RPC_URL, getPublicClient, getRpcUrl, type VeydriftPublicClient } from "./rpc.js";
 
 // ---------------------------------------------------------------------------------------------
 // Action -> calldata
@@ -202,7 +182,11 @@ export async function buildTx(action: Action, opts: BuildOptions = {}): Promise<
       try {
         gas = await client.estimateGas({ account: opts.from, to, data, value });
       } catch (err) {
-        gasEstimateError = (err as Error).message;
+        // A revert during estimation carries the raw custom-error data; decode it against the
+        // pinned errors so the reason reads `InsufficientResources(...)` rather than viem's
+        // generic "unknown reason". Non-revert failures (RPC down) keep their own message.
+        const described = describeRevert(err);
+        gasEstimateError = described.decoded ? described.message : (err as Error).message;
       }
     }
     const fee = await fetchMaxFeePerGas(client);
@@ -253,6 +237,11 @@ export interface StoredTx {
   /** Same as `gasEstimateError`, for a failed live `maxFeePerGas`/`getGasPrice` fetch
    *  (an RPC issue, not a revert) -- the other way `estimatedCostWei` ends up `null`. */
   feeEstimateError?: string | null;
+  /** The on-chain pin verdict (`checkOnchainPin`) taken when this tx was built, so the agent's
+   *  `abi_hash` gate judges the same moment the calldata was produced and needs no second
+   *  `walletctl` call per tick. `null` only when the check could not run at all, which every
+   *  consumer must treat as a failure. */
+  onchainPin?: OnchainPinResult | null;
   purpose?: string;
   functionName?: string;
   signature?: string;
@@ -261,7 +250,7 @@ export interface StoredTx {
 /** `BuiltTx` -> `StoredTx`, the exact mapping `build --out` writes. A pure function so it
  *  can be unit-tested directly against `buildTx`'s documented `undefined`/`null`
  *  conventions, rather than only indirectly through a full CLI invocation. */
-export function toStoredTx(built: BuiltTx): StoredTx {
+export function toStoredTx(built: BuiltTx, onchainPin?: OnchainPinResult | null): StoredTx {
   return {
     to: built.to,
     data: built.data,
@@ -272,6 +261,7 @@ export function toStoredTx(built: BuiltTx): StoredTx {
     estimatedCostWei: built.estimatedCostWei !== undefined ? built.estimatedCostWei.toString() : null,
     gasEstimateError: built.gasEstimateError ?? null,
     feeEstimateError: built.feeEstimateError ?? null,
+    onchainPin: onchainPin ?? null,
     purpose: built.purpose,
     functionName: built.functionName,
     signature: built.signature,
@@ -362,6 +352,12 @@ export interface SimulateResult {
   estimatedCostWei?: bigint;
   returnData?: `0x${string}`;
   revertReason?: string;
+  /** Set when the revert's raw data decoded against a pinned custom error (e.g.
+   *  `InsufficientResources`); `revertReason` then reads `Name(args) (reverted)`. */
+  errorName?: string;
+  errorArgs?: string[];
+  /** The raw revert payload, when the RPC returned one. */
+  revertData?: `0x${string}`;
   functionName?: string;
 }
 
@@ -409,8 +405,15 @@ export async function simulateTx(
     const estimatedCostWei = gas !== undefined && maxFeePerGas !== undefined ? gas * maxFeePerGas : undefined;
     return { ok: true, gas, maxFeePerGas, estimatedCostWei, returnData: callResult.data, functionName: fn?.name };
   } catch (err) {
-    const message = (err as { shortMessage?: string; message?: string }).shortMessage ?? (err as Error).message;
-    return { ok: false, revertReason: message, functionName: fn?.name };
+    const described = describeRevert(err);
+    return {
+      ok: false,
+      revertReason: described.message,
+      errorName: described.decoded?.errorName,
+      errorArgs: described.decoded?.errorArgs,
+      revertData: described.data,
+      functionName: fn?.name,
+    };
   }
 }
 
@@ -443,6 +446,9 @@ export interface SendOptions {
   /** Injectable for tests; forwarded to `checkAllowlist`'s own option of the same name -- the
    *  alliance-feature counterpart to `resolveAllowCombat` above, same lazy-resolution rationale. */
   resolveAllowAlliance?: () => boolean;
+  /** Injectable for tests; defaults to the real `checkOnchainPin`. Runs LAST, right before signing
+   *  (it is the only network-dependent refusal, so every cheap local refusal happens first). */
+  checkOnchainPin?: (o: { to: string; verifyCode: boolean }) => Promise<OnchainPinResult>;
 }
 
 export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${string}`> {
@@ -485,6 +491,29 @@ export async function sendTx(tx: UnsignedTx, opts: SendOptions): Promise<`0x${st
   });
   if (!allow.ok) {
     throw new SendRefusedError(`allowlist rejected this transaction: ${allow.reason}`);
+  }
+
+  // The on-chain pin: the contract system behind the pinned proxies must still be the one this
+  // skill was pinned against. Read from the chain (never the backend), fail-closed, and every
+  // failure path -- including the RPC being down -- is a refusal: an ordinary throw here would be
+  // reported as "send failed", which the agent must treat as a possible broadcast.
+  let pin: OnchainPinResult;
+  try {
+    pin = await (opts.checkOnchainPin ?? ((o) => checkOnchainPin(o)))({ to: tx.to, verifyCode: true });
+  } catch (err) {
+    throw new SendRefusedError(`could not verify the on-chain pin before signing: ${(err as Error).message}`);
+  }
+  if (!pin.ok) {
+    throw new SendRefusedError(
+      `on-chain pin check failed -- the deployed contracts differ from what this skill is pinned to ` +
+        `(re-pin per references/abi-pinning.md): ${pin.problems.join("; ")}`,
+    );
+  }
+  if (needsDependencyPin(fn?.name, pin) && !pin.dependenciesOk) {
+    throw new SendRefusedError(
+      `refusing "${fn?.name}": a contract it calls (Randomness engine / Moon system) differs from the pin ` +
+        `-- ${pin.problems.join("; ")}`,
+    );
   }
 
   try {

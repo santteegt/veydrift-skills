@@ -212,7 +212,7 @@ Completed in ~2s, 466 bytes — well inside the design target of <10s / ≤2KB.
 | Trigger | What happens |
 | --- | --- |
 | Any incoming hostile fleet | ESCALATE, no proposal at all |
-| Live `deploymentAbiHash` drifts from the pinned hash | Block every write; `walletctl verify-abi` surfaces this before any `send` |
+| A pinned contract's on-chain implementation drifts from the pin (read from the chain, not the backend's hash) | Block every write; `walletctl verify-abi` surfaces this before any `send`, and `send` re-checks the chain immediately before signing |
 | `/health` unhealthy for `on_health_unhealthy_minutes` (default 30) | ESCALATE |
 | Same action reverts `on_revert_count` times (default 2) | ESCALATE, do not retry blindly |
 | A single action's cost exceeds `escalate_above_pct_of_resources` (default 25%) of current holdings | ESCALATE rather than BLOCK — a judgment call, not a hard stop |

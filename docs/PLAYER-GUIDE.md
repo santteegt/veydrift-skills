@@ -642,26 +642,32 @@ Verify it's wired up correctly:
 
 ```bash
 $ npx tsx src/cli.ts status
-provider:        keystore
-address:         0x7Cd117B9a5e8E5e9E11a5Db0C1e489dF899eda9A
+provider:        envkey
+address:         0xa7bed393C3A38ffA30Edd46272CB7e2310C187b7
+policy wallet:   (no policy.json -- send will not check the signer address)
 rpcUrl:          https://mainnet.base.org
 chainId:         8453 (Base)
 balance:         0 ETH
-pinned ABI hash: sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4
-pinned commit:   202d1acd9e35d815bd66cb9bae744341b1b1cf9e
-live ABI hash:   sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4
-ABI pin match:   MATCH
+pinned ABI hash: sha256:260b70d9a6d8051ef72c80bedc6b2453a75a98df539fd99abac6632f1bef30a9
+pinned commit:   2b329fb161b921a46966576be4eecd10573c7bef
+backend ABI hash: sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4
+backend vs pin:   KNOWN-STALE (equals the value recorded at pin time; the backend's deployment metadata lags the chain -- advisory only)
 game contract:   0xf397910F005151b09644228573a4353818D3755d
+on-chain pin:    MATCH
+  game impl:     0xCeBe176E0b88eF9d134047c3312215425bc96745
+  alliance impl: 0xdD80154a4f9C8dcfC8dDC351CF6DF1a8fF531C0D
+  dependencies:  MATCH
 capabilities:    canSign=true canSimulate=false remotePolicy=false
 ```
 
-(This exact transcript was captured against a real, throwaway test keystore created with
-the recipe above — the address is that test wallet's, not a real account's. Yours will
-show your own address and a real ETH balance.) The important lines: `ABI pin match: MATCH`
-confirms the wallet skill's pinned contract ABI still matches what's actually deployed —
-check this before your first real send, since a mismatch there blocks every write.
-`balance: 0 ETH` is fine for now; you'll need a small amount of ETH on Base once you reach
-tier 2, for gas.
+(Captured against a throwaway `envkey` test key, so no keystore password is involved and the
+address is that key's, not a real account's; a keystore setup prints `provider: keystore` and
+your own address and balance.) The important line is `on-chain pin: MATCH`: the wallet reads
+each contract's implementation straight from the chain and confirms it is still what the wallet
+skill was pinned against — check this before your first real send, since a mismatch blocks
+every write. The `backend vs pin` line is advisory: the backend's own deployment metadata can lag
+the chain, so `KNOWN-STALE` there is expected and harmless. `balance: 0 ETH` is fine for now;
+you'll need a small amount of ETH on Base once you reach tier 2, for gas.
 
 ### `envkey` (testing only — read this before using it)
 
@@ -1134,7 +1140,7 @@ asks it to invent numbers it doesn't have.
 | `vd tick` says `readiness.ready` is not true, or health nulls | Almost always transient backend replica lag, not an outage — the agent already treats this correctly and will retry. If it persists past `on_health_unhealthy_minutes` (default 30), it escalates instead of retrying forever. |
 | `/health` reports `ok: false`, but the tick still runs normally | Expected: `ok:false` caused *solely* by a combat-related backend readiness issue (a "New attacks are temporarily paused"-style condition) no longer blocks the peaceful ladder — this codebase never touches combat regardless of policy, so that specific condition can't affect what it would propose. Any other cause of `ok:false` still blocks/escalates as before. |
 | `walletctl status` refuses to run | Expected if no provider is configured yet — it's telling you `VEYDRIFT_KEYSTORE` (or `VEYDRIFT_PRIVATE_KEY` for `envkey`) isn't set. Not a bug. |
-| `walletctl verify-abi` shows a mismatch | The deployed contract's ABI has changed since this repo's pin. **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe. |
+| `walletctl verify-abi` shows a mismatch | A pinned contract's implementation on the chain has changed since this repo's pin (or the chain could not be read — the output says which). **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe (`npm run repin`). |
 | Guards read `22/25 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |

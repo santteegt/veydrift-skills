@@ -1,5 +1,6 @@
 {
-  "commit": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e",
+  "commit": "2b329fb161b921a46966576be4eecd10573c7bef",
+  "artifact": "VeydriftAllianceSystem.2b329fb.json",
   "abiHash": "sha256:393335c106ecf203eb63d93d21c27b51e10fb4a217a5fd6de5feb63132999535",
   "foundry": {
     "solc": "0.8.28",
@@ -8,18 +9,29 @@
     "cbor_metadata": false,
     "bytecode_hash": "none"
   },
-  "fetchedAt": "2026-09-07T18:03:00Z",
+  "fetchedAt": "2026-09-29T04:12:41.640Z",
   "source": {
     "repo": "https://github.com/Borodutch/veydrift.git",
-    "localClone": "/Users/santteegt/GitRepositories/clones/veydrift",
-    "commit": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e",
-    "artifactPath": "packages/contracts/out/VeydriftAllianceSystem.sol/VeydriftAllianceSystem.json",
+    "commit": "2b329fb161b921a46966576be4eecd10573c7bef",
+    "buildLocation": "scratch build of gh api repos/Borodutch/veydrift/tarball/2b329fb (lib/ symlinked from the local clone; submodule SHAs identical)",
     "buildCommand": "forge build --skip test --skip script",
-    "verifiedAgainstLiveRuntimeConfig": false,
-    "liveRuntimeConfigUrl": "https://api.veydrift.com/runtime-config",
-    "liveDeploymentAbiHashAtVerification": null,
-    "liveDeploymentCommitAtVerification": null,
-    "verifiedAt": null
+    "forgeVersion": "forge Version: 1.5.1-stable",
+    "artifactPath": "packages/contracts/out/VeydriftAllianceSystem.sol/VeydriftAllianceSystem.json",
+    "confirmation": {
+      "status": "confirmed",
+      "method": "Runtime code of every contract reachable from the game and alliance implementations (40 contracts, including modules, nested modules, libraries and the Randomness/Moon implementations) matched forge artifacts of this commit, masking immutableReferences and linkReferences (`npm run repin -- confirm`).",
+      "verifiedAt": "2026-09-29T04:12:41.640Z",
+      "atBlock": 51932907
+    }
   },
-  "note": "abi/VeydriftAllianceSystem.202d1ac.json contains { abi, methodIdentifiers } extracted from the forge artifact above, same shape and hashing convention as PINNED.json/VeydriftGame.202d1ac.json (abiHash = sha256(JSON.stringify(pinned.abi)), compact separators, key order as emitted by forge/JSON.parse). Re-pinned 2026-09-07 alongside the game contract's re-pin after the on-chain upgrade, from the same `forge build` at the game contract's live deploymentCommit -- so both pinned artifacts come from one coherent source tree. UNLIKE the game contract's pin, this one still has NO live-hash re-verification path: /runtime-config exposes `allianceContractAddress` (unchanged across the upgrade: 0x0E5a6210482B15780cf5Ec036107031dcA702001) but no `allianceAbiHash`/`allianceDeploymentCommit` field anywhere -- only the single `backend.build.deploymentAbiHash`/`deploymentCommit` pair, which is for the game contract. Whether the alliance contract was itself redeployed in the upgrade cannot be confirmed from the API; the address is unchanged. The 15 in-scope membership functions' selectors are byte-identical between commit 701bed3 and 202d1ac (independently checked at re-pin time). This pin is therefore still verified only once, by construction (exact commit checkout + exact forge settings above, matching the game contract's own pinned settings from the same build). Prior pin: commit 701bed3578cff4d134657c714c599dbdb55a4b6a, abiHash sha256:3992c8215c0f1f6bb01dd8afdbc39514a79a1f3fd9b2f7be07056b131cd4de8f. See references/abi-pinning.md's 'Second contract' section."
+  "implementation": {
+    "proxy": "0x0E5a6210482B15780cf5Ec036107031dcA702001",
+    "proxyKind": "ERC1967 forwarder with UUPS _authorizeUpgrade in the implementation (admin slot zero)",
+    "slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "address": "0xdD80154a4f9C8dcfC8dDC351CF6DF1a8fF531C0D",
+    "codeHash": "0x14c0fb4965e8837ff057329e3c6f02e7c95cfb5f0e01ced52926ca3cfaa21279",
+    "observedAt": "2026-09-29T04:12:41.640Z",
+    "observedAtBlock": 51932907
+  },
+  "note": "abi/VeydriftAllianceSystem.2b329fb.json holds { abi, methodIdentifiers } from the forge artifact above. /runtime-config exposes no alliance ABI hash, so this pin is verified on-chain (see `implementation`), not against a backend hash."
 }

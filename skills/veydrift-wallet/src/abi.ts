@@ -1,13 +1,12 @@
 /**
- * Pinned-ABI loading, hashing and live verification.
+ * Pinned-ABI loading, hashing and verification.
  *
  * The wallet engine never trusts a freshly-`forge build`-ed ABI at runtime; it trusts only the
- * committed `abi/VeydriftGame.202d1ac.json` (and, since the alliance feature, the committed
- * `abi/VeydriftAllianceSystem.202d1ac.json` sibling), and cross-checks the game contract's hash
- * against the live `/runtime-config` before any write path is used. See
- * references/abi-pinning.md for the full derivation, the main-vs-deployed divergence this
- * guards against, and -- new -- why the alliance contract's pin has no equivalent live-hash
- * re-check.
+ * committed `abi/VeydriftGame.<sha7>.json` (plus the alliance and delegation siblings). Drift is
+ * detected two ways: `verifyAbi()` below compares the game ABI hash to the backend's
+ * `/runtime-config` self-report (advisory -- the backend's deployment metadata can go stale, and did),
+ * and `onchain-pin.ts` re-reads the proxies' EIP-1967 implementation slots from the chain itself
+ * (the authority). See references/abi-pinning.md.
  */
 
 import { createHash } from "node:crypto";
@@ -15,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Abi, AbiFunction } from "viem";
-import { decodeFunctionResult, toFunctionSelector, toFunctionSignature } from "viem";
+import { decodeErrorResult, decodeFunctionResult, toFunctionSelector, toFunctionSignature } from "viem";
 
 // Resolve bundled paths relative to this file, never `cwd` -- this module may be invoked from
 // anywhere once the skill is installed elsewhere (npx skills add copies the tree).
@@ -35,8 +34,35 @@ export interface PinnedArtifact {
   methodIdentifiers: Record<string, string>;
 }
 
+/** A proxy pinned by its EIP-1967 implementation, read from the chain (never the backend). */
+export interface PinnedProxy {
+  proxy: string;
+  proxyKind?: string;
+  /** EIP-1967 implementation slot (same constant for every proxy pinned here). */
+  slot?: string;
+  address?: string;
+  codeHash?: string;
+  proxyAdmin?: string;
+  observedAt?: string;
+  observedAtBlock?: number;
+}
+
+/** An external contract the game CALLs (not delegatecalls) whose behavior can change without the
+ *  game's own implementation changing -- pinned separately, enforced only for `appliesTo`. */
+export interface PinnedDependency {
+  proxy: string;
+  proxyKind?: string;
+  implementation: string;
+  codeHash: string;
+  addressSource?: string;
+  matchesArtifact?: string;
+}
+
 export interface PinnedMeta {
   commit: string;
+  /** Basename of the pinned ABI file under `abi/`. Read from here (not hard-coded in this module)
+   *  so a re-pin is one artifact, not a meta file plus a source edit that can be forgotten. */
+  artifact: string;
   abiHash: string;
   foundry: {
     solc: string;
@@ -47,13 +73,27 @@ export interface PinnedMeta {
   };
   fetchedAt: string;
   source: Record<string, unknown>;
+  /** On-chain pin: the proxy's implementation address + code hash at pin time. */
+  implementation?: PinnedProxy & { address: string; codeHash: string };
+  dependencies?: {
+    randomnessEngine: PinnedDependency;
+    moonSystem: PinnedDependency;
+    /** Function names that reach the dependencies above, and therefore also need them pinned. */
+    appliesTo: string[];
+  };
+  /** What `/runtime-config` reported when this was pinned, recorded as KNOWN-STALE: the backend's
+   *  deployment metadata lagged the chain, so it is advisory and never the authority. */
+  backendReported?: {
+    deploymentAbiHash: string;
+    deploymentCommit: string;
+    deploymentTimestamp?: string;
+    note?: string;
+  };
+  /** Extra ABIs merged into function resolution for the game address only -- entrypoints the
+   *  proxy serves from `fallback()` (delegation) that the forge `VeydriftGame` artifact lacks. */
+  supplemental?: Array<{ name: string; file: string; abiHash: string; artifactPath?: string; note?: string }>;
   note?: string;
 }
-
-const ARTIFACT_FILENAMES: Record<Contract, string> = {
-  game: "VeydriftGame.202d1ac.json",
-  alliance: "VeydriftAllianceSystem.202d1ac.json",
-};
 
 const META_FILENAMES: Record<Contract, string> = {
   game: "PINNED.json",
@@ -62,10 +102,11 @@ const META_FILENAMES: Record<Contract, string> = {
 
 const _artifacts: Partial<Record<Contract, PinnedArtifact>> = {};
 const _metas: Partial<Record<Contract, PinnedMeta>> = {};
+let _supplemental: PinnedArtifact[] | undefined;
 
 export function loadPinnedArtifact(contract: Contract = "game"): PinnedArtifact {
   if (!_artifacts[contract]) {
-    const raw = readFileSync(join(ABI_DIR, ARTIFACT_FILENAMES[contract]), "utf8");
+    const raw = readFileSync(join(ABI_DIR, loadPinnedMeta(contract).artifact), "utf8");
     _artifacts[contract] = JSON.parse(raw) as PinnedArtifact;
   }
   return _artifacts[contract] as PinnedArtifact;
@@ -79,8 +120,73 @@ export function loadPinnedMeta(contract: Contract = "game"): PinnedMeta {
   return _metas[contract] as PinnedMeta;
 }
 
+/** The pinned artifact for `contract`, UNMERGED. This is what `computePinnedAbiHash` hashes and
+ *  what the backend's `deploymentAbiHash` is comparable to -- merging supplemental entries in here
+ *  would silently change the hash. Function/error resolution goes through `getResolvableAbi`. */
 export function getPinnedAbi(contract: Contract = "game"): Abi {
   return loadPinnedArtifact(contract).abi;
+}
+
+function loadSupplementalArtifacts(): PinnedArtifact[] {
+  if (!_supplemental) {
+    const entries = loadPinnedMeta("game").supplemental ?? [];
+    _supplemental = entries.map((entry) => {
+      const artifact = JSON.parse(readFileSync(join(ABI_DIR, entry.file), "utf8")) as PinnedArtifact;
+      const actual = computeAbiHash(artifact.abi);
+      if (actual !== entry.abiHash) {
+        throw new Error(
+          `supplemental ABI "${entry.name}" (${entry.file}) hashes to ${actual}, but PINNED.json pins ` +
+            `${entry.abiHash} -- refusing to resolve functions against a hand-edited pin`,
+        );
+      }
+      return artifact;
+    });
+  }
+  return _supplemental;
+}
+
+function abiEntryKey(entry: Abi[number]): string {
+  if (entry.type === "function" || entry.type === "event" || entry.type === "error") {
+    return `${entry.type}:${toFunctionSignature(entry as Parameters<typeof toFunctionSignature>[0])}`;
+  }
+  return `${entry.type}:${JSON.stringify(entry)}`;
+}
+
+/** The ABI used to RESOLVE functions (build/simulate/send/describe): the pinned artifact for
+ *  `contract` plus, for `"game"` only, the supplemental interface ABIs (the delegation entrypoints
+ *  the proxy serves from `fallback()`). Entries already present in the pinned artifact win, so a
+ *  signature appearing in both is never double-counted. Never used for hashing. */
+export function getResolvableAbi(contract: Contract = "game"): Abi {
+  const pinned = getPinnedAbi(contract);
+  if (contract !== "game") return pinned;
+  const seen = new Set(pinned.map(abiEntryKey));
+  const extra: Abi[number][] = [];
+  for (const artifact of loadSupplementalArtifacts()) {
+    for (const entry of artifact.abi) {
+      const key = abiEntryKey(entry);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      extra.push(entry);
+    }
+  }
+  return [...pinned, ...extra] as Abi;
+}
+
+/** Every custom error known to any pinned ABI (game, alliance, supplemental), for decoding a
+ *  revert's raw data regardless of which contract raised it. */
+function getAllErrorsAbi(): Abi {
+  const seen = new Set<string>();
+  const errors: Abi[number][] = [];
+  for (const contract of ["game", "alliance"] as const) {
+    for (const entry of getResolvableAbi(contract)) {
+      if (entry.type !== "error") continue;
+      const key = abiEntryKey(entry);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      errors.push(entry);
+    }
+  }
+  return errors as Abi;
 }
 
 /** sha256(JSON.stringify(abi)) -- compact separators (JSON.stringify's default), key order as
@@ -127,30 +233,48 @@ export async function fetchLiveRuntimeConfig(): Promise<RuntimeConfig> {
   return (await res.json()) as RuntimeConfig;
 }
 
+/** How the backend's self-reported deployment hash relates to the pin:
+ *  - `match`: it reports the pinned hash (the backend caught up);
+ *  - `known-stale`: it reports exactly the value recorded in PINNED.json's `backendReported` (the
+ *    backend's deployment metadata lags the chain -- expected, not drift);
+ *  - `other`: some third value (advisory only -- the chain is the authority, see onchain-pin.ts);
+ *  - `unavailable`: the field was absent. */
+export type BackendHashStatus = "match" | "known-stale" | "other" | "unavailable";
+
 export interface AbiVerifyResult {
+  /** `pinnedHash === liveHash` -- the literal comparison, kept for callers that want it. */
   match: boolean;
   pinnedHash: string;
   liveHash: string;
   pinnedCommit: string;
   liveDeploymentCommit: string;
   commitMatch: boolean;
+  backendStatus: BackendHashStatus;
 }
 
-/** The single source of truth for "is it safe to write [to the game contract]". Recomputes the
- *  pinned hash from the on-disk ABI (not the cached value in PINNED.json) and compares to the
- *  live `deploymentAbiHash`. On any mismatch, callers must block every write -- see guard()
- *  usage in cli.ts and allowlist.ts.
+/** Pure classifier for `AbiVerifyResult.backendStatus` (exported for tests). */
+export function classifyBackendHash(
+  pinnedHash: string,
+  liveHash: string,
+  knownStaleHash: string | undefined,
+): BackendHashStatus {
+  if (!liveHash) return "unavailable";
+  if (liveHash === pinnedHash) return "match";
+  if (knownStaleHash !== undefined && liveHash === knownStaleHash) return "known-stale";
+  return "other";
+}
+
+/** The backend-reported half of drift detection -- ADVISORY. Recomputes the pinned game ABI hash
+ *  from the on-disk ABI (not the cached value in PINNED.json) and compares it to the live
+ *  `deploymentAbiHash`, classifying the result (see `BackendHashStatus`).
  *
- *  **Game contract only, deliberately.** There is no `verifyAllianceAbi()` sibling: as of
- *  2026-09-01, `/runtime-config` exposes `allianceContractAddress` but no
- *  `allianceAbiHash`/`allianceDeploymentCommit` field anywhere -- only the single
- *  `backend.build.deploymentAbiHash`/`deploymentCommit` pair, which is for the game contract.
- *  The alliance ABI pin (`abi/PINNED.alliance.json`) was therefore verified exactly once, by
- *  construction (exact commit checkout + exact forge settings, matching the game contract's own
- *  pinned settings from the same build), and can never be automatically re-checked against a
- *  live hash the way this function re-checks the game contract's pin on every call. This is a
- *  real, permanent limit of the upstream API, not a gap this module can close -- see
- *  references/abi-pinning.md's "Second contract" section. */
+ *  This is no longer "the single source of truth for is it safe to write": the backend's
+ *  `deploymentAbiHash`/`deploymentCommit`/timestamp are set by its own deploy metadata and stayed at
+ *  the 2026-09-07 values while the game and alliance implementations were swapped on-chain several
+ *  times after. The authority is `checkOnchainPin()` (onchain-pin.ts), which reads the proxies'
+ *  EIP-1967 implementation slots directly from the chain. Neither the alliance nor the delegation
+ *  entrypoints are covered by the backend's hash at all (no `allianceAbiHash` field exists, and the
+ *  delegation functions are not in the game artifact) -- see references/abi-pinning.md. */
 export async function verifyAbi(): Promise<AbiVerifyResult> {
   const meta = loadPinnedMeta("game");
   const pinnedHash = computePinnedAbiHash("game");
@@ -164,6 +288,7 @@ export async function verifyAbi(): Promise<AbiVerifyResult> {
     pinnedCommit: meta.commit,
     liveDeploymentCommit,
     commitMatch: meta.commit === liveDeploymentCommit,
+    backendStatus: classifyBackendHash(pinnedHash, liveHash, meta.backendReported?.deploymentAbiHash),
   };
 }
 
@@ -174,7 +299,7 @@ export async function verifyAbi(): Promise<AbiVerifyResult> {
 // ---------------------------------------------------------------------------------------------
 
 export function findFunctionsByName(name: string, contract: Contract = "game"): AbiFunction[] {
-  const abi = getPinnedAbi(contract);
+  const abi = getResolvableAbi(contract);
   return abi.filter((e): e is AbiFunction => e.type === "function" && e.name === name);
 }
 
@@ -184,7 +309,7 @@ export function findFunctionBySignature(
   signature: string,
   contract: Contract = "game",
 ): AbiFunction {
-  const abi = getPinnedAbi(contract);
+  const abi = getResolvableAbi(contract);
   const match = abi.find(
     (e): e is AbiFunction => e.type === "function" && toFunctionSignature(e) === signature,
   );
@@ -276,7 +401,7 @@ export function functionsForSelector(selector: `0x${string}`): AbiFunction[] {
   const lower = selector.toLowerCase();
   const contracts: Contract[] = ["game", "alliance"];
   return contracts.flatMap((contract) => {
-    const abi = getPinnedAbi(contract);
+    const abi = getResolvableAbi(contract);
     const fns = abi.filter((e): e is AbiFunction => e.type === "function");
     return fns.filter((fn) => toFunctionSelector(fn).toLowerCase() === lower);
   });
@@ -331,4 +456,57 @@ export function decodeSimulateReturnData(
   } catch {
     return undefined;
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Custom-error decoding. A reverting `eth_call`/`estimateGas` reaches us as a viem error whose
+// `shortMessage` is "Execution reverted for an unknown reason." for every custom error -- e.g. an
+// unaffordable call reverts with `InsufficientResources(metal, crystal, deuterium)`, which the pinned
+// ABI knows perfectly well. Decode the raw revert data against every pinned error instead.
+// ---------------------------------------------------------------------------------------------
+
+/** Walks a viem error's `cause` chain for the raw revert payload (hex `data`). */
+export function extractRevertData(err: unknown): `0x${string}` | undefined {
+  let node: unknown = err;
+  for (let depth = 0; node && typeof node === "object" && depth < 8; depth++) {
+    const data = (node as { data?: unknown }).data;
+    if (typeof data === "string" && /^0x[0-9a-fA-F]{8,}$/.test(data)) return data as `0x${string}`;
+    if (data && typeof data === "object") {
+      const inner = (data as { data?: unknown }).data;
+      if (typeof inner === "string" && /^0x[0-9a-fA-F]{8,}$/.test(inner)) return inner as `0x${string}`;
+    }
+    node = (node as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+export interface DecodedRevert {
+  errorName: string;
+  errorArgs: string[];
+  /** e.g. `InsufficientResources(9035, 44471, 81685)` */
+  text: string;
+}
+
+/** Decode raw revert data against the pinned custom errors (game + alliance + supplemental), plus
+ *  the two Solidity built-ins. `undefined` when the data is empty or matches nothing pinned. */
+export function decodeRevertData(data: `0x${string}` | undefined): DecodedRevert | undefined {
+  if (!data) return undefined;
+  try {
+    const decoded = decodeErrorResult({ abi: getAllErrorsAbi(), data });
+    const args = ((decoded.args ?? []) as readonly unknown[]).map((a) =>
+      typeof a === "bigint" ? a.toString() : String(a),
+    );
+    return { errorName: decoded.errorName, errorArgs: args, text: `${decoded.errorName}(${args.join(", ")})` };
+  } catch {
+    return undefined;
+  }
+}
+
+/** One-liner used wherever a viem error's message is surfaced: the decoded custom error when the raw
+ *  revert data is recoverable and known, otherwise the error's own short message. */
+export function describeRevert(err: unknown): { message: string; decoded?: DecodedRevert; data?: `0x${string}` } {
+  const data = extractRevertData(err);
+  const decoded = decodeRevertData(data);
+  const raw = (err as { shortMessage?: string; message?: string }).shortMessage ?? (err as Error).message;
+  return { message: decoded ? `${decoded.text} (reverted)` : raw, decoded, data };
 }

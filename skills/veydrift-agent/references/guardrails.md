@@ -83,7 +83,7 @@ facts.
 | 9 | `alliance_action` | **(alliance feature, 2026-09-01; `openDefenseIntent` added by the ACS defense coordination feature)** for one of the 15 `VeydriftAllianceSystem` membership functions, or `openDefenseIntent` (its own branch, gated on `allow_acs_defense` not `allow_alliance`): a per-function precondition (caller role floor, membership/invite/join-request-row lookup, batch-fails-closed for `kickMembers`/`setMembersRole`, sole-member check for `leaveAlliance`, Officer-and-not-self check for `transferAllianceOwnership`; for `openDefenseIntent`, the same `_hostile_mission_coordination_defect` re-check `acs_defend_target` performs plus live `coordination_allowed`) — see its own section below | `Action`'s alliance fields, `Policy.actions.allow_alliance`/`.allow_acs_defense`, `Policy.wallet`, `alliance_state` (live), and for `openDefenseIntent` also `hostile_mission`/`coordination_allowed` (live) | not an alliance function or `openDefenseIntent` → PASS trivially; the relevant flag false → BLOCK; `alliance_state`/`hostile_mission`/`coordination_allowed` (as applicable) `None` → BLOCK |
 | 10 | `attack_protection` | **(commit 6 of the launch-actions plan, 2026-08-28; extended to Missile in commit 7)** for an Attack `launchFleetMission` or a `launchInterplanetaryMissileAttack` action: a live, target-specific `/wallet/{addr}/attack-protection` re-check, fetched fresh at guard-evaluation time — never trusted from either generator's own, earlier, coarser generation-time read | `attack_protection_allowed` (bool \| None) and, since commit 7, `attack_protection_blocked_reason` (str \| None), both from `tick._attack_protection_allowed` | not an Attack/Missile action → PASS trivially; `None` (fetch failure, unresolvable target, non-boolean response) → BLOCK; `False` → BLOCK, UNLESS the action is Missile and `blocked_reason == "bashing"` exactly (see its own section below) |
 | 11 | `address` | on-chain destination ∈ the **live** `/runtime-config` address set (since the alliance feature, includes `allianceContractAddress` alongside `gameContractAddress`/`contractAddress`) | `live_addresses`, a built `unsigned_tx` | either missing → BLOCK, never PASS |
-| 12 | `abi_hash` | live `deploymentAbiHash` == pinned. **For an alliance action or `openDefenseIntent`, PASSes unconditionally instead** — there is no live `allianceAbiHash`/`allianceDeploymentCommit` field anywhere in `/runtime-config` to compare against; that pin was verified once, by construction, at commit time (`skills/veydrift-wallet/references/abi-pinning.md`'s "Second contract" section). AcsDefend/Intercept/`launchDefenseHold` are on the GAME contract and take the normal live-hash path unchanged | `Snapshot.deployment_abi_hash` (game actions only) | missing or mismatched (game action) → BLOCK **all** writes; alliance action/`openDefenseIntent` → always PASS, with an explicit detail string naming the reason |
+| 12 | `abi_hash` | The on-chain pin `walletctl build` stored on the tx (`unsigned_tx.onchain_pin`): every pinned proxy's implementation (game, alliance) still matches, and for the functions that reach the Randomness/Moon contracts (`onchain_pin.applies_to`) those match too. The backend's `deploymentAbiHash` is **advisory**: the pin or the recorded known-stale value → silent PASS, a third value → WARN, absent → PASS. Applies to alliance actions and `openDefenseIntent` like any other (the alliance implementation is verified on-chain too) | `UnsignedTx.onchain_pin` (from `walletctl build`'s `onchainPin`); `Snapshot.deployment_abi_hash` (advisory) | no built tx / no verdict / verdict `ok=false` (drift, unreadable chain) → BLOCK **all** writes; dependency function with `dependencies_ok=false` → BLOCK; third backend value → WARN |
 | 13 | `health` | `/health` reported `ok && readiness.ready`, **or** (2026-08-22) a positively confirmed combat-only degradation — `Snapshot.combat_only_degradation()` — **except for an Attack action specifically, where commit 6 of the launch-actions plan withdraws that exception** (Attack requests VRF at launch and cannot resolve while randomness is degraded). **Deliberately NOT withdrawn for Missile** (commit 7) — `launchInterplanetaryMissileAttack` never requests randomness at all (interception is deterministic arithmetic, confirmed by reading `VeydriftPlanetManagementModule.sol` directly), so the exception genuinely still applies to it | `Action` (to know whether this is specifically an Attack action), `Snapshot.health_ok`, `.readiness_ready`, `.degradation_reasons`, `.game_maintenance`, `.randomness_readiness` | n/a — `combat_only_degradation()` is itself fail-closed (see below); the commit-6 correction is a BLOCK, not a missing-data case |
 | 14 | `game_paused` | **(added 2026-08-20)** `gameMaintenance.paused` is not true — a chain-side maintenance pause means any write would revert | `Snapshot.game_maintenance` | `None` (gameMaintenance missing from `/health`) → BLOCK — "cannot confirm not paused" is not "confirmed not paused"; see its own section below |
 | 15 | `index_lag` | a prior receipt is indexed within `max_index_wait_s` | `AgentState.pending` | nothing pending → PASS (legitimately nothing to wait on, not missing data); pending but no receipt yet → WARN; past the deadline → BLOCK |
@@ -311,14 +311,14 @@ tick rather than wasted gas. Second, the "caller has a home planet" proxy above
 precondition — small, isolated, deferrable if the proxy is ever found to diverge in
 practice.
 
-**`abi_hash`'s alliance branch.** `/runtime-config` exposes `allianceContractAddress` but
-has no `allianceAbiHash`/`allianceDeploymentCommit` field anywhere — there is nothing for
-this gate to compare an alliance action's ABI hash against, ever. Rather than silently
-reusing the game contract's hash (which would be comparing the wrong thing entirely, or
-coincidentally passing/failing for unrelated reasons), this gate PASSes an alliance
-action unconditionally, with an explicit detail string naming why. See
-`skills/veydrift-wallet/references/abi-pinning.md`'s "Second contract" section for the
-full explanation of why this is a permanent limit, not a transitional gap.
+**`abi_hash`'s authority.** The gate does not trust the backend's `deploymentAbiHash`: that
+metadata can lag the chain, so it can neither detect nor vouch for an upgrade. It judges the
+on-chain verdict `walletctl build` took when it produced the calldata (each proxy's EIP-1967
+implementation slot, read from the chain) — see `skills/veydrift-wallet/references/abi-pinning.md`.
+Because the verdict rides on the built tx, an offline `vd guard run` (no build) BLOCKs with "no
+on-chain pin result" rather than passing vacuously. The backend value stays as a signal only: the
+pin, or the value recorded as known-stale, is silent (a WARN every tick would break
+`is_structural_tier_block`'s noise suppression and poison `--readiness`).
 
 **`prerequisites` is new (this work package) and independently re-derives its inputs from
 `Snapshot`, never trusts `plan.py`'s own filtering** — the same posture `_gate_energy`
@@ -399,12 +399,13 @@ first.
 
 Every numeric ceiling a gate checks against comes from `policy.json`'s `limits`,
 `reserves`, `storage`, and `escalation` blocks — nothing here is
-hardcoded beyond the two contract-derived constants `guard.py` duplicates from
-`skills/veydrift-wallet/abi/PINNED.json` (`PINNED_ABI_HASH`) and from
+hardcoded beyond the contract-derived constants `guard.py` duplicates from
+`skills/veydrift-wallet/abi/PINNED.json` (`PINNED_ABI_HASH`, `KNOWN_STALE_BACKEND_ABI_HASH`) and from
 `veydrift-wallet/src/allowlist.ts` (`_MIN_TIER_FOR_FUNCTION`, the tier→function map).
-Those two are duplicated rather than imported because this package must never import
+Those are duplicated rather than imported because this package must never import
 from a TypeScript project — if the wallet
-engine is ever re-pinned or its tier map changes, both copies need updating together;
+engine is ever re-pinned or its tier map changes, both copies need updating together (tests
+diff them against the wallet's files);
 `references/abi-pinning.md` (WP4a's) is the canonical description of the pin itself.
 
 | Policy field | Gate(s) |

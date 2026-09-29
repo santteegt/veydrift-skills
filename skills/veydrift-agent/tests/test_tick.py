@@ -42,6 +42,7 @@ from veydrift_agent.models import (
     GuardReport,
     GuardStatus,
     Limits,
+    OnchainPin,
     OpportunityFinding,
     OpportunityReport,
     PlanetSnapshot,
@@ -283,7 +284,15 @@ def test_killswitch_recovers_a_5xx_health_body_and_reports_combat_only_degradati
 # --------------------------------------------------------------------------------------
 
 
+_PASSING_PIN = OnchainPin(ok=True, dependencies_ok=True)
+
+
 def _patch_common(monkeypatch, *, snapshot=None, action=None, live_addresses=None, unsigned_tx=None, gas=None, built_tx_path=None):
+    # `abi_hash` BLOCKs an on-chain action whose build carried no on-chain pin verdict (the real
+    # `_walletctl_build` parses one out of `walletctl build`'s stored tx). These fakes bypass that
+    # parser, so attach a passing verdict unless the test supplied its own.
+    if unsigned_tx is not None and unsigned_tx.onchain_pin is None:
+        unsigned_tx = unsigned_tx.model_copy(update={"onchain_pin": _PASSING_PIN})
     monkeypatch.setattr(tick, "_fetch_snapshot", lambda *a, **kw: snapshot or _healthy_snapshot())
     # Phase 5: `_resolvable_mission_ids` makes a live /wallet/{addr}/fleet-visibility
     # call inside `_run_tick`'s normal (non-killswitch) path -- stubbed here so every
@@ -2911,6 +2920,73 @@ def test_walletctl_build_gas_cost_wei_none_when_estimated_cost_wei_is_null(isola
     assert gas_cost_wei is None
 
 
+def _build_with_payload(monkeypatch, payload):
+    def _fake_run_walletctl(*args, timeout=None):
+        Path(args[args.index("--out") + 1]).write_text(json.dumps(payload))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(tick, "_run_walletctl", _fake_run_walletctl)
+    return tick._walletctl_build(_build_action(), provider="keystore")
+
+
+_BASE_PAYLOAD = {
+    "to": "0xf397910F005151b09644228573a4353818D3755d",
+    "data": "0x165715e3" + "00" * 32,
+    "value": "0",
+    "chainId": 8453,
+}
+
+
+def test_walletctl_build_parses_the_stored_onchain_pin_verdict(isolated_home, monkeypatch):
+    payload = {
+        **_BASE_PAYLOAD,
+        "onchainPin": {
+            "ok": True,
+            "dependenciesOk": True,
+            "appliesTo": ["launchFleetMission", "resolveFleetMission"],
+            "problems": [],
+            "warnings": ["could not cross-check /runtime-config addresses (HTTP 503)"],
+            "checkedAt": "2026-09-28T23:00:00.000Z",
+            "block": "51932353",
+            "game": {"ignored": "per-proxy detail stays in the stored tx file"},
+        },
+    }
+    unsigned_tx, _cost, _error, _path = _build_with_payload(monkeypatch, payload)
+    pin = unsigned_tx.onchain_pin
+    assert pin is not None and pin.ok and pin.dependencies_ok
+    assert pin.applies_to == ["launchFleetMission", "resolveFleetMission"]
+    assert pin.warnings and pin.block == "51932353"
+
+
+def test_walletctl_build_keeps_a_failed_pin_verdict_and_its_reasons(isolated_home, monkeypatch):
+    payload = {**_BASE_PAYLOAD, "onchainPin": {"ok": False, "dependenciesOk": False, "problems": ["game: implementation drifted"]}}
+    unsigned_tx, _cost, _error, _path = _build_with_payload(monkeypatch, payload)
+    assert unsigned_tx.onchain_pin is not None
+    assert unsigned_tx.onchain_pin.ok is False
+    assert unsigned_tx.onchain_pin.problems == ["game: implementation drifted"]
+
+
+@pytest.mark.parametrize("raw", [None, "yes", 1, []])
+def test_walletctl_build_leaves_the_pin_none_when_the_verdict_is_absent_or_not_an_object(isolated_home, monkeypatch, raw):
+    """An older `walletctl`, or a `null` verdict (the check could not run), must stay `None` --
+    which `abi_hash` BLOCKs on -- never become a passing default."""
+    payload = {**_BASE_PAYLOAD}
+    if raw is not None:
+        payload["onchainPin"] = raw
+    unsigned_tx, _cost, _error, _path = _build_with_payload(monkeypatch, payload)
+    assert unsigned_tx.onchain_pin is None
+
+
+@pytest.mark.parametrize("ok_value", ["true", 1, "yes", None])
+def test_walletctl_build_requires_the_pin_flags_to_be_literally_true(isolated_home, monkeypatch, ok_value):
+    """A truthy-looking string or number is not `True`: a malformed payload fails closed."""
+    payload = {**_BASE_PAYLOAD, "onchainPin": {"ok": ok_value, "dependenciesOk": ok_value}}
+    unsigned_tx, _cost, _error, _path = _build_with_payload(monkeypatch, payload)
+    assert unsigned_tx.onchain_pin is not None
+    assert unsigned_tx.onchain_pin.ok is False
+    assert unsigned_tx.onchain_pin.dependencies_ok is False
+
+
 def test_walletctl_build_surfaces_the_real_revert_reason_when_gas_estimation_fails(isolated_home, monkeypatch):
     """`gasEstimateError` (2026-09 fix): `estimatedCostWei: null` alone can mean either
     "no provider configured, no estimate ever attempted" (benign) or "a real
@@ -3459,7 +3535,9 @@ def test_revert_streak_gate_blocks_after_on_revert_count_reverts(isolated_home, 
         policy,
         agent_state,
         live_addresses={_LIVE_ADDR},
-        unsigned_tx=unsigned_tx,
+        # Built directly (not via `_patch_common`), so it needs its own passing pin verdict:
+        # without one `abi_hash` BLOCKs and would mask the ESCALATE this test is about.
+        unsigned_tx=unsigned_tx.model_copy(update={"onchain_pin": _PASSING_PIN}),
         gas_cost_wei=1_000,
         eth_balance_wei=10**18,
         now=datetime.now(UTC),

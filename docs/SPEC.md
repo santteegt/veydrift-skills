@@ -1155,6 +1155,18 @@ A document, not code. Deliverable of this pass; the decision comes later.
 > `skills/veydrift-wallet/CHANGELOG.md` `1.0.0`. `abi-pinning.md` was updated to match. The
 > "`main` is not the deployed contract" principle is unchanged.
 
+> **Correction (2026-09-28 — drift is judged on-chain).** The game and alliance proxies'
+> implementations were swapped on-chain several times after the 2026-09-07 pin while
+> `/runtime-config`'s `deploymentAbiHash`/`deploymentCommit`/timestamp never changed, so the
+> "compare to live `deploymentAbiHash`" mechanism described above reported "match" throughout — it
+> trusts the backend's own deployment metadata, which lags the chain. The authority is now the
+> chain: `verify-abi`, `build` and `send` read each pinned proxy's EIP-1967 implementation (and the
+> Randomness/Moon contracts the game calls) and compare it to `PINNED*.json`; the backend hash is
+> advisory. The pin moved to commit `2b329fb161b921a46966576be4eecd10573c7bef`, expected hash
+> `sha256:260b70d9a6d8051ef72c80bedc6b2453a75a98df539fd99abac6632f1bef30a9`, confirmed by matching
+> the runtime code of all 40 contracts behind the proxies to a forge build. See Correction 77 and
+> `skills/veydrift-wallet/references/abi-pinning.md`.
+
 ### 6.7 Two traps the encoder must handle
 
 Silent-corruption bugs, not crashes. Each gets a dedicated function and a dedicated test.
@@ -2333,13 +2345,33 @@ the list sorts high-to-low; `guard.py` never references `.brief`; `brief` is exc
 `Action.model_json_schema()`. Verified end-to-end against the live API (`vd tick
 --dry-run`, `vd plan run`, `--json`) before and after the Rich-markup fix.
 
+
+**Correction 77 (2026-09-28): re-pin to `2b329fb1` and on-chain drift detection.** The wallet
+skill's ABI pin moved (`202d1ac` → `2b329fb161b921a46966576be4eecd10573c7bef`) and its
+authority changed from the backend's self-reported hash to the chain. Nothing in the reachable
+write surface changed: the game ABI gained `startProductionBatch`, `moonShipProductionVersion`,
+five delegation errors and the `DelegateUpdated` event, nothing was removed or altered, and the
+alliance ABI is byte-identical. The delegation entrypoints (`setDelegate`, `revokeDelegate`,
+`delegateOf`, `delegatorOf`, `effectivePlayer`) are served from the game proxy's `fallback()`, so
+they live in a supplemental pinned ABI, not the game artifact.
+
+Mechanism: `walletctl build` stores an on-chain pin verdict in the tx file (`onchainPin`); the
+agent's `_gate_abi_hash` consumes it (`UnsignedTx.onchain_pin`) and BLOCKs when it is absent
+or failed; `walletctl send` re-checks immediately before signing and refuses with
+`SendRefusedError` (never a generic error — the agent would record a possible broadcast). The
+backend's `deploymentAbiHash` is recorded in `PINNED.json` as known-stale and passes silently, so
+the gate does not warn every tick. `npm run repin -- confirm|write` proves a candidate build
+matches every reachable contract before pinning — the router, every module, nested module and
+library, and the external dependencies — because the logic that changes lives in the modules: a
+router-only bytecode comparison would confirm a commit without touching it.
+
 ---
 
 ## 10. Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| Contract upgraded mid-build (UUPS) | `verify-abi` every tick; blocks writes on drift |
+| Contract upgraded mid-build (UUPS / transparent proxy) | The on-chain implementation pin is checked by `build` (every tick) and `send` (right before signing) and by `verify-abi`; blocks writes on drift. **Not** the backend's hash — it lags the chain. Residuals: the Moon proxy address is backend-reported; migration/paid-invite/space-dock contracts are not pinned |
 | API shape changes | Summaries degrade rather than crash; unknown fields ignored, missing required fields → explicit error |
 | Formulas unverified by this codebase above level 0 | Cost scaling, queue behaviour and lazy settlement above level 0 are **unobserved by this system acting** — this codebase has never itself proposed, guarded or sent an action that resolved above level 0. Every planner path depending on level >0 is fixture-tested and marked unverified-against-live in `strategy-playbook.md` |
 | `skills add` copy semantics bite | Criteria 13 and 17 test it directly |

@@ -23,8 +23,8 @@ already self-heal this once, automatically, from the pinned lockfile — but if 
 invoking `walletctl` directly (not through `vd tick`), do the check yourself.
 
 ```
-walletctl status                      # provider, address, chainId, ETH balance, ABI pin state
-walletctl verify-abi                  # live deploymentAbiHash vs pinned -- exit 1 on drift
+walletctl status                      # provider, address, chainId, ETH balance, on-chain pin state
+walletctl verify-abi [--json]         # on-chain implementations vs the pin -- exit 1 on drift
 walletctl build   --action a.json     # -> unsigned {to, data, value, chainId, gas}
 walletctl simulate --tx tx.json       # eth_call + estimateGas; surfaces reverts
 walletctl send    --tx tx.json --confirm
@@ -130,6 +130,11 @@ Before the allowlist, `send` also refuses unless the provider's address equals `
 `wallet` (skipped only when no policy file exists) — a key for another account can't sign a
 transaction planned for this one.
 
+After the allowlist and immediately before signing, `send` re-reads the chain: every pinned proxy's
+implementation (and its code hash) must still match the pin, `tx.to` must be a pinned proxy, and the
+functions that reach the Randomness/Moon contracts need those pinned too. This is fail-closed —
+including when the RPC is unreachable — and always a `REFUSED:`, never a generic failure.
+
 Any failure: non-zero exit, the rejection reason printed as `REFUSED:`, nothing signed. A failure
 inside the provider's sign-and-broadcast step prints `BROADCAST UNCERTAIN:` instead — the tx may be
 on the network, so check `walletctl nonce` before sending again. Full mechanics
@@ -158,14 +163,15 @@ that's supplementary detail, not something this skill's own operation depends on
 
 ## ABI pinning
 
-Every write is gated on the pinned ABI's hash matching the live backend's
-`deploymentAbiHash` — **`main` is not the deployed contract** and building from it
-produces a different, wrong hash. `walletctl verify-abi` is the check; run it before any
-`send` session, not just once at setup (`checkAllowlist` trusts the on-disk pin per
-transaction, it does not re-fetch and re-hash every time). Full rebuild recipe, the exact
-pinned hash, and what the 2026-09-07 on-chain contract upgrade changed (allowlisted surface
-unchanged; `playerScore` is now on the deployed contract, `firstPlanetOf` was removed):
-`references/abi-pinning.md`.
+The pin is checked against the **chain**, not the backend: `build` records each pinned proxy's
+on-chain implementation verdict in the tx file, `send` re-checks it right before signing, and
+`walletctl verify-abi` reports it (exit 1 on drift). The backend's `deploymentAbiHash` is advisory —
+its deployment metadata can lag the chain. A mismatch means the contracts were upgraded: every game
+write is blocked until re-pinned with `npm run repin` (`confirm` proves the build matches what is
+deployed, `write` regenerates the pin). Run `verify-abi` before any `send` session. **`main` is not
+the deployed contract.** The delegation entrypoints (`setDelegate`, `revokeDelegate`, …) are served
+from the proxy's `fallback()` and live in a supplemental pinned ABI. Full mechanics, residual limits
+and the re-pin recipe: `references/abi-pinning.md`.
 
 ## Routing table
 
@@ -173,7 +179,7 @@ unchanged; `playerScore` is now on the deployed contract, `firstPlanetOf` was re
 | --- | --- |
 | Provider selection, swap procedure, the address-binding constraint in full | `references/providers.md` |
 | Exact allowlist checks, the `--confirm` invariant, signer-address binding, uncertain broadcasts, what ethskills recommends that this engine consciously skips (and why) | `references/tx-safety.md` |
-| ABI pin provenance, rebuild recipe, `main`-vs-deployed divergence | `references/abi-pinning.md` |
+| What is pinned, how on-chain drift is detected, the supplemental ABI, residual limits, the re-pin recipe | `references/abi-pinning.md` |
 
 Every row above is a file bundled with this skill — it travels with the install and is all
 you need. (`skills/veydrift-agent/references/contract-writes.md`, if that sibling skill is

@@ -76,8 +76,9 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1056 Python tests, 272 TypeScript tests** (270 passed + 2 intentionally
-skipped), both suites green. Run both before calling any change done; they are independent
+baseline: **1121 Python tests, 342 TypeScript tests** (339 passed + 3 intentionally
+skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain check),
+both suites green. Run both before calling any change done; they are independent
 projects but cover a system with two enforcement layers that must agree (§6).
 
 **Never run these against your real `$VEYDRIFT_HOME`.** Point `VEYDRIFT_HOME` at a scratch
@@ -229,6 +230,11 @@ touching related code, re-run the check named alongside each one.
   account. See `skills/veydrift-agent/references/strategy-playbook.md` §13 for the full
   mechanics and why cross-planet economic scoring (the obvious-looking alternative) would
   make the starvation problem worse, not better.
+- **Drift is judged by the chain, never by the backend's hash.** `guard._gate_abi_hash` consumes
+  the on-chain pin verdict `walletctl build` stores on the tx (`UnsignedTx.onchain_pin`); no verdict
+  (offline, older wallet) is a BLOCK, and `/runtime-config`'s `deploymentAbiHash` is advisory only.
+  `walletctl send` re-checks the chain right before signing and refuses with `SendRefusedError` —
+  including when the RPC is down, since any other error would be recorded as a possible broadcast.
 - **Secrets never reach a log or a tracked file.** `log.py` scrubs any
   `0x[0-9a-fA-F]{64}` that isn't a known tx hash, and refuses to write a value matching a
   configured secret env var. Before committing, `git diff --cached` anything touching
@@ -237,46 +243,37 @@ touching related code, re-run the check named alongside each one.
 
 ## 6. The ABI pin — how to re-verify or re-pin it
 
-`skills/veydrift-wallet/abi/PINNED.json` records the ABI hash from the **deployed**
-contract at commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
-(`sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4`). This is the
-**second** pin — the contract was upgraded on-chain on 2026-09-07 and the pin was moved
-from `701bed3578cff4d134657c714c599dbdb55a4b6a`
-(`sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99`); see
-`skills/veydrift-wallet/CHANGELOG.md`'s `1.0.0` entry for the full ABI diff (allowlisted
-surface and both silent-corruption traps unchanged; `playerScore`/`firstPlanetOf` swapped
-presence). **`main` on the Veydrift contracts repo is still not the deployed contract** —
-building from `main` (or from the backend's `gitSha`, a different thing again) gives a
-different, wrong ABI. Always check out the commit `/runtime-config` reports as
-`deploymentCommit`, never `main`, before rebuilding:
+`skills/veydrift-wallet/abi/PINNED.json` records the pin: deployment commit
+`2b329fb161b921a46966576be4eecd10573c7bef`, game ABI hash
+`sha256:260b70d9a6d8051ef72c80bedc6b2453a75a98df539fd99abac6632f1bef30a9`, confirmed by
+matching the runtime code of all 40 contracts behind the proxies to a forge build of that
+commit (history: `skills/veydrift-wallet/CHANGELOG.md`).
+
+**The chain is the authority, not the backend.** `/runtime-config`'s `deploymentCommit` /
+`deploymentAbiHash` are the backend's own metadata and lag the chain — never conclude the
+contracts are unchanged from them. `walletctl verify-abi`, `build` and `send` read each pinned
+proxy's EIP-1967 implementation from the chain (game, alliance, and the Randomness/Moon
+contracts the game calls) and compare it to the pin; any drift blocks game writes until
+re-pinned. **`main` on the contracts repo is not the deployed contract**, nor is the backend's
+`gitSha`.
+
+To re-pin, build the candidate commit with the pinned foundry settings (`solc 0.8.28`,
+`optimizer_runs 1`, `via_ir true`, `cbor_metadata false`), then:
 
 ```bash
-git -C /Users/santteegt/GitRepositories/clones/veydrift checkout 202d1acd9e35d815bd66cb9bae744341b1b1cf9e
-git -C /Users/santteegt/GitRepositories/clones/veydrift submodule update --init --recursive --depth 1
-cd /Users/santteegt/GitRepositories/clones/veydrift/packages/contracts
-rm -rf out && forge build --skip test --skip script
+npm --prefix skills/veydrift-wallet run repin -- confirm --out <contracts>/out
+npm --prefix skills/veydrift-wallet run repin -- write   --out <contracts>/out --commit <40-hex sha>
 ```
 
-Then recompute `sha256(JSON.stringify(artifact.abi))` (compact separators, forge's key
-order) and compare against a live `GET https://api.veydrift.com/runtime-config`'s
-`backend.build.deploymentAbiHash`. Full recipe and the exact foundry settings that affect
-reproducibility (`solc 0.8.28`, `optimizer_runs 1`, `via_ir true`, `cbor_metadata false`)
-are in `skills/veydrift-wallet/references/abi-pinning.md`. If the contract has genuinely
-been redeployed, re-pin deliberately — don't let a mismatch silently pass by relaxing the
-comparison.
+`confirm` matches every reachable contract to the build (router, modules, libraries, dependencies)
+and `write` refuses unless it passes. Then update by hand, as tripwires: `tests/abi.test.ts`'s
+expected constants and `guard.py`'s `PINNED_ABI_HASH` / `KNOWN_STALE_BACKEND_ABI_HASH`.
+Never relax the comparison to make a mismatch pass. Full recipe, residual limits and the
+supplemental ABI (the delegation entrypoints are `fallback()`-routed, so absent from the game
+artifact): `skills/veydrift-wallet/references/abi-pinning.md`.
 
-**A second, independent pin exists since the alliance feature (2026-09-01)**:
-`abi/PINNED.alliance.json` + `abi/VeydriftAllianceSystem.202d1ac.json`, same commit, same
-`forge build` settings — but with a narrower guarantee than the pin above. `/runtime-
-config` exposes `allianceContractAddress` directly but has no `allianceAbiHash`/
-`allianceDeploymentCommit` field anywhere, so this pin was verified exactly once, by
-construction, and can never be automatically re-checked against a live hash the way
-`verify-abi` re-checks the game contract's pin on every call. It was re-pinned to
-`202d1ac` alongside the game contract on 2026-09-07 (from the same `forge build`, for
-source-tree coherence); the alliance contract's on-chain address is unchanged and its 15
-in-scope membership selectors are byte-identical across the two commits. See `references/
-abi-pinning.md`'s "Second contract" section — the no-live-recheck limit is a permanent
-limit of the upstream API, not something to work around by inventing a substitute check.
+The alliance pin (`PINNED.alliance.json`) has no backend hash to compare, so it is verified
+on-chain only, like the game's.
 
 ## 7. Four silent-corruption traps in the write path
 
@@ -337,7 +334,7 @@ VEYDRIFT_HOME=/tmp/scratch-veydrift uv run --directory skills/veydrift-agent vd 
 # The formula layer against live data
 uv run --directory skills/veydrift-agent vd calc verify
 
-# The ABI pin against live /runtime-config
+# The pin against the chain (implementation slots + code hashes; the backend hash is advisory)
 cd skills/veydrift-wallet && npx tsx src/cli.ts verify-abi
 ```
 

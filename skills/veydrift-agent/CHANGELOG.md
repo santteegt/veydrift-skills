@@ -11,6 +11,28 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-09-28
+
+### Changed
+- **`abi_hash` judges the chain, not the backend.** The gate now consumes the on-chain pin verdict
+  `walletctl build` stores on the tx (`UnsignedTx.onchain_pin`, new `OnchainPin` model): every pinned
+  proxy's implementation (game, alliance) must still match, and the functions that reach the
+  Randomness/Moon contracts (`applies_to`) additionally need those to match. The backend's
+  `deploymentAbiHash` became advisory — the previous pin, which `/runtime-config` still reports after
+  the chain moved on, is recorded as `KNOWN_STALE_BACKEND_ABI_HASH` and passes silently (a WARN every
+  tick would have broken `is_structural_tier_block`'s noise suppression and poisoned `--readiness`);
+  a third value WARNs. No built tx, or a build that carried no verdict (offline `vd guard run`), is a
+  BLOCK. The alliance carve-out ("no live-hash path, PASS unconditionally") is gone: the alliance
+  implementation is verified on-chain like the game's.
+- Re-pinned `PINNED_ABI_HASH` to the deployed commit `2b329fb161b921a46966576be4eecd10573c7bef`.
+  Two tests diff the agent's hash constants and `applies_to` against the wallet's `PINNED.json`.
+- `test_coverage_doc.py` finds the pinned ABI by glob (it had hard-coded the commit-suffixed
+  filename, so a re-pin turned it into a silent skip), fails loudly when the ABI directory has no
+  unique game artifact, and also covers the supplemental delegation ABI. `docs/COVERAGE.md` gained
+  rows for the three new writable functions.
+- `SKILL.md` / `references/guardrails.md` / `references/api-routes.md` describe the on-chain
+  authority and that `/runtime-config`'s `backend.build.deployment*` fields can lag the chain.
+
 ## [1.23.1] - 2026-09-14
 
 ### Docs

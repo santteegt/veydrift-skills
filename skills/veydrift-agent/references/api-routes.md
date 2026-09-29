@@ -216,21 +216,27 @@ Key findings:
 
 ### 3.2 `/runtime-config` (target: `config`)
 
-No params. Confirmed live 2026-08-12:
+No params. Shape (abridged):
 
 ```json
 {
   "chainId": 8453, "network": "Base",
   "contractAddress": "0xf397910F005151b09644228573a4353818D3755d",
   "backend": { "build": {
-    "deploymentAbiHash": "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4",
-    "deploymentCommit": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e"
+    "deploymentAbiHash": "sha256:<hex>",
+    "deploymentCommit": "<40-hex sha>",
+    "deploymentTimestamp": "<ISO-8601>"
   }},
   "featureSupport": { "researchEndpoint": true, "highscoresEndpoint": true, "...": "..." }
 }
 ```
 
-This ABI hash and deployment commit match `skills/veydrift-wallet/abi/PINNED.json` exactly.
+**`backend.build.deployment*` is the backend's own deployment metadata, not evidence of what is
+deployed.** It can lag the chain: the proxies' implementations can be swapped without these fields
+changing. Never conclude "the contracts are unchanged" from a matching hash or commit here; the
+authority is the on-chain implementation check (`veydrift-wallet`'s `references/abi-pinning.md`),
+which `abi_hash` consumes via `walletctl build`. Contract addresses in this response are also
+backend-reported.
 
 ### 3.3 `/wallet/{addr}/settlement`
 

@@ -48,6 +48,23 @@ Foundry settings that matter for reproducibility: `solc 0.8.28`, `optimizer_runs
 > function surface — see `docs/COVERAGE.md`'s 2026-09-07 note and
 > `skills/veydrift-wallet/CHANGELOG.md` `1.0.0` for the full ABI diff.
 
+> **Correction (2026-09-28 — the deployed commit moved again, and `/runtime-config` did not
+> notice).** The game and alliance proxies' implementations were swapped on-chain several times
+> after the backend's reported `deploymentTimestamp` (`2026-09-07T02:02:59Z`), yet
+> `/runtime-config` still reports `deploymentCommit` `202d1acd…` and the `986ea81b…` hash: the
+> backend's deployment metadata lags the chain, so "pin to the commit `/runtime-config` reports"
+> — this section's rule above — is not safe on its own. The deployed commit is
+> `2b329fb161b921a46966576be4eecd10573c7bef` (game hash
+> `sha256:260b70d9a6d8051ef72c80bedc6b2453a75a98df539fd99abac6632f1bef30a9`), **confirmed** by
+> matching the runtime code of all 40 contracts behind the proxies to a forge build with the same
+> foundry settings. Game ABI diff versus `202d1ac`: nothing removed or changed; added
+> `startProductionBatch`, `moonShipProductionVersion`, five delegation errors and
+> `DelegateUpdated`. The alliance ABI is byte-identical. The single-wallet delegation entrypoints
+> are served from the game proxy's `fallback()` and declared only in `IVeydriftDelegation`, so no
+> forge `VeydriftGame` artifact (and no backend hash) contains them. Drift is now detected by
+> reading the proxies' EIP-1967 implementation slots from the chain — see
+> `skills/veydrift-wallet/references/abi-pinning.md` and `docs/SPEC.md` Correction 77.
+
 ### 1.1 main has already drifted from the deployed contract
 
 > **Correction (2026-09-07 — on-chain contract upgrade).** This table is **inverted** by the

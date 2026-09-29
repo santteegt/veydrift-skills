@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { encodeAbiParameters, encodeFunctionData } from "viem";
+import { encodeAbiParameters, encodeErrorResult, encodeFunctionData } from "viem";
 import {
+  classifyBackendHash,
+  computeAbiHash,
   computePinnedAbiHash,
+  decodeRevertData,
   decodeSimulateReturnData,
+  describeRevert,
+  extractRevertData,
   findFunctionsByName,
   functionsForSelector,
   getPinnedAbi,
+  getResolvableAbi,
   getSelector,
   getSelectorForSignature,
   isNonpayableRead,
@@ -14,13 +20,17 @@ import {
   resolveFunctionAbi,
 } from "../src/abi.js";
 
-// Live /runtime-config `backend.build.deploymentAbiHash` / `deploymentCommit`, re-probed
-// 2026-09-07 after the on-chain contract upgrade. Reproduced locally by `forge build` at the
-// reported deploymentCommit (see references/abi-pinning.md). Prior pin was
-// sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99 at commit
-// 701bed3578cff4d134657c714c599dbdb55a4b6a.
-const EXPECTED_HASH = "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4";
-const EXPECTED_COMMIT = "202d1acd9e35d815bd66cb9bae744341b1b1cf9e";
+// The pin, re-derived 2026-09-28 after the game and alliance proxies' implementations changed
+// on-chain (delegation + batch production). The deployed commit was CONFIRMED by matching the runtime
+// code of every contract behind the proxies to a forge build of this commit (see PINNED.json's
+// source.confirmation and references/abi-pinning.md). NOTE: this is deliberately NOT what the
+// backend's /runtime-config reports -- that still says the previous pin below, recorded in
+// PINNED.json as `backendReported` (known-stale). Previous pin: commit
+// 202d1acd9e35d815bd66cb9bae744341b1b1cf9e, hash
+// sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4.
+const EXPECTED_HASH = "sha256:260b70d9a6d8051ef72c80bedc6b2453a75a98df539fd99abac6632f1bef30a9";
+const EXPECTED_COMMIT = "2b329fb161b921a46966576be4eecd10573c7bef";
+const STALE_BACKEND_HASH = "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4";
 
 describe("pinned ABI", () => {
   it("hashes to the spec-pinned value", () => {
@@ -172,7 +182,9 @@ describe("pinned alliance ABI (VeydriftAllianceSystem)", () => {
     expect(meta.abiHash).toBe(
       "sha256:393335c106ecf203eb63d93d21c27b51e10fb4a217a5fd6de5feb63132999535",
     );
-    expect(meta.commit).toBe("202d1acd9e35d815bd66cb9bae744341b1b1cf9e");
+    // The alliance ABI is byte-identical to the previous pin (same hash); only the commit and the
+    // implementation moved.
+    expect(meta.commit).toBe(EXPECTED_COMMIT);
   });
 
   it("getPinnedAbi('alliance') returns a non-empty ABI, distinct from the game ABI", () => {
@@ -286,5 +298,145 @@ describe("decodeSimulateReturnData", () => {
     expect(
       decodeSimulateReturnData("0xdeadbeef", "0x0000000000000000000000000000000000000000000000000000000000000001"),
     ).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The delegation entrypoints are served from the game proxy's fallback() and declared only in
+// IVeydriftDelegation, so they live in a SUPPLEMENTAL pinned ABI merged for resolution -- never
+// into the artifact the hash is computed over.
+// ---------------------------------------------------------------------------------------------
+describe("supplemental delegation ABI", () => {
+  const DELEGATION: Array<[string, string]> = [
+    ["setDelegate(address)", "0xca5eb5e1"],
+    ["revokeDelegate()", "0x55d1ef38"],
+    ["delegateOf(address)", "0x8d22ea2a"],
+    ["delegatorOf(address)", "0x2222ef9f"],
+    ["effectivePlayer(address)", "0x6d3498d8"],
+  ];
+
+  it.each(DELEGATION)("%s resolves for contract 'game' with selector %s", (sig, selector) => {
+    const fn = resolveFunctionAbi(sig, "game");
+    expect(getSelector(fn)).toBe(selector);
+    expect(resolveFunctionAbi(sig)).toBe(fn); // default contract is game
+  });
+
+  it("is absent from the pinned game artifact but present in the resolvable ABI", () => {
+    const has = (abi: readonly { type: string; name?: string }[]) =>
+      abi.some((e) => e.type === "function" && e.name === "setDelegate");
+    expect(has(getPinnedAbi("game"))).toBe(false);
+    expect(has(getResolvableAbi("game"))).toBe(true);
+  });
+
+  it("merging never changes the game ABI hash", () => {
+    expect(computePinnedAbiHash("game")).toBe(EXPECTED_HASH);
+  });
+
+  it("does not leak into the alliance contract's resolution", () => {
+    expect(() => resolveFunctionAbi("setDelegate(address)", "alliance")).toThrow(/pinned "alliance" artifact/);
+  });
+
+  it("functionsForSelector finds a delegation function (describe/simulate/send rely on it)", () => {
+    expect(functionsForSelector("0x55d1ef38").map((f) => f.name)).toEqual(["revokeDelegate"]);
+  });
+
+  it("PINNED.json's supplemental record matches the file on disk", () => {
+    const [entry] = loadPinnedMeta("game").supplemental ?? [];
+    expect(entry?.name).toBe("VeydriftDelegation");
+    const delegationFns = getResolvableAbi("game").filter(
+      (e) => e.type === "function" && DELEGATION.some(([sig]) => sig.startsWith(`${e.name}(`)),
+    );
+    expect(delegationFns).toHaveLength(DELEGATION.length);
+    expect(entry?.abiHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("deduplicates: an entry present in both the pinned artifact and the supplemental appears once", () => {
+    const events = getResolvableAbi("game").filter((e) => e.type === "event" && e.name === "DelegateUpdated");
+    expect(events).toHaveLength(1);
+  });
+});
+
+describe("startProductionBatch (in the pinned game ABI)", () => {
+  it("resolves by full signature with a tuple[] second input", () => {
+    const fn = resolveFunctionAbi("startProductionBatch(uint256,(uint8,uint8,uint32)[])");
+    expect(getSelector(fn)).toBe("0xa1de3f6a");
+    expect(fn.inputs[1]?.type).toBe("tuple[]");
+    expect(fn.stateMutability).toBe("nonpayable");
+  });
+
+  it("is part of the hashed artifact (unlike the fallback-routed delegation functions)", () => {
+    expect(getPinnedAbi("game").some((e) => e.type === "function" && e.name === "startProductionBatch")).toBe(true);
+  });
+});
+
+describe("backend hash classification (advisory, never the authority)", () => {
+  const PINNED = EXPECTED_HASH;
+  it("match: the backend reports the pinned hash", () => {
+    expect(classifyBackendHash(PINNED, PINNED, STALE_BACKEND_HASH)).toBe("match");
+  });
+  it("known-stale: the backend reports exactly the value recorded at pin time", () => {
+    expect(classifyBackendHash(PINNED, STALE_BACKEND_HASH, STALE_BACKEND_HASH)).toBe("known-stale");
+  });
+  it("other: a third value is flagged but is advisory", () => {
+    expect(classifyBackendHash(PINNED, "sha256:something-else", STALE_BACKEND_HASH)).toBe("other");
+  });
+  it("unavailable: an absent field is not confused with a mismatch", () => {
+    expect(classifyBackendHash(PINNED, "", STALE_BACKEND_HASH)).toBe("unavailable");
+  });
+  it("PINNED.json records the known-stale backend value", () => {
+    expect(loadPinnedMeta("game").backendReported?.deploymentAbiHash).toBe(STALE_BACKEND_HASH);
+  });
+});
+
+describe("custom-error decoding", () => {
+  const gameAbi = getPinnedAbi("game");
+
+  it("decodes InsufficientResources against the pinned ABI", () => {
+    const data = encodeErrorResult({ abi: gameAbi, errorName: "InsufficientResources", args: [9035n, 44471n, 81685n] });
+    const decoded = decodeRevertData(data);
+    expect(decoded?.errorName).toBe("InsufficientResources");
+    expect(decoded?.text).toBe("InsufficientResources(9035, 44471, 81685)");
+  });
+
+  it("decodes a delegation error added by the upgrade", () => {
+    const a = "0x00000000000000000000000000000000000000a1";
+    const b = "0x00000000000000000000000000000000000000b2";
+    const data = encodeErrorResult({ abi: gameAbi, errorName: "DelegatedWalletCannotDelegate", args: [a, b] });
+    expect(decodeRevertData(data)?.errorName).toBe("DelegatedWalletCannotDelegate");
+  });
+
+  it("decodes an error that only the alliance ABI declares", () => {
+    const allianceOnly = getPinnedAbi("alliance").find(
+      (e) => e.type === "error" && !gameAbi.some((g) => g.type === "error" && g.name === e.name),
+    );
+    expect(allianceOnly).toBeDefined();
+    if (allianceOnly?.type !== "error") throw new Error("unreachable");
+    const args = allianceOnly.inputs.map((input) => (input.type === "address" ? "0x00000000000000000000000000000000000000c3" : 1));
+    const data = encodeErrorResult({ abi: getPinnedAbi("alliance"), errorName: allianceOnly.name, args } as never);
+    expect(decodeRevertData(data)?.errorName).toBe(allianceOnly.name);
+  });
+
+  it("returns undefined for empty or unknown revert data rather than guessing", () => {
+    expect(decodeRevertData(undefined)).toBeUndefined();
+    expect(decodeRevertData("0xdeadbeef")).toBeUndefined();
+  });
+
+  it("extractRevertData finds the payload anywhere in a viem-style cause chain", () => {
+    const data = "0x2ab0f96f0000000000000000000000000000000000000000000000000000000000000001";
+    expect(extractRevertData({ cause: { cause: { data } } })).toBe(data);
+    expect(extractRevertData({ cause: { data: { data } } })).toBe(data);
+    expect(extractRevertData(new Error("no payload"))).toBeUndefined();
+  });
+
+  it("describeRevert names the decoded custom error, and falls back to the short message when it cannot", () => {
+    const data = encodeErrorResult({ abi: gameAbi, errorName: "InsufficientResources", args: [1n, 2n, 3n] });
+    const decoded = describeRevert({ shortMessage: "Execution reverted for an unknown reason.", cause: { data } });
+    expect(decoded.message).toBe("InsufficientResources(1, 2, 3) (reverted)");
+    expect(decoded.data).toBe(data);
+    expect(describeRevert({ shortMessage: "rpc unreachable" }).message).toBe("rpc unreachable");
+  });
+
+  it("computeAbiHash is a pure function of the ABI it is given", () => {
+    expect(computeAbiHash(getPinnedAbi("game"))).toBe(EXPECTED_HASH);
   });
 });

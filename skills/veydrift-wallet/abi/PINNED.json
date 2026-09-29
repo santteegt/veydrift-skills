@@ -1,6 +1,7 @@
 {
-  "commit": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e",
-  "abiHash": "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4",
+  "commit": "2b329fb161b921a46966576be4eecd10573c7bef",
+  "artifact": "VeydriftGame.2b329fb.json",
+  "abiHash": "sha256:260b70d9a6d8051ef72c80bedc6b2453a75a98df539fd99abac6632f1bef30a9",
   "foundry": {
     "solc": "0.8.28",
     "optimizer_runs": 1,
@@ -8,18 +9,69 @@
     "cbor_metadata": false,
     "bytecode_hash": "none"
   },
-  "fetchedAt": "2026-09-07T18:03:00Z",
+  "fetchedAt": "2026-09-29T04:12:41.640Z",
   "source": {
     "repo": "https://github.com/Borodutch/veydrift.git",
-    "localClone": "/Users/santteegt/GitRepositories/clones/veydrift",
-    "commit": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e",
-    "artifactPath": "packages/contracts/out/VeydriftGame.sol/VeydriftGame.json",
+    "commit": "2b329fb161b921a46966576be4eecd10573c7bef",
+    "buildLocation": "scratch build of gh api repos/Borodutch/veydrift/tarball/2b329fb (lib/ symlinked from the local clone; submodule SHAs identical)",
     "buildCommand": "forge build --skip test --skip script",
-    "verifiedAgainstLiveRuntimeConfig": true,
-    "liveRuntimeConfigUrl": "https://api.veydrift.com/runtime-config",
-    "liveDeploymentAbiHashAtVerification": "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4",
-    "liveDeploymentCommitAtVerification": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e",
-    "verifiedAt": "2026-09-07T18:03:00Z"
+    "forgeVersion": "forge Version: 1.5.1-stable",
+    "artifactPath": "packages/contracts/out/VeydriftGame.sol/VeydriftGame.json",
+    "confirmation": {
+      "status": "confirmed",
+      "method": "Runtime code of every contract reachable from the game and alliance implementations (40 contracts, including modules, nested modules, libraries and the Randomness/Moon implementations) matched forge artifacts of this commit, masking immutableReferences and linkReferences (`npm run repin -- confirm`).",
+      "verifiedAt": "2026-09-29T04:12:41.640Z",
+      "atBlock": 51932907
+    }
   },
-  "note": "abi/VeydriftGame.202d1ac.json contains { abi, methodIdentifiers } extracted from the forge artifact above. abiHash = sha256(JSON.stringify(pinned.abi)) with compact separators, key order as emitted by forge/JSON.parse. Re-pinned 2026-09-07 after the on-chain contract upgrade: the prior pin (commit 701bed3578cff4d134657c714c599dbdb55a4b6a, abiHash sha256:62cdedb794d4aa11cce1e9ef61e26f12227ce40a3bf47dd6156db6dc5676bc99) no longer matches live /runtime-config. main (HEAD 094f2277 at re-pin time -- the backend's own gitSha, but NOT its deploymentCommit) still produces a different hash; always build from the reported deploymentCommit. See references/abi-pinning.md."
+  "implementation": {
+    "proxy": "0xf397910F005151b09644228573a4353818D3755d",
+    "proxyKind": "OpenZeppelin v5 TransparentUpgradeableProxy (admin slot = a ProxyAdmin)",
+    "slot": "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+    "address": "0xCeBe176E0b88eF9d134047c3312215425bc96745",
+    "codeHash": "0xaaa74e3cb2728165586034bd39d855b707f4f9c338e3c290e2018e512c2bd2d6",
+    "proxyAdmin": "0xc81609E77b5ea79d0CdA9794b75B65D567535cb9",
+    "observedAt": "2026-09-29T04:12:41.640Z",
+    "observedAtBlock": 51932907
+  },
+  "dependencies": {
+    "randomnessEngine": {
+      "proxy": "0xdc7d3388bfb07E2cC8DD3Be265d7C1182D34d069",
+      "proxyKind": "ERC1967 forwarder (admin slot zero; upgrade authority inside the implementation)",
+      "implementation": "0xBf9F9a29CDd921DbE579c3588271e4fe060614D0",
+      "codeHash": "0x42cdf31c79d99a3e547418469b3390c3d5e06962445ac30cc9180045be0a6a22",
+      "addressSource": "the game's own `randomnessEngine()` getter (on-chain truth)",
+      "matchesArtifact": "RandomnessEngine @ 2b329fb"
+    },
+    "moonSystem": {
+      "proxy": "0x4935f1E0024F1Ea07877a583F89A51BF3d91Cf5C",
+      "proxyKind": "ERC1967 forwarder (admin slot zero; upgrade authority inside the implementation)",
+      "implementation": "0x6f220D13a543ad688A75230fCf23816F8690a5E5",
+      "codeHash": "0xacd548208e3df8b761da71fd43616bded689a8494657d5d4b1f836e4db5f12e4",
+      "addressSource": "live /runtime-config `moonContractAddress` -- the game exposes no on-chain getter for it, so this address is backend-reported (residual)",
+      "matchesArtifact": "VeydriftMoonSystem @ 2b329fb"
+    },
+    "appliesTo": [
+      "launchFleetMission",
+      "launchInterplanetaryMissileAttack",
+      "resolveFleetMission",
+      "launchDefenseHold"
+    ]
+  },
+  "backendReported": {
+    "deploymentAbiHash": "sha256:986ea81b6dbca8d86149cd3449849160d75d19ea692cd5c9d1900355ecf41ec4",
+    "deploymentCommit": "202d1acd9e35d815bd66cb9bae744341b1b1cf9e",
+    "deploymentTimestamp": "2026-09-07T02:02:59.383Z",
+    "note": "What /runtime-config reported at re-pin time. If it differs from this pin's abiHash it is KNOWN-STALE: the guard treats it as advisory (never the authority) and stays silent while the backend keeps reporting exactly this value."
+  },
+  "supplemental": [
+    {
+      "name": "VeydriftDelegation",
+      "file": "VeydriftDelegation.2b329fb.json",
+      "abiHash": "sha256:bebb4fe472379ee7022a7ed118cdd8bba26004e9dc536d78ba9a56ea635699dc",
+      "artifactPath": "packages/contracts/out/IVeydriftDelegation.sol/IVeydriftDelegation.json",
+      "note": "setDelegate/revokeDelegate/delegateOf/delegatorOf/effectivePlayer are routed through the game proxy's fallback() (VeydriftGame.sol) and declared only in this interface, so the VeydriftGame artifact (and the backend's deploymentAbiHash) never contains them. Merged into function resolution for contract=\"game\" only; the game ABI hash above is over the game artifact alone."
+    }
+  ],
+  "note": "abi/VeydriftGame.2b329fb.json holds { abi, methodIdentifiers } from the forge artifact above; abiHash = sha256(JSON.stringify(abi)), compact separators, forge key order."
 }

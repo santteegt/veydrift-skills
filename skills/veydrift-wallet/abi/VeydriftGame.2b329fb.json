@@ -1126,7 +1126,7 @@
       "name": "finishBuildingUpgrade",
       "inputs": [
         {
-          "name": "planetId",
+          "name": "",
           "type": "uint256",
           "internalType": "uint256"
         }
@@ -1571,7 +1571,7 @@
       "name": "joinBodyAttackMission",
       "inputs": [
         {
-          "name": "",
+          "name": "originPlanetId",
           "type": "uint256",
           "internalType": "uint256"
         },
@@ -1685,7 +1685,7 @@
           ]
         },
         {
-          "name": "",
+          "name": "originIsMoon",
           "type": "bool",
           "internalType": "bool"
         }
@@ -2019,7 +2019,7 @@
       "name": "launchBodyFleetMission",
       "inputs": [
         {
-          "name": "",
+          "name": "originPlanetId",
           "type": "uint256",
           "internalType": "uint256"
         },
@@ -2138,7 +2138,7 @@
           "internalType": "uint16"
         },
         {
-          "name": "",
+          "name": "originIsMoon",
           "type": "bool",
           "internalType": "bool"
         },
@@ -2770,6 +2770,19 @@
         }
       ],
       "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "moonShipProductionVersion",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "pure"
     },
     {
       "type": "function",
@@ -4429,12 +4442,12 @@
       "name": "startBuildingUpgrade",
       "inputs": [
         {
-          "name": "planetId",
+          "name": "",
           "type": "uint256",
           "internalType": "uint256"
         },
         {
-          "name": "building",
+          "name": "",
           "type": "uint8",
           "internalType": "enum Building"
         }
@@ -4563,6 +4576,41 @@
         }
       ],
       "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "startProductionBatch",
+      "inputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "",
+          "type": "tuple[]",
+          "internalType": "struct ProductionOrder[]",
+          "components": [
+            {
+              "name": "kind",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "itemId",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "quantity",
+              "type": "uint32",
+              "internalType": "uint32"
+            }
+          ]
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
     },
     {
       "type": "function",
@@ -5337,6 +5385,37 @@
           "type": "uint128",
           "indexed": false,
           "internalType": "uint128"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "DelegateUpdated",
+      "inputs": [
+        {
+          "name": "main",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "previousDelegate",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "delegate",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "actor",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
         }
       ],
       "anonymous": false
@@ -7233,6 +7312,54 @@
     },
     {
       "type": "error",
+      "name": "DelegateAlreadyAssigned",
+      "inputs": [
+        {
+          "name": "delegate",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "main",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "DelegateHasDelegate",
+      "inputs": [
+        {
+          "name": "delegate",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "nestedDelegate",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "DelegatedWalletCannotDelegate",
+      "inputs": [
+        {
+          "name": "wallet",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "main",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
       "name": "FieldCapacityReached",
       "inputs": []
     },
@@ -7432,6 +7559,17 @@
     },
     {
       "type": "error",
+      "name": "InvalidDelegate",
+      "inputs": [
+        {
+          "name": "delegate",
+          "type": "address",
+          "internalType": "address"
+        }
+      ]
+    },
+    {
+      "type": "error",
       "name": "InvalidHoldWindow",
       "inputs": [
         {
@@ -7538,6 +7676,17 @@
           "name": "dependency",
           "type": "bytes32",
           "internalType": "bytes32"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "NoDelegate",
+      "inputs": [
+        {
+          "name": "account",
+          "type": "address",
+          "internalType": "address"
         }
       ]
     },
@@ -7991,6 +8140,7 @@
     "moonAttackParityActivatedAt()": "79ff28fd",
     "moonResources(uint256)": "1f20b321",
     "moonShipCount(uint256,uint8)": "dc02fa88",
+    "moonShipProductionVersion()": "685cd382",
     "moveMoonGateShips(uint256,uint256,address,(uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32,uint32))": "c79cca11",
     "nextFleetId()": "80198ce1",
     "nextPlanetId()": "c16bedad",
@@ -8053,6 +8203,7 @@
     "startPlanetWithAllianceInvite(bytes32,uint64,uint8,bytes32,bytes32)": "042fec83",
     "startPlanetWithReferral(bytes32,uint8,bytes32,bytes32)": "dad57ff9",
     "startPrice()": "f1a9af89",
+    "startProductionBatch(uint256,(uint8,uint8,uint32)[])": "a1de3f6a",
     "startResearch(uint256,uint8)": "7f314b93",
     "startShipProduction(uint256,uint8,uint32)": "13aed9a2",
     "storageCaps(uint256)": "6db0ecd7",

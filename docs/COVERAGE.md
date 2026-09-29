@@ -12,11 +12,13 @@ comes straight from the pinned ABI, not from memory:
 
 ```bash
 jq -r '.abi[] | select(.type=="function" and (.stateMutability=="nonpayable" or .stateMutability=="payable")) | .name' \
-  skills/veydrift-wallet/abi/VeydriftGame.202d1ac.json | sort -u | wc -l
+  skills/veydrift-wallet/abi/VeydriftGame.2b329fb.json \
+  skills/veydrift-wallet/abi/VeydriftDelegation.2b329fb.json | sort -u | wc -l
 ```
 
-Run 2026-09-07 against `skills/veydrift-wallet/abi/VeydriftGame.202d1ac.json`: **69 ABI
-entries, 68 unique function names.** The gap is `launchFleetMission`, which is overloaded on
+Run 2026-09-07 against the then-pinned `VeydriftGame.202d1ac.json`: **69 ABI entries, 68
+unique function names.** (Superseded by the 2026-09-28 re-pin below, which adds 3 more: 70
+ABI entries / 71 unique names counting the delegation ABI.) The gap is `launchFleetMission`, which is overloaded on
 the deployed ABI (a 7-arg and a 6-arg form — see `AGENTS.md` §7, trap #2); both forms are
 listed as separate rows below. Every claim in Part 1 traces to one of: `guard.py`'s
 `_MIN_TIER_FOR_FUNCTION` (`guard.py:83-103`, re-verified 2026-08-17), `allowlist.ts`'s
@@ -26,6 +28,18 @@ Phase 2, 2026-08-16) `candidates.py` for `Action(function=...)`, `tick.py`'s
 `_action_to_walletctl_json` (`tick.py:449-482`, re-verified 2026-08-17), or the
 deployed contract source at commit `202d1acd9e35d815bd66cb9bae744341b1b1cf9e`
 (`/Users/santteegt/GitRepositories/clones/veydrift`).
+
+**2026-09-28 re-pin (game + alliance implementations changed on-chain).** The pinned ABI moved
+from `202d1ac` to `2b329fb1` — the deployed commit, *confirmed* by matching the runtime code of all
+40 contracts behind the proxies to a forge build (`skills/veydrift-wallet/references/abi-pinning.md`).
+The game ABI gained exactly **`startProductionBatch`**, `moonShipProductionVersion` (a pure
+rollout handshake), five delegation errors and the `DelegateUpdated` event; nothing was removed or
+changed, and the alliance ABI is byte-identical (same hash). The **delegation entrypoints**
+(`setDelegate`, `revokeDelegate`, `delegateOf`, `delegatorOf`, `effectivePlayer`) are served from the
+proxy's `fallback()` and declared only in `IVeydriftDelegation`, so they are absent from the game
+artifact and live in the supplemental `VeydriftDelegation.2b329fb.json` — which the coverage test now
+reads too. Net writable-inventory effect: **+3** (`startProductionBatch`, `setDelegate`,
+`revokeDelegate`), all classified in §1.2 below.
 
 **2026-09-07 on-chain contract upgrade.** The pinned ABI moved from commit `701bed3` to
 `202d1ac` (see `skills/veydrift-wallet/CHANGELOG.md` `1.0.0` and `references/abi-pinning.md`).
@@ -90,12 +104,18 @@ reproduce Phase 3's behaviour exactly (Phase 4's own acceptance criterion).
 | `launchFleetMission(uint256,uint256,uint8,(uint32×14),(uint128,uint128,uint128),uint256)` (6-arg) | Same generators; `tick.py` selects this overload when `Action.speed_pct` is `None` (the contract's own 100%-speed default) — since no generator ever sets `speed_pct`, this is the branch every live `launchFleetMission` proposal actually takes today, including Colonize and Deploy since 2026-08-28 (`docs/SPEC.md` correction 69), and Attack since the same date's commit 6 (`generate_attack_candidates` doesn't set `speed_pct` either — `docs/SPEC.md` correction 71). Same Transport/Deploy target-ownership contract rule as the 7-arg row above applies here identically | Same as above | Same as above | **implemented (live) — this is the overload the planner actually reaches, and round 2 (2026-08-19) confirmed it end-to-end on a fork**: origin planet 23 (`2:477:7`) → target planet 184 (`2:477:3`), both owned by the same impersonated 10-planet account as the 7-arg row, `{smallCargo: 2, largeCargo: 1}`, `{deuterium: 5000}`, `status: "success"` — the first real fleet mission ever launched by this codebase (`fork-testing.md` §9.2). The fuel this mission actually cost (`FleetMissionCargo` event, `fuelCost = 10`) matched `calc.mission_fuel`'s prediction exactly (`fork-testing.md` §8.3). **Round 3 (2026-08-19) sent this same overload for Colonize (mission type 2)**: the same account produced a Colony Ship (home planet already met the Shipyard ≥4/Impulse Drive ≥3 production thresholds, no unlock chain needed), sent a Colonize mission to a scanned-available coordinate (`2:477:9`), and `resolveFleetMission` resolved it — `status: "success"` on both, and `isCoordinateAvailable`/`planetCountOf` confirmed the exact targeted slot flipped `true`→`false` / `10`→`11` (`fork-testing.md` §10). **Round 4 (2026-08-30) sent this same overload for Attack (mission type 3)**: origin planet 23 → target planet 25 (a real third-party account, live-confirmed `attackProtection.allowed: true`), `{lightFighter: 2, cruiser: 1}`, `status: "success"` — `FleetMissionLaunched` confirmed `missionType=3` on-chain and a genuine nonzero VRF `randomnessRequestId` despite the built calldata passing `0` (the contract overwrites it, per `docs/SPEC.md` correction 71, now confirmed live rather than only by source), and `FleetMissionCargo`'s emitted `fuelCost=261` again matched `calc.py`'s independent prediction exactly. **Battle resolution itself remains unverified by this codebase** — it depends on an off-chain, precommitted randomness reveal only the real fulfiller account can produce; attempting `resolveFleetMission` before that arrives correctly reverted `PendingRandomness`, and forcibly faking the reveal via storage write was deliberately avoided as faking the mechanism under test rather than exercising it (`fork-testing.md` §11.2-11.4) | Attack's battle-resolution step specifically — genuinely out of this codebase's reach on a fork, not merely undone |
 | `launchInterplanetaryMissileAttack(uint256,uint256,uint8,uint32)` | **New, 2026-08-28 (launch-actions plan commit 7).** Yes — `candidates.generate_missile_candidates`/`select_missile_candidate`, gated on `policy.actions.allow_combat` (the same flag Attack uses). Shares NOTHING with `launchFleetMission` — its own selector, no fleet tuple, no mission-type argument, no fleet slot, no travel time; resolves fully synchronously (confirmed by reading `VeydriftPlanetManagementModule.sol`'s implementation directly, not inferred). Sends every owned Interplanetary Missile (`Defense.InterplanetaryMissile`, id 9) at the target's most-numerous eligible defense type (`_choose_missile_primary_target`, ids 0-7 only — ABM(8)/IPM(9) are refused as targets by the contract itself). The ladder's most conservative rung (`8f:missile`), reached only once every other band, Attack included, found nothing at all | OPERATOR (`guard.py:110`, new entry — plus `_gate_missile_target`'s own independent `policy.actions.allow_combat` check, since this function has no shared non-combat sibling to split "unconditional tier + conditional argument" the way `launchFleetMission`/Attack does) | OPERATOR, conditional on `policy.actions.allow_combat` via `COMBAT_SIGNATURES`/`combatSelectorSet()` (`allowlist.ts`, new — **deliberately never added to the unconditional `tierSelectors('operator')` set**, unlike Colonize/Attack's shape; see `docs/SPEC.md` correction 72 for exactly why the two layers' shapes differ here and how the cross-layer test accounts for it) | **implemented — fork-verified (round 4, 2026-08-30).** A new, dedicated `guard._gate_missile_target` (22nd gate) independently re-derives range (`calc.missile_range`/`calc.missile_system_distance`, read directly from `VeydriftPlanetManagementModule.sol`'s private `_interplanetaryMissileRange`/`_systemDistanceForMissiles`), primary-target validity, and owned-missile-count from `Snapshot` alone; `guard._gate_attack_protection` (shared with Attack) gained a missile-specific branch — `_enforceAttackProtection(..., countsBashing=false)` means a target blocked only by the bashing limit is still a legal missile target, confirmed by reading the same contract source. **Live-sent on a local Anvil fork**: an Interplanetary Missile was produced from scratch (`startDefenseProduction`/`finishDefenseProduction`, after raising the account's Missile Silo/Impulse Drive via a documented `anvil_setStorageAt` precondition bump, the same technique round 3 used for Astrophysics) and launched at the exact range boundary (distance 59, `calc.missile_range(12) = 59`) — `status: "success"`, and the emitted `InterplanetaryMissileAttack(launched=1, intercepted=0, hits=1, destroyedPrimary=1)` event was independently confirmed against real before/after `PlanetDefenseCountChanged` reads on both the origin (IPM count 1→0) and target (RocketLauncher count 12→11) planets — see `skills/veydrift-wallet/references/fork-testing.md` §11.5-11.6 | Missile's full launch-through-resolution path is now closed. No further verification named. |
 
-### 1.2 Planned (0 rows — was 2; both moved to §1.1, 2026-08-17)
+### 1.2 Planned (3 rows — added by the 2026-09-28 re-pin; the earlier two moved to §1.1 on 2026-08-17)
 
-Empty as of this change. `launchFleetMission`'s two overloads (the only rows this section ever
-held) moved to §1.1 once `models.py` was unfrozen and `guard.py`'s `mission_type` gate /
-`tick.py`'s encoder / `candidates.py`'s logistics generators landed — see that section and
-`veydrift-agent`'s `CHANGELOG.md` `[Unreleased]` entry for the full writeup.
+`launchFleetMission`'s two overloads (this section's first two rows) moved to §1.1 once
+`models.py` was unfrozen and `guard.py`'s `mission_type` gate / `tick.py`'s encoder /
+`candidates.py`'s logistics generators landed. The three rows below are the new surface the
+2026-09-28 re-pin exposes; each moves to §1.1 when its phase lands.
+
+| Function | Planner | Guard tier map | Wallet allowlist | Status | What it would take |
+| --- | --- | --- | --- | --- | --- |
+| `startProductionBatch(uint256,(uint8,uint8,uint32)[])` | Not yet — planned as an opt-in planner rung behind `policy.strategy.production_batch` (default off), plus manual `--action` | ECONOMY (planned) | ECONOMY (planned, `ECONOMY_SIGNATURES`) | **planned.** In the game ABI (`VeydriftGame.sol` declares it; the module is `VeydriftBatchTransportModule`). Atomic: 1–15 orders (`InvalidQuantity` otherwise), `kind` 0 = ship / 1 = defense with itemId ranges (`InvalidId`), cost charged per order (same total as the singles), separate ship and defense lanes with a cumulative backlog cap of 16. Measured `eth_estimateGas` (planet 664, Solar Satellite orders): 1 / 3 / 8 / 15 orders = 634,973 / 1,019,837 / 2,173,354 / 3,781,382, versus 598,132 for a single order at any quantity — so a batch pays off only for *distinct* items | A dedicated `_gate_production_batch`, an encoder branch, spend derived from the orders, and a gas-headroom constant |
+| `setDelegate(address)` | No — never planner-proposed | not in the map — calldata-only by design | **in no allowlist set, at any tier** — `send` refuses it | **planned as calldata-only.** Fallback-routed (supplemental ABI). Must be signed by the *main* wallet itself, so the skill never sends it: it builds, simulates (from the main wallet) and prints full calldata for a human to sign. The contract does not check that the delegate owns no planets — a delegate with its own planets makes them unreachable through it — so the guard must | A `_gate_delegation_action` (flag, address validity, delegate owns no planets), an encoder branch that builds from `policy.wallet`, and advisor-mode full-calldata output |
+| `revokeDelegate()` | No — manual `--action` only | ECONOMY (planned) | ECONOMY under `policy.actions.allow_delegation` (planned) | **planned.** Fallback-routed (supplemental ABI). Callable by the main wallet *or* the delegate, so it doubles as an agent-side kill-switch | The same gate, an encoder branch, and the wallet-side flag resolver |
 
 ### 1.3 Removed (1 row)
 

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { encodeFunctionData, getAddress } from "viem";
-import { resolveFunctionAbi, type RuntimeConfig } from "../src/abi.js";
+import { encodeErrorResult, encodeFunctionData, getAddress } from "viem";
+import { getPinnedAbi, resolveFunctionAbi, type RuntimeConfig } from "../src/abi.js";
+import type { OnchainPinResult } from "../src/onchain-pin.js";
 import type { UnsignedTx, WalletProvider } from "../src/providers/types.js";
+import { passingPin } from "./helpers/onchainPin.js";
 import {
   buildTx,
   describeTx,
@@ -12,6 +14,7 @@ import {
   SendRefusedError,
   simulateTx,
   toStoredTx,
+  type SendOptions,
   type VeydriftPublicClient,
 } from "../src/tx.js";
 
@@ -191,6 +194,71 @@ describe("buildTx", () => {
 // verdict, forcing a human to re-run `walletctl build`/`simulate` by hand to find the real
 // reason (see the Colonize precision-loss finding, AGENTS.md §7 trap #4, discovered exactly
 // this way). `toStoredTx` is now the single place this mapping lives, tested directly here.
+describe("custom-error decoding in build and simulate", () => {
+  const revertData = encodeErrorResult({
+    abi: getPinnedAbi("game"),
+    errorName: "InsufficientResources",
+    args: [9035n, 44471n, 81685n],
+  });
+  const revert = () =>
+    Object.assign(new Error("execution reverted"), {
+      shortMessage: "Execution reverted for an unknown reason.",
+      cause: { data: revertData },
+    });
+  const action = { function: "startBuildingUpgrade(uint256,uint8)", args: [664, 3] };
+  const from = "0x0000000000000000000000000000000000000d00" as const;
+
+  it("names the custom error in gasEstimateError instead of viem's generic 'unknown reason'", async () => {
+    const built = await buildTx(action, {
+      from,
+      client: mockClient({
+        estimateGas: async () => {
+          throw revert();
+        },
+      }),
+      fetchConfig: async () => fixtureConfig(),
+    });
+    expect(built.gas).toBeUndefined();
+    expect(built.gasEstimateError).toBe("InsufficientResources(9035, 44471, 81685) (reverted)");
+  });
+
+  it("keeps a non-revert estimation failure's own message (an RPC outage is not a custom error)", async () => {
+    const built = await buildTx(action, {
+      from,
+      client: mockClient({
+        estimateGas: async () => {
+          throw new Error("HTTP 503");
+        },
+      }),
+      fetchConfig: async () => fixtureConfig(),
+    });
+    expect(built.gasEstimateError).toBe("HTTP 503");
+  });
+
+  it("simulate reports the decoded error name, args and raw payload", async () => {
+    const fn = resolveFunctionAbi("startBuildingUpgrade(uint256,uint8)");
+    const tx: UnsignedTx = {
+      to: GAME_ADDRESS,
+      data: encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, 3] }),
+      value: 0n,
+      chainId: 8453,
+      gas: 500_000n,
+    };
+    const result = await simulateTx(tx, {
+      client: mockClient({
+        call: async () => {
+          throw revert();
+        },
+      }),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errorName).toBe("InsufficientResources");
+    expect(result.errorArgs).toEqual(["9035", "44471", "81685"]);
+    expect(result.revertData).toBe(revertData);
+    expect(result.revertReason).toBe("InsufficientResources(9035, 44471, 81685) (reverted)");
+  });
+});
+
 describe("toStoredTx", () => {
   function fixtureBuilt(overrides: Partial<Parameters<typeof toStoredTx>[0]> = {}) {
     return {
@@ -230,6 +298,26 @@ describe("toStoredTx", () => {
   it("round-trips through JSON.stringify with no bigint left un-stringified", () => {
     const out = toStoredTx(fixtureBuilt({ gas: 150_000n, gasEstimateError: "execution reverted" }));
     expect(() => JSON.stringify(out)).not.toThrow();
+  });
+});
+
+describe("toStoredTx carries the on-chain pin verdict", () => {
+  const built = {
+    to: GAME_ADDRESS,
+    data: "0x12345678" as const,
+    value: 0n,
+    chainId: 8453,
+    functionName: "startResearch",
+    signature: "startResearch(uint256,uint8)",
+  };
+  it("stores the verdict so the agent's gate judges the moment the calldata was produced", () => {
+    const stored = toStoredTx(built, passingPin());
+    expect(stored.onchainPin?.ok).toBe(true);
+    expect(JSON.parse(JSON.stringify(stored)).onchainPin.game.name).toBe("game");
+  });
+  it("stores null -- never omits -- when the check could not run, which every consumer must treat as a failure", () => {
+    expect(toStoredTx(built).onchainPin).toBeNull();
+    expect("onchainPin" in toStoredTx(built)).toBe(true);
   });
 });
 
@@ -444,6 +532,11 @@ function mockProvider(): WalletProvider & { signAndSend: ReturnType<typeof vi.fn
 }
 
 describe("sendTx", () => {
+  // Every test that reaches the pre-sign on-chain pin check gets a passing stub by default, so no
+  // sendTx test touches the network; the pin-specific tests below override it.
+  const passingCheck = async (): Promise<OnchainPinResult> => passingPin();
+  const send = (t: UnsignedTx, o: SendOptions) => sendTx(t, { checkOnchainPin: passingCheck, ...o });
+
   const fn = resolveFunctionAbi("startBuildingUpgrade(uint256,uint8)");
   const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args: [664n, 3] });
   const tx: UnsignedTx = { to: GAME_ADDRESS, data, value: 0n, chainId: 8453 };
@@ -451,14 +544,14 @@ describe("sendTx", () => {
   it("refuses without confirm:true -- no env var or flag makes it implicit", async () => {
     const provider = mockProvider();
     await expect(
-      sendTx(tx, { tier: "economy", confirm: false, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
+      send(tx, { tier: "economy", confirm: false, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
     ).rejects.toThrow(SendRefusedError);
     expect(provider.signAndSend).not.toHaveBeenCalled();
   });
 
   it("signs and sends when confirm:true and the allowlist passes", async () => {
     const provider = mockProvider();
-    const hash = await sendTx(tx, {
+    const hash = await send(tx, {
       tier: "economy",
       confirm: true,
       provider,
@@ -476,7 +569,7 @@ describe("sendTx", () => {
     const provider = mockProvider();
 
     await expect(
-      sendTx(readTx, { tier: "operator", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
+      send(readTx, { tier: "operator", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
     ).rejects.toThrow(/semantically a read/);
     expect(provider.signAndSend).not.toHaveBeenCalled();
   });
@@ -484,7 +577,7 @@ describe("sendTx", () => {
   it("refuses when the allowlist rejects (e.g. tier too low)", async () => {
     const provider = mockProvider();
     await expect(
-      sendTx(tx, { tier: "advisor", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
+      send(tx, { tier: "advisor", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
     ).rejects.toThrow(/allowlist rejected/);
     expect(provider.signAndSend).not.toHaveBeenCalled();
   });
@@ -492,7 +585,7 @@ describe("sendTx", () => {
   it("refuses when the provider's signer address differs from the policy wallet", async () => {
     const provider = mockProvider();
     await expect(
-      sendTx(tx, {
+      send(tx, {
         tier: "economy",
         confirm: true,
         provider,
@@ -505,7 +598,7 @@ describe("sendTx", () => {
 
   it("sends when the signer matches the policy wallet, case-insensitively", async () => {
     const provider = mockProvider();
-    const hash = await sendTx(tx, {
+    const hash = await send(tx, {
       tier: "economy",
       confirm: true,
       provider,
@@ -519,7 +612,7 @@ describe("sendTx", () => {
     const provider = mockProvider();
     provider.getAddress = vi.fn().mockRejectedValue(new Error("bad keystore password"));
     await expect(
-      sendTx(tx, {
+      send(tx, {
         tier: "economy",
         confirm: true,
         provider,
@@ -533,7 +626,7 @@ describe("sendTx", () => {
   it("reports a signAndSend failure as BroadcastUncertainError, not a refusal", async () => {
     const provider = mockProvider();
     provider.signAndSend.mockRejectedValue(new Error("request timed out"));
-    const err = await sendTx(tx, {
+    const err = await send(tx, {
       tier: "economy",
       confirm: true,
       provider,
@@ -549,9 +642,113 @@ describe("sendTx", () => {
     const otherTx: UnsignedTx = { ...tx, to: getAddress("0x000000000000000000000000000000000000dead") };
     const provider = mockProvider();
     await expect(
-      sendTx(otherTx, { tier: "economy", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
+      send(otherTx, { tier: "economy", confirm: true, provider, expectedAddress: null, fetchConfig: async () => fixtureConfig() }),
     ).rejects.toThrow(SendRefusedError);
     expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+
+  // --- the on-chain pin: read from the chain, fail-closed, every failure is a REFUSAL -----------
+  it("refuses when the on-chain pin has drifted, and never signs", async () => {
+    const provider = mockProvider();
+    const drifted = passingPin({ ok: false, problems: ["game: implementation of 0xf397 is 0xbeef, but the pin is 0xcafe"] });
+    await expect(
+      sendTx(tx, {
+        tier: "economy",
+        confirm: true,
+        provider,
+        expectedAddress: null,
+        fetchConfig: async () => fixtureConfig(),
+        checkOnchainPin: async () => drifted,
+      }),
+    ).rejects.toThrow(/on-chain pin check failed.*game: implementation/);
+    expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses with SendRefusedError -- NOT a broadcast-uncertain error -- when the pin check itself cannot run", async () => {
+    const provider = mockProvider();
+    const err = await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: null,
+      fetchConfig: async () => fixtureConfig(),
+      checkOnchainPin: async () => {
+        throw new Error("rpc down");
+      },
+    }).catch((e: unknown) => e);
+    // A plain throw would surface as "send failed" and make the agent record a possible broadcast
+    // that blocks every later action until nonce reconciliation.
+    expect(err).toBeInstanceOf(SendRefusedError);
+    expect(err).not.toBeInstanceOf(BroadcastUncertainError);
+    expect((err as Error).message).toMatch(/could not verify the on-chain pin.*rpc down/);
+    expect(provider.signAndSend).not.toHaveBeenCalled();
+  });
+
+  it("asks for the full code-hash check and passes the tx destination to the pin check", async () => {
+    const provider = mockProvider();
+    const check = vi.fn(async () => passingPin());
+    await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider,
+      expectedAddress: null,
+      fetchConfig: async () => fixtureConfig(),
+      checkOnchainPin: check,
+    });
+    expect(check).toHaveBeenCalledWith({ to: GAME_ADDRESS, verifyCode: true });
+  });
+
+  it("runs the pin check last: a local refusal (tier too low) never reaches the network", async () => {
+    const provider = mockProvider();
+    const check = vi.fn(async () => passingPin());
+    await expect(
+      sendTx(tx, {
+        tier: "advisor",
+        confirm: true,
+        provider,
+        expectedAddress: null,
+        fetchConfig: async () => fixtureConfig(),
+        checkOnchainPin: check,
+      }),
+    ).rejects.toThrow(/allowlist rejected/);
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("a drifted DEPENDENCY blocks only the functions that reach it", async () => {
+    const driftedDeps = passingPin({ dependenciesOk: false, problems: ["moonSystem: implementation drifted"] });
+    const resolveTx: UnsignedTx = {
+      to: GAME_ADDRESS,
+      data: encodeFunctionData({
+        abi: [resolveFunctionAbi("resolveFleetMission(uint256)")],
+        functionName: "resolveFleetMission",
+        args: [26480n],
+      }),
+      value: 0n,
+      chainId: 8453,
+    };
+    const blocked = mockProvider();
+    await expect(
+      sendTx(resolveTx, {
+        tier: "economy",
+        confirm: true,
+        provider: blocked,
+        expectedAddress: null,
+        fetchConfig: async () => fixtureConfig(),
+        checkOnchainPin: async () => driftedDeps,
+      }),
+    ).rejects.toThrow(/a contract it calls .* differs from the pin/);
+    expect(blocked.signAndSend).not.toHaveBeenCalled();
+
+    const allowed = mockProvider();
+    const hash = await sendTx(tx, {
+      tier: "economy",
+      confirm: true,
+      provider: allowed,
+      expectedAddress: null,
+      fetchConfig: async () => fixtureConfig(),
+      checkOnchainPin: async () => driftedDeps,
+    });
+    expect(hash).toBe("0xabc123");
   });
 });
 
