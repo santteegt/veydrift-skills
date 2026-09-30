@@ -5543,8 +5543,13 @@ def test_two_override_ticks_whose_comparison_differs_only_in_the_trace_are_dedup
 def test_base_rationale_strips_only_the_jev_selection_sentence():
     plain = _build_action().model_copy(update={"rationale": "Solar Plant is next."})
     assert jev_engine.base_rationale(plain) == "Solar Plant is next."
-    picked = plain.model_copy(update={"engine": "jev", "rationale": "Solar Plant is next." + jev_engine._selection_suffix(41, "economy")})
+    picked = plain.model_copy(update={"engine": "jev", "rationale": jev_engine._with_selection_sentence("Solar Plant is next.", 41, "economy")})
+    assert picked.rationale == "Solar Plant is next. Selected by the jev engine from 41 legal candidates (economy focus)."
     assert jev_engine.base_rationale(picked) == "Solar Plant is next."
+    # an empty candidate rationale gets the sentence alone (no leading space) and strips back to empty
+    bare = picked.model_copy(update={"rationale": jev_engine._with_selection_sentence("", 1, "economy")})
+    assert bare.rationale == "Selected by the jev engine from 1 legal candidates (economy focus)."
+    assert jev_engine.base_rationale(bare) == ""
     # a rationale the sentence merely appears in the middle of, or an action not from jev, is untouched
     quoted = picked.model_copy(update={"rationale": "Selected by the jev engine from 3 legal candidates (x focus). then more"})
     assert jev_engine.base_rationale(quoted) == quoted.rationale

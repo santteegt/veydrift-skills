@@ -48,12 +48,13 @@ if TYPE_CHECKING:
 HOLD_RULE = "9j:hold"
 
 #: The sentence `decide` appends to a jev-selected action's rationale. Built in one place so
-#: `base_rationale` can remove exactly what `_selection_suffix` adds.
-_SELECTION_SUFFIX_RE = re.compile(r" Selected by the jev engine from \d+ legal candidates \([^()]*\)\.$")
+#: `base_rationale` can remove exactly what `_with_selection_sentence` adds.
+_SELECTION_SUFFIX_RE = re.compile(r"(?:^| )Selected by the jev engine from \d+ legal candidates \([^()]*\)\.$")
 
 
-def _selection_suffix(pool_size: int, group: str) -> str:
-    return f" Selected by the jev engine from {pool_size} legal candidates ({group} focus)."
+def _with_selection_sentence(rationale: str, pool_size: int, group: str) -> str:
+    sentence = f"Selected by the jev engine from {pool_size} legal candidates ({group} focus)."
+    return f"{rationale} {sentence}" if rationale else sentence
 
 
 def base_rationale(action: Action) -> str:
@@ -996,7 +997,7 @@ def decide(
     action = action.model_copy(
         update={
             "engine": "jev",
-            "rationale": action.rationale + _selection_suffix(len(pool), winner.entry.group),
+            "rationale": _with_selection_sentence(action.rationale, len(pool), winner.entry.group),
         }
     )
     return action, EngineTrace(engine="jev", **fields)
