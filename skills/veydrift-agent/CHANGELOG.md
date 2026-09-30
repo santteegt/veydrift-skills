@@ -27,6 +27,9 @@ skills are not versioned in lockstep.
   unlock-chain family has no queue precondition. `generate_unlock_chain_candidates` does check
   queues — per step, a building step needs `allow_building` and an empty building queue on that
   planet, a research step needs `allow_research` and an empty research queue. No behaviour change.
+- `select_shipyard_candidate` no longer picks a Crawler whose live `crawlerProduction.capped` is
+  true: it adds no production, and no guard blocked it. `generate_crawler_candidates` still emits it
+  with its "at boost cap" basis.
 
 ## [1.27.1] - 2026-09-29
 

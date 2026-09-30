@@ -2868,6 +2868,21 @@ def test_shipyard_selector_is_unchanged_with_the_flag_off():
     assert winner is not None and winner.action.kind is ActionKind.SHIP
 
 
+def test_shipyard_selector_never_picks_a_crawler_already_at_its_boost_cap():
+    live = CrawlerProduction(total=10, effective=10, max_effective=10, boost_bps=20, capped=True)
+    snapshot = _on_track(_ready_snapshot(ship_counts={ids.Ship.CRAWLER: 10}, crawler_production=live))
+    policy = make_policy(
+        planets=[700], actions=ActionsCfg(allow_ships=True), strategy=StrategyCfg(enable_crawler=True)
+    )
+
+    (crawler,) = candidates.generate_crawler_candidates(snapshot, policy, snapshot.planet(700))
+    assert crawler.score_basis.startswith(candidates.CRAWLER_AT_CAP_BASIS_PREFIX)
+
+    winner, _ = candidates.select_shipyard_candidate(snapshot, policy, snapshot.planets)
+
+    assert winner is None
+
+
 def test_a_scored_single_ship_outranks_the_batch(monkeypatch):
     """The energy-driven Solar Satellite / a scored Crawler is more urgent than topping up a
     declared stock target, so the batch must not displace it."""
