@@ -296,7 +296,9 @@ be.
 ## 8. The full ladder, rung by rung
 
 This codebase's decision ladder, implemented exactly, first match wins
-(`plan.plan_next_action`). Rungs 0-4 are vetoes, unchanged since before Phase 2. Rungs
+(`plan.plan_next_action`). `policy.engine.kind = "jev"` is an alternative to bands 2-8 below
+(vetoes and the storage deadline stay as here, and the ladder is its fallback); see
+`references/jev-engine.md`. Rungs 0-4 are vetoes, unchanged since before Phase 2. Rungs
 5-9 are described here exactly as before (same numbers, same branch conditions) — as of
 Phase 2 they are driven by `candidates.py`'s `select_storage_candidate` /
 `select_building_candidate` / `select_research_candidate` / `select_shipyard_candidate`
@@ -794,6 +796,10 @@ step reflects that, never a queue laid down in advance. `building_priority` is u
 by any of this — it keeps its own, separate, higher-precedence reachability path.
 
 ## 13. Fair rotation across multiple planets
+
+`planet_rotation` applies to the ladder engine only. Under `policy.engine.kind = "jev"` the
+candidates of every planet are compared in one pool instead of walked, so there is nothing to
+rotate (`references/jev-engine.md` §12 says why that is acceptable and what it costs).
 
 **The problem.** Three rungs — 6 (building queue empty), 8b (unlock-chain), and 8
 (shipyard idle) — walk `policy.planets` in list order and return on the first planet

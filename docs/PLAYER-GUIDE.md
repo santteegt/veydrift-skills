@@ -18,6 +18,7 @@ account-specific (your wallet, your planet), that's called out.
 4. [Install the skills](#4-install-the-skills)
 5. [Bootstrap via an agent session](#5-bootstrap-via-an-agent-session)
 6. [Create your policy](#6-create-your-policy)
+    - [6a. Choosing a decision engine](#6a-choosing-a-decision-engine)
 7. [Set up your wallet](#7-set-up-your-wallet)
 8. [Your first tick](#8-your-first-tick)
 9. [Manual action override — `vd tick --action`](#9-manual-action-override-vd-tick---action)
@@ -167,6 +168,7 @@ sections set them up; this is the reference to come back to:
 | `VEYDRIFT_PRIVATE_KEY` | wallet | Raw private key (`envkey` provider, testing only). | — (required by that provider) |
 | `VEYDRIFT_TIER` | wallet | Fallback tier when no `policy.json` exists yet. Ignored (and flagged as a disagreement) once a policy file is present — `walletctl` always trusts the file over this. | `advisor` |
 | `VEYDRIFT_WALLET_DIR` | agent | Escape hatch if the two skills aren't installed as siblings — see above. | sibling-directory auto-detect |
+| `TYPESAFE_API_KEY` | agent | TypeSafe API key for the optional `jev` decision engine (§6a). Only read when `policy.engine.kind` is `"jev"`; never put it in `policy.json`. Always redacted from logs. | unset (the jev engine then falls back to the ladder) |
 | `VEYDRIFT_SECRET_ENV_VARS` | agent | Comma-separated extra env var names to redact from logs, beyond the built-in `VEYDRIFT_PRIVATE_KEY`/`VEYDRIFT_KEYSTORE_PASSWORD`. Only needed if you've added your own secret-bearing env var into this system's environment. | unset (built-ins only) |
 
 ## 5. Bootstrap via an agent session
@@ -279,6 +281,7 @@ change called out:
   },
   "wallet_engine": { "provider": "keystore", "require_confirmation": true },
   "radar": { "enabled": true },     // incoming-attack/resolved-battle/debris check, every tick -- see §10 and §11a
+  "engine": { "kind": "ladder" },   // "ladder" (default) or "jev" -- which decision engine proposes each tick, see §6a
   "strategy": {
     "resource_weights": { "metal": 1, "crystal": 1, "deuterium": 1 },   // used to tie-break, not to pick a family -- see below
     "max_alternatives": 5,            // caps how many runner-up options each proposal lists
@@ -491,6 +494,21 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | --- | --- | --- | --- |
 | `enabled` | bool | `true`/`false` — runs the incoming-attack/resolved-battle/debris check every tick, scoped to `policy.planets` (empty = every owned planet). **Defaults `true`**, unlike almost every other flag in this file — this is deliberate: radar is read-only and finds things a tick would otherwise miss silently. See §10 and §11a. | `true` |
 
+**`engine`** (see §6a; `jev` is read only when `kind` is `"jev"`, and every key here is strict — an unknown key is a hard error)
+
+| Field | Type | Legal values / range | Default |
+| --- | --- | --- | --- |
+| `kind` | string enum | exactly `"ladder"` or `"jev"` | `"ladder"` |
+| `jev.model` | string | the TypeSafe model id | `"jev-latest"` |
+| `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric | `""` |
+| `jev.weights` | object | `fit`, `urgency`, `focus`, `economy`, `threat`, each `>= 0`, at least one `> 0`; only the ratios matter | `0.30 / 0.25 / 0.15 / 0.25 / 0.05` |
+| `jev.min_confidence` / `min_confidence_high_stakes` / `min_margin` | float | `0`-`1`; below them the ladder decides instead | `0.5` / `0.75` / `0.03` |
+| `jev.timeout_s` | float | `0.5`-`30`; total budget for the request, retry included | `5.0` |
+| `jev.max_candidates` | int | `2`-`60`; pool size cap | `24` |
+| `jev.payback_reference_hours` | float | `> 0`; the payback at which the economy term scores 0.5 | `24.0` |
+| `jev.high_stakes_only_when_idle` | bool | `true`: Colonize/Attack/Missile enter the pool only when nothing else is legal | `true` |
+| `jev.allow_hold` | bool | `true`: a confident "wait" judgment returns a NO-OP instead of the best candidate | `false` |
+
 **`strategy`**
 
 | Field | Type | Legal values / range | Default |
@@ -582,6 +600,69 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 > locked," not as a build order the planner works through.
 
 </details>
+
+### 6a. Choosing a decision engine
+
+By default every tick's proposal comes from the **ladder**: a fixed, hand-checkable order
+of bands (§10), always offline. Its cost is that an earlier band nearly always wins first:
+with an idle building queue, research, ships and defense rarely get a turn (§13 of
+`references/strategy-playbook.md`, and the `opportunities:` line, describe the symptom).
+
+The optional **jev engine** compares every *legal* candidate across all bands at once. It
+sends a short, anonymised description of your situation and your stated intent to TypeSafe's
+Jev model in one request, combines the answers with weights you control, and picks the best.
+It falls back to the ladder whenever it can't give a confident answer, so the worst case is
+today's behaviour. Nothing else changes: vetoes and the storage-overflow deadline still
+decide first, the guard and the wallet re-check every action independently, and your tier and
+`require_confirmation` govern sending exactly as before.
+
+To turn it on, set `kind` and write an `intent` in plain sentences (name the kinds of
+development you want, in order, and anything to avoid):
+
+```json
+"engine": {
+  "kind": "jev",
+  "jev": {
+    "intent": "Research first, keep both planets developing, a modest defense, never attack."
+  }
+}
+```
+
+Every other `jev` key has a default (see the field reference above). Then give the agent a
+TypeSafe API key **in the environment, never in `policy.json`**:
+
+```bash
+export TYPESAFE_API_KEY=...        # in the shell (or launchd/scheduler environment) that runs vd tick
+uv run --directory skills/veydrift-agent vd doctor    # prints: engine: jev / TYPESAFE_API_KEY: set / typesafe-sdk: importable
+```
+
+The SDK ships as a dependency of the skill. With no key, each tick simply falls back to the
+ladder and says why (`fallback_reason: missing_key`).
+
+**What leaves your machine:** a paragraph of intent, plus per-candidate sentences like
+"Upgrade Metal Mine to level 5 (pays back in 6-24 hours, costs a moderate share of the planet's
+resources, build time 2-8 hours)". Never your wallet, signer, any address, coordinates or raw
+planet ids (planets are "planet A", "planet B"), and every quantity is a coarse bucket.
+`vd engine pool --snapshot S.json --policy P.json` prints the exact request offline, with no
+key.
+
+**Trying it safely:**
+
+```bash
+vd engine compare --snapshot S.json --policy P.json   # ladder vs jev on the same input
+```
+
+Exit `0` = they agree, `1` = they disagree, `3` = jev fell back to the ladder. Keep `tier` at
+`advisor` and read the `engine` block each tick adds to `proposals.jsonl` (which engine
+decided, its confidence, whether it agreed with the ladder, the top candidates); the tick
+report gets one `engine:` line. `vd plan run --engine jev` does the same offline against a
+snapshot file.
+
+Cost is one short request per tick. Its limits are real: it judges qualitative fit, not
+numbers, and its choices are not reproducible bit for bit. If a young colony gets ignored
+under jev (the economy term favours established planets), say so in the intent, lower
+`weights.economy`, or go back to the ladder with `planet_rotation` on — rotation applies to
+the ladder only. The full reference is `skills/veydrift-agent/references/jev-engine.md`.
 
 ## 7. Set up your wallet
 
@@ -921,8 +1002,9 @@ A few things worth understanding about that block before you trust it:
   ordering means an idle building queue always wins over research/ships/defense whenever
   there's anything at all left to upgrade — on an active economy that's essentially
   always true, so research/ship/defense counts can sit unchanged for a long stretch even
-  though nothing is misconfigured. There is no `policy.json` field that reorders this;
-  naming more entries in `research_priority`/`ship_targets`/`defense_targets` only
+  though nothing is misconfigured. There is no `policy.json` field that reorders the
+  ladder (the optional `jev` engine, §6a, is the alternative that does weigh bands against
+  each other); naming more entries in `research_priority`/`ship_targets`/`defense_targets` only
   changes *which* research or ship gets picked once it's that band's turn, never *when*
   its turn comes. If you notice this happening, the `opportunities:` line now also
   reports `storage`/`building`/`research`/`shipyard`/`unlock_chain` findings — what each
@@ -932,6 +1014,12 @@ A few things worth understanding about that block before you trust it:
   another mine level, hand-write that action as `--action` (§9's manual override,
   `allow_agent_action_override`) to submit it directly for one tick; this doesn't change
   automatic behavior going forward, only that one tick's pick.
+- **An `engine:` line appears only when `policy.engine.kind` is `"jev"` (§6a).** It says
+  which engine decided and how sure it was (`engine: jev (jev-latest, 140ms, confidence
+  0.71, agrees with ladder)`), that the ladder decided because jev couldn't give a
+  confident answer (`engine: jev -> ladder fallback (timeout)`), or that a veto or the
+  storage deadline decided first (`engine: jev pre-empted by 1b:game-paused`). The same
+  detail is in `proposals.jsonl`'s `engine` block.
 
 ## 11. Running on a schedule
 
@@ -1203,6 +1291,7 @@ asks it to invent numbers it doesn't have.
 | `walletctl verify-abi` shows a mismatch | A pinned contract's implementation on the chain has changed since this repo's pin (or the chain could not be read — the output says which). **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe (`npm run repin`). |
 | Guards read `24/27 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
+| A tick says `engine: jev -> ladder fallback (<reason>)` | The jev engine could not give a confident answer, so the ladder decided (§6a). `missing_key`/`auth`: check `TYPESAFE_API_KEY`; `timeout`/`connection`/`server`: transient; `low_confidence`/`low_margin`: the model wasn't sure. The proposal is a normal ladder proposal. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 | `incoming: none` but you were attacked | Expected — that field only ever lists *future* arrivals; it can't show an attack that has already resolved. Check the `radar:` line instead (§10), or run `vd radar check` (§11a) directly — its second signal reads your mission archive specifically to catch this case. |
 

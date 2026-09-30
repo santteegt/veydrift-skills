@@ -13,7 +13,10 @@ Two installable Claude/Hermes skills:
 
 - **`skills/veydrift-agent/`** (Python, uv) — reads Veydrift's API, runs deterministic
   calculators, proposes zero or one action per tick. Never signs anything; never imports
-  `viem`/`ethers`/`web3` (grep-verifiable — acceptance criterion 15 of `docs/SPEC.md`).
+  `viem`/`ethers`/`web3` (grep-verifiable — acceptance criterion 15 of `docs/SPEC.md`). Two
+  decision engines propose the action: the fixed-order ladder (`plan.py`, the default and the
+  fallback) and the opt-in `jev` engine (`engine.py`/`jev_engine.py`/`jev.py`, TypeSafe's Jev model
+  judging a pool of legal candidates).
 - **`skills/veydrift-wallet/`** (TypeScript, npm) — the only thing in this repo that builds
   real calldata, signs, or submits. Independently re-validates every transaction against
   its own allowlist regardless of what the agent skill already checked.
@@ -33,6 +36,7 @@ skills/
 │   │   ├── models.py            # pydantic: Policy, Action, Snapshot, GuardReport — see §4
 │   │   ├── cli.py                # typer app; mounts each module's `app` sub-app — see §4
 │   │   ├── read.py, calc.py, plan.py, guard.py, tick.py, log.py
+│   │   ├── engine.py, jev_engine.py, jev.py  # engine dispatch + `vd engine`; jev engine; TypeSafe client
 │   │   └── ids.py, http.py, state.py, fmt.py
 │   ├── schemas/                 # GENERATED from the pydantic models — do not hand-edit
 │   ├── references/              # loaded into context on demand; see SKILL.md's routing table
@@ -76,9 +80,10 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1233 Python tests, 399 TypeScript tests** (396 passed + 3 intentionally
-skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain check),
-both suites green. Run both before calling any change done; they are independent
+baseline: **1508 Python tests** (1506 passed + 2 skipped: the opt-in `VEYDRIFT_JEV_LIVE_TESTS=1`
+live TypeSafe tests, which also need `TYPESAFE_API_KEY`), **399 TypeScript tests** (396 passed + 3
+intentionally skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain
+check), both suites green. Run both before calling any change done; they are independent
 projects but cover a system with two enforcement layers that must agree (§6).
 
 **Never run these against your real `$VEYDRIFT_HOME`.** Point `VEYDRIFT_HOME` at a scratch
@@ -218,7 +223,28 @@ touching related code, re-run the check named alongside each one.
   (the `targetPlanetId`-means-`hostileMissionId` repurposing, the exactly-`Attack`
   requirement, the `_canCoordinateDefense` self-owned-planet short-circuit, the honest
   verification-status caveats).
-- **`policy.strategy.planet_rotation` (default `false`) is the only thing allowed to
+- **The engine never runs inside `plan_next_action`.** `plan.py` stays pure and offline; the only
+  network call an engine makes (TypeSafe) lives under `engine.py`/`jev.py`. `vd plan run` is
+  offline unless given `--engine policy|jev`.
+- **Vetoes and the storage-overflow deadline run before any engine, and never call TypeSafe.**
+  Both engines share `plan.veto_action`/`plan.deadline_action`; the killswitch halts before any
+  network call. A jev decision reports them as `pre_empted_by`.
+- **The jev pool comes only from `candidates.collect_pool`, and its filters must mirror guard's
+  BLOCK gates.** It also makes the checks guard does not (`allow_building`/`allow_research`/
+  `allow_fleet_noncombat`, queue idleness). Re-run `tests/test_pool.py`'s two property tests when
+  touching either the pool or a guard gate.
+- **Any jev failure or weak result runs the ladder.** Every `JevError`, `empty_pool`,
+  `low_confidence*`, `low_margin` and an unexpected exception returns `plan_next_action`'s own
+  action with `EngineTrace.fallback_reason`; an engine problem never fails a tick.
+- **`Action.engine` is provenance only.** `guard.py` never reads it; a manual override is always
+  `"ladder"`.
+- **Nothing identifying goes to TypeSafe.** No wallet, signer, address, coordinate or raw planet id
+  (planets are "planet A/B/..."); game numbers are bucketed by code. The base URL is a code
+  constant in `jev.py`, never a policy field or an environment override; the key is
+  `TYPESAFE_API_KEY` only, and is a default scrubbed secret.
+- **The `engine` proposal field is excluded from the dedup fingerprint, and rationale/alternatives
+  carry no probabilities.** Alternatives are in band order, never composite order.
+- **`policy.strategy.planet_rotation` (the ladder engine only; default `false`) is the only thing allowed to
   change which planet three ladder rungs (`6:building-queue-empty`, `8b:unlock-chain`,
   `8:shipyard-idle`) walk first — never a re-scoring of candidates.** Off, `plan.py`
   behaves exactly as it always has: those three rungs walk `policy.planets`'s literal
@@ -589,9 +615,10 @@ enough to call out here specifically, not a duplicate of that ledger.
   unlock-chain are even evaluated; declaring more `research_priority`/`ship_targets`/
   `defense_targets`/`building_priority` names doesn't help, since those only decide
   *which entity* wins within its own band, never the relative order *between* bands.
-  Unlike planet-level starvation, this has not been given an automatic fix (that would
-  need its own scoring/rotation design across fundamentally different candidate types,
-  undertaken). What exists instead is a diagnostic: `opportunities.py`'s
+  Unlike planet-level starvation, the ladder has no automatic fix for this; the opt-in
+  `policy.engine.kind = "jev"` engine is the automatic cross-band alternative (it weighs every
+  legal candidate against a stated intent; `references/jev-engine.md`). What exists for the
+  ladder is a diagnostic: `opportunities.py`'s
   `storage`/`building`/`research`/`shipyard`/`unlock_chain` families (see `references/
   opportunities.md`'s "Bands 1-4" section) surface each band's own winner every tick
   regardless of which one the ladder actually picked, so a human or agent that notices
@@ -640,6 +667,10 @@ enough to call out here specifically, not a duplicate of that ledger.
   (measured gas) and the backlog boundary (16 behind the active head), `setDelegate` refused by `send`,
   `revokeDelegate` by the delegate, all four signer-binding refusals, and full `vd tick` sends both from
   an override and from the planner, signed by a delegate key.
+- `skills/veydrift-agent/references/jev-engine.md` — the jev decision engine: enabling it, the
+  candidate pool and its filters, exactly what is (and is never) sent to TypeSafe, the questions
+  and composite score, every `fallback_reason`, `vd engine pool|compare`, tuning, and why
+  cross-planet scoring is acceptable here despite `strategy-playbook.md` §13.
 - `skills/veydrift-agent/references/radar.md` — the attack/resolved-battle/debris radar
   (new module, `radar.py`, read-only, no `veydrift-wallet` involvement): why
   `incoming_fleets` alone missed a real live attack during this feature's own planning,

@@ -702,6 +702,45 @@ any `Decision` logic — the winning `Action` is decided exactly the way it alwa
 > All three new corrections are summarised here rather than re-explained in full; §9's
 > own entries are the source of truth for exactly what each commit changed and why.
 
+#### Decision engines: `engine.kind = "jev"` (2026-09-29)
+
+`plan_next_action` stays the ladder, pure and offline: no network call ever enters `plan.py`.
+A second engine, `policy.engine.kind = "jev"` (default `"ladder"`), is dispatched *around* it by
+`engine.decide`, which `tick.py` calls in its place (`tick._run_tick` and `_describe_override`; the
+killswitch path stays ladder-only). Vocabulary and code map:
+
+- **Shared rungs** (`plan.py`, no behaviour change): `veto_action` (rungs 0-4) and `deadline_action`
+  (rung 5, the `5:` storage-overflow rules) are extracted so every engine runs the same vetoes and
+  the same deadline first. `RULE_BY_FAMILY` maps each candidate family to the *existing* ladder rule
+  literal (`test_brief.py` scans `plan.py` for rule literals; `brief._GOAL_BY_RULE`,
+  `guard._gate_storage_overflow` and the strategy.md narration key on them), and `finalize_candidate`
+  is the public name of `_finalize`.
+- **Pool** (`candidates.collect_pool`): every generator on every unrotated target planet (research
+  once), then hard filters (`locked`, `allow_flag`, `non_selectable`, `planet_missing`, `queue_busy`,
+  `storage_cap`, `spend_unverifiable`, `unaffordable`, `reserve`, `fields`, `energy_unknown`,
+  `fleet_slots`, `batch_vs_scored_single`, `high_stakes_not_idle`, `duplicate`), each counted by
+  reason, then a deterministic per-family pre-trim to `max_candidates`. The filters mirror every
+  guard BLOCK a snapshot can decide, and add what the guard does not check (`allow_building`,
+  `allow_research`, `allow_fleet_noncombat`, queue idleness).
+- **Client** (`jev.py`): `JevBackend.ask` over the `typesafe-sdk` `system_one` call, the SDK imported
+  lazily; every failure is a `JevError` with a fixed `reason`; the key is `TYPESAFE_API_KEY` only and
+  the base URL a code constant.
+- **Engine** (`jev_engine.decide`): vetoes, deadline, the ladder's own pick (fallback and agreement
+  reference), the pool, one request (`state` with every game number bucketed by code and planets as
+  labels; questions `tick_focus` Choice, `threat` Noul, per-candidate `fit`/`urgency` Scores), a
+  weighted composite (`policy.engine.jev.weights`), then gates on minimum confidence (over the
+  winner's weighted judgments), a higher floor for colonize/attack/missile, and a minimum margin.
+  Any `JevError`, an empty pool, or a failed gate returns the ladder's own `Action` with
+  `EngineTrace.fallback_reason`; an unexpected exception is caught in `engine.decide` as
+  `engine_error:<Class>`. A veto or the deadline is `EngineTrace.pre_empted_by`, with no request.
+- **Provenance**: `Action.engine` (`"ladder"`/`"jev"`) is never read by the guard; the trace is
+  `proposals.jsonl`'s `engine` block, excluded from the dedup fingerprint.
+- **CLI**: `vd engine pool|compare`, `vd plan run --engine ladder|policy|jev`, `vd doctor` lines.
+
+`planet_rotation` is a ladder-only device (correction 75): it has no meaning when candidates are
+compared rather than walked. Full operator reference: `skills/veydrift-agent/references/jev-engine.md`;
+correction 81 and criteria 81.1-81.6 in §9.
+
 ### 5.5 `vd guard` — guardrail evaluation
 
 Returns `ALLOW` / `BLOCK` / `ESCALATE` with a per-gate verdict list. **Every gate is evaluated and
@@ -857,6 +896,16 @@ cannot build *yet* is no longer a dead end: `plan.py` rung `8b` proposes the sha
 prerequisite toward it instead, when nothing else on the ladder found anything (see §5.4's Phase 4
 note). `building_priority` is unaffected — it already has its own reachability path and does not feed
 rung `8b`.
+
+**`engine`** (2026-09-29, correction 81): `{"kind": "ladder" | "jev", "jev": {...}}`. `kind` defaults to
+`"ladder"`, and an absent `engine` key reproduces the pre-engine behaviour exactly. `jev` holds `model`
+(`"jev-latest"`), `intent` (plain-language strategy, at most 1000 characters; empty uses a built-in
+rubric), `weights` (`fit`/`urgency`/`focus`/`economy`/`threat`), `min_confidence`,
+`min_confidence_high_stakes`, `min_margin`, `timeout_s`, `max_candidates`, `payback_reference_hours`,
+`high_stakes_only_when_idle` and `allow_hold`, all read only when `kind` is `"jev"`. Every class is
+`extra="forbid"` (unlike `StrategyCfg`). The API key is never a policy field: it comes from the
+`TYPESAFE_API_KEY` environment variable. Because `Policy` is `extra="forbid"`, a policy file that sets
+`engine` will not load on an agent build predating it. See §5.4's engine subsection.
 
 ### 5.7 `vd tick` — the loop entrypoint
 
@@ -2399,6 +2448,85 @@ lane is the only state in which the per-lane backlog cap of 16 cannot be hit); q
 affordable above `reserves` and to the defense caps; Solar Satellite and Crawler never batch; a
 scored single always wins. Gas is per order, so a batch of one item gains nothing and is never built.
 Default off reproduces the previous ladder exactly.
+
+**Correction 81 (2026-09-29): the jev decision engine, `policy.engine.kind = "jev"`.** Additive and
+opt-in; the ladder stays the default and the fallback. It closes the structural gap AGENTS.md §10 records
+(Band 2 unconditionally precedes Bands 3-4, and nothing in the policy weighs one band against another) by
+letting a language model, TypeSafe's Jev, judge every *legal* candidate against a plain-language intent,
+while code keeps everything numeric. Design in §5.4 (engine subsection) and §5.6 (`engine`).
+
+What did not change: `plan_next_action` is still pure and offline, the vetoes and the storage-overflow
+deadline still decide first under both engines, `guard.py` gained no gate and never reads `Action.engine`,
+and the wallet allowlists are untouched. The engine can only choose among candidates the generators already
+emit; it never supplies an action or an argument. A jev-chosen action is sent under the same tier,
+`require_confirmation` and `--confirm` rules as any other.
+
+Variants considered and rejected: letting Jev decide from the raw snapshot (it cannot enumerate legal
+actions, and its documented weaknesses are exactly this game's numeric core: counting, numeric closeness,
+dates, multi-hop reasoning), and cross-planet payback scoring *for the ladder* (correction 75's argument
+stands for that engine). Under the jev engine the same concern is handled differently: the pool is a fixed
+set of legal candidates ranked against an explicit intent with planet roles in the state, payback is one
+weighted term among five, and the ladder is the fallback. The residual risk is real and documented in
+`references/jev-engine.md` §12: with default weights the economy term still favours established planets.
+
+Two things follow from the design and are pinned by tests. First, a fixed-order fallback contract: every
+failure mode (each `JevError` reason, `empty_pool`, `low_confidence`, `low_confidence_high_stakes`,
+`low_margin`, `engine_error:<Class>`) returns the ladder's own `Action` with the reason in the trace.
+Second, dedup stability: the alternatives are listed in band order, never composite order, and the trace is
+excluded from the fingerprint, so probability and latency jitter do not defeat
+`last_proposal_fingerprint`.
+
+Acceptance criteria (numbering follows the corrections above):
+
+81.1. **Default policy behaviour is identical to the ladder.** With `engine.kind == "ladder"` (the
+      default, and an absent `engine` key), `engine.decide` returns exactly `plan_next_action`'s `Action`
+      (`model_dump` equality), `proposals.jsonl`'s `engine` is `null`, no engine panel line is printed, and
+      the dedup fingerprint of a proposal is what it was before the engine existed.
+      Pinned by `test_engine.py::test_default_policy_decide_is_exactly_the_ladder`,
+      `test_engine.py::test_plan_run_engine_ladder_is_identical_to_no_flag`,
+      `test_tick.py::test_default_policy_records_no_engine_block_and_prints_no_engine_line`,
+      `test_tick.py::test_fingerprint_of_a_default_policy_proposal_is_what_it_was_before_the_engine_existed`.
+81.2. **Every pooled candidate passes the guard BLOCK gates the pool mirrors.** For every fixture and a
+      policy matrix, each pooled entry came unaltered from a generator, has its allow flag on and its
+      queues idle, and triggers no BLOCK from `prerequisites`, `energy`, `affordability`, `reserve`,
+      `fields`, `production_batch`, `mission_type`, `fleet_slots`, `missile_target` or `value_ceiling`; and a
+      ladder band 2-8 winner missing from the pool was refused for a reason a guard gate mirrors.
+      Pinned by `test_pool.py::test_property_every_pooled_entry_is_generated_legal_and_never_blocked_by_the_snapshot_gates`
+      and `test_pool.py::test_property_the_ladders_band_2_to_8_winner_is_pooled_or_refused_as_a_guard_would`,
+      with the per-filter tests in the same file. Re-run them when touching either the pool or a guard gate.
+81.3. **Every fallback returns the ladder's own action.** Each `JevError` reason, an empty pool, a missing
+      answer, low confidence, low confidence at the high-stakes floor, a thin margin, and an exception
+      inside the engine yield the action `plan_next_action` returns, with `Action.engine == "ladder"` and
+      the reason recorded; an engine failure never fails a tick.
+      Pinned by `test_jev_engine.py::test_every_jev_error_falls_back_to_the_ladder_action`,
+      `test_low_confidence_falls_back`, `test_high_stakes_winners_need_the_higher_floor`,
+      `test_a_thin_margin_falls_back`, `test_an_empty_pool_falls_back_without_a_call`,
+      `test_a_missing_answer_is_a_malformed_fallback`,
+      `test_engine.py::test_an_exception_inside_the_jev_engine_falls_back_to_the_ladder` and
+      `test_tick.py::test_an_engine_exception_never_fails_the_tick`.
+81.4. **Nothing identifying is sent to TypeSafe.** The `state` and `questions` contain no wallet, signer,
+      40-hex address, coordinate or raw planet id (planets are "planet A/B/..."); the base URL is a code
+      constant that an environment override cannot redirect; the key never reaches a log.
+      Pinned by `test_jev_engine.py::test_the_payload_carries_no_wallet_signer_address_coordinate_or_raw_planet_id`,
+      `test_jev.py::test_request_goes_to_the_constant_base_url_despite_env_override`,
+      `test_jev.py::test_errors_never_carry_the_key_or_state` and
+      `test_tick.py::test_the_typesafe_key_never_reaches_a_log_or_a_tick_report`.
+81.5. **The killswitch, the vetoes and the storage deadline never call TypeSafe.** Each returns the
+      ladder's own action with `pre_empted_by` set, and the backend is never invoked.
+      Pinned by `test_jev_engine.py::test_vetoes_and_the_deadline_never_call_the_backend`,
+      `test_engine.py::test_killswitch_with_jev_halts_without_calling_the_jev_engine` and
+      `test_tick.py::test_killswitch_with_jev_configured_never_reaches_the_jev_engine`.
+81.6. **The dedup fingerprint is stable under probability jitter.** Two ticks that differ only in
+      probabilities, confidence and latency produce the identical action and the second is a duplicate;
+      the `engine` key is a fingerprint-excluded key; alternatives do not depend on composite order.
+      Pinned by `test_jev_engine.py::test_jittered_probabilities_with_the_same_argmax_give_an_identical_action`,
+      `test_jev_engine.py::test_alternatives_never_depend_on_the_composite_order`,
+      `test_tick.py::test_a_second_jev_tick_differing_only_in_probabilities_and_latency_is_deduped` and
+      `test_tick.py::test_engine_is_a_fingerprint_excluded_key`.
+
+Verification beyond the unit suites is opt-in: `VEYDRIFT_JEV_LIVE_TESTS=1` (with a real
+`TYPESAFE_API_KEY`) runs the scenario fixtures under `tests/fixtures/jev_scenarios/` and a tiny live
+round trip against the real API, checking both the pick and the fallback rate.
 
 ---
 

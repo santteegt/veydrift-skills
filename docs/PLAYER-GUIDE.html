@@ -750,6 +750,7 @@ footer.doc-foot a { color: var(--ink-dim); }
         <tr><td><code>VEYDRIFT_PRIVATE_KEY</code></td><td>wallet</td><td>Raw private key (<code>envkey</code> provider, testing only).</td><td>— (required by that provider)</td></tr>
         <tr><td><code>VEYDRIFT_TIER</code></td><td>wallet</td><td>Fallback tier when no <code>policy.json</code> exists yet. Ignored (and flagged as a disagreement) once a policy file is present — <code>walletctl</code> always trusts the file over this.</td><td><code>advisor</code></td></tr>
         <tr><td><code>VEYDRIFT_WALLET_DIR</code></td><td>agent</td><td>Escape hatch if the two skills aren't installed as siblings — see above.</td><td>sibling-directory auto-detect</td></tr>
+        <tr><td><code>TYPESAFE_API_KEY</code></td><td>agent</td><td>TypeSafe API key for the optional <code>jev</code> decision engine (§6a). Only read when <code>policy.engine.kind</code> is <code>"jev"</code>; never put it in <code>policy.json</code>. Always redacted from logs.</td><td>unset (the jev engine then falls back to the ladder)</td></tr>
         <tr><td><code>VEYDRIFT_SECRET_ENV_VARS</code></td><td>agent</td><td>Comma-separated extra env var names to redact from logs, beyond the built-in <code>VEYDRIFT_PRIVATE_KEY</code>/<code>VEYDRIFT_KEYSTORE_PASSWORD</code>.</td><td>unset (built-ins only)</td></tr>
       </tbody>
     </table>
@@ -827,6 +828,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   },
   <span class="c-key">"wallet_engine"</span>: { <span class="c-key">"provider"</span>: <span class="c-str">"keystore"</span>, <span class="c-key">"require_confirmation"</span>: true },
   <span class="c-key">"radar"</span>: { <span class="c-key">"enabled"</span>: true },              <span class="c-comment">// incoming-attack/resolved-battle/debris check, every tick — see §10, §11a</span>
+  <span class="c-key">"engine"</span>: { <span class="c-key">"kind"</span>: <span class="c-str">"ladder"</span> },   <span class="c-comment">// "ladder" (default) or "jev" — which decision engine proposes each tick, see §6a</span>
   <span class="c-key">"strategy"</span>: {
     <span class="c-key">"resource_weights"</span>: { <span class="c-key">"metal"</span>: 1, <span class="c-key">"crystal"</span>: 1, <span class="c-key">"deuterium"</span>: 1 },   <span class="c-comment">// used to tie-break, not to pick a family -- see below</span>
     <span class="c-key">"max_alternatives"</span>: 5,            <span class="c-comment">// caps how many runner-up options each proposal lists</span>
@@ -990,6 +992,25 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
     </table>
   </div>
 
+  <p><strong><code>engine</code></strong> (see §6a; <code>jev</code> is read only when <code>kind</code> is <code>"jev"</code>, and every key here is strict — an unknown key is a hard error)</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Type</th><th>Legal values / range</th><th>Default</th></tr></thead>
+      <tbody>
+        <tr><td><code>kind</code></td><td>string enum</td><td>exactly <code>"ladder"</code> or <code>"jev"</code></td><td><code>"ladder"</code></td></tr>
+        <tr><td><code>jev.model</code></td><td>string</td><td>the TypeSafe model id</td><td><code>"jev-latest"</code></td></tr>
+        <tr><td><code>jev.intent</code></td><td>string</td><td>your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric</td><td><code>""</code></td></tr>
+        <tr><td><code>jev.weights</code></td><td>object</td><td><code>fit</code>, <code>urgency</code>, <code>focus</code>, <code>economy</code>, <code>threat</code>, each <code>&gt;= 0</code>, at least one <code>&gt; 0</code>; only the ratios matter</td><td><code>0.30 / 0.25 / 0.15 / 0.25 / 0.05</code></td></tr>
+        <tr><td><code>jev.min_confidence</code> / <code>min_confidence_high_stakes</code> / <code>min_margin</code></td><td>float</td><td><code>0</code>-<code>1</code>; below them the ladder decides instead</td><td><code>0.5</code> / <code>0.75</code> / <code>0.03</code></td></tr>
+        <tr><td><code>jev.timeout_s</code></td><td>float</td><td><code>0.5</code>-<code>30</code>; total budget for the request, retry included</td><td><code>5.0</code></td></tr>
+        <tr><td><code>jev.max_candidates</code></td><td>int</td><td><code>2</code>-<code>60</code>; pool size cap</td><td><code>24</code></td></tr>
+        <tr><td><code>jev.payback_reference_hours</code></td><td>float</td><td><code>&gt; 0</code>; the payback at which the economy term scores 0.5</td><td><code>24.0</code></td></tr>
+        <tr><td><code>jev.high_stakes_only_when_idle</code></td><td>bool</td><td><code>true</code>: Colonize/Attack/Missile enter the pool only when nothing else is legal</td><td><code>true</code></td></tr>
+        <tr><td><code>jev.allow_hold</code></td><td>bool</td><td><code>true</code>: a confident "wait" judgment returns a NO-OP instead of the best candidate</td><td><code>false</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
   <p><strong><code>strategy</code></strong></p>
   <div class="table-wrap">
     <table>
@@ -1040,6 +1061,29 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
   </div>
   </div>
   </details>
+  <h3 id="s6a">6a. Choosing a decision engine</h3>
+  <p>By default every tick's proposal comes from the <strong>ladder</strong>: a fixed, hand-checkable order of bands (§10), always offline. Its cost is that an earlier band nearly always wins first: with an idle building queue, research, ships and defense rarely get a turn.</p>
+  <p>The optional <strong>jev engine</strong> compares every <em>legal</em> candidate across all bands at once. It sends a short, anonymised description of your situation and your stated intent to TypeSafe's Jev model in one request, combines the answers with weights you control, and picks the best. It falls back to the ladder whenever it can't give a confident answer, so the worst case is today's behaviour. Nothing else changes: vetoes and the storage-overflow deadline still decide first, the guard and the wallet re-check every action independently, and your tier and <code>require_confirmation</code> govern sending exactly as before.</p>
+  <p>To turn it on, set <code>kind</code> and write an <code>intent</code> in plain sentences (name the kinds of development you want, in order, and anything to avoid):</p>
+  <div class="codeblock">
+    <div class="codeblock-head"><span>policy.json</span></div>
+    <div class="codeblock-body"><pre>"engine": {
+  "kind": "jev",
+  "jev": {
+    "intent": "Research first, keep both planets developing, a modest defense, never attack."
+  }
+}</pre></div>
+  </div>
+  <p>Every other <code>jev</code> key has a default (see the field reference above). Then give the agent a TypeSafe API key <strong>in the environment, never in <code>policy.json</code></strong>:</p>
+  <div class="codeblock">
+    <div class="codeblock-head"><span>shell</span></div>
+    <div class="codeblock-body"><pre>export TYPESAFE_API_KEY=...        <span class="c-comment"># in the shell (or launchd/scheduler environment) that runs vd tick</span>
+uv run --directory skills/veydrift-agent vd doctor    <span class="c-comment"># prints: engine: jev / TYPESAFE_API_KEY: set / typesafe-sdk: importable</span></pre></div>
+  </div>
+  <p>The SDK ships as a dependency of the skill. With no key, each tick simply falls back to the ladder and says why (<code>fallback_reason: missing_key</code>).</p>
+  <p><strong>What leaves your machine:</strong> a paragraph of intent, plus per-candidate sentences like "Upgrade Metal Mine to level 5 (pays back in 6-24 hours, costs a moderate share of the planet's resources, build time 2-8 hours)". Never your wallet, signer, any address, coordinates or raw planet ids (planets are "planet A", "planet B"), and every quantity is a coarse bucket. <code>vd engine pool --snapshot S.json --policy P.json</code> prints the exact request offline, with no key.</p>
+  <p><strong>Trying it safely:</strong> <code>vd engine compare --snapshot S.json --policy P.json</code> runs the ladder and jev on the same input (exit <code>0</code> they agree, <code>1</code> they disagree, <code>3</code> jev fell back to the ladder). Keep <code>tier</code> at <code>advisor</code> and read the <code>engine</code> block each tick adds to <code>proposals.jsonl</code> (which engine decided, its confidence, whether it agreed with the ladder, the top candidates); the tick report gets one <code>engine:</code> line. <code>vd plan run --engine jev</code> does the same offline against a snapshot file.</p>
+  <p>Cost is one short request per tick. Its limits are real: it judges qualitative fit, not numbers, and its choices are not reproducible bit for bit. If a young colony gets ignored under jev (the economy term favours established planets), say so in the intent, lower <code>weights.economy</code>, or go back to the ladder with <code>planet_rotation</code> on — rotation applies to the ladder only. The full reference is <code>skills/veydrift-agent/references/jev-engine.md</code>.</p>
 </section>
 <section class="chapter" id="s7" data-num="07" data-label="Set up your wallet">
   <div class="chapter-head"><span class="chapter-num">07</span><h2 class="chapter-title">Set up your wallet</h2></div>
@@ -1239,7 +1283,8 @@ npx tsx src/cli.ts simulate --tx tx.json --from 0xYOUR_MAIN_WALLET     <span cla
     <li><strong>The transaction shown is real and complete</strong>, not a mockup. That's what makes a later promotion decision evidence-based rather than a guess (§13).</li>
     <li><strong>A <code>radar:</code> line, when it appears, is never routine narration</strong> — it only shows up when the radar check (<code>policy.radar.enabled</code>, on by default) found something: an incoming mission of any type, a resolved attack, or debris on your own planet. This exists because the field that lists <em>upcoming</em> arrivals cannot show an attack that already happened — it simply falls off that list once resolved. If you ask "was I attacked?", check the <code>radar:</code> line (or run <code>vd radar check</code>, §11a) — not just <code>incoming: none</code>.</li>
     <li><strong>An <code>opportunities:</code> line means a raid target, colonize slot, or foreign debris field was found — even on a tick that proposed something else entirely.</strong> The agent's decision ladder picks exactly one thing to propose per tick, in a fixed priority order, and stops looking the moment something earlier in that order wins — so a live raid target, open colonize slot, or foreign debris field can go unmentioned on a tick where something else won, even with the relevant flag on the whole time. <code>opportunities:</code> checks for these independently every tick. Works at every tier, including <code>advisor</code> — enabling <code>allow_combat</code> there still submits nothing, but you'll see the opportunity in the report.</li>
-    <li><strong>The same <code>opportunities:</code> line also has the opposite job: telling you when building is winning every single tick and nothing else is getting a turn.</strong> The ladder's own ordering means an idle building queue always wins over research/ships/defense whenever there's anything left to upgrade — on an active economy that's essentially always true, so research/ship/defense counts can sit unchanged for a long stretch even though nothing is misconfigured. There is no <code>policy.json</code> field that reorders this; naming more entries in <code>research_priority</code>/<code>ship_targets</code>/<code>defense_targets</code> only changes <em>which</em> research or ship gets picked once it's that band's turn, never <em>when</em> its turn comes. If you notice this happening, <code>opportunities:</code> now also reports <code>storage</code>/<code>building</code>/<code>research</code>/<code>shipyard</code>/<code>unlock_chain</code> findings — what each of those bands would propose <em>right now</em>, regardless of which one the ladder actually picked this tick — so you can see what's waiting behind whatever keeps winning. If research or a ship/defense build is genuinely more valuable to you right now than another mine level, hand-write that action as <code>--action</code> (<a href="#s9">§9's manual override</a>, <code>allow_agent_action_override</code>) to submit it directly for one tick; this doesn't change automatic behavior going forward, only that one tick's pick.</li>
+    <li><strong>The same <code>opportunities:</code> line also has the opposite job: telling you when building is winning every single tick and nothing else is getting a turn.</strong> The ladder's own ordering means an idle building queue always wins over research/ships/defense whenever there's anything left to upgrade — on an active economy that's essentially always true, so research/ship/defense counts can sit unchanged for a long stretch even though nothing is misconfigured. There is no <code>policy.json</code> field that reorders the ladder (the optional <code>jev</code> engine, <a href="#s6a">§6a</a>, is the alternative that does weigh bands against each other); naming more entries in <code>research_priority</code>/<code>ship_targets</code>/<code>defense_targets</code> only changes <em>which</em> research or ship gets picked once it's that band's turn, never <em>when</em> its turn comes. If you notice this happening, <code>opportunities:</code> now also reports <code>storage</code>/<code>building</code>/<code>research</code>/<code>shipyard</code>/<code>unlock_chain</code> findings — what each of those bands would propose <em>right now</em>, regardless of which one the ladder actually picked this tick — so you can see what's waiting behind whatever keeps winning. If research or a ship/defense build is genuinely more valuable to you right now than another mine level, hand-write that action as <code>--action</code> (<a href="#s9">§9's manual override</a>, <code>allow_agent_action_override</code>) to submit it directly for one tick; this doesn't change automatic behavior going forward, only that one tick's pick.</li>
+    <li><strong>An <code>engine:</code> line appears only when <code>policy.engine.kind</code> is <code>"jev"</code> (§6a).</strong> It says which engine decided and how sure it was (<code>engine: jev (jev-latest, 140ms, confidence 0.71, agrees with ladder)</code>), that the ladder decided because jev couldn't give a confident answer (<code>engine: jev -&gt; ladder fallback (timeout)</code>), or that a veto or the storage deadline decided first (<code>engine: jev pre-empted by 1b:game-paused</code>). The same detail is in <code>proposals.jsonl</code>'s <code>engine</code> block.</li>
   </ul>
 </section>
 <section class="chapter" id="s11" data-num="11" data-label="Running on a schedule">
@@ -1434,6 +1479,7 @@ mine target), fall back to the cadence default.</pre></div>
         <tr><td><code>walletctl status</code> refuses to run</td><td>Expected with no provider configured — not a bug</td></tr>
         <tr><td><code>verify-abi</code> shows a mismatch</td><td>A pinned contract's on-chain implementation changed (or the chain was unreadable — the output says which). Every write is blocked until resolved — deliberate</td></tr>
         <tr><td>Guards read 24/27 at tier 1</td><td>Correct and expected — see §10</td></tr>
+        <tr><td><code>engine: jev -&gt; ladder fallback (&lt;reason&gt;)</code></td><td>The jev engine couldn't give a confident answer, so the ladder decided (§6a). <code>missing_key</code>/<code>auth</code>: check <code>TYPESAFE_API_KEY</code>; <code>timeout</code>/<code>connection</code>/<code>server</code>: transient; <code>low_confidence</code>/<code>low_margin</code>: the model wasn't sure. The proposal is a normal ladder proposal.</td></tr>
         <tr><td><code>policy.json</code> edits rejected</td><td>Schema validated strictly — the error names the exact field</td></tr>
         <tr><td><code>incoming: none</code> but you were attacked</td><td>Expected — that field only ever lists <em>future</em> arrivals; it can't show an attack that already resolved. Check the <code>radar:</code> line (§10) or run <code>vd radar check</code> (§11a) directly.</td></tr>
       </tbody>

@@ -11,6 +11,30 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-09-29
+
+### Added
+- **The jev decision engine** (`policy.engine.kind = "jev"`; default `"ladder"`, unchanged). Vetoes and
+  the storage-overflow deadline decide first; then `candidates.collect_pool` builds every legal candidate
+  across all bands, one TypeSafe request judges them against `policy.engine.jev.intent`, and a weighted
+  composite plus confidence/margin gates pick the winner. Any error or weak result runs the ladder.
+  New modules `engine.py` (dispatch), `jev.py` (TypeSafe client), `jev_engine.py`. See
+  `references/jev-engine.md`.
+- `policy.engine` (`EngineCfg`/`JevCfg`/`JevWeights`, all `extra="forbid"`), in
+  `assets/policy.example.json` and the regenerated policy schema.
+- `Action.engine` (`"ladder"`/`"jev"`, provenance only, never read by the guard) and `EngineTrace`,
+  logged as `proposals.jsonl`'s `engine` block (excluded from the dedup fingerprint), `actions.jsonl`'s
+  `engine` field, a `[engine=jev]` strategy.md tag and one report-panel line.
+- `vd engine pool` (the pool, rejection counts and the exact request, offline) and `vd engine compare`
+  (ladder vs jev; exit 0 agree, 1 disagree, 3 fallback, 4 load error); `vd plan run --engine
+  ladder|policy|jev` (default `ladder`, offline); `vd doctor` reports the engine kind, whether
+  `TYPESAFE_API_KEY` is set and whether the SDK imports.
+- `TYPESAFE_API_KEY` is a default scrubbed secret. `typesafe-sdk` is a dependency, imported lazily.
+
+### Changed
+- `plan.py` exposes `veto_action`, `deadline_action`, `RULE_BY_FAMILY` and `finalize_candidate`
+  (`plan_next_action` composes them; no behaviour change, still pure and offline).
+
 ## [1.27.1] - 2026-09-29
 
 ### Fixed

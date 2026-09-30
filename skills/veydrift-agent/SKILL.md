@@ -33,6 +33,7 @@ vd guard <cmd>       # Evaluate guardrails against a proposed action
 vd tick              # Run one loop iteration -- the orchestrator, see below
 vd log <cmd>         # Read and summarise the action and strategy logs
 vd radar check       # Standalone incoming-attack/resolved-battle/debris check
+vd engine <cmd>      # Inspect and compare decision engines (ladder vs jev)
 vd doctor            # Report which sub-commands are wired up and where state lives
 ```
 
@@ -121,6 +122,9 @@ a rationale that states the exact numbers behind the decision — read it before
 it; the reasoning is meant to be checkable by hand (`references/strategy-playbook.md` §11
 is a checklist for exactly that).
 
+`vd plan run` stays offline: it runs the ladder unless you pass `--engine policy|jev`, which
+may call TypeSafe (see the jev engine note below).
+
 Beyond the one proposal above, `vd tick` also runs an opportunity scan unconditionally —
 what's available on every band regardless of which one actually won this tick: every
 per-planet raid/colonize/foreign-debris/transport target reachable, plus the single pick
@@ -178,6 +182,15 @@ see `references/strategy-playbook.md` for the full derivation):
         whole ladder, reached only when every other band, Attack included, found
         nothing at all
      else → NO-OP with an explicit reason
+
+**An alternative engine.** `policy.engine.kind` defaults to `"ladder"` (everything above).
+Set to `"jev"`, the vetoes (rungs 0-4) and the storage-overflow deadline still decide first,
+unchanged, but bands 2-8 are replaced by the jev engine: it builds the pool of every *legal*
+candidate across all bands, has TypeSafe's Jev model judge each against `policy.engine.jev.intent`
+in one request, composes a weighted score, and gates on confidence. Any error or weak result
+runs the ladder instead, so the ladder is always the fallback. It needs `TYPESAFE_API_KEY`;
+`guard.py` and `walletctl` re-check everything as before. Read `references/jev-engine.md` before
+turning it on.
 
 The economic band's actual choices — which mine, which energy source — are **derived from
 the planet's live traits** (temperature, multipliers, current levels), not hardcoded per
@@ -247,6 +260,7 @@ Defense enum order and the Deathstar/Dreadstar naming wrong (`references/entity-
 | When and how to supply your own `Action` instead of the planner's choice (`vd tick --action`) | `references/manual-action-override.md` |
 | How the incoming-attack/resolved-battle/debris radar works, `vd radar check`'s exit codes, and why `incoming_fleets` alone can miss a real attack | `references/radar.md` |
 | Why an attack/missile/colonize/foreign-harvest/transport opportunity can be invisible in the tick report even with the relevant flag on, and how `opportunities.py` surfaces it anyway | `references/opportunities.md` |
+| Enabling the jev engine (`policy.engine`), what it sends to TypeSafe and never sends, the candidate pool's filters, the question set and composite score, every `fallback_reason`, `vd engine pool`/`compare`, tuning | `references/jev-engine.md` |
 | AcsDefend/Intercept/`launchDefenseHold`/`openDefenseIntent` mechanics, the `targetPlanetId`-means-`hostileMissionId` trap, and how `coordination.py` suggests them from radar findings | `references/coordination.md` |
 
 Every row above is a file bundled with this skill — it travels with the install and is all

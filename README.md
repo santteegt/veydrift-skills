@@ -10,7 +10,9 @@ tier — build, allowlist, simulate and submit the transaction for it. Veydrift 
 on-chain space-strategy game on Base mainnet; nothing here is generic blockchain tooling.
 
 - **`veydrift-agent`** (Python) — reads the game API, runs deterministic calculators,
-  proposes zero or one action per tick. Never signs anything.
+  proposes zero or one action per tick, from a fixed decision ladder or (opt-in,
+  `policy.engine.kind = "jev"`, needs a `TYPESAFE_API_KEY`) TypeSafe's Jev model judging every
+  legal candidate, with the ladder as fallback. Never signs anything.
 - **`veydrift-wallet`** (TypeScript) — the only thing here that builds real calldata,
   signs, or submits. Independently re-validates every transaction against its own
   allowlist regardless of what the agent skill already checked.
