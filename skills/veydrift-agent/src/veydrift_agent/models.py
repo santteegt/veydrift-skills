@@ -850,18 +850,24 @@ class JevWeights(Base):
     Each term is normalised to 0..1 before weighting; the sum is divided out, so only the
     ratios matter. `economy` is the only term computed entirely by code (payback hours)."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    fit: float = Field(0.30, ge=0)
-    urgency: float = Field(0.25, ge=0)
-    focus: float = Field(0.15, ge=0)
-    economy: float = Field(0.25, ge=0)
-    threat: float = Field(0.05, ge=0)
+    fit: float = Field(0.30, ge=0, le=100)
+    urgency: float = Field(0.25, ge=0, le=100)
+    focus: float = Field(0.15, ge=0, le=100)
+    economy: float = Field(0.25, ge=0, le=100)
+    threat: float = Field(0.05, ge=0, le=100)
 
     @model_validator(mode="after")
-    def _some_weight_is_positive(self) -> JevWeights:
-        if self.fit + self.urgency + self.focus + self.economy + self.threat <= 0:
-            raise ValueError("at least one engine.jev.weights entry must be > 0")
+    def _some_judgment_weight_is_positive(self) -> JevWeights:
+        # `fit`, `urgency` and `focus` are the model-judged terms that carry a confidence; with
+        # only `economy`/`threat` weighted, every confidence gate would pass vacuously.
+        if self.fit + self.urgency + self.focus <= 0:
+            raise ValueError(
+                "at least one of engine.jev.weights fit, urgency or focus must be > 0 "
+                "(they are the judgments that carry a confidence; an economy/threat-only "
+                "config would make every confidence gate vacuous)"
+            )
         return self
 
 
@@ -870,7 +876,7 @@ class JevCfg(Base):
     TypeSafe API key comes from the `TYPESAFE_API_KEY` environment variable, never from
     this file, and the API base URL is a code constant, never configurable here."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     #: TypeSafe System One model id.
     model: str = "jev-latest"
@@ -883,12 +889,15 @@ class JevCfg(Base):
     min_confidence_high_stakes: float = Field(0.75, ge=0, le=1)
     #: A composite lead over the runner-up smaller than this is a coin toss; the ladder decides.
     min_margin: float = Field(0.03, ge=0, le=1)
-    #: Total budget for the TypeSafe call, retries included.
+    #: Time budget for the TypeSafe call. Each network attempt gets `timeout_s / 2` per phase
+    #: (connect, read, write, pool) and at most one retry is started, so a failed attempt plus
+    #: its retry stays near `timeout_s` in the normal case. It is not a hard wall-clock deadline:
+    #: a peer that trickles bytes is bounded per chunk, not overall.
     timeout_s: float = Field(5.0, ge=0.5, le=30)
     #: Pool size cap, after the deterministic per-family pre-trim.
     max_candidates: int = Field(24, ge=2, le=60)
     #: `H0` in the economy term `H0 / (H0 + payback_hours)`.
-    payback_reference_hours: float = Field(24.0, gt=0)
+    payback_reference_hours: float = Field(24.0, gt=0, le=10000)
     #: Colonize/Attack/Missile enter the pool only when nothing else is selectable.
     high_stakes_only_when_idle: bool = True
     #: Let a confident "hold" judgment return a NOOP instead of the best candidate.

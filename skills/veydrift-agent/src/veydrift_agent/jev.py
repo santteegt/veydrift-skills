@@ -10,6 +10,15 @@ API (model `jev-latest`). Everything the engine needs from TypeSafe goes through
   never kept (it can echo request content); only its class name, HTTP status and request id.
 - Score answers are normalised to 0..1 here (`ScoreAnswer.normalized`), so the engine never
   deals with level indices. The API's score legend is 0-based: a 4-level Score spans 0..3.
+- Answer *values* are validated, not just their types: a score outside its legend's span, a
+  confidence/probability outside [0, 1], an empty or wrong-sized legend, or choice
+  probabilities that do not sum to 1 are `JevError("malformed", <qid>)`.
+- Time budget (`timeout_s`): each network attempt gets `timeout_s / 2` as an `httpx2.Timeout`
+  (applied to each of connect, read, write and pool), and the SDK's retry budget is
+  `timeout_s` with at most one retry, so a failed attempt plus its retry is about `timeout_s`
+  in the normal case. This is *not* a hard wall-clock deadline: the timeouts are per network
+  phase, the SDK only refuses to *start* a retry past the budget, and a peer that trickles
+  bytes is bounded per chunk, not overall.
 
 Tests replace the backend through `default_backend` (the SDK's `httpx2` transport is not
 something `respx` intercepts).
@@ -143,6 +152,17 @@ def _finite(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+#: Slack for float noise on a value that should lie in [0, 1] / inside a legend's span.
+_EPS = 1e-6
+#: How far a choice's probabilities may stray from summing to 1.
+_PROB_SUM_TOLERANCE = 0.05
+
+
+def _unit(value: object) -> bool:
+    """A finite number in [0, 1] (within `_EPS`)."""
+    return _finite(value) and -_EPS <= float(value) <= 1.0 + _EPS  # type: ignore[arg-type]
+
+
 def _sdk_question(sdk: Any, spec: QuestionSpec) -> Any:
     crit = spec.criteria
     if spec.kind == "choice":
@@ -207,8 +227,12 @@ class TypeSafeBackend:
         except Exception as exc:  # noqa: BLE001 -- pydantic/SDK validation; class name only
             raise JevError("bad_request", f"question spec invalid ({type(exc).__name__})") from None
 
-        # At most one retry, and never past the caller's total budget; short backoff so the
-        # retry fits inside a few-second budget.
+        # At most one retry, and no retry is *started* past the caller's budget; short backoff
+        # so the retry fits inside a few-second budget. Each attempt gets half the budget per
+        # network phase, so a failed attempt plus its retry stays near `timeout_s` (see the
+        # module docstring: per-phase timeouts, not a hard wall-clock deadline).
+        import httpx2  # the SDK's own HTTP layer; present whenever the SDK is
+
         retry = sdk.RetryPolicy(
             max_retries=1, backoff_initial=0.25, backoff_max=1.0, timeout=timeout_s
         )
@@ -218,7 +242,7 @@ class TypeSafeBackend:
                 api_key=self._api_key,
                 model=model,
                 retry=retry,
-                timeout=timeout_s,
+                timeout=httpx2.Timeout(timeout_s / 2),
                 base_url=BASE_URL,
             )
         except sdk.TypeSafeError:
@@ -254,7 +278,8 @@ def _parse(
     response: Any, questions: dict[str, QuestionSpec], model: str, latency_ms: int
 ) -> JevAnswers:
     """Turn an SDK `SystemOneResponse` into `JevAnswers`; a missing, wrong-typed or non-finite
-    answer for any asked question is `JevError("malformed", <qid>)`."""
+    answer for any asked question -- or one whose values are out of range -- is
+    `JevError("malformed", <qid>)`."""
     choices: dict[str, ChoiceAnswer] = {}
     scores: dict[str, ScoreAnswer] = {}
     nouls: dict[str, float] = {}
@@ -266,25 +291,35 @@ def _parse(
             if spec.kind == "choice":
                 a = r_choices.get(qid)
                 options = spec.criteria if isinstance(spec.criteria, dict) else {}
-                if a is None or not _finite(a.confidence) or a.choice not in options:
+                if a is None or not _unit(a.confidence) or a.choice not in options:
                     raise ValueError
                 probs = {str(k): float(v) for k, v in a.probabilities.items()}
-                if not all(math.isfinite(v) for v in probs.values()):
+                if (
+                    not probs
+                    or not all(_unit(v) for v in probs.values())
+                    or not set(probs) <= {str(o) for o in options}
+                    or abs(sum(probs.values()) - 1.0) > _PROB_SUM_TOLERANCE
+                ):
                     raise ValueError
                 choices[qid] = ChoiceAnswer(a.choice, probs, float(a.confidence))
             elif spec.kind == "score":
                 s = r_scores.get(qid)
-                if s is None or not _finite(s.score) or not _finite(s.confidence):
+                if s is None or not _finite(s.score) or not _unit(s.confidence):
                     raise ValueError
                 # The API's legend is 0-based (a 4-level Score spans 0..3); read the span from
-                # the legend rather than assuming it.
+                # the legend rather than assuming it, and require it to match the levels asked.
                 levels = sorted(int(k) for k in s.legend)
-                lo, hi = (levels[0], levels[-1]) if levels else (0, 0)
+                asked = len(spec.criteria) if isinstance(spec.criteria, (list, tuple)) else 0
+                if not levels or len(levels) != asked:
+                    raise ValueError
+                lo, hi = levels[0], levels[-1]
+                if not lo - _EPS <= float(s.score) <= hi + _EPS:
+                    raise ValueError
                 norm = 0.0 if hi <= lo else (float(s.score) - lo) / (hi - lo)
                 scores[qid] = ScoreAnswer(min(1.0, max(0.0, norm)), float(s.confidence))
             else:
                 n = r_nouls.get(qid)
-                if n is None or not _finite(n.noul):
+                if n is None or not _unit(n.noul):
                     raise ValueError
                 nouls[qid] = min(1.0, max(0.0, float(n.noul)))
         current = ""

@@ -38,6 +38,7 @@ from veydrift_agent.models import (
     Action,
     ActionKind,
     ActionsCfg,
+    Decision,
     EngineCfg,
     EngineTrace,
     EntityTarget,
@@ -47,6 +48,7 @@ from veydrift_agent.models import (
     Policy,
     RadarFinding,
     RadarReport,
+    Resources,
     Snapshot,
     StrategyCfg,
 )
@@ -213,7 +215,7 @@ def test_the_state_has_the_documented_shape():
     assert "defense target: Rocket Launcher, want 3" in situation["declared_targets"]
     planets = situation["planets"]
     assert [p["label"] for p in planets] == ["planet A", "planet B"]
-    assert [p["role"] for p in planets] == ["home", "colony"]
+    assert [p["role"] for p in planets] == ["listed first", "other"]
     a = planets[0]
     assert a["energy"] == "surplus"
     assert a["storage_hours_to_cap"] == {"metal": "more than a day", "crystal": "more than a day", "deuterium": "more than a day"}
@@ -230,7 +232,7 @@ def test_labels_follow_the_target_planet_order():
     pool = pool_of(snapshot, policy)
     state, _ = jev_engine.build_request(snapshot, policy, pool)
     planets = state["situation"]["planets"]
-    assert [(p["label"], p["role"]) for p in planets] == [("planet A", "home"), ("planet B", "colony")]
+    assert [(p["label"], p["role"]) for p in planets] == [("planet A", "listed first"), ("planet B", "other")]
     by_id = {e.candidate.action.planet_id: c["planet"] for e, c in zip(pool, state["candidates"], strict=True) if c["planet"].startswith("planet")}
     assert by_id[665] == "planet A" and by_id[664] == "planet B"
 
@@ -771,6 +773,258 @@ def test_an_empty_pool_falls_back_without_a_call():
     result = run(snapshot, policy, backend)
     assert_fell_back(snapshot, policy, result, "empty_pool")
     assert backend.calls == [] and result[1].pool_size == 0
+
+
+# --------------------------------------------------------------------------------------
+# High-stakes winners must be endorsed, and must respect the ladder's meaning of "idle".
+# --------------------------------------------------------------------------------------
+
+
+def only_high_stakes_setup(**jev_kw: Any) -> tuple[Snapshot, Policy]:
+    """Everything ordinary is switched off, so the ladder itself reaches 8d:colonize and the pool
+    holds colonize/attack/missile (two planets each): c0/c1 colonize, c2/c3 attack, c4/c5 missile."""
+    jev_kw.setdefault("min_margin", 0.0)
+    policy = make_policy(
+        actions=ActionsCfg(
+            allow_building=False,
+            allow_research=False,
+            allow_ships=False,
+            allow_defense=False,
+            allow_fleet_noncombat=False,
+            allow_combat=True,
+        ),
+        strategy=StrategyCfg(colonize=True),
+        engine=EngineCfg(kind="jev", jev=JevCfg(**jev_kw)),
+    )
+    return two_planet(), policy
+
+
+def endorsing(at: int = 0, **kwargs: Any) -> Callable[[dict[str, Any], dict[str, QuestionSpec]], JevAnswers]:
+    """Candidate `at` is fit 1.0 / urgency 1.0 and `tick_focus` picks its group; all else scores 0."""
+    kwargs.setdefault("focus", "expansion")
+    kwargs.setdefault("default_fit", 0.0)
+    kwargs.setdefault("default_urg", 0.0)
+    return scripted(fits={at: kwargs.pop("fit", 1.0)}, urgs={at: 1.0}, **kwargs)
+
+
+def test_an_unaffordable_ladder_pick_does_not_open_the_door_to_an_unendorsed_attack():
+    """The judge's repro: nothing affordable but an attack. The ladder proposes (unaffordable)
+    research; the pool drops the unaffordable items and holds only the attack; a model that finds
+    the attack unrelated to the strategy (fit 0, urgency 0) used to win it by default."""
+    planet = rich_planet().model_copy(
+        update={
+            "resources_as_of_now": Resources(metal=0, crystal=0, deuterium=50_000),
+            "resources": Resources(metal=0, crystal=0, deuterium=50_000),
+        }
+    )
+    snapshot = rich_snapshot(planet)
+    policy = make_policy(
+        actions=ActionsCfg(allow_building=True, allow_research=True, allow_combat=True, allow_defense=True, allow_ships=True),
+        strategy=StrategyCfg(),
+        engine=EngineCfg(kind="jev", jev=JevCfg(min_margin=0.0)),
+    )
+    kwargs = target_kwargs()
+    kwargs.pop("missile_targets")
+
+    ladder_action = ladder(snapshot, policy, **kwargs)
+    assert ladder_action.rule == "7:research-queue-empty" and ladder_action.is_onchain()
+    pool = pool_of(snapshot, policy, **kwargs)
+    assert [e.candidate.family for e in pool] == ["attack"]
+
+    def indifferent(state, questions):
+        scores = {qid: 0.0 for qid in questions if qid.startswith(("fit_", "urgency_"))}
+        return answers_from(questions, scores=scores, score_confidence=0.95, choice_confidence=0.95)
+
+    action, trace = run(snapshot, policy, FakeBackend(indifferent), **kwargs)
+
+    assert_fell_back(snapshot, policy, (action, trace), "high_stakes_not_idle", **kwargs)
+    assert action.rule == "7:research-queue-empty"
+    # ... and the attack really was something the guard would have let through.
+    from test_pool import _guard_report
+
+    attack = pool[0].candidate.action
+    assert _guard_report(attack, snapshot, policy).decision is Decision.ALLOW
+
+
+def test_a_high_stakes_winner_is_refused_while_the_ladders_pick_is_ordinary(monkeypatch):
+    snapshot = two_planet()
+    policy = jev_policy(max_candidates=60)  # high_stakes_only_when_idle stays on
+    full = pool_of(snapshot, jev_policy(high_stakes_only_when_idle=False, max_candidates=60), **target_kwargs())
+    colonize = next(e for e in full if e.candidate.family == "colonize")
+    economy = next(e for e in full if e.candidate.family == "mine")
+    pool = sorted([colonize, economy], key=lambda e: (e.band, e.index))
+    monkeypatch.setattr(candidates, "collect_pool", lambda *a, **k: (pool, {}))
+    at = pool.index(colonize)
+    assert not ladder(snapshot, policy, **target_kwargs()).rule.startswith("8")
+
+    result = run(snapshot, policy, FakeBackend(endorsing(at)), **target_kwargs())
+    assert_fell_back(snapshot, policy, result, "high_stakes_not_idle", **target_kwargs())
+
+    off = jev_policy(high_stakes_only_when_idle=False, max_candidates=60)
+    action, trace = run(snapshot, off, FakeBackend(endorsing(at)), **target_kwargs())
+    assert trace.engine == "jev" and action.rule == "8d:colonize"
+
+
+def test_a_weakly_fitting_high_stakes_winner_falls_back():
+    snapshot, policy = only_high_stakes_setup()
+    assert ladder(snapshot, policy, **target_kwargs()).rule == "8d:colonize"
+    for fit in (0.0, 0.5, 0.7):  # 0.75 ("directly supports") is the least that endorses
+        result = run(snapshot, policy, FakeBackend(endorsing(fit=fit)), **target_kwargs())
+        assert result[1].fallback_reason == "high_stakes_not_endorsed", fit
+        assert result[1].winner_confidence == 0.9
+    assert run(snapshot, policy, FakeBackend(endorsing(fit=0.75)), **target_kwargs())[1].engine == "jev"
+
+
+def test_a_high_stakes_winner_of_another_group_than_the_focus_falls_back():
+    snapshot, policy = only_high_stakes_setup()
+    result = run(snapshot, policy, FakeBackend(endorsing(focus="offense")), **target_kwargs())
+    assert_fell_back(snapshot, policy, result, "high_stakes_not_endorsed", **target_kwargs())
+    assert result[1].top[0].family == "colonize", "colonize still won the composite; the focus vetoed it"
+
+
+def test_a_high_stakes_winner_falls_back_when_the_focus_is_hold_even_if_hold_is_not_allowed():
+    snapshot, policy = only_high_stakes_setup(allow_hold=False)
+    result = run(snapshot, policy, FakeBackend(endorsing(focus="hold")), **target_kwargs())
+    assert_fell_back(snapshot, policy, result, "high_stakes_hold", **target_kwargs())
+    assert result[1].top[0].family == "colonize"
+
+    # a hold too weak to be taken as a hold still vetoes a high-stakes move
+    weak = run(snapshot, policy, FakeBackend(endorsing(focus="hold", focus_p=0.4)), **target_kwargs())
+    assert weak[1].fallback_reason == "high_stakes_hold"
+
+
+def test_an_endorsed_high_stakes_winner_is_taken_when_the_ladder_pick_is_high_stakes_too():
+    snapshot, policy = only_high_stakes_setup()
+    action, trace = run(snapshot, policy, FakeBackend(endorsing()), **target_kwargs())
+    assert trace.engine == "jev" and trace.fallback_reason is None
+    assert action.rule == "8d:colonize" and action.engine == "jev"
+    assert trace.winner_confidence == 0.9 and trace.margin > 0
+
+    # the attack rung (also high-stakes) is just as reachable when it is the endorsed one
+    attack = next(i for i, e in enumerate(pool_of(snapshot, policy, **target_kwargs())) if e.candidate.family == "attack")
+    action, trace = run(snapshot, policy, FakeBackend(endorsing(attack, focus="offense")), **target_kwargs())
+    assert trace.engine == "jev" and action.rule == "8e:attack"
+
+
+def test_an_endorsed_high_stakes_winner_is_taken_when_the_ladder_has_nothing_to_do(monkeypatch):
+    snapshot, policy = only_high_stakes_setup()
+    idle = Action(kind=ActionKind.NOOP, rule="9:noop", rationale="nothing to do")
+    monkeypatch.setattr(plan, "plan_next_action", lambda *a, **k: idle)
+    action, trace = run(snapshot, policy, FakeBackend(endorsing()), **target_kwargs())
+    assert trace.engine == "jev" and action.rule == "8d:colonize"
+    assert trace.ladder_pick["rule"] == "9:noop"
+
+
+def test_deploy_is_high_stakes_at_the_engine_too(monkeypatch):
+    snapshot = two_planet()
+    policy = jev_policy(max_candidates=60)
+    full = pool_of(snapshot, jev_policy(high_stakes_only_when_idle=False, max_candidates=60), **target_kwargs())
+    deploy = next(e for e in full if e.candidate.family == "logistics-deploy")
+    mine = next(e for e in full if e.candidate.family == "mine")
+    pool = sorted([deploy, mine], key=lambda e: (e.band, e.index))
+    monkeypatch.setattr(candidates, "collect_pool", lambda *a, **k: (pool, {}))
+    at = pool.index(deploy)
+    assert "logistics-deploy" in candidates.HIGH_STAKES_FAMILIES
+
+    result = run(snapshot, policy, FakeBackend(endorsing(at, focus="logistics")), **target_kwargs())
+    assert_fell_back(snapshot, policy, result, "high_stakes_not_idle", **target_kwargs())
+
+    weak = run(snapshot, policy, FakeBackend(endorsing(at, focus="logistics", fit_conf=0.6, urg_conf=0.6)), **target_kwargs())
+    assert weak[1].fallback_reason == "low_confidence_high_stakes"
+
+
+def test_the_ladder_rules_that_count_as_high_stakes_are_exactly_the_high_stakes_families():
+    assert jev_engine.HIGH_STAKES_RULES == {"8c:logistics-deploy", "8d:colonize", "8e:attack", "8f:missile"}
+
+
+# --------------------------------------------------------------------------------------
+# Degenerate composition, and the margin against a different kind of action.
+# --------------------------------------------------------------------------------------
+
+
+def with_weights(policy: Policy, weights: JevWeights) -> Policy:
+    jev_cfg = policy.engine.jev.model_copy(update={"weights": weights})
+    return policy.model_copy(update={"engine": policy.engine.model_copy(update={"jev": jev_cfg})})
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")], ids=["inf", "nan"])
+def test_a_non_finite_weight_is_a_malformed_fallback(bad):
+    snapshot, base = two_planet(), jev_policy()
+    weights = JevWeights.model_construct(fit=bad, urgency=0.25, focus=0.15, economy=0.25, threat=0.05)
+    policy = with_weights(base, weights)
+    result = run(snapshot, policy, FakeBackend(scripted()))
+    assert result[1].fallback_reason == "malformed" and result[1].engine == "ladder"
+    assert result[0].model_dump() == ladder(snapshot, policy).model_dump()
+
+
+def test_a_non_finite_composite_is_a_malformed_fallback():
+    snapshot, policy = two_planet(), jev_policy(payback_reference_hours=1.0)
+    policy = policy.model_copy(update={"engine": policy.engine.model_copy(update={"jev": policy.engine.jev.model_copy(update={"payback_reference_hours": float("nan")})})})
+    result = run(snapshot, policy, FakeBackend(scripted()))
+    assert result[1].fallback_reason == "malformed"
+    assert result[0].model_dump() == ladder(snapshot, policy).model_dump()
+
+
+def test_an_all_zero_weight_vector_is_malformed_not_a_division_by_zero():
+    snapshot = two_planet()
+    weights = JevWeights.model_construct(fit=0.0, urgency=0.0, focus=0.0, economy=0.0, threat=0.0)
+    result = run(snapshot, with_weights(jev_policy(), weights), FakeBackend(scripted()))
+    assert result[1].fallback_reason == "malformed"
+
+
+def test_confidence_is_never_vacuously_certain():
+    snapshot = two_planet()
+    # only the (code-computed) economy term is weighted: no judgment carries a confidence.
+    weights = JevWeights.model_construct(fit=0.0, urgency=0.0, focus=0.0, economy=1.0, threat=0.0)
+    policy = with_weights(jev_policy(), weights)
+    result = run(snapshot, policy, FakeBackend(scripted(fit_conf=0.01, urg_conf=0.01, focus_conf=0.01)))
+    assert result[1].fallback_reason == "malformed" and result[1].engine == "ladder"
+
+    winner = jev_engine._Scored(
+        id="c0", entry=pool_of(snapshot, policy)[0], fit=1.0, fit_confidence=0.9, urgency=1.0, urgency_confidence=0.9,
+        focus=1.0, economy=1.0, threat=0.0, composite=1.0,
+    )
+    with pytest.raises(JevError) as err:
+        jev_engine._confidence(winner, 0.9, policy)
+    assert err.value.reason == "malformed"
+
+
+def test_identical_candidates_on_symmetric_planets_do_not_starve_the_margin_gate():
+    snapshot, policy = two_planet(), jev_policy(min_margin=0.03)
+    pool = pool_of(snapshot, policy)
+    twins = [i for i, e in enumerate(pool) if e.candidate.family == "mine" and e.candidate.action.entity_id == ids.Building.METAL_MINE]
+    assert len(twins) == 2 and pool[twins[0]].candidate.action.planet_id != pool[twins[1]].candidate.action.planet_id
+
+    action, trace = run(snapshot, policy, FakeBackend(scripted(fits={i: 1.0 for i in twins}, default_fit=0.3)))
+
+    assert trace.fallback_reason is None and trace.engine == "jev"
+    first, second = trace.top[0], trace.top[1]
+    assert first.composite == second.composite, "the twins tie"
+    assert {first.id, second.id} == {f"c{i}" for i in twins}
+    assert action.planet_id == pool[twins[0]].candidate.action.planet_id, "the tie goes to the lower generation index"
+    rival = max(j.composite for j in trace.top if j.id not in {first.id, second.id})
+    assert trace.margin == pytest.approx(first.composite - rival, abs=1e-4)
+    assert trace.margin >= 0.03
+
+
+def test_the_margin_is_still_measured_against_a_different_kind_of_action():
+    snapshot, policy = two_planet(), jev_policy(min_margin=0.03)
+    pool = pool_of(snapshot, policy)
+    metal = next(i for i, e in enumerate(pool) if e.candidate.action.entity_id == ids.Building.METAL_MINE)
+    crystal = next(i for i, e in enumerate(pool) if e.candidate.action.entity_id == ids.Building.CRYSTAL_MINE)
+    # Two different upgrades that score alike: that is a genuinely thin margin.
+    result = run(snapshot, policy, FakeBackend(scripted(fits={metal: 1.0, crystal: 1.0}, urgs={metal: 1.0, crystal: 1.0}, default_fit=0.0, default_urg=0.0)))
+    assert result[1].fallback_reason == "low_margin"
+
+
+def test_a_pool_of_one_kind_only_has_no_rival_to_be_confused_with(monkeypatch):
+    snapshot, policy = two_planet(), jev_policy(min_margin=0.5)
+    pool = pool_of(snapshot, policy)
+    twins = [e for e in pool if e.candidate.family == "mine" and e.candidate.action.entity_id == ids.Building.METAL_MINE]
+    monkeypatch.setattr(candidates, "collect_pool", lambda *a, **k: (twins, {}))
+    _action, trace = run(snapshot, policy, FakeBackend(scripted()))
+    assert trace.engine == "jev" and trace.margin == 1.0
+
 
 
 # --------------------------------------------------------------------------------------

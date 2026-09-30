@@ -169,7 +169,8 @@ def test_success_parses_mixed_choice_score_noul(wire):
 
 
 @pytest.mark.parametrize(
-    ("score", "expected"), [(0.0, 0.0), (3.0, 1.0), (1.5, 0.5), (3.4, 1.0), (-0.2, 0.0)]
+    ("score", "expected"),
+    [(0.0, 0.0), (3.0, 1.0), (1.5, 0.5), (3.0000004, 1.0), (-0.0000004, 0.0)],
 )
 def test_score_normalisation_is_zero_based_and_clamped(wire, score, expected):
     wire(_ok(_payload(fit=score)))
@@ -230,7 +231,11 @@ def test_client_is_configured_with_one_retry_and_the_timeout_budget(wire):
     kw = w.clients[0]
     assert kw["retry"].max_retries == 1
     assert kw["retry"].timeout == 3.5
-    assert kw["timeout"] == 3.5
+    # Each attempt gets half the budget per network phase, so a failed attempt plus its
+    # retry stays near the budget; it is an `httpx2.Timeout`, not a bare float.
+    timeout = kw["timeout"]
+    assert isinstance(timeout, httpx2.Timeout)
+    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (1.75,) * 4
     assert kw["model"] == "jev-latest"
 
 
@@ -344,6 +349,57 @@ def test_a_choice_outside_the_offered_options_is_malformed(wire):
         _ask()
     assert exc.value.reason == "malformed"
     assert exc.value.detail == "tick_focus"
+
+
+def _mutated(mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    payload = _payload()
+    mutate(payload["answers"])
+    return payload
+
+
+def _set(qid: str, **fields: Any) -> Callable[[dict[str, Any]], None]:
+    return lambda answers: answers[qid].update(fields)
+
+
+@pytest.mark.parametrize(
+    ("qid", "mutate"),
+    [
+        ("fit_a", _set("fit_a", legend={})),
+        ("fit_a", _set("fit_a", legend={"0": "poor", "1": "ok"})),  # 4 levels asked, 2 returned
+        ("fit_a", _set("fit_a", score=3.4)),
+        ("fit_a", _set("fit_a", score=-0.2)),
+        ("fit_a", _set("fit_a", confidence=5.0)),
+        ("fit_a", _set("fit_a", confidence=-0.1)),
+        ("tick_focus", _set("tick_focus", confidence=1.5)),
+        ("tick_focus", _set("tick_focus", probabilities={"economy": 7.0, "defense": -3.0})),
+        ("tick_focus", _set("tick_focus", probabilities={"economy": 0.5, "defense": 0.2})),
+        ("tick_focus", _set("tick_focus", probabilities={"economy": 0.9, "defense": 0.9})),
+        ("tick_focus", _set("tick_focus", probabilities={"economy": 0.6, "conquest": 0.4})),
+        ("tick_focus", _set("tick_focus", probabilities={})),
+        ("threat", _set("threat", noul=1.5)),
+        ("threat", _set("threat", noul=-0.5)),
+    ],
+)
+def test_out_of_range_answer_values_are_malformed(wire, qid, mutate):
+    wire(_ok(_mutated(mutate)))
+    with pytest.raises(JevError) as exc:
+        _ask()
+    assert exc.value.reason == "malformed"
+    assert exc.value.detail == qid
+
+
+def test_probabilities_summing_to_one_within_tolerance_are_accepted(wire):
+    payload = _mutated(
+        _set("tick_focus", probabilities={"economy": 0.62, "defense": 0.3, "science": 0.1})
+    )
+    wire(_ok(payload))
+    assert _ask().choices["tick_focus"].choice == "economy"
+
+
+def test_a_probability_subset_of_the_options_is_accepted(wire):
+    payload = _mutated(_set("tick_focus", probabilities={"economy": 0.7, "defense": 0.3}))
+    wire(_ok(payload))
+    assert set(_ask().choices["tick_focus"].probabilities) == {"economy", "defense"}
 
 
 def test_an_unrequested_extra_answer_is_ignored(wire):

@@ -220,6 +220,7 @@
         "payback_reference_hours": {
           "default": 24.0,
           "exclusiveMinimum": 0,
+          "maximum": 10000,
           "title": "Payback Reference Hours",
           "type": "number"
         },
@@ -243,30 +244,35 @@
       "properties": {
         "economy": {
           "default": 0.25,
+          "maximum": 100,
           "minimum": 0,
           "title": "Economy",
           "type": "number"
         },
         "fit": {
           "default": 0.3,
+          "maximum": 100,
           "minimum": 0,
           "title": "Fit",
           "type": "number"
         },
         "focus": {
           "default": 0.15,
+          "maximum": 100,
           "minimum": 0,
           "title": "Focus",
           "type": "number"
         },
         "threat": {
           "default": 0.05,
+          "maximum": 100,
           "minimum": 0,
           "title": "Threat",
           "type": "number"
         },
         "urgency": {
           "default": 0.25,
+          "maximum": 100,
           "minimum": 0,
           "title": "Urgency",
           "type": "number"

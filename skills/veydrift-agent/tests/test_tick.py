@@ -5377,11 +5377,38 @@ def test_override_with_jev_records_what_the_jev_engine_would_have_proposed(isola
     assert len(calls) == 1  # the comparison went through the configured engine
     record = log.read_proposals()[0]
     assert record["source"] == "manual_override"
+    # The fingerprinted override record is the ladder shape under both engines...
     would = record["override"]["planner_would_have_proposed"]
-    assert would["engine"] == "ladder"
-    assert would["fallback_reason"] == "timeout"
-    assert "latency_ms" not in would  # only stable strings: the override record is fingerprinted
-    assert record["engine"] is None  # the action is the operator's, not an engine's
+    assert set(would) == {"rule", "kind", "function", "rationale"}
+    # ...and the comparison's trace goes in the (fingerprint-excluded) engine block.
+    assert record["engine"]["engine"] == "ladder"
+    assert record["engine"]["configured"] == "jev"
+    assert record["engine"]["fallback_reason"] == "timeout"
+    assert record["engine"]["latency_ms"] == 5000
+    assert "engine: jev -> ladder fallback (timeout)" in _flat_output(result.output)
+
+
+def test_two_override_ticks_whose_comparison_differs_only_in_the_trace_are_deduped(
+    isolated_home, monkeypatch, tmp_path
+):
+    _write_policy_allowing_override(engine={"kind": "jev"})
+    _patch_common(monkeypatch)
+    action_file = _write_override_action_file(tmp_path)
+
+    timeout_trace = EngineTrace(engine="ladder", configured="jev", fallback_reason="timeout", latency_ms=5000)
+    _patch_jev(monkeypatch, action=_build_action(), trace=timeout_trace)
+    r1 = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+    assert r1.exit_code == 0, r1.output
+    assert len(log.read_proposals()) == 1
+
+    ok_trace = _jev_trace(latency_ms=90, winner_confidence=0.9, focus_probabilities={"economy": 0.9, "research": 0.1})
+    _patch_jev(monkeypatch, action=_build_action(), trace=ok_trace)
+    r2 = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+
+    assert r2.exit_code == 0, r2.output
+    assert "duplicate" in r2.output.lower()
+    assert load_agent_state().tick_count == 1
+    assert len(log.read_proposals()) == 1
 
 
 def test_override_record_is_unchanged_under_the_default_ladder_engine(isolated_home, monkeypatch, tmp_path):

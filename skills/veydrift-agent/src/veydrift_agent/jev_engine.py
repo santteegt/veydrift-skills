@@ -18,6 +18,7 @@ hours-to-cap, defense posture), the state stays small, and each question is narr
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -51,6 +52,14 @@ DEFAULT_INTENT = (
     "Grow a sound, balanced economy: keep mines energy-safe, avoid wasted production, "
     "progress research and declared targets steadily, and avoid risky military action."
 )
+
+#: The ladder's rules for the high-stakes families (8c deploy, 8d colonize, 8e attack, 8f missile):
+#: a ladder pick whose `rule` is in this set is itself a high-stakes action.
+HIGH_STAKES_RULES = frozenset(plan_mod.RULE_BY_FAMILY[f] for f in candidates.HIGH_STAKES_FAMILIES)
+
+#: A high-stakes winner needs a normalized `fit` of at least this ("directly supports" on the
+#: five-level fit scale) and must be the group `tick_focus` chose.
+HIGH_STAKES_MIN_FIT = 0.75
 
 #: The economy term of a candidate with no payback score (it does not raise production
 #: directly: research, infrastructure, ships, defense, logistics, ...).
@@ -257,6 +266,8 @@ def _declared_targets(policy: Policy) -> list[str]:
 
 
 def _planet_state(planet: PlanetSnapshot, label: str, role: str) -> dict[str, Any]:
+    # `role` is only where the planet sits in the target-planet order; the ladder treats the first
+    # one specially for research, but nothing here knows which planet is the player's capital.
     queues = {
         kind.value: "idle" if planet.queues.get(kind) is None else "busy"
         for kind in (QueueKind.BUILDING, QueueKind.SHIP, QueueKind.DEFENSE)
@@ -290,7 +301,7 @@ def _situation(
         "threats": _threats(snapshot, policy, context),
         "declared_targets": _declared_targets(policy),
         "planets": [
-            _planet_state(p, labels[p.planet_id], "home" if i == 0 else "colony") for i, p in enumerate(target_planets)
+            _planet_state(p, labels[p.planet_id], "listed first" if i == 0 else "other") for i, p in enumerate(target_planets)
         ],
     }
 
@@ -612,6 +623,8 @@ def _compose(pool: list[PoolEntry], answers: JevAnswers, policy: Policy) -> list
     cfg = policy.engine.jev
     w = cfg.weights
     total_w = w.fit + w.urgency + w.focus + w.economy + w.threat
+    if not math.isfinite(total_w) or total_w <= 0:
+        raise JevError("malformed", "weights")
     focus_answer: ChoiceAnswer = _answer(answers.choices, "tick_focus")
     threat = float(_answer(answers.nouls, "threat"))
     scored: list[_Scored] = []
@@ -646,7 +659,8 @@ def _compose(pool: list[PoolEntry], answers: JevAnswers, policy: Policy) -> list
 
 def _confidence(winner: _Scored, focus_confidence: float, policy: Policy) -> float:
     """Minimum confidence over the judgments with a positive weight that fed the winner
-    (fit, urgency, tick_focus). Nouls carry none. 1.0 when no judgment with a confidence fed it."""
+    (fit, urgency, tick_focus). Nouls carry none. Never a vacuous 1.0: if no weighted judgment
+    carries a confidence (the policy validator forbids such weights) it is `malformed`."""
     w = policy.engine.jev.weights
     confidences: list[float] = []
     if w.fit > 0:
@@ -655,7 +669,48 @@ def _confidence(winner: _Scored, focus_confidence: float, policy: Policy) -> flo
         confidences.append(winner.urgency_confidence)
     if w.focus > 0:
         confidences.append(focus_confidence)
-    return min(confidences) if confidences else 1.0
+    if not confidences:
+        raise JevError("malformed", "no weighted judgment carries a confidence")
+    return min(confidences)
+
+
+def _kind(s: _Scored) -> tuple[str, str | None, int | None]:
+    """What sort of move an entry is, for the margin: `(family, function, entity)`. The same
+    upgrade on two planets is one kind; a different entity or family is a different one."""
+    action = s.entry.candidate.action
+    return (s.entry.candidate.family, action.function, action.entity_id)
+
+
+def _margin(scored: list[_Scored]) -> float | None:
+    """Winner composite minus the best composite of a *different kind* of action; `None` when
+    every entry is the winner's kind (nothing to be confused with). Identical candidates on
+    symmetric planets tie by construction and say nothing about the decision."""
+    winner = scored[0]
+    kind = _kind(winner)
+    rivals = [s.composite for s in scored[1:] if _kind(s) != kind]
+    return winner.composite - max(rivals) if rivals else None
+
+
+def _high_stakes_reason(
+    winner: _Scored, ladder_action: Action, focus_answer: ChoiceAnswer, cfg: Any
+) -> str | None:
+    """Why a high-stakes winner must not be taken, or `None` when it is endorsed. A high-stakes
+    move (colonize, attack, missile, deploy) needs more than a top composite:
+
+    - `high_stakes_not_idle`: the ladder reaches 8c-deploy/8d/8e/8f only when every earlier band
+      proposed nothing at all, affordable or not. If the ladder's own pick is an on-chain action
+      whose rule is not in `HIGH_STAKES_RULES`, the account is not idle -- something ordinary is
+      pending (even if merely unaffordable) -- so the ladder's pick stands.
+    - `high_stakes_hold`: `tick_focus` chose hold.
+    - `high_stakes_not_endorsed`: the winner's fit is below `HIGH_STAKES_MIN_FIT`, or `tick_focus`
+      chose a group other than the winner's."""
+    if cfg.high_stakes_only_when_idle and ladder_action.is_onchain() and ladder_action.rule not in HIGH_STAKES_RULES:
+        return "high_stakes_not_idle"
+    if focus_answer.choice == "hold":
+        return "high_stakes_hold"
+    if winner.fit < HIGH_STAKES_MIN_FIT or focus_answer.choice != winner.entry.group:
+        return "high_stakes_not_endorsed"
+    return None
 
 
 def _r(value: float | None) -> float | None:
@@ -779,8 +834,16 @@ def decide(
     focus_answer = answers.choices["tick_focus"]
     threat = answers.nouls["threat"]
     winner = scored[0]
-    conf = _confidence(winner, focus_answer.confidence, policy)
-    margin = 1.0 if len(scored) == 1 else winner.composite - scored[1].composite
+    if not all(math.isfinite(s.composite) for s in scored):
+        return fall_back("malformed")
+    try:
+        conf = _confidence(winner, focus_answer.confidence, policy)
+    except JevError as err:
+        return fall_back(err.reason)
+    rival_margin = _margin(scored)
+    margin = 1.0 if rival_margin is None else rival_margin
+    if not math.isfinite(margin):
+        return fall_back("malformed")
     diagnostics: dict[str, Any] = {
         "winner_confidence": _r(conf),
         "margin": _r(margin),
@@ -809,9 +872,13 @@ def decide(
     fields["agrees_with_ladder"] = agrees
     if conf < cfg.min_confidence:
         return fall_back("low_confidence")
-    if winner.entry.candidate.family in candidates.HIGH_STAKES_FAMILIES and conf < cfg.min_confidence_high_stakes:
-        return fall_back("low_confidence_high_stakes")
-    if len(scored) > 1 and margin < cfg.min_margin:
+    if winner.entry.candidate.family in candidates.HIGH_STAKES_FAMILIES:
+        if conf < cfg.min_confidence_high_stakes:
+            return fall_back("low_confidence_high_stakes")
+        reason = _high_stakes_reason(winner, ladder_action, focus_answer, cfg)
+        if reason is not None:
+            return fall_back(reason)
+    if rival_margin is not None and margin < cfg.min_margin:
         return fall_back("low_margin")
 
     # Alternatives in pool order (band, then generation index), never composite order, so the

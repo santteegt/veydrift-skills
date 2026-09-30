@@ -1598,9 +1598,9 @@ def _describe_override(
     missile_targets: dict[int, tuple[str, dict[int, int], bool | None]],
     last_attended_planet_id: int | None,
     context: engine_mod.EngineContext | None = None,
-) -> tuple[dict[str, Any], str]:
-    """`(override_record, override_line)` for a `vd tick --action`-supplied action --
-    the code-enforced disagreement record `references/manual-action-override.md`
+) -> tuple[dict[str, Any], str, EngineTrace]:
+    """`(override_record, override_line, comparison_trace)` for a `vd tick --action`-supplied
+    action -- the code-enforced disagreement record `references/manual-action-override.md`
     promises: the operator never has to hand-describe what the planner would have
     proposed instead, because this calls `engine_mod.decide` itself -- the *configured*
     engine, so the comparison is against what a normal tick would really have proposed --
@@ -1613,12 +1613,12 @@ def _describe_override(
     Its result is never executed -- only recorded, in `proposals.jsonl` (`override_record`),
     `logs/strategy.md` and the printed tick report (`override_line`, both via `_finish_tick`).
 
-    `planner_would_have_proposed` gains `"engine"` and `"fallback_reason"` keys only when
-    `policy.engine.kind == "jev"`: the record is part of the dedup fingerprint, so a
-    default-policy record must stay byte-identical to what it was before the engine existed.
-    Only the engine name and fallback reason go in -- never probabilities or latency, which
-    would jitter the fingerprint. The override tick's own `engine_trace` (the report panel)
-    is `None`: the executed-or-proposed action is the operator's, not an engine's.
+    `planner_would_have_proposed` is byte-identical for both engines (`rule`, `kind`,
+    `function`, `rationale`): the record is part of the dedup fingerprint, and under `jev`
+    anything derived from the TypeSafe call (a `timeout` versus a success, probabilities,
+    latency) would defeat dedup on otherwise identical override ticks. The comparison's
+    `EngineTrace` is returned separately; `_run_tick` records it in the proposal's `engine`
+    field (fingerprint-excluded) on the override path when `jev` is configured.
 
     `last_attended_planet_id` must be the exact same value `_run_tick`'s own planner
     branch would pass -- otherwise the "planner would have proposed" record silently
@@ -1645,7 +1645,7 @@ def _describe_override(
         last_attended_planet_id=last_attended_planet_id,
         context=context,
     )
-    record = {
+    record: dict[str, Any] = {
         "operator_action": {
             "rule": override_action.rule,
             "function": override_action.function,
@@ -1658,15 +1658,12 @@ def _describe_override(
             "rationale": planner_choice.rationale,
         },
     }
-    if policy_model.engine.kind == "jev":
-        record["planner_would_have_proposed"]["engine"] = planner_choice.engine
-        record["planner_would_have_proposed"]["fallback_reason"] = planner_trace.fallback_reason
     line = (
         f"OVERRIDE: operator chose {override_action.rule or override_action.function or override_action.kind.value} "
         f"({override_action.rationale}) instead of the planner's "
         f"{planner_choice.rule or planner_choice.kind.value} ({planner_choice.rationale})."
     )
-    return record, line
+    return record, line, planner_trace
 
 
 # --------------------------------------------------------------------------------------
@@ -2707,9 +2704,10 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     override_record: dict[str, Any] | None = None
     override_line: str | None = None
     # `engine_mod.decide` dispatches on `policy.engine.kind` (the ladder, by default -- exactly
-    # `plan_next_action`, offline). `engine_trace` stays `None` on the override path: the
-    # action is the operator's, so no engine chose it (`_describe_override` records what the
-    # configured engine would have proposed instead, in `override_record`).
+    # `plan_next_action`, offline). On the override path the action is the operator's, so no
+    # engine chose it; `engine_trace` is the trace of the *comparison* call
+    # `_describe_override` makes (recorded only when jev is configured, and outside the dedup
+    # fingerprint like every engine block).
     engine_trace: EngineTrace | None = None
     engine_context = engine_mod.EngineContext(radar_report=radar_report, alliance_state=alliance_state)
     if override_action is not None:
@@ -2726,7 +2724,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             if derived_cost is not None:
                 override_action = override_action.model_copy(update={"cost": derived_cost})
         action = brief_mod.attach(override_action, snapshot, policy_model)
-        override_record, override_line = _describe_override(
+        override_record, override_line, engine_trace = _describe_override(
             override_action,
             snapshot,
             policy_model,

@@ -377,22 +377,7 @@ def test_engine_pool_json(tmp_path, monkeypatch):
     assert isinstance(payload["rejected"], dict)
     assert payload["request"]["state"] == {"s": 1}
     assert payload["request"]["estimated_tokens"] > 0
-    assert payload["note"] is None
-
-
-def test_engine_pool_survives_an_unimplemented_build_request(tmp_path, monkeypatch):
-    snap, pol = _write_inputs(tmp_path, jev_policy(planets=[664]))
-
-    def _not_yet(*a, **kw):
-        raise NotImplementedError
-
-    monkeypatch.setattr(jev_engine, "build_request", _not_yet)
-
-    result = runner.invoke(vd_app, ["engine", "pool", "--snapshot", snap, "--policy", pol])
-
-    assert result.exit_code == 0, result.output
-    assert "pool:" in result.output
-    assert "note: jev_engine.build_request is not implemented yet" in result.output
+    assert "note" not in payload
 
 
 def test_engine_pool_needs_no_key_and_no_network(tmp_path, monkeypatch):

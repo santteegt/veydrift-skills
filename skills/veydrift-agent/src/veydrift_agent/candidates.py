@@ -2032,6 +2032,11 @@ def generate_defense_target_candidates(snapshot: Snapshot, policy: Policy, plane
     return out
 
 
+#: `score_basis` of the undeclared default Rocket Launcher candidate -- the only way
+#: `collect_pool` recognises it (a declared `defense_targets` entry carries a different basis).
+DEFAULT_ROCKET_LAUNCHER_BASIS = "policy-declared; cheapest defense entry"
+
+
 def _generate_default_rocket_launcher_candidate(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
     """The pre-Phase-3 hardcoded default: a single Rocket Launcher, unconditionally --
     ported verbatim from `plan.py`'s pre-Phase-2 `_shipyard_action` defense branch. Fires
@@ -2059,7 +2064,7 @@ def _generate_default_rocket_launcher_candidate(snapshot: Snapshot, policy: Poli
     )
     if unmet_reqs:
         return [Candidate(action=action, family="defense", score=None, score_basis="locked: " + "; ".join(describe(r) for r in unmet_reqs))]
-    return [Candidate(action=action, family="defense", score=None, score_basis="policy-declared; cheapest defense entry")]
+    return [Candidate(action=action, family="defense", score=None, score_basis=DEFAULT_ROCKET_LAUNCHER_BASIS)]
 
 
 def generate_defense_candidates(snapshot: Snapshot, policy: Policy, planet: PlanetSnapshot) -> list[Candidate]:
@@ -3336,8 +3341,9 @@ GROUP_BY_FAMILY: dict[str, str] = {
     "missile": "offense",
 }
 
-#: Families whose action is a permanent or hard-to-reverse commitment.
-HIGH_STAKES_FAMILIES = frozenset({"colonize", "attack", "missile"})
+#: Families whose action is a permanent or hard-to-reverse commitment (`logistics-deploy`
+#: moves the whole fleet to another planet for good).
+HIGH_STAKES_FAMILIES = frozenset({"colonize", "attack", "missile", "logistics-deploy"})
 
 
 @dataclass(frozen=True)
@@ -3540,10 +3546,14 @@ def collect_pool(
     7. `fields` -- the planet has a free field, and reports its field data.
     8. `energy_unknown` -- the planet reports an energy balance (`guard._gate_energy`).
     9. `fleet_slots` -- a fleet mission needs a free slot; unknown counts as none.
+    9b. `economy_not_on_track` -- the undeclared default Rocket Launcher (the ladder's filler when
+        `defense_targets` is empty, recognised by `DEFAULT_ROCKET_LAUNCHER_BASIS`) is pooled only
+        while `economy_on_track` holds, as `select_shipyard_candidate` requires. Declared targets
+        are unaffected.
     10. `batch_vs_scored_single` -- a scored single ship order on the same planet outranks a
         production batch (AGENTS.md section 5).
-    11. `high_stakes_not_idle` -- with `high_stakes_only_when_idle`, colonize/attack/missile
-        survive only when nothing else did.
+    11. `high_stakes_not_idle` -- with `high_stakes_only_when_idle`, the `HIGH_STAKES_FAMILIES`
+        (colonize/attack/missile/deploy) survive only when nothing else did.
     12. `duplicate` -- one entry per action identity (`pool_key`), lowest band then lowest
         generation index; research dedups by technology and prefers `target_planets[0]`.
 
@@ -3592,8 +3602,11 @@ def collect_pool(
         rejected[reason] = rejected.get(reason, 0) + 1
 
     survivors: list[PoolEntry] = []
+    on_track = economy_on_track(snapshot, target_planets)
     for entry in entries:
         reason = _rejection_reason(entry.candidate, snapshot, policy)
+        if reason is None and not on_track and entry.candidate.score_basis == DEFAULT_ROCKET_LAUNCHER_BASIS:
+            reason = "economy_not_on_track"
         if reason is None:
             survivors.append(entry)
         else:

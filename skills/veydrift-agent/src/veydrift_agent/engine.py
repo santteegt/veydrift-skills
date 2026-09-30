@@ -224,24 +224,17 @@ def pool(
         for i, e in enumerate(entries)
     ]
 
-    request: dict[str, Any] | None = None
-    note: str | None = None
-    try:
-        from veydrift_agent import jev, jev_engine
+    from veydrift_agent import jev, jev_engine
 
-        state, questions = jev_engine.build_request(snapshot_model, policy_model, entries, None)
-        request = {
-            "state": state,
-            "questions": {qid: asdict(q) for qid, q in questions.items()},
-            "estimated_tokens": jev.estimate_tokens(state, questions),
-        }
-    except NotImplementedError:
-        note = "jev_engine.build_request is not implemented yet; showing the pool only."
+    state, questions = jev_engine.build_request(snapshot_model, policy_model, entries, None)
+    request: dict[str, Any] = {
+        "state": state,
+        "questions": {qid: asdict(q) for qid, q in questions.items()},
+        "estimated_tokens": jev.estimate_tokens(state, questions),
+    }
 
     if json_output:
-        typer.echo(
-            json.dumps({"pool": rows, "rejected": rejected, "request": request, "note": note}, indent=2, default=str)
-        )
+        typer.echo(json.dumps({"pool": rows, "rejected": rejected, "request": request}, indent=2, default=str))
         return
 
     typer.echo(f"pool: {len(rows)} candidate(s)")
@@ -251,14 +244,11 @@ def pool(
             f"planet={row['planet_id']}  {row['entity']}  -- {row['score_basis']}"
         )
     typer.echo("rejected: " + (", ".join(f"{k}={v}" for k, v in sorted(rejected.items())) or "none"))
-    if note:
-        typer.echo(f"note: {note}")
-    if request is not None:
-        typer.echo(f"estimated request size: ~{request['estimated_tokens']} tokens")
-        typer.echo("state:")
-        typer.echo(json.dumps(request["state"], indent=2, default=str))
-        typer.echo("questions:")
-        typer.echo(json.dumps(request["questions"], indent=2, default=str))
+    typer.echo(f"estimated request size: ~{request['estimated_tokens']} tokens")
+    typer.echo("state:")
+    typer.echo(json.dumps(request["state"], indent=2, default=str))
+    typer.echo("questions:")
+    typer.echo(json.dumps(request["questions"], indent=2, default=str))
 
 
 @app.command()

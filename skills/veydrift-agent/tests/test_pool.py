@@ -660,6 +660,16 @@ def test_high_stakes_families_are_pooled_only_when_nothing_else_is():
     assert "high_stakes_not_idle" not in rejected_off
 
 
+def test_deploy_is_a_high_stakes_family():
+    assert "logistics-deploy" in candidates.HIGH_STAKES_FAMILIES
+    snapshot = rich_snapshot()
+    policy = make_policy(strategy=rich_strategy())
+    busy, rejected = pool_of(snapshot, policy, **target_kwargs(), max_candidates=200)
+    assert "logistics-deploy" not in families(busy) and rejected["high_stakes_not_idle"] >= 1
+    idle_off, _ = pool_of(snapshot, policy, **target_kwargs(), high_stakes_only_when_idle=False, max_candidates=200)
+    assert "logistics-deploy" in families(idle_off)
+
+
 def test_high_stakes_families_survive_when_the_pool_is_otherwise_empty():
     snapshot = rich_snapshot()
     only_high_stakes = make_policy(
@@ -675,7 +685,8 @@ def test_high_stakes_families_survive_when_the_pool_is_otherwise_empty():
     )
     for knob in (True, False):
         pool, rejected = pool_of(snapshot, only_high_stakes, **target_kwargs(), high_stakes_only_when_idle=knob)
-        assert families(pool) == candidates.HIGH_STAKES_FAMILIES, knob
+        # deploy is high-stakes too, but allow_fleet_noncombat is off here
+        assert families(pool) == candidates.HIGH_STAKES_FAMILIES - {"logistics-deploy"}, knob
         assert "high_stakes_not_idle" not in rejected
 
 
@@ -695,6 +706,42 @@ def test_high_stakes_only_ever_needs_one_ordinary_survivor_to_be_dropped():
     pool, rejected = pool_of(snapshot, one_ordinary, **target_kwargs())
     assert families(pool) == {"research"}
     assert rejected["high_stakes_not_idle"] >= 3
+
+
+def _default_rocket_launchers(pool: list[PoolEntry]) -> list[PoolEntry]:
+    return [e for e in pool if e.candidate.score_basis == candidates.DEFAULT_ROCKET_LAUNCHER_BASIS]
+
+
+def test_the_undeclared_default_rocket_launcher_needs_the_economy_on_track():
+    # rich_strategy declares defense_targets; the default filler only exists when none are declared.
+    policy = make_policy(strategy=rich_strategy(defense_targets=[], ship_targets=[]))
+    idle = rich_snapshot()
+    pool, rejected = pool_of(idle, policy, max_candidates=200)
+    assert not candidates.economy_on_track(idle, idle.planets)
+    assert _default_rocket_launchers(pool) == [] and not find(pool, function="startDefenseProduction")
+    assert rejected["economy_not_on_track"] == 2, "one default Rocket Launcher per planet"
+
+    # Something building on one planet: on track, so the ladder's filler is legal on both planets.
+    queues = {**idle.planets[0].queues, QueueKind.BUILDING: _busy(QueueKind.BUILDING, ids.Building.METAL_MINE, "Metal Mine")}
+    busy_planet = idle.planets[0].model_copy(update={"queues": queues})
+    on_track = idle.model_copy(update={"planets": [busy_planet, idle.planets[1]]})
+    pool, rejected = pool_of(on_track, policy, max_candidates=200)
+    assert {e.candidate.action.planet_id for e in _default_rocket_launchers(pool)} == {664, 665}
+    assert "economy_not_on_track" not in rejected
+
+    # A busy research queue counts too, and then both planets get their filler.
+    researching = idle.model_copy(update={"research_queue": _busy(QueueKind.RESEARCH, ids.Technology.ENERGY, "Energy Technology")})
+    pool, rejected = pool_of(researching, policy, max_candidates=200)
+    assert len(_default_rocket_launchers(pool)) == 2 and "economy_not_on_track" not in rejected
+
+
+def test_declared_defense_targets_are_pooled_even_when_the_economy_is_idle():
+    idle = rich_snapshot()
+    assert not candidates.economy_on_track(idle, idle.planets)
+    policy = make_policy(strategy=rich_strategy())  # declares 3 Rocket Launchers
+    pool, rejected = pool_of(idle, policy, max_candidates=200)
+    assert find(pool, function="startDefenseProduction")
+    assert _default_rocket_launchers(pool) == [] and "economy_not_on_track" not in rejected
 
 
 def _energy_research_action(planet_id: int, snapshot: Snapshot) -> Action:
