@@ -129,6 +129,7 @@
   }
   a.card p { margin: 0; color: var(--ink-dim); font-size: 14px; line-height: 1.55; }
   a.card .go { margin-top: 14px; color: var(--accent); font-weight: 600; font-size: 14px; }
+  @media (min-width: 620px) { a.card.card-wide { grid-column: 1 / -1; } }
 
   .callout {
     display: block;
@@ -192,6 +193,14 @@
       layers, the silent&#8209;corruption traps, and what's tested versus genuinely
       unverified.</p>
       <span class="go">Read the walkthrough &rarr;</span>
+    </a>
+    <a class="card card-wide" href="JEV-ENGINE.html">
+      <span class="kicker">Decision engines</span>
+      <h2>The Jev Decision Engine</h2>
+      <p>An alternative to the fixed-order ladder: every legal move judged against your
+      plain&#8209;language strategy by TypeSafe's Jev model, with the ladder as the fallback.
+      How it decides, how to turn it on and tune it, and how it was built and verified.</p>
+      <span class="go">Read about the engine &rarr;</span>
     </a>
   </div>
 

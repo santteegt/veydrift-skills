@@ -721,8 +721,13 @@ enough to call out here specifically, not a duplicate of that ledger.
   reduced to a single entrypoint, and the verified-but-unused `calc.py` formulas. Regenerated
   against the pinned ABI, not hand-maintained; guarded against silently going stale by
   `skills/veydrift-agent/tests/test_coverage_doc.py`.
+- `docs/JEV-ENGINE.html` — the published overview of the jev decision engine: how it decides,
+  how to enable and tune it, the implementation map, and how it was built and verified. A
+  synthesis of `skills/veydrift-agent/references/jev-engine.md` and SPEC correction 81.
 
-**Maintenance note — read this before changing `docs/SPEC.md`.**
+**Maintenance note — read this before changing `docs/SPEC.md`.** `docs/JEV-ENGINE.html` has the
+same property for the jev engine: grep it too whenever the engine's gates, pool filters,
+`policy.engine` fields or fallback reasons change.
 `docs/PLAYER-GUIDE.md` and `docs/TECHNICAL-WALKTHROUGH.md` both restate spec content in
 prose: the tier table, the policy schema, the decision ladder, the guardrail list, module
 responsibilities. That restatement is deliberate — it's what makes them readable without
