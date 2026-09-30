@@ -264,10 +264,20 @@ checks after the confidence floor run in the order listed.
 - *Endorsed.* The winner's normalized `fit` is at least 0.75 ("directly supports" on the five-level
   scale) **and** `tick_focus` chose the winner's own group; otherwise `high_stakes_not_endorsed`.
 
+**Endorsement and split answers.** The fit at least 0.75 test reads the *expected* (probability-weighted)
+fit, so a split answer can average past it: half the probability on "directly supports" and half on
+"unrelated" can still land above 0.75 on the five-level scale. What catches a split answer is the
+high-stakes confidence floor (`min_confidence_high_stakes`), because the confidence of a split
+answer is low. Keep that floor high.
+
 **Margin.** The margin is the winner's composite minus the best composite among entries of a
-different kind, where kind is `(family, function, entity)`. The same upgrade on two symmetric
+different kind. Kind is `(family, function, entity)`; a fleet or missile launch also carries its
+mission type, origin planet and target, so two attacks from different origins, or on different
+targets, are different kinds and must clear `min_margin`. The same upgrade on two symmetric
 planets is one kind, so identical candidates tie without forcing `low_margin`. With no entry of a
-different kind the margin is 1.0 and the gate is skipped.
+different kind (a pool holding only one kind) there is nothing to be confused with: the gate is
+skipped and the trace reports `margin: null` (omitted from `vd engine compare`'s output and from
+the panel line), never a made-up number.
 
 **Hold.** With `allow_hold` on, a `tick_focus` of `hold` with probability at least 0.5 and
 confidence at least `min_confidence` returns a NOOP with rule `9j:hold` (`engine: "jev"`)
@@ -281,9 +291,9 @@ configured):
 | --- | --- |
 | `missing_key` | `TYPESAFE_API_KEY` unset or blank |
 | `sdk_missing` | `typesafe-sdk` not importable |
-| `timeout`, `connection` | the request timed out or could not connect (one retry at most, within the `timeout_s` budget; see Tuning) |
+| `timeout`, `connection` | the request timed out or could not connect (a timeout is not retried; a connection error may retry once within the `timeout_s` budget; see Tuning) |
 | `rate_limited`, `auth`, `bad_request`, `server` | the matching TypeSafe API error class |
-| `malformed` | an answer missing, of the wrong type, non-finite or out of range for any asked question: an empty or mis-sized score legend, a score outside the legend's span, a confidence, noul or probability outside 0..1, choice probabilities that do not sum to 1 (tolerance 0.05) or name an option that was not asked; also a non-finite composite or margin, or a weight vector with no confidence-bearing judgment |
+| `malformed` | an answer missing, of the wrong type, non-finite or out of range for any asked question: an empty or mis-sized score legend, a score more than 5% of the legend's span past either end (a smaller overshoot is clamped to 0..1), a confidence, noul or probability outside 0..1, choice probabilities that do not sum to 1 (tolerance 0.05) or name an option that was not asked; also a non-finite composite or margin, or a weight vector with no confidence-bearing judgment |
 | `request_too_large` | estimated request over 48,000 tokens |
 | `empty_pool` | nothing legal to choose from |
 | `low_confidence`, `low_confidence_high_stakes`, `high_stakes_not_idle`, `high_stakes_hold`, `high_stakes_not_endorsed`, `low_margin` | the gates above |
@@ -324,7 +334,9 @@ ladder's action) and `test_vetoes_and_the_deadline_never_call_the_backend`.
   "planner would have proposed" comparison runs the configured engine, so under jev it costs
   one request. The `planner_would_have_proposed` record keeps the ladder's shape for both
   engines (`rule`, `kind`, `function`, `rationale`; no `engine` or `fallback_reason` key), because
-  anything derived from the TypeSafe call would defeat dedup. Under jev the comparison's trace goes
+  anything derived from the TypeSafe call would defeat dedup. For that reason the rationale is
+  recorded without the "Selected by the jev engine" sentence (it names the pool size and focus
+  group), so a jev pick and the ladder fallback for the same candidate record the same bytes. Under jev the comparison's trace goes
   into the proposal's fingerprint-excluded `engine` field, and the panel line shows it; that line
   describes the comparison, not the operator's action.
 
@@ -363,10 +375,11 @@ jev have chosen differently here" without a tick.
 - **Thresholds.** Raise `min_confidence`/`min_margin` to hand more ticks to the ladder; lower
   them to trust the model more. A high fallback rate under `low_margin` usually means the pool
   holds several near-equivalent candidates, which is fine.
-- **`timeout_s`** (0.5-30) is a time budget, not a hard deadline. Each network attempt gets
-  `timeout_s / 2` per phase (connect, read, write, pool) and at most one retry is started within
-  the budget, so a failing call takes about `timeout_s` in the normal case; a peer that trickles
-  bytes is bounded per chunk, not overall. **`max_candidates`** (2-60) caps the pool after the pre-trim.
+- **`timeout_s`** (0.5-30) is a time budget, not a hard deadline. One attempt may take up to
+  `timeout_s` per phase (connect, read, write, pool) and a timeout is never retried; a fast
+  failure (connection error, 429, 5xx) may retry once, and only if the retry still fits the
+  budget. A peer that trickles bytes is bounded per chunk, not overall, so the wall-clock time can
+  exceed `timeout_s`. **`max_candidates`** (2-60) caps the pool after the pre-trim.
 - **Declared targets still matter**: `ship_targets`, `defense_targets`, `research_priority` and
   `building_priority` shape which candidates exist and appear in the facts.
 

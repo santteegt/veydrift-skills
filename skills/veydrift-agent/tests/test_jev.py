@@ -170,7 +170,7 @@ def test_success_parses_mixed_choice_score_noul(wire):
 
 @pytest.mark.parametrize(
     ("score", "expected"),
-    [(0.0, 0.0), (3.0, 1.0), (1.5, 0.5), (3.0000004, 1.0), (-0.0000004, 0.0)],
+    [(0.0, 0.0), (3.0, 1.0), (1.5, 0.5), (3.0000004, 1.0), (-0.0000004, 0.0), (3.1, 1.0), (-0.1, 0.0)],
 )
 def test_score_normalisation_is_zero_based_and_clamped(wire, score, expected):
     wire(_ok(_payload(fit=score)))
@@ -231,11 +231,13 @@ def test_client_is_configured_with_one_retry_and_the_timeout_budget(wire):
     kw = w.clients[0]
     assert kw["retry"].max_retries == 1
     assert kw["retry"].timeout == 3.5
-    # Each attempt gets half the budget per network phase, so a failed attempt plus its
-    # retry stays near the budget; it is an `httpx2.Timeout`, not a bare float.
+    # A timeout is never retried (a second full-length wait would double the wait).
+    assert kw["retry"].api_timeout_error is False
+    # One attempt gets the full budget per network phase; it is an `httpx2.Timeout`, not a
+    # bare float.
     timeout = kw["timeout"]
     assert isinstance(timeout, httpx2.Timeout)
-    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (1.75,) * 4
+    assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (3.5,) * 4
     assert kw["model"] == "jev-latest"
 
 
@@ -280,7 +282,61 @@ def test_transport_timeout_maps_to_timeout(wire):
     with pytest.raises(JevError) as exc:
         _ask()
     assert exc.value.reason == "timeout"
-    assert w.calls == 2
+    assert w.calls == 1  # a timeout is not retried
+
+
+@pytest.fixture
+def slow_server(monkeypatch):
+    """A local HTTP server answering after `delay[0]` seconds; points the backend at it."""
+    import http.server
+    import threading
+    import time
+
+    delay = [0.0]
+    hits: list[float] = []
+    body = json.dumps({"model": "m", "usage": {}, "answers": {"q": {"type": "noul", "noul": 0.5}}}).encode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args: Any) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            hits.append(time.monotonic())
+            self.rfile.read(int(self.headers.get("content-length", 0)))
+            time.sleep(delay[0])
+            try:
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except OSError:  # the client gave up first
+                pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("TYPESAFE_API_KEY", KEY)
+    monkeypatch.setattr(jev, "BASE_URL", f"http://127.0.0.1:{server.server_address[1]}")
+    yield delay, hits
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_response_slower_than_half_the_budget_but_within_it_succeeds(slow_server):
+    delay, hits = slow_server
+    delay[0] = 0.7  # more than timeout_s / 2, less than timeout_s
+    out = _ask(questions={"q": QuestionSpec("noul", "Is it?")}, timeout_s=1.5)
+    assert out.nouls == {"q": 0.5}
+    assert len(hits) == 1
+
+
+def test_a_response_slower_than_the_budget_times_out_after_exactly_one_attempt(slow_server):
+    delay, hits = slow_server
+    delay[0] = 3.0
+    with pytest.raises(JevError) as exc:
+        _ask(questions={"q": QuestionSpec("noul", "Is it?")}, timeout_s=0.5)
+    assert exc.value.reason == "timeout"
+    assert len(hits) == 1
 
 
 def test_transport_connection_error_maps_to_connection(wire):
@@ -368,6 +424,8 @@ def _set(qid: str, **fields: Any) -> Callable[[dict[str, Any]], None]:
         ("fit_a", _set("fit_a", legend={"0": "poor", "1": "ok"})),  # 4 levels asked, 2 returned
         ("fit_a", _set("fit_a", score=3.4)),
         ("fit_a", _set("fit_a", score=-0.2)),
+        ("urgency_a", _set("urgency_a", score=4.3)),  # 0..4 legend: 5% of the span is 0.2
+        ("urgency_a", _set("urgency_a", score=-0.3)),
         ("fit_a", _set("fit_a", confidence=5.0)),
         ("fit_a", _set("fit_a", confidence=-0.1)),
         ("tick_focus", _set("tick_focus", confidence=1.5)),
@@ -386,6 +444,11 @@ def test_out_of_range_answer_values_are_malformed(wire, qid, mutate):
         _ask()
     assert exc.value.reason == "malformed"
     assert exc.value.detail == qid
+
+
+def test_a_score_a_hair_past_the_end_of_its_legend_parses_and_clamps(wire):
+    wire(_ok(_mutated(_set("urgency_a", score=4.004))))
+    assert _ask().scores["urgency_a"].normalized == 1.0
 
 
 def test_probabilities_summing_to_one_within_tolerance_are_accepted(wire):

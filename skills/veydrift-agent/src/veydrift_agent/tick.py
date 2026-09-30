@@ -1613,10 +1613,13 @@ def _describe_override(
     Its result is never executed -- only recorded, in `proposals.jsonl` (`override_record`),
     `logs/strategy.md` and the printed tick report (`override_line`, both via `_finish_tick`).
 
-    `planner_would_have_proposed` is byte-identical for both engines (`rule`, `kind`,
+    `planner_would_have_proposed` has the same four keys for both engines (`rule`, `kind`,
     `function`, `rationale`): the record is part of the dedup fingerprint, and under `jev`
     anything derived from the TypeSafe call (a `timeout` versus a success, probabilities,
-    latency) would defeat dedup on otherwise identical override ticks. The comparison's
+    latency) would defeat dedup on otherwise identical override ticks. That includes the jev
+    selection sentence in a jev pick's rationale (pool size, focus group), which
+    `jev_engine.base_rationale` removes, so a jev pick and its ladder fallback for the same
+    candidate record the same text. The comparison's
     `EngineTrace` is returned separately; `_run_tick` records it in the proposal's `engine`
     field (fingerprint-excluded) on the override path when `jev` is configured.
 
@@ -1645,6 +1648,11 @@ def _describe_override(
         last_attended_planet_id=last_attended_planet_id,
         context=context,
     )
+    planner_rationale = planner_choice.rationale
+    if planner_choice.engine == "jev":  # lazy: a ladder-only tick never loads the jev modules
+        from veydrift_agent import jev_engine
+
+        planner_rationale = jev_engine.base_rationale(planner_choice)
     record: dict[str, Any] = {
         "operator_action": {
             "rule": override_action.rule,
@@ -1655,13 +1663,13 @@ def _describe_override(
             "rule": planner_choice.rule,
             "kind": planner_choice.kind.value,
             "function": planner_choice.function,
-            "rationale": planner_choice.rationale,
+            "rationale": planner_rationale,
         },
     }
     line = (
         f"OVERRIDE: operator chose {override_action.rule or override_action.function or override_action.kind.value} "
         f"({override_action.rationale}) instead of the planner's "
-        f"{planner_choice.rule or planner_choice.kind.value} ({planner_choice.rationale})."
+        f"{planner_choice.rule or planner_choice.kind.value} ({planner_rationale})."
     )
     return record, line, planner_trace
 

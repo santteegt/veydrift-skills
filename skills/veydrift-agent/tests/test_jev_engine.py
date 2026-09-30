@@ -31,6 +31,7 @@ from pool_fixtures import (
 )
 
 from veydrift_agent import candidates, ids, jev, jev_engine, plan
+from veydrift_agent import engine as engine_mod
 from veydrift_agent.candidates import PoolEntry
 from veydrift_agent.engine import EngineContext
 from veydrift_agent.jev import ChoiceAnswer, JevAnswers, JevError, QuestionSpec, ScoreAnswer
@@ -716,7 +717,7 @@ def test_a_single_entry_pool_skips_the_margin_gate(monkeypatch):
     only = pool_of(snapshot, policy)[:1]
     monkeypatch.setattr(candidates, "collect_pool", lambda *a, **k: (only, {}))
     action, trace = run(snapshot, policy, FakeBackend(scripted()))
-    assert trace.engine == "jev" and trace.margin == 1.0
+    assert trace.engine == "jev" and trace.margin is None
     assert action.rationale.endswith("Selected by the jev engine from 1 legal candidates (economy focus).")
 
 
@@ -1023,7 +1024,8 @@ def test_a_pool_of_one_kind_only_has_no_rival_to_be_confused_with(monkeypatch):
     twins = [e for e in pool if e.candidate.family == "mine" and e.candidate.action.entity_id == ids.Building.METAL_MINE]
     monkeypatch.setattr(candidates, "collect_pool", lambda *a, **k: (twins, {}))
     _action, trace = run(snapshot, policy, FakeBackend(scripted()))
-    assert trace.engine == "jev" and trace.margin == 1.0
+    assert trace.engine == "jev" and trace.margin is None
+    assert engine_mod.describe_trace(trace).startswith("jev (")  # a None margin is rendered without a number
 
 
 
@@ -1277,3 +1279,38 @@ def test_scenarios_against_the_live_backend(capsys):
         print(f"\njev live scenarios: {len(SCENARIO_FILES)} run, {len(fallbacks)} fell back {fallbacks}, {len(wrong)} unacceptable {wrong}")
     assert not wrong
     assert len(fallbacks) <= len(SCENARIO_FILES) / 2
+
+
+def test_two_attacks_from_different_origins_are_different_kinds_and_must_clear_the_margin():
+    snapshot, policy = only_high_stakes_setup(min_margin=0.2)
+    pool = pool_of(snapshot, policy, **target_kwargs())
+    attacks = [i for i, e in enumerate(pool) if e.candidate.family == "attack"]
+    origins = {pool[i].candidate.action.planet_id for i in attacks}
+    assert len(attacks) == 2 and len(origins) == 2
+    assert {pool[i].candidate.action.target_planet_id for i in attacks} == {7001}, "same target, different origin"
+
+    both = scripted(fits={i: 1.0 for i in attacks}, urgs={i: 1.0 for i in attacks}, default_fit=0.0, default_urg=0.0, focus="offense")
+    result = run(snapshot, policy, FakeBackend(both), **target_kwargs())
+    assert_fell_back(snapshot, policy, result, "low_margin", **target_kwargs())
+    assert result[1].margin is not None and result[1].margin < 0.2
+
+    # with one origin clearly ahead the margin is real and the attack is taken
+    action, trace = run(snapshot, policy, FakeBackend(endorsing(attacks[0], focus="offense")), **target_kwargs())
+    assert trace.engine == "jev" and action.rule == "8e:attack" and trace.margin >= 0.2
+
+
+def test_the_kind_of_a_launch_carries_mission_origin_and_target_but_an_upgrade_does_not():
+    snapshot, policy = only_high_stakes_setup()
+    pool = pool_of(snapshot, policy, **target_kwargs())
+
+    def scored(entry: PoolEntry) -> jev_engine._Scored:
+        return jev_engine._Scored(
+            id="c", entry=entry, fit=0.5, fit_confidence=0.9, urgency=0.5, urgency_confidence=0.9,
+            focus=0.5, economy=0.5, threat=0.0, composite=0.5,
+        )
+
+    a, b = (scored(e) for e in pool if e.candidate.family == "attack")
+    assert jev_engine._kind(a) != jev_engine._kind(b)
+    assert jev_engine._kind(a) == jev_engine._kind(a)
+    mines = [scored(e) for e in pool_of(two_planet(), jev_policy()) if e.candidate.family == "mine" and e.candidate.action.entity_id == ids.Building.METAL_MINE]
+    assert jev_engine._kind(mines[0]) == jev_engine._kind(mines[1])

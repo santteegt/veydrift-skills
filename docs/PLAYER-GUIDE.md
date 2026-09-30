@@ -503,7 +503,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric | `""` |
 | `jev.weights` | object | `fit`, `urgency`, `focus`, `economy`, `threat`, each `0`-`100`, at least one of `fit`/`urgency`/`focus` `> 0`; only the ratios matter | `0.30 / 0.25 / 0.15 / 0.25 / 0.05` |
 | `jev.min_confidence` / `min_confidence_high_stakes` / `min_margin` | float | `0`-`1`; below them the ladder decides instead | `0.5` / `0.75` / `0.03` |
-| `jev.timeout_s` | float | `0.5`-`30`; time budget for the request (each attempt gets half per network phase, at most one retry): about this long in the normal case, not a hard deadline | `5.0` |
+| `jev.timeout_s` | float | `0.5`-`30`; time budget for the request (one attempt may take up to this long per network phase; a timeout is not retried, a fast failure may retry once): not a hard deadline | `5.0` |
 | `jev.max_candidates` | int | `2`-`60`; pool size cap | `24` |
 | `jev.payback_reference_hours` | float | `> 0` and at most `10000`; the payback at which the economy term scores 0.5 | `24.0` |
 | `jev.high_stakes_only_when_idle` | bool | `true`: Colonize/Attack/Missile/Deploy enter the pool only when nothing else is legal, and are only taken when the ladder itself has nothing ordinary to do and the model endorses them | `true` |

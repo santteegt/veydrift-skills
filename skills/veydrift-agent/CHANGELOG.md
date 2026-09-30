@@ -43,10 +43,16 @@ skills are not versioned in lockstep.
 ### Changed
 - `plan.py` exposes `veto_action`, `deadline_action`, `RULE_BY_FAMILY` and `finalize_candidate`
   (`plan_next_action` composes them; no behaviour change, still pure and offline).
-- The jev margin is measured against the best entry of a different kind (`(family, function, entity)`),
-  so identical candidates on symmetric planets no longer force `low_margin`.
-- `timeout_s` is a budget, not a deadline: each attempt gets `timeout_s / 2` per network phase and at most
-  one retry starts within the budget (about `timeout_s` in the normal case).
+- The jev margin is measured against the best entry of a different kind (`(family, function, entity)`, plus
+  mission type, origin and target for a fleet or missile launch), so identical candidates on symmetric planets
+  no longer force `low_margin` while two attacks from different origins or on different targets must clear it.
+  A pool of one kind skips the gate and the trace's `margin` is `null`.
+- `timeout_s` is a per-attempt budget, not a deadline: one attempt may take up to `timeout_s` per network phase;
+  a timeout is not retried, a fast failure may retry once within the budget.
+- A score up to 5% of the legend's span past either end parses and clamps to `0..1`; further out is `malformed`.
+- Under a manual override with jev, `planner_would_have_proposed.rationale` omits the jev selection sentence,
+  so a jev pick and its ladder fallback for the same candidate record identical bytes and dedup.
+- The high-stakes fit endorsement reads the expected fit; the high-stakes confidence floor catches split answers.
 - Planet role sent to TypeSafe is `listed first`/`other`. Under a manual override with jev, the comparison
   trace goes to the fingerprint-excluded `engine` field and `planner_would_have_proposed` keeps the ladder
   shape. `vd engine pool --json` has no `note` key.

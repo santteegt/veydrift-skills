@@ -885,20 +885,21 @@ class JevCfg(Base):
     weights: JevWeights = Field(default_factory=JevWeights)
     #: Below this (minimum confidence over the winner's judgments) the ladder decides instead.
     min_confidence: float = Field(0.5, ge=0, le=1)
-    #: The same floor for colonize/attack/missile winners.
+    #: The same floor for colonize/attack/missile/deploy winners.
     min_confidence_high_stakes: float = Field(0.75, ge=0, le=1)
-    #: A composite lead over the runner-up smaller than this is a coin toss; the ladder decides.
+    #: A composite lead over the best candidate of a different kind smaller than this is a coin
+    #: toss; the ladder decides. Skipped when every candidate is the winner's kind.
     min_margin: float = Field(0.03, ge=0, le=1)
-    #: Time budget for the TypeSafe call. Each network attempt gets `timeout_s / 2` per phase
-    #: (connect, read, write, pool) and at most one retry is started, so a failed attempt plus
-    #: its retry stays near `timeout_s` in the normal case. It is not a hard wall-clock deadline:
-    #: a peer that trickles bytes is bounded per chunk, not overall.
+    #: Time budget for the TypeSafe call. One attempt may take up to `timeout_s` per phase
+    #: (connect, read, write, pool) and a timeout is not retried; a fast failure (connection
+    #: error, 429, 5xx) may retry once while it fits the budget. It is not a hard wall-clock
+    #: deadline: a peer that trickles bytes is bounded per chunk, not overall.
     timeout_s: float = Field(5.0, ge=0.5, le=30)
     #: Pool size cap, after the deterministic per-family pre-trim.
     max_candidates: int = Field(24, ge=2, le=60)
     #: `H0` in the economy term `H0 / (H0 + payback_hours)`.
     payback_reference_hours: float = Field(24.0, gt=0, le=10000)
-    #: Colonize/Attack/Missile enter the pool only when nothing else is selectable.
+    #: Colonize/Attack/Missile/Deploy enter the pool only when nothing else is selectable.
     high_stakes_only_when_idle: bool = True
     #: Let a confident "hold" judgment return a NOOP instead of the best candidate.
     allow_hold: bool = False
@@ -1319,6 +1320,8 @@ class EngineTrace(Base):
     ladder_pick: dict[str, Any] | None = None
     agrees_with_ladder: bool | None = None
     winner_confidence: float | None = None
+    #: Winner composite minus the best composite of a different kind; `None` when every pool
+    #: entry is the winner's kind (the margin gate is skipped).
     margin: float | None = None
     focus_probabilities: dict[str, float] = Field(default_factory=dict)
     threat: float | None = None

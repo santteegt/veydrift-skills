@@ -733,17 +733,18 @@ killswitch path stays ladder-only). Vocabulary and code map:
   weighted composite (`policy.engine.jev.weights`), then gates on minimum confidence (over the
   winner's weighted judgments), a higher floor for a high-stakes winner (`candidates.HIGH_STAKES_FAMILIES`:
   colonize, attack, missile, logistics-deploy), the high-stakes endorsement gate (below), and a minimum
-  margin measured against the best entry of a different kind (`(family, function, entity)`; 1.0 when none).
+  margin measured against the best entry of a different kind (`(family, function, entity)`, plus mission type, origin and target for a launch; skipped, and `null` in the trace, when none).
   A high-stakes winner is taken only when the ladder's own pick is not an ordinary on-chain action
   (`high_stakes_not_idle`, with `high_stakes_only_when_idle` on), `tick_focus` did not choose hold
   (`high_stakes_hold`, even with `allow_hold` off) and the model endorses it: normalized `fit` at least
-  `HIGH_STAKES_MIN_FIT` (0.75) and `tick_focus` on the winner's group (`high_stakes_not_endorsed`).
+  `HIGH_STAKES_MIN_FIT` (0.75, on the expected fit, so a split answer can average past it; the high-stakes
+  confidence floor is what catches those) and `tick_focus` on the winner's group (`high_stakes_not_endorsed`).
   Any `JevError`, an empty pool, or a failed gate returns the ladder's own `Action` with
   `EngineTrace.fallback_reason`; an unexpected exception is caught in `engine.decide` as
   `engine_error:<Class>`. A veto or the deadline is `EngineTrace.pre_empted_by`, with no request.
 - **Provenance**: `Action.engine` (`"ladder"`/`"jev"`) is never read by the guard; the trace is
   `proposals.jsonl`'s `engine` block, excluded from the dedup fingerprint. On a `vd tick --action` override
-  the `planner_would_have_proposed` record keeps the ladder's shape (no `engine`/`fallback_reason` key) and
+  the `planner_would_have_proposed` record keeps the ladder's shape (no `engine`/`fallback_reason` key, and the jev selection sentence removed from `rationale`) and
   the comparison's trace goes into that same `engine` block.
 - **CLI**: `vd engine pool|compare`, `vd plan run --engine ladder|policy|jev`, `vd doctor` lines.
 
@@ -2537,14 +2538,18 @@ Acceptance criteria (numbering follows the corrections above):
       alternatives do not depend on composite order. It is *not* stable across a pick that flips: a result near
       `min_confidence`, `min_margin` or a high-stakes floor can move between the jev pick and the ladder
       fallback from one tick to the next (no hysteresis; documented as a known limit, no test asserts stability
-      there). On an override tick the `planner_would_have_proposed` record is byte-identical for both engines
+      there). On an override tick the `planner_would_have_proposed` record is byte-identical for a jev pick and
+      the ladder fallback for the same candidate: `tick._describe_override` records `jev_engine.base_rationale`
+      (the rationale without the "Selected by the jev engine from N legal candidates (<group> focus)." sentence),
       and the comparison trace lives in the excluded `engine` field.
       Pinned by `test_jev_engine.py::test_jittered_probabilities_with_the_same_argmax_give_an_identical_action`,
       `test_jev_engine.py::test_alternatives_never_depend_on_the_composite_order`,
       `test_tick.py::test_a_second_jev_tick_differing_only_in_probabilities_and_latency_is_deduped`,
       `test_tick.py::test_engine_is_a_fingerprint_excluded_key`,
       `test_tick.py::test_override_with_jev_records_what_the_jev_engine_would_have_proposed`,
-      `test_tick.py::test_two_override_ticks_whose_comparison_differs_only_in_the_trace_are_deduped` and
+      `test_tick.py::test_two_override_ticks_whose_comparison_differs_only_in_the_trace_are_deduped` (real
+      `jev_engine.decide` output, success versus timeout),
+      `test_tick.py::test_base_rationale_strips_only_the_jev_selection_sentence` and
       `test_tick.py::test_override_record_is_unchanged_under_the_default_ladder_engine`.
 81.7. **A high-stakes jev pick needs model endorsement and ladder idleness, else the ladder decides.** A
       winner in `candidates.HIGH_STAKES_FAMILIES` (colonize, attack, missile, logistics-deploy) passes, in
@@ -2570,10 +2575,12 @@ Acceptance criteria (numbering follows the corrections above):
       weight vector with no positive `fit`/`urgency`/`focus`. At runtime a non-finite composite or margin, or
       a weight vector with no confidence-bearing judgment, is a `malformed` fallback (confidence is never
       vacuously 1.0). A TypeSafe answer is validated by value: an empty or mis-sized score legend, a score
-      outside the legend's span, a confidence/noul/probability outside `[0, 1]`, choice probabilities not
+      more than 5% of the span past either end of the legend (less is clamped into `0..1`), a confidence/noul/probability outside `[0, 1]`, choice probabilities not
       summing to 1 (tolerance 0.05) or naming an unasked option are `malformed`. The margin is measured against
-      the best entry of a different `(family, function, entity)`, so identical candidates on symmetric planets do
-      not force `low_margin`.
+      the best entry of a different kind, so identical candidates on symmetric planets do not force `low_margin`.
+      Kind is `(family, function, entity)`; a fleet or missile launch adds mission type, origin planet, target
+      planet and target coordinates, so two attacks from different origins or on different targets must clear
+      `min_margin`. A pool of a single kind skips the gate and the trace's `margin` is `null`.
       Pinned by `test_models_engine.py::test_non_finite_weights_are_rejected`,
       `test_non_finite_cfg_numbers_are_rejected`, `test_weights_are_bounded_to_0_100`,
       `test_payback_reference_hours_is_bounded`, `test_weights_without_a_judgment_term_are_rejected`,
@@ -2583,7 +2590,19 @@ Acceptance criteria (numbering follows the corrections above):
       `test_an_all_zero_weight_vector_is_malformed_not_a_division_by_zero`,
       `test_confidence_is_never_vacuously_certain`,
       `test_identical_candidates_on_symmetric_planets_do_not_starve_the_margin_gate` and
-      `test_the_margin_is_still_measured_against_a_different_kind_of_action`.
+      `test_the_margin_is_still_measured_against_a_different_kind_of_action`,
+      `test_a_pool_of_one_kind_only_has_no_rival_to_be_confused_with`,
+      `test_two_attacks_from_different_origins_are_different_kinds_and_must_clear_the_margin`;
+      `test_jev.py::test_a_score_a_hair_past_the_end_of_its_legend_parses_and_clamps`.
+81.9. **`timeout_s` is a per-attempt budget, not a wall-clock deadline.** One attempt may take up to `timeout_s`
+      per network phase (connect, read, write, pool). A timeout is never retried; a fast failure (connection
+      error, 429, 5xx) may retry once, and only if the SDK's `timeout_s` retry budget still fits its backoff. A
+      peer that trickles bytes is bounded per chunk, not overall. (An earlier design halved the per-attempt
+      timeout to fit a retry; it made every 2.5-5 s response fail at the default.)
+      Pinned by `test_jev.py::test_client_is_configured_with_one_retry_and_the_timeout_budget`,
+      `test_a_response_slower_than_half_the_budget_but_within_it_succeeds`,
+      `test_a_response_slower_than_the_budget_times_out_after_exactly_one_attempt`,
+      `test_transport_timeout_maps_to_timeout` and `test_http_status_maps_to_reason_and_retries_at_most_once`.
 
 Verification beyond the unit suites is opt-in: `VEYDRIFT_JEV_LIVE_TESTS=1` (with a real
 `TYPESAFE_API_KEY`) runs the scenario fixtures under `tests/fixtures/jev_scenarios/` and a tiny live

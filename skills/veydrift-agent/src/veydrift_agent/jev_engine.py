@@ -47,6 +47,25 @@ if TYPE_CHECKING:
 #: Off-chain rule for a confident "hold" judgment (`policy.engine.jev.allow_hold`).
 HOLD_RULE = "9j:hold"
 
+#: The sentence `decide` appends to a jev-selected action's rationale. Built in one place so
+#: `base_rationale` can remove exactly what `_selection_suffix` adds.
+_SELECTION_SUFFIX_RE = re.compile(r" Selected by the jev engine from \d+ legal candidates \([^()]*\)\.$")
+
+
+def _selection_suffix(pool_size: int, group: str) -> str:
+    return f" Selected by the jev engine from {pool_size} legal candidates ({group} focus)."
+
+
+def base_rationale(action: Action) -> str:
+    """`action.rationale` without the jev selection sentence. The sentence carries the pool size
+    and focus group, which vary between calls; the manual-override record (part of the tick's
+    dedup fingerprint) must not, so a jev pick and its ladder fallback for the same candidate
+    record the same text."""
+    if action.engine != "jev":
+        return action.rationale
+    return _SELECTION_SUFFIX_RE.sub("", action.rationale)
+
+
 #: `strategy_intent` when `policy.engine.jev.intent` is empty.
 DEFAULT_INTENT = (
     "Grow a sound, balanced economy: keep mines energy-safe, avoid wasted production, "
@@ -674,11 +693,24 @@ def _confidence(winner: _Scored, focus_confidence: float, policy: Policy) -> flo
     return min(confidences)
 
 
-def _kind(s: _Scored) -> tuple[str, str | None, int | None]:
+#: Functions whose actions are distinguished by origin and target as well as by entity: two
+#: fleet or missile launches from different planets, or at different targets, are different
+#: moves (unlike the same upgrade on two symmetric planets).
+_TARGETED_FUNCTIONS = frozenset({"launchFleetMission", "launchInterplanetaryMissileAttack"})
+
+_Kind = tuple[Any, ...]
+
+
+def _kind(s: _Scored) -> _Kind:
     """What sort of move an entry is, for the margin: `(family, function, entity)`. The same
-    upgrade on two planets is one kind; a different entity or family is a different one."""
+    upgrade on two planets is one kind; a different entity or family is a different one. A fleet
+    or missile launch additionally carries its mission type, origin planet and target, so two
+    attacks from different origins or on different targets are different kinds."""
     action = s.entry.candidate.action
-    return (s.entry.candidate.family, action.function, action.entity_id)
+    base: _Kind = (s.entry.candidate.family, action.function, action.entity_id)
+    if action.function in _TARGETED_FUNCTIONS:
+        return (*base, action.mission_type, action.planet_id, action.target_planet_id, action.target_coordinates)
+    return base
 
 
 def _margin(scored: list[_Scored]) -> float | None:
@@ -841,12 +873,11 @@ def decide(
     except JevError as err:
         return fall_back(err.reason)
     rival_margin = _margin(scored)
-    margin = 1.0 if rival_margin is None else rival_margin
-    if not math.isfinite(margin):
+    if rival_margin is not None and not math.isfinite(rival_margin):
         return fall_back("malformed")
     diagnostics: dict[str, Any] = {
         "winner_confidence": _r(conf),
-        "margin": _r(margin),
+        "margin": None if rival_margin is None else _r(rival_margin),
         "focus_probabilities": {k: round(v, 4) for k, v in focus_answer.probabilities.items()},
         "threat": _r(threat),
         "top": [_judgment(s) for s in scored[:5]],
@@ -878,7 +909,7 @@ def decide(
         reason = _high_stakes_reason(winner, ladder_action, focus_answer, cfg)
         if reason is not None:
             return fall_back(reason)
-    if rival_margin is not None and margin < cfg.min_margin:
+    if rival_margin is not None and rival_margin < cfg.min_margin:
         return fall_back("low_margin")
 
     # Alternatives in pool order (band, then generation index), never composite order, so the
@@ -894,7 +925,7 @@ def decide(
     action = action.model_copy(
         update={
             "engine": "jev",
-            "rationale": f"{action.rationale} Selected by the jev engine from {len(pool)} legal candidates ({winner.entry.group} focus).",
+            "rationale": action.rationale + _selection_suffix(len(pool), winner.entry.group),
         }
     )
     return action, EngineTrace(engine="jev", **fields)

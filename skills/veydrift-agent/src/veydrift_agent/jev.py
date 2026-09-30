@@ -13,12 +13,12 @@ API (model `jev-latest`). Everything the engine needs from TypeSafe goes through
 - Answer *values* are validated, not just their types: a score outside its legend's span, a
   confidence/probability outside [0, 1], an empty or wrong-sized legend, or choice
   probabilities that do not sum to 1 are `JevError("malformed", <qid>)`.
-- Time budget (`timeout_s`): each network attempt gets `timeout_s / 2` as an `httpx2.Timeout`
-  (applied to each of connect, read, write and pool), and the SDK's retry budget is
-  `timeout_s` with at most one retry, so a failed attempt plus its retry is about `timeout_s`
-  in the normal case. This is *not* a hard wall-clock deadline: the timeouts are per network
-  phase, the SDK only refuses to *start* a retry past the budget, and a peer that trickles
-  bytes is bounded per chunk, not overall.
+- Time budget (`timeout_s`): one attempt may take up to `timeout_s` as an `httpx2.Timeout`
+  (applied to each of connect, read, write and pool). A timeout is never retried; a fast failure
+  (connection error, 429, 5xx) may retry once, and the SDK only *starts* that retry if its
+  backoff still fits the `timeout_s` retry budget. This is *not* a hard wall-clock deadline:
+  the timeouts are per network phase, so a peer that trickles bytes is bounded per chunk, not
+  overall.
 
 Tests replace the backend through `default_backend` (the SDK's `httpx2` transport is not
 something `respx` intercepts).
@@ -154,6 +154,9 @@ def _finite(value: object) -> bool:
 
 #: Slack for float noise on a value that should lie in [0, 1] / inside a legend's span.
 _EPS = 1e-6
+#: How far past either end of its legend a score may sit (as a fraction of the span) before it
+#: is malformed; the normalised value is clamped to [0, 1].
+_SCORE_SPAN_TOLERANCE = 0.05
 #: How far a choice's probabilities may stray from summing to 1.
 _PROB_SUM_TOLERANCE = 0.05
 
@@ -227,14 +230,18 @@ class TypeSafeBackend:
         except Exception as exc:  # noqa: BLE001 -- pydantic/SDK validation; class name only
             raise JevError("bad_request", f"question spec invalid ({type(exc).__name__})") from None
 
-        # At most one retry, and no retry is *started* past the caller's budget; short backoff
-        # so the retry fits inside a few-second budget. Each attempt gets half the budget per
-        # network phase, so a failed attempt plus its retry stays near `timeout_s` (see the
-        # module docstring: per-phase timeouts, not a hard wall-clock deadline).
+        # One attempt gets the full `timeout_s` per network phase and a timeout is not retried;
+        # a fast failure (connection error, 429, 5xx) may retry once, with a short backoff, and
+        # only while it fits the `timeout_s` retry budget (see the module docstring: per-phase
+        # timeouts, not a hard wall-clock deadline).
         import httpx2  # the SDK's own HTTP layer; present whenever the SDK is
 
         retry = sdk.RetryPolicy(
-            max_retries=1, backoff_initial=0.25, backoff_max=1.0, timeout=timeout_s
+            max_retries=1,
+            api_timeout_error=False,
+            backoff_initial=0.25,
+            backoff_max=1.0,
+            timeout=timeout_s,
         )
         started = time.monotonic()
         try:
@@ -242,7 +249,7 @@ class TypeSafeBackend:
                 api_key=self._api_key,
                 model=model,
                 retry=retry,
-                timeout=httpx2.Timeout(timeout_s / 2),
+                timeout=httpx2.Timeout(timeout_s),
                 base_url=BASE_URL,
             )
         except sdk.TypeSafeError:
@@ -313,7 +320,11 @@ def _parse(
                 if not levels or len(levels) != asked:
                     raise ValueError
                 lo, hi = levels[0], levels[-1]
-                if not lo - _EPS <= float(s.score) <= hi + _EPS:
+                # The API's scores are expectations over the level distribution and can sit a
+                # hair past the end of the span; tolerate that, clamp below, reject anything
+                # further out as malformed.
+                tol = max(_EPS, _SCORE_SPAN_TOLERANCE * (hi - lo))
+                if not lo - tol <= float(s.score) <= hi + tol:
                     raise ValueError
                 norm = 0.0 if hi <= lo else (float(s.score) - lo) / (hi - lo)
                 scores[qid] = ScoreAnswer(min(1.0, max(0.0, norm)), float(s.confidence))

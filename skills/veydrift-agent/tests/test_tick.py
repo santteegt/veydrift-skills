@@ -18,13 +18,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import jev_fakes
 import pytest
 import respx
 from typer.testing import CliRunner
 
 from veydrift_agent import guard as guard_mod
-from veydrift_agent import http, ids, jev_engine, log, tick
+from veydrift_agent import http, ids, jev, jev_engine, log, tick
 from veydrift_agent import plan as plan_mod
+from veydrift_agent.jev import JevError
 from veydrift_agent.models import (
     Action,
     ActionKind,
@@ -5388,27 +5390,108 @@ def test_override_with_jev_records_what_the_jev_engine_would_have_proposed(isola
     assert "engine: jev -> ladder fallback (timeout)" in _flat_output(result.output)
 
 
+def _agreeing_responder(snapshot, policy):
+    """A responder that endorses only the candidate the real ladder would pick, so the real
+    `jev_engine.decide` agrees with the ladder on `snapshot`."""
+    from veydrift_agent import candidates
+
+    empty = dict(own_planet_debris={}, foreign_debris_targets={}, colonize_targets=[], attack_targets={}, missile_targets={})
+    ladder = plan_mod.plan_next_action(
+        snapshot, policy, pending_tx_unreconciled=False, resolvable_mission_ids=[], last_attended_planet_id=None, **empty
+    )
+    cfg = policy.engine.jev
+    pool, _ = candidates.collect_pool(
+        snapshot,
+        policy,
+        plan_mod._target_planets(snapshot, policy),
+        high_stakes_only_when_idle=cfg.high_stakes_only_when_idle,
+        max_candidates=cfg.max_candidates,
+        **empty,
+    )
+    key = candidates.pool_key(ladder)
+    at = next(i for i, e in enumerate(pool) if candidates.pool_key(e.candidate.action) == key)
+
+    def respond(state, questions):
+        scores = {q: (1.0 if q in (f"fit_c{at}", f"urgency_c{at}") else 0.0) for q in questions if q.startswith(("fit_", "urgency_"))}
+        return jev_fakes.answers_from(
+            questions, scores=scores, score_confidence=0.95, choice_confidence=0.95, focus=pool[at].group
+        )
+
+    return respond
+
+
 def test_two_override_ticks_whose_comparison_differs_only_in_the_trace_are_deduped(
     isolated_home, monkeypatch, tmp_path
 ):
-    _write_policy_allowing_override(engine={"kind": "jev"})
-    _patch_common(monkeypatch)
-    action_file = _write_override_action_file(tmp_path)
+    """Real `jev_engine.decide` output both times, on the same snapshot: a jev success that
+    agrees with the ladder, then a timeout fallback. The jev rationale carries a selection
+    sentence (pool size, focus group) and the fallback does not; the override record -- part
+    of the dedup fingerprint -- must be byte-identical anyway."""
+    real_plan = plan_mod.plan_next_action
+    from pool_fixtures import make_policy, rich_snapshot, rich_strategy
 
-    timeout_trace = EngineTrace(engine="ladder", configured="jev", fallback_reason="timeout", latency_ms=5000)
-    _patch_jev(monkeypatch, action=_build_action(), trace=timeout_trace)
+    from veydrift_agent.models import EngineCfg, JevCfg
+    from veydrift_agent.state import policy_path
+
+    snapshot = rich_snapshot()
+    policy = make_policy(
+        strategy=rich_strategy().model_copy(update={"allow_agent_action_override": True}),
+        engine=EngineCfg(kind="jev", jev=JevCfg(min_margin=0.0, max_candidates=60)),
+    )
+    init_policy()
+    policy_path().write_text(policy.model_dump_json())
+    _patch_common(monkeypatch, snapshot=snapshot)
+    monkeypatch.setattr(plan_mod, "plan_next_action", real_plan)
+    responder = _agreeing_responder(snapshot, policy)
+    action_file = _write_override_action_file(tmp_path)
+    decisions: list[tuple[Action, EngineTrace]] = []
+    real_decide = jev_engine.decide
+
+    def _spy(*a, **kw):
+        decisions.append(real_decide(*a, **kw))
+        return decisions[-1]
+
+    monkeypatch.setattr(jev_engine, "decide", _spy)
+
+    monkeypatch.setattr(jev, "default_backend", lambda cfg: jev_fakes.FakeBackend(responder))
     r1 = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
     assert r1.exit_code == 0, r1.output
     assert len(log.read_proposals()) == 1
 
-    ok_trace = _jev_trace(latency_ms=90, winner_confidence=0.9, focus_probabilities={"economy": 0.9, "research": 0.1})
-    _patch_jev(monkeypatch, action=_build_action(), trace=ok_trace)
+    monkeypatch.setattr(jev, "default_backend", lambda cfg: jev_fakes.FakeBackend(error=JevError("timeout")))
     r2 = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
-
     assert r2.exit_code == 0, r2.output
+
+    (ok_action, ok_trace), (fb_action, fb_trace) = decisions
+    assert ok_trace.engine == "jev" and ok_trace.agrees_with_ladder is True
+    assert "Selected by the jev engine" in ok_action.rationale
+    assert fb_trace.engine == "ladder" and fb_trace.fallback_reason == "timeout"
+    assert "Selected by the jev engine" not in fb_action.rationale
     assert "duplicate" in r2.output.lower()
     assert load_agent_state().tick_count == 1
-    assert len(log.read_proposals()) == 1
+    proposals = log.read_proposals()
+    assert len(proposals) == 1
+    would = proposals[0]["override"]["planner_would_have_proposed"]
+    assert "Selected by" not in would["rationale"]
+    assert would["rationale"] == fb_action.rationale
+    # byte-identical: the record a success would have written equals the fallback's
+    assert json.dumps(would, sort_keys=True) == json.dumps(
+        {"rule": fb_action.rule, "kind": fb_action.kind.value, "function": fb_action.function,
+         "rationale": fb_action.rationale},
+        sort_keys=True,
+    )
+
+
+def test_base_rationale_strips_only_the_jev_selection_sentence():
+    plain = _build_action().model_copy(update={"rationale": "Solar Plant is next."})
+    assert jev_engine.base_rationale(plain) == "Solar Plant is next."
+    picked = plain.model_copy(update={"engine": "jev", "rationale": "Solar Plant is next." + jev_engine._selection_suffix(41, "economy")})
+    assert jev_engine.base_rationale(picked) == "Solar Plant is next."
+    # a rationale the sentence merely appears in the middle of, or an action not from jev, is untouched
+    quoted = picked.model_copy(update={"rationale": "Selected by the jev engine from 3 legal candidates (x focus). then more"})
+    assert jev_engine.base_rationale(quoted) == quoted.rationale
+    ladder_side = picked.model_copy(update={"engine": "ladder"})
+    assert jev_engine.base_rationale(ladder_side) == ladder_side.rationale
 
 
 def test_override_record_is_unchanged_under_the_default_ladder_engine(isolated_home, monkeypatch, tmp_path):
