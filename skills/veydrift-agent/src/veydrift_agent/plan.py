@@ -195,6 +195,32 @@ def _rotate_for_fairness(
 # --------------------------------------------------------------------------------------
 
 
+# Candidate family -> the EXISTING ladder rule literal an action of that family carries
+# when it wins a band. Only literals already present in this module (`tests/test_brief.py`
+# regex-scans this file for rule literals and checks each has a brief goal). The `5:`
+# deadline rules are deliberately absent: rung 5 is `deadline_action`'s, keyed off the
+# storage-overflow trigger, not off the family alone.
+RULE_BY_FAMILY: dict[str, str] = {
+    "mine": "6:building-queue-empty",
+    "energy": "6:building-queue-empty",
+    "storage": "6:building-queue-empty",
+    "infrastructure": "6:building-queue-empty",
+    "research": "7:research-queue-empty",
+    "ship": "8:shipyard-idle",
+    "defense": "8:shipyard-idle",
+    "crawler": "8:shipyard-idle",
+    "batch": "8:shipyard-idle",
+    "unlock": "8b:unlock-chain",
+    "logistics-transport": "8c:logistics-transport",
+    "logistics-deploy": "8c:logistics-deploy",
+    "logistics-harvest": "8c:logistics-harvest",
+    "logistics-harvest-foreign": "8c:logistics-harvest-foreign",
+    "colonize": "8d:colonize",
+    "attack": "8e:attack",
+    "missile": "8f:missile",
+}
+
+
 def _why_not(alternative: candidates.Candidate, winner: candidates.Candidate) -> str:
     """`"payback 47h vs 31h"` when both the alternative and the winner are scored,
     otherwise the alternative's own `score_basis` (e.g. `"locked: needs Shipyard 2 (have
@@ -224,6 +250,11 @@ def _finalize(
     return brief_mod.attach(action, snapshot, policy, score_basis=winner.score_basis)
 
 
+# Public name for engines outside this module that turn a chosen `Candidate` into a
+# finalized `Action` exactly the way the ladder does.
+finalize_candidate = _finalize
+
+
 def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Policy, rule: str) -> Action | None:
     """The energy-first opener for a single planet. Thin wrapper around
     `candidates.select_building_candidate` — kept as a standalone, importable function
@@ -240,41 +271,19 @@ def _next_building_action(planet: PlanetSnapshot, snapshot: Snapshot, policy: Po
 # --------------------------------------------------------------------------------------
 
 
-def plan_next_action(
+def veto_action(
     snapshot: Snapshot,
     policy: Policy,
     *,
     killswitch_active: bool = False,
     pending_tx_unreconciled: bool = False,
     resolvable_mission_ids: list[int] | None = None,
-    own_planet_debris: dict[int, Resources] | None = None,
-    foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
-    colonize_targets: list[tuple[str, int]] | None = None,
-    attack_targets: dict[int, tuple[str, Resources, bool | None]] | None = None,
-    missile_targets: dict[int, tuple[str, dict[int, int], bool | None]] | None = None,
-    last_attended_planet_id: int | None = None,
-) -> Action:
-    """Decide exactly one `Action` from `snapshot` + `policy`. First matching rung wins;
-    `Action.rule` records which one fired (e.g. `"5:storage-overflow-spend"`) so the log
-    is auditable without re-running the planner (docs/SPEC.md §5.4).
-
-    `killswitch_active`, `pending_tx_unreconciled`, `resolvable_mission_ids`,
-    `own_planet_debris`, `foreign_debris_targets`, `colonize_targets`, `attack_targets`
-    and `missile_targets` are not on `Snapshot` (that model is frozen and owned by WP1)
-    — they are `tick.py`'s responsibility to discover (killswitch file,
-    `agent-state.json`, `/missions`, `/universe/galaxies/{g}/systems/{s}`,
-    `/raid-finder/debris`, `/highscores`) and pass in. Defaults are the safe "nothing
-    pending" state, so calling this with just a snapshot and policy is a legitimate
-    offline planning call.
-
-    `last_attended_planet_id` (`policy.strategy.planet_rotation` feature): this function
-    has no opinion on that policy flag -- it's `tick.py`'s job to decide whether to pass
-    a real `AgentState.last_attended_planet_id` or `None` here. When non-`None`, only
-    Band 2's per-planet loop and the Band 4/Band 8 selectors that take a planet list walk
-    a rotated view starting after this planet instead of `policy.planets`'s literal
-    order -- see `_rotate_for_fairness`. Defaulting to `None` keeps "calling this with
-    just a snapshot and policy" behaviorally identical to before this feature existed.
-    """
+) -> Action | None:
+    """Rungs 0-4 of the ladder -- safety vetoes, not strategy: killswitch, health, game
+    paused, unreconciled pending tx, a resolvable mission, an incoming hostile fleet.
+    Returns the exact `Action` `plan_next_action` returns for the first rung that fires,
+    or `None` when none does. Shared by every decision engine so a veto can never be
+    bypassed by a different strategy layer."""
     if killswitch_active:
         return Action(kind=ActionKind.HALT, rule="0:killswitch", rationale="KILLSWITCH file present; halting before any further action.")
 
@@ -359,6 +368,65 @@ def plan_next_action(
                 ),
             )
 
+    return None
+
+
+def deadline_action(snapshot: Snapshot, policy: Policy, target_planets: list[PlanetSnapshot]) -> Action | None:
+    """Rung 5 -- deadline-driven storage overflow (a loss-avoidance deadline, not an ROI
+    question). Returns the finalized `5:storage-overflow-storage` /
+    `5:storage-overflow-spend` `Action`, or `None` when no planet is near its cap."""
+    storage_winner, storage_alternatives = candidates.select_storage_candidate(snapshot, policy, target_planets)
+    if storage_winner is None:
+        return None
+    rule = "5:storage-overflow-storage" if storage_winner.family == "storage" else "5:storage-overflow-spend"
+    return _finalize(storage_winner, storage_alternatives, rule, policy, snapshot)
+
+
+def plan_next_action(
+    snapshot: Snapshot,
+    policy: Policy,
+    *,
+    killswitch_active: bool = False,
+    pending_tx_unreconciled: bool = False,
+    resolvable_mission_ids: list[int] | None = None,
+    own_planet_debris: dict[int, Resources] | None = None,
+    foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
+    colonize_targets: list[tuple[str, int]] | None = None,
+    attack_targets: dict[int, tuple[str, Resources, bool | None]] | None = None,
+    missile_targets: dict[int, tuple[str, dict[int, int], bool | None]] | None = None,
+    last_attended_planet_id: int | None = None,
+) -> Action:
+    """Decide exactly one `Action` from `snapshot` + `policy`. First matching rung wins;
+    `Action.rule` records which one fired (e.g. `"5:storage-overflow-spend"`) so the log
+    is auditable without re-running the planner (docs/SPEC.md §5.4).
+
+    `killswitch_active`, `pending_tx_unreconciled`, `resolvable_mission_ids`,
+    `own_planet_debris`, `foreign_debris_targets`, `colonize_targets`, `attack_targets`
+    and `missile_targets` are not on `Snapshot` (that model is frozen and owned by WP1)
+    — they are `tick.py`'s responsibility to discover (killswitch file,
+    `agent-state.json`, `/missions`, `/universe/galaxies/{g}/systems/{s}`,
+    `/raid-finder/debris`, `/highscores`) and pass in. Defaults are the safe "nothing
+    pending" state, so calling this with just a snapshot and policy is a legitimate
+    offline planning call.
+
+    `last_attended_planet_id` (`policy.strategy.planet_rotation` feature): this function
+    has no opinion on that policy flag -- it's `tick.py`'s job to decide whether to pass
+    a real `AgentState.last_attended_planet_id` or `None` here. When non-`None`, only
+    Band 2's per-planet loop and the Band 4/Band 8 selectors that take a planet list walk
+    a rotated view starting after this planet instead of `policy.planets`'s literal
+    order -- see `_rotate_for_fairness`. Defaulting to `None` keeps "calling this with
+    just a snapshot and policy" behaviorally identical to before this feature existed.
+    """
+    vetoed = veto_action(
+        snapshot,
+        policy,
+        killswitch_active=killswitch_active,
+        pending_tx_unreconciled=pending_tx_unreconciled,
+        resolvable_mission_ids=resolvable_mission_ids,
+    )
+    if vetoed is not None:
+        return vetoed
+
     target_planets = _target_planets(snapshot, policy)
     # policy.strategy.planet_rotation feature: a separately-rotated VIEW for the three
     # rungs below that walk a planet list in order and return on the first match
@@ -373,10 +441,9 @@ def plan_next_action(
     rotated_planets = _rotate_for_fairness(target_planets, last_attended_planet_id)
 
     # Band 1: deadline-driven storage overflow.
-    storage_winner, storage_alternatives = candidates.select_storage_candidate(snapshot, policy, target_planets)
-    if storage_winner is not None:
-        rule = "5:storage-overflow-storage" if storage_winner.family == "storage" else "5:storage-overflow-spend"
-        return _finalize(storage_winner, storage_alternatives, rule, policy, snapshot)
+    deadline = deadline_action(snapshot, policy, target_planets)
+    if deadline is not None:
+        return deadline
 
     # Band 2: economically scored building (mine, energy-first-filtered). Rotation-
     # eligible -- walks `rotated_planets`, not `target_planets`.
@@ -428,13 +495,9 @@ def plan_next_action(
         snapshot, policy, target_planets, own_planet_debris=own_planet_debris, foreign_debris_targets=foreign_debris_targets
     )
     if logistics_winner is not None:
-        rule = {
-            "logistics-transport": "8c:logistics-transport",
-            "logistics-deploy": "8c:logistics-deploy",
-            "logistics-harvest": "8c:logistics-harvest",
-            "logistics-harvest-foreign": "8c:logistics-harvest-foreign",
-        }[logistics_winner.family]
-        return _finalize(logistics_winner, logistics_alternatives, rule, policy, snapshot)
+        return _finalize(
+            logistics_winner, logistics_alternatives, RULE_BY_FAMILY[logistics_winner.family], policy, snapshot
+        )
 
     # Band 6 (commit 4 of the launch-actions plan, rung `8d`): Colonize, consuming an
     # already-built Colony Ship toward `policy.strategy.colonize` (default `False`, so

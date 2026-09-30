@@ -16,11 +16,12 @@ tests is demonstrated against a **Fusion-locked variant** of that fixture instea
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from veydrift_agent import ids
+from veydrift_agent import brief, candidates, ids
 from veydrift_agent.models import (
     Action,
     ActionKind,
@@ -41,7 +42,17 @@ from veydrift_agent.models import (
     StorageCfg,
     StrategyCfg,
 )
-from veydrift_agent.plan import _next_building_action, _rotate_for_fairness, plan_next_action
+from veydrift_agent.plan import (
+    RULE_BY_FAMILY,
+    _finalize,
+    _next_building_action,
+    _rotate_for_fairness,
+    _target_planets,
+    deadline_action,
+    finalize_candidate,
+    plan_next_action,
+    veto_action,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -1047,3 +1058,144 @@ def test_production_batch_flag_replaces_a_single_stock_order_with_one_batch():
 
     off = policy.model_copy(update={"strategy": strategy.model_copy(update={"production_batch": False})})
     assert plan_next_action(snapshot, off).kind == ActionKind.SHIP
+
+
+# --------------------------------------------------------------------------------------
+# `veto_action` / `deadline_action` / `RULE_BY_FAMILY` -- the pieces `plan_next_action` was
+# split into so a second decision engine can reuse the vetoes and the storage deadline
+# without the ladder. Zero behaviour change: each helper returns exactly what
+# `plan_next_action` returned for the same input, and `None` when its rungs do not fire.
+# --------------------------------------------------------------------------------------
+
+
+def _veto_cases():
+    """`(label, snapshot, policy, kwargs)` for every veto rung, as the tests above build them."""
+    snapshot = load_snapshot("planet_664.json")
+    policy = make_policy(planets=[664])
+    paused = snapshot.model_copy(
+        update={
+            "game_paused": True,
+            "game_maintenance": GameMaintenance(paused=True, pause_age_seconds=125),
+            "degradation_reasons": ["game_paused"],
+        }
+    )
+    hostile = snapshot.model_copy(
+        update={"incoming_fleets": [IncomingFleet(mission_id="1", target_planet_id=664, hostile=True)]}
+    )
+    return [
+        ("killswitch", snapshot, policy, {"killswitch_active": True}),
+        ("health", snapshot.model_copy(update={"health_ok": False}), policy, {}),
+        ("paused-escalate", paused, make_policy(planets=[664], escalation=EscalationCfg(on_game_paused=True)), {}),
+        ("paused-noop", paused, make_policy(planets=[664], escalation=EscalationCfg(on_game_paused=False)), {}),
+        ("pending", snapshot, policy, {"pending_tx_unreconciled": True}),
+        ("mission", snapshot, policy, {"resolvable_mission_ids": [42]}),
+        ("hostile", hostile, policy, {}),
+    ]
+
+
+@pytest.mark.parametrize("label,snapshot,policy,kwargs", _veto_cases(), ids=[c[0] for c in _veto_cases()])
+def test_veto_action_is_exactly_what_the_ladder_returns_for_each_veto(label, snapshot, policy, kwargs):
+    vetoed = veto_action(snapshot, policy, **kwargs)
+    assert vetoed is not None
+    assert vetoed == plan_next_action(snapshot, policy, **kwargs)
+
+
+def test_veto_action_returns_none_when_no_veto_rung_fires():
+    snapshot = load_snapshot("planet_664.json")
+    policy = make_policy(planets=[664])
+    assert veto_action(snapshot, policy) is None
+    friendly = snapshot.model_copy(
+        update={"incoming_fleets": [IncomingFleet(mission_id="1", target_planet_id=664, hostile=False)]}
+    )
+    assert veto_action(friendly, policy) is None
+    # An empty resolvable list is "nothing to resolve", not a veto.
+    assert veto_action(snapshot, policy, resolvable_mission_ids=[]) is None
+
+
+def test_veto_action_honours_the_on_incoming_fleet_escalation_flag():
+    snapshot = load_snapshot("planet_664.json").model_copy(
+        update={"incoming_fleets": [IncomingFleet(mission_id="1", target_planet_id=664, hostile=True)]}
+    )
+    policy = make_policy(planets=[664], escalation=EscalationCfg(on_incoming_fleet=False))
+    assert veto_action(snapshot, policy) is None
+
+
+def _near_cap_snapshot(**planet_updates) -> Snapshot:
+    snapshot = load_snapshot("planet_664.json")
+    planet = snapshot.planet(664)
+    assert planet is not None
+    update = {
+        "resources_as_of_now": Resources(metal=9_900, crystal=1_000, deuterium=0),
+        "production_per_hour": Resources(metal=500, crystal=0, deuterium=0),
+        "storage_caps": Resources(metal=10_000, crystal=10_000, deuterium=10_000),
+    }
+    update.update(planet_updates)
+    return snapshot.model_copy(update={"planets": [planet.model_copy(update=update)]})
+
+
+def test_deadline_action_matches_the_ladders_storage_overflow_rung():
+    at_risk = _near_cap_snapshot()
+    policy = make_policy(planets=[664])
+
+    deadline = deadline_action(at_risk, policy, _target_planets(at_risk, policy))
+
+    assert deadline is not None
+    assert deadline.rule == "5:storage-overflow-spend"
+    assert deadline == plan_next_action(at_risk, policy)
+
+
+def test_deadline_action_agrees_with_the_ladder_when_only_the_storage_building_is_on_offer():
+    at_risk = _near_cap_snapshot()
+    policy = make_policy(planets=[664], actions=ActionsCfg(allow_building=True, allow_research=False))
+    ladder = plan_next_action(at_risk, policy)
+    deadline = deadline_action(at_risk, policy, _target_planets(at_risk, policy))
+    assert deadline is not None
+    assert deadline == ladder
+    assert deadline.rule in {"5:storage-overflow-spend", "5:storage-overflow-storage"}
+
+
+def test_deadline_action_returns_none_without_overflow_or_with_a_busy_queue():
+    snapshot = load_snapshot("planet_664.json")
+    policy = make_policy(planets=[664])
+    assert deadline_action(snapshot, policy, _target_planets(snapshot, policy)) is None
+
+    busy_snapshot = _near_cap_snapshot(
+        queues={
+            QueueKind.BUILDING: QueueEntry(
+                kind=QueueKind.BUILDING, entity_id=ids.Building.METAL_MINE, entity_name="Metal Mine"
+            )
+        }
+    )
+    assert deadline_action(busy_snapshot, policy, _target_planets(busy_snapshot, policy)) is None
+
+
+def test_finalize_candidate_is_the_ladders_own_finalizer():
+    assert finalize_candidate is _finalize
+
+
+def _candidate_family_literals() -> set[str]:
+    source = Path(candidates.__file__).read_text()
+    return set(re.findall(r'family="([^"]+)"', source))
+
+
+def test_rule_by_family_covers_every_family_the_generators_emit():
+    families = _candidate_family_literals()
+    assert families, "regex found no family literals -- candidates.py changed shape"
+    assert families <= set(RULE_BY_FAMILY), sorted(families - set(RULE_BY_FAMILY))
+
+
+def test_every_rule_mapped_to_a_family_has_a_brief_goal():
+    missing = sorted(set(RULE_BY_FAMILY.values()) - set(brief._GOAL_BY_RULE))
+    assert not missing, missing
+
+
+def test_band_and_group_maps_have_exactly_the_rule_maps_keys():
+    assert set(candidates.BAND_BY_FAMILY) == set(RULE_BY_FAMILY)
+    assert set(candidates.GROUP_BY_FAMILY) == set(RULE_BY_FAMILY)
+
+
+def test_rule_by_family_tracks_the_band_the_ladder_walks_each_family_in():
+    """The rule prefix follows the ladder position: a later band never gets an earlier rule."""
+    order = {"6": 2, "7": 3, "8": 4, "8b": 5, "8c": 6, "8d": 7, "8e": 8, "8f": 9}
+    for family, rule in RULE_BY_FAMILY.items():
+        assert order[rule.split(":")[0]] == candidates.BAND_BY_FAMILY[family], family

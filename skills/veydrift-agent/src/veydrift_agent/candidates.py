@@ -51,6 +51,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from veydrift_agent import calc, ids
+from veydrift_agent.guard import production_spend
 from veydrift_agent.models import (
     Action,
     ActionKind,
@@ -95,6 +96,35 @@ class Candidate:
     #: 15.00h payback"), or why it's unscored ("locked: needs Shipyard 2 (have 0)",
     #: "no production_per_hour change at this level").
     score_basis: str
+
+
+#: `score_basis` of the one candidate a generator emits that is *not selectable* yet does not
+#: carry the `"locked:"` prefix: `generate_energy_candidates`' Solar Satellite when
+#: `policy.actions.allow_ships` is false. `select_building_candidate` never picks it (it
+#: re-derives the energy choice itself and falls back to Solar Plant); the pool filter
+#: (`collect_pool`) matches on this constant, never on a duplicated literal.
+ALLOW_SHIPS_FALSE_BASIS = "policy.actions.allow_ships=false"
+
+#: Prefix of `generate_crawler_candidates`' `score_basis` when the live
+#: `crawlerProduction.capped` flag is already true: a Crawler that adds nothing. Not
+#: `"locked:"`-prefixed, so the ladder's `select_shipyard_candidate` still treats it as
+#: selectable; the pool does not.
+CRAWLER_AT_CAP_BASIS_PREFIX = "at boost cap"
+
+
+def is_non_selectable(candidate: Candidate) -> str | None:
+    """Reason code when `candidate` is a visibility-only alternative, never something to
+    execute; `None` when it is selectable. `"locked"`: a `"locked:"` basis (unmet
+    prerequisite, defense cap). `"allow_flag"`: the `allow_ships=false` Solar Satellite.
+    `"non_selectable"`: a Crawler already at its boost cap."""
+    basis = candidate.score_basis
+    if basis.startswith("locked:"):
+        return "locked"
+    if basis == ALLOW_SHIPS_FALSE_BASIS:
+        return "allow_flag"
+    if basis.startswith(CRAWLER_AT_CAP_BASIS_PREFIX):
+        return "non_selectable"
+    return None
 
 
 # --------------------------------------------------------------------------------------
@@ -623,7 +653,7 @@ def generate_energy_candidates(snapshot: Snapshot, policy: Policy, planet: Plane
                     ),
                     family="energy",
                     score=None,
-                    score_basis="policy.actions.allow_ships=false",
+                    score_basis=ALLOW_SHIPS_FALSE_BASIS,
                 )
             )
         else:
@@ -1803,7 +1833,7 @@ def generate_crawler_candidates(snapshot: Snapshot, policy: Policy, planet: Plan
                 family="crawler",
                 score=None,
                 score_basis=(
-                    f"at boost cap -- live crawlerProduction.capped=true (effective {live.effective}"
+                    f"{CRAWLER_AT_CAP_BASIS_PREFIX} -- live crawlerProduction.capped=true (effective {live.effective}"
                     f"/{live.max_effective}, boostBps={live.boost_bps})"
                 ),
             )
@@ -3247,3 +3277,393 @@ def rank_candidates(candidates: list[Candidate]) -> list[Candidate]:
     unscored = [c for c in candidates if c.score is None]
     scored.sort(key=lambda c: c.score)
     return [*scored, *unscored]
+
+
+# --------------------------------------------------------------------------------------
+# The candidate pool -- every *legal* candidate across every band, for a decision engine
+# that compares candidates across bands instead of walking the ladder's early-return chain
+# (`jev_engine.py`). `plan.py`'s ladder never builds this: it stops at the first band that
+# produces a winner. The pool runs *every* generator on *every* target planet, then applies
+# the hard filters below -- each one mirrors a check the ladder's selectors or `guard.py`
+# already make, so that nothing in the pool is something the guard would BLOCK for a reason
+# knowable from the snapshot alone. Three flags `guard.py` never checks
+# (`allow_building`, `allow_research`, `allow_fleet_noncombat`) and queue idleness (also
+# unchecked there; the contract would revert) are the reason this filter pass exists at all.
+# Nothing here scores or picks: `economy_on_track`, the value ceiling, declared priority
+# position and the energy-limited state stay facts for the caller, never filters.
+# --------------------------------------------------------------------------------------
+
+#: Candidate family -> ladder band (`plan.py`'s eight bands, numbered from the storage
+#: deadline as 1, which the pool never contains -- `plan.deadline_action` owns that rung).
+BAND_BY_FAMILY: dict[str, int] = {
+    "mine": 2,
+    "energy": 2,
+    "storage": 2,
+    "infrastructure": 2,
+    "research": 3,
+    "ship": 4,
+    "crawler": 4,
+    "defense": 4,
+    "batch": 4,
+    "unlock": 5,
+    "logistics-transport": 6,
+    "logistics-deploy": 6,
+    "logistics-harvest": 6,
+    "logistics-harvest-foreign": 6,
+    "colonize": 7,
+    "attack": 8,
+    "missile": 9,
+}
+
+#: Candidate family -> the coarse group a decision engine reasons about.
+GROUP_BY_FAMILY: dict[str, str] = {
+    "mine": "economy",
+    "energy": "economy",
+    "storage": "economy",
+    "infrastructure": "economy",
+    "crawler": "economy",
+    "research": "research",
+    "ship": "fleet_defense",
+    "defense": "fleet_defense",
+    "batch": "fleet_defense",
+    "unlock": "unlock",
+    "logistics-transport": "logistics",
+    "logistics-deploy": "logistics",
+    "logistics-harvest": "logistics",
+    "logistics-harvest-foreign": "logistics",
+    "colonize": "expansion",
+    "attack": "offense",
+    "missile": "offense",
+}
+
+#: Families whose action is a permanent or hard-to-reverse commitment.
+HIGH_STAKES_FAMILIES = frozenset({"colonize", "attack", "missile"})
+
+
+@dataclass(frozen=True)
+class PoolEntry:
+    candidate: Candidate
+    band: int
+    group: str
+    #: Action identity: `(function, planet_id, entity_id, mission_type, target_planet_id,
+    #: target_coordinates, frozenset(orders), quantity)`. Two entries with equal keys are the
+    #: same on-chain call.
+    key: tuple
+    #: Generation order across the whole pool -- the final deterministic tie-break.
+    index: int
+
+
+def pool_key(action: Action) -> tuple:
+    """The identity of `action` as a call: what would be submitted, ignoring rationale, cost
+    bookkeeping and alternatives."""
+    return (
+        action.function,
+        action.planet_id,
+        action.entity_id,
+        action.mission_type,
+        action.target_planet_id,
+        action.target_coordinates,
+        frozenset((o.kind, o.item_id, o.quantity) for o in action.orders),
+        action.quantity,
+    )
+
+
+def _allow_flag_ok(action: Action, policy: Policy) -> bool:
+    """The `policy.actions`/`policy.strategy` flag that must be on for `action`'s kind. An
+    unrecognised kind or mission type is refused, never assumed allowed."""
+    actions = policy.actions
+    kind = action.kind
+    if kind is ActionKind.BUILD:
+        return actions.allow_building
+    if kind is ActionKind.RESEARCH:
+        return actions.allow_research
+    if kind is ActionKind.SHIP:
+        return actions.allow_ships
+    if kind is ActionKind.DEFENSE:
+        return actions.allow_defense
+    if kind is ActionKind.PRODUCTION_BATCH:
+        if not action.orders:
+            return False
+        return all(actions.allow_ships if o.kind == "ship" else actions.allow_defense for o in action.orders)
+    if kind is ActionKind.MISSILE_ATTACK:
+        return actions.allow_combat
+    if kind is ActionKind.FLEET_MISSION:
+        mission = action.mission_type
+        if mission == ids.FleetMissionType.ATTACK:
+            return actions.allow_combat
+        if mission == ids.FleetMissionType.COLONIZE:
+            return policy.strategy.colonize
+        if mission in (ids.FleetMissionType.TRANSPORT, ids.FleetMissionType.DEPLOY, ids.FleetMissionType.HARVEST):
+            return actions.allow_fleet_noncombat
+        return False
+    return False
+
+
+def _queues_idle(action: Action, snapshot: Snapshot, planet: PlanetSnapshot) -> bool:
+    """The queue(s) `action` would occupy are idle. Mirrors the ladder: a queue entry that is
+    absent from `planet.queues` reads as idle, exactly as `plan_next_action` reads it."""
+    kind = action.kind
+    if kind is ActionKind.BUILD:
+        return planet.queues.get(QueueKind.BUILDING) is None
+    if kind is ActionKind.RESEARCH:
+        return snapshot.research_queue is None
+    if kind is ActionKind.SHIP:
+        return planet.queues.get(QueueKind.SHIP) is None
+    if kind is ActionKind.DEFENSE:
+        return planet.queues.get(QueueKind.DEFENSE) is None
+    if kind is ActionKind.PRODUCTION_BATCH:
+        for order in action.orders:
+            lane = QueueKind.SHIP if order.kind == "ship" else QueueKind.DEFENSE
+            if planet.queues.get(lane) is not None:
+                return False
+    return True
+
+
+def _pool_spend(action: Action, snapshot: Snapshot) -> Resources | None:
+    """What `guard._gate_affordability`/`_gate_reserve` measure: live unit cost x quantity for
+    any production action (never `Action.cost`), otherwise the candidate's own `cost` (a
+    fleet mission's is cargo + fuel, built by `_fleet_mission_cost`). `None` when a
+    production spend cannot be verified -- unverifiable, never zero."""
+    if action.kind in (ActionKind.SHIP, ActionKind.DEFENSE, ActionKind.PRODUCTION_BATCH):
+        return production_spend(action, snapshot)
+    return action.cost
+
+
+def _fields_ok(planet: PlanetSnapshot) -> bool:
+    """`guard._gate_fields`'s BLOCK conditions (it applies to every action with a target
+    planet, not only builds): missing data, zero total, or no free field."""
+    if planet.fields_total is None or planet.fields_used is None or planet.fields_total <= 0:
+        return False
+    return planet.fields_used < planet.fields_total
+
+
+def _rejection_reason(candidate: Candidate, snapshot: Snapshot, policy: Policy) -> str | None:
+    """The first hard filter `candidate` fails, as a stable reason code; `None` when it
+    survives every one. Order is fixed so the reported counts are reproducible."""
+    non_selectable = is_non_selectable(candidate)
+    if non_selectable is not None:
+        return non_selectable
+    action = candidate.action
+    if not _allow_flag_ok(action, policy):
+        return "allow_flag"
+    planet = snapshot.planet(action.planet_id) if action.planet_id is not None else None
+    if planet is None:
+        return "planet_missing"
+    if not _queues_idle(action, snapshot, planet):
+        return "queue_busy"
+    if (
+        action.kind is ActionKind.BUILD
+        and candidate.family != "storage"  # a storage upgrade is the remedy for a capped cost, never capped by it
+        and _exceeds_storage_cap(action.cost, planet.storage_caps) is not None
+    ):
+        return "storage_cap"
+    spend = _pool_spend(action, snapshot)
+    if spend is None:
+        return "spend_unverifiable"
+    holdings = planet.resources_as_of_now
+    if not holdings.covers(spend):
+        return "unaffordable"
+    reserves = policy.reserves
+    if (
+        holdings.metal - spend.metal < reserves.metal
+        or holdings.crystal - spend.crystal < reserves.crystal
+        or holdings.deuterium - spend.deuterium < reserves.deuterium
+    ):
+        return "reserve"
+    if not _fields_ok(planet):
+        return "fields"
+    if planet.energy is None:
+        # `guard._gate_energy` BLOCKs every action on a planet whose energy balance is unknown.
+        return "energy_unknown"
+    if action.kind is ActionKind.FLEET_MISSION and (
+        snapshot.fleet_slots_active is None
+        or snapshot.fleet_slots_limit is None
+        or snapshot.fleet_slots_active >= snapshot.fleet_slots_limit
+    ):
+        return "fleet_slots"
+    return None
+
+
+def _pre_trim(entries: list[PoolEntry], max_candidates: int) -> list[PoolEntry]:
+    """Deterministic cap. Each family is ranked with `rank_candidates` (scored ascending by
+    payback, then generation order), then families take one entry each per round in band order
+    (ties by family name), so every family present keeps a slot before any family gets a
+    second; if there are more families than `max_candidates`, the lowest bands win."""
+    if len(entries) <= max_candidates:
+        return entries
+    by_family: dict[str, list[PoolEntry]] = {}
+    for entry in entries:
+        by_family.setdefault(entry.candidate.family, []).append(entry)
+    ranked: dict[str, list[PoolEntry]] = {}
+    for family, members in by_family.items():
+        order = rank_candidates([m.candidate for m in members])
+        by_id = {id(m.candidate): m for m in members}
+        ranked[family] = [by_id[id(c)] for c in order]
+    family_order = sorted(ranked, key=lambda f: (BAND_BY_FAMILY[f], f))
+    kept: list[PoolEntry] = []
+    depth = 0
+    while len(kept) < max_candidates and any(depth < len(ranked[f]) for f in family_order):
+        for family in family_order:
+            if depth < len(ranked[family]) and len(kept) < max_candidates:
+                kept.append(ranked[family][depth])
+        depth += 1
+    return kept
+
+
+def collect_pool(
+    snapshot: Snapshot,
+    policy: Policy,
+    target_planets: list[PlanetSnapshot],
+    *,
+    own_planet_debris: dict[int, Resources] | None = None,
+    foreign_debris_targets: dict[int, tuple[str, Resources]] | None = None,
+    colonize_targets: list[tuple[str, int]] | None = None,
+    attack_targets: dict[int, tuple[str, Resources, bool | None]] | None = None,
+    missile_targets: dict[int, tuple[str, dict[int, int], bool | None]] | None = None,
+    high_stakes_only_when_idle: bool = True,
+    max_candidates: int = 24,
+) -> tuple[list[PoolEntry], dict[str, int]]:
+    """Every legal candidate across every band, as `(pool, rejected_counts)`.
+
+    Runs every generator on every planet in `target_planets` (unrotated: rotation is a
+    ladder-fairness device, meaningless when candidates are compared rather than walked) and
+    research once, through `target_planets[0]` -- the planet `startResearch` is submitted
+    through. Then applies the hard filters, in this order, each rejection counted under its
+    reason code in `rejected_counts`:
+
+    1. `locked` / `allow_flag` / `non_selectable` -- `is_non_selectable`.
+    2. `allow_flag` -- the `policy.actions`/`policy.strategy` flag for the action kind.
+    3. `planet_missing`, then `queue_busy` -- the queue(s) the action would occupy are idle.
+    4. `storage_cap` -- a building whose cost exceeds the planet's storage cap.
+    5. `spend_unverifiable` / `unaffordable` -- live spend covered by `resources_as_of_now`.
+    6. `reserve` -- holdings after spend stay at or above `policy.reserves`.
+    7. `fields` -- the planet has a free field, and reports its field data.
+    8. `energy_unknown` -- the planet reports an energy balance (`guard._gate_energy`).
+    9. `fleet_slots` -- a fleet mission needs a free slot; unknown counts as none.
+    10. `batch_vs_scored_single` -- a scored single ship order on the same planet outranks a
+        production batch (AGENTS.md section 5).
+    11. `high_stakes_not_idle` -- with `high_stakes_only_when_idle`, colonize/attack/missile
+        survive only when nothing else did.
+    12. `duplicate` -- one entry per action identity (`pool_key`), lowest band then lowest
+        generation index; research dedups by technology and prefers `target_planets[0]`.
+
+    `pre_trim` counts entries dropped by the deterministic `max_candidates` cap (not a
+    rejection -- those are legal candidates that did not fit). Output is ordered by band, then
+    generation index. Fails closed: missing data rejects.
+    """
+    entries: list[PoolEntry] = []
+    counter = 0
+
+    def add(generated: list[Candidate]) -> None:
+        nonlocal counter
+        for candidate in generated:
+            entries.append(
+                PoolEntry(
+                    candidate=candidate,
+                    band=BAND_BY_FAMILY[candidate.family],
+                    group=GROUP_BY_FAMILY[candidate.family],
+                    key=pool_key(candidate.action),
+                    index=counter,
+                )
+            )
+            counter += 1
+
+    for planet in target_planets:
+        add(generate_mine_candidates(snapshot, policy, planet))
+        add(generate_energy_candidates(snapshot, policy, planet))
+        add(generate_proactive_storage_candidates(snapshot, policy, planet))
+        add(generate_infrastructure_candidates(snapshot, policy, planet))
+        add(generate_ship_candidates(snapshot, policy, planet))
+        add(generate_defense_candidates(snapshot, policy, planet))
+        add(generate_production_batch_candidates(snapshot, policy, planet))
+        add(generate_unlock_chain_candidates(snapshot, policy, planet))
+        add(generate_transport_candidates(snapshot, policy, planet, target_planets))
+        add(generate_deploy_candidates(snapshot, policy, planet))
+        add(generate_harvest_candidates(snapshot, policy, planet, own_planet_debris=own_planet_debris))
+        add(generate_foreign_harvest_candidates(snapshot, policy, planet, foreign_debris_targets=foreign_debris_targets))
+        add(generate_colonize_candidates(snapshot, policy, planet, colonize_targets=colonize_targets))
+        add(generate_attack_candidates(snapshot, policy, planet, attack_targets=attack_targets))
+        add(generate_missile_candidates(snapshot, policy, planet, missile_targets=missile_targets))
+    add(generate_research_candidates(snapshot, policy, target_planets))
+
+    rejected: dict[str, int] = {}
+
+    def reject(reason: str) -> None:
+        rejected[reason] = rejected.get(reason, 0) + 1
+
+    survivors: list[PoolEntry] = []
+    for entry in entries:
+        reason = _rejection_reason(entry.candidate, snapshot, policy)
+        if reason is None:
+            survivors.append(entry)
+        else:
+            reject(reason)
+
+    # A scored single ship order always outranks a batch on the same planet. Exactly the singles
+    # `select_shipyard_candidate` weighs the batch against: the shipyard rung's own ship
+    # candidates (the energy-driven satellite, a Crawler), not the energy family's satellite
+    # (which the ladder reaches through the building band instead).
+    scored_single_planets = {
+        e.candidate.action.planet_id
+        for e in survivors
+        if e.candidate.action.kind is ActionKind.SHIP
+        and e.candidate.family in ("ship", "crawler")
+        and e.candidate.score is not None
+    }
+    kept: list[PoolEntry] = []
+    for entry in survivors:
+        if entry.candidate.family == "batch" and entry.candidate.action.planet_id in scored_single_planets:
+            reject("batch_vs_scored_single")
+        else:
+            kept.append(entry)
+    survivors = kept
+
+    if high_stakes_only_when_idle and any(e.candidate.family not in HIGH_STAKES_FAMILIES for e in survivors):
+        kept = []
+        for entry in survivors:
+            if entry.candidate.family in HIGH_STAKES_FAMILIES:
+                reject("high_stakes_not_idle")
+            else:
+                kept.append(entry)
+        survivors = kept
+
+    # Research: one entry per technology, preferring the planet research is submitted through.
+    research_planet = target_planets[0].planet_id if target_planets else None
+
+    def research_rank(entry: PoolEntry) -> tuple[int, int, int]:
+        return (0 if entry.candidate.action.planet_id == research_planet else 1, entry.band, entry.index)
+
+    best_research: dict[int | None, PoolEntry] = {}
+    for entry in survivors:
+        if entry.candidate.action.kind is not ActionKind.RESEARCH:
+            continue
+        current = best_research.get(entry.candidate.action.entity_id)
+        if current is None or research_rank(entry) < research_rank(current):
+            best_research[entry.candidate.action.entity_id] = entry
+    kept = []
+    for entry in survivors:
+        if entry.candidate.action.kind is ActionKind.RESEARCH and best_research[entry.candidate.action.entity_id] is not entry:
+            reject("duplicate")
+        else:
+            kept.append(entry)
+    survivors = kept
+
+    # Everything else: one entry per action identity, lowest band then lowest index.
+    best_by_key: dict[tuple, PoolEntry] = {}
+    for entry in survivors:
+        current = best_by_key.get(entry.key)
+        if current is None or (entry.band, entry.index) < (current.band, current.index):
+            best_by_key[entry.key] = entry
+    kept = []
+    for entry in survivors:
+        if best_by_key[entry.key] is entry:
+            kept.append(entry)
+        else:
+            reject("duplicate")
+    survivors = kept
+
+    trimmed = _pre_trim(survivors, max_candidates)
+    if len(trimmed) < len(survivors):
+        rejected["pre_trim"] = len(survivors) - len(trimmed)
+    trimmed.sort(key=lambda e: (e.band, e.index))
+    return trimmed, rejected
