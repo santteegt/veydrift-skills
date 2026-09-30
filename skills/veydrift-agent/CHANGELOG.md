@@ -11,6 +11,15 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+### Fixed
+- **Potentially breaking:** an unknown or misspelled key anywhere in `policy.json` is now a hard
+  error. Only the top level of `Policy` rejected unknown keys; the nested sections (`cadence`,
+  `limits`, `reserves`, `storage`, `actions`, `escalation`, `wallet_engine`, `strategy` including
+  `resource_weights` and each `ship_targets`/`defense_targets` entry, and `radar`) silently dropped
+  them, so a typo such as `allow_agent_action_overide` left the intended flag at its default with no
+  warning. A policy file that carries a stray key will now fail to load and must have it removed or
+  corrected. API-response models are unchanged and stay tolerant.
+
 ## [1.27.1] - 2026-09-29
 
 ### Fixed

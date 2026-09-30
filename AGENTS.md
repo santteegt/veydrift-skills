@@ -76,7 +76,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1233 Python tests, 399 TypeScript tests** (396 passed + 3 intentionally
+baseline: **1249 Python tests, 399 TypeScript tests** (396 passed + 3 intentionally
 skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain check),
 both suites green. Run both before calling any change done; they are independent
 projects but cover a system with two enforcement layers that must agree (§6).
