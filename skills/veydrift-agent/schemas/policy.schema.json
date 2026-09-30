@@ -1,6 +1,7 @@
 {
   "$defs": {
     "ActionsCfg": {
+      "additionalProperties": false,
       "properties": {
         "allow_acs_defense": {
           "default": false,
@@ -52,6 +53,7 @@
       "type": "object"
     },
     "Cadence": {
+      "additionalProperties": false,
       "properties": {
         "economy_minutes": {
           "default": 10,
@@ -98,6 +100,7 @@
       "type": "object"
     },
     "EntityTarget": {
+      "additionalProperties": false,
       "description": "One declared standing-count target (Phase 3 of the general-strategy-engine\nprogram, docs/SPEC.md \u00a75.4/\u00a75.6): \"I want N of this ship/defense.\" Resolved against\n`ids.py`'s `*_NAMES` maps case-insensitively via `name`, or directly via `id` \u2014\nexactly one of the two should be set. `candidates.py` resolves `name` at generation\ntime and raises loudly (`ValueError`) on an unknown name rather than treating it as\n\"no target\" \u2014 `Policy` is `extra=\"forbid\"`, so a typo in a key is already a hard\nstop; a typo in a *value* here must be too, for the same reason.",
       "properties": {
         "count": {
@@ -134,6 +137,7 @@
       "type": "object"
     },
     "EscalationCfg": {
+      "additionalProperties": false,
       "properties": {
         "on_abi_hash_change": {
           "default": true,
@@ -282,6 +286,7 @@
       "type": "object"
     },
     "Limits": {
+      "additionalProperties": false,
       "properties": {
         "escalate_above_pct_of_resources": {
           "default": 25,
@@ -319,20 +324,9 @@
       "title": "Limits",
       "type": "object"
     },
-    "RadarCfg": {
-      "description": "Gates the `vd tick` integration of radar.py's incoming-fleet / resolved-attack /\ndebris check, scoped to `policy.planets` (empty == every owned planet, same\nconvention `Policy.planets` already uses for the snapshot itself).\n\nDefault `True` -- a deliberate departure from this codebase's usual \"empty/off ==\nold behaviour\" convention every other `ActionsCfg`/`StrategyCfg` flag follows. Every\none of those flags gates something that can spend gas, move resources, or reach\ncombat; radar is read-only and finds things a tick would otherwise miss silently --\nsee references/radar.md's incident writeup: `snapshot.incoming_fleets` alone missed\na real attack because it only ever lists future arrivals, not resolved ones. Do not\n\"fix\" this default to `False` by pattern-matching the other flags in this file; that\nwould reproduce the exact gap this field exists to close.",
-      "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        }
-      },
-      "title": "RadarCfg",
-      "type": "object"
-    },
-    "Resources": {
-      "description": "A metal/crystal/deuterium triple. Used for holdings, costs, caps and reserves.",
+    "PolicyResources": {
+      "additionalProperties": false,
+      "description": "`Resources` as it appears inside a policy file (`reserves`, `strategy.resource_weights`):\nsame fields, but unknown keys are rejected. Accepts a plain `Resources` instance too.",
       "properties": {
         "crystal": {
           "default": 0,
@@ -350,10 +344,24 @@
           "type": "integer"
         }
       },
-      "title": "Resources",
+      "title": "PolicyResources",
+      "type": "object"
+    },
+    "RadarCfg": {
+      "additionalProperties": false,
+      "description": "Gates the `vd tick` integration of radar.py's incoming-fleet / resolved-attack /\ndebris check, scoped to `policy.planets` (empty == every owned planet, same\nconvention `Policy.planets` already uses for the snapshot itself).\n\nDefault `True` -- a deliberate departure from this codebase's usual \"empty/off ==\nold behaviour\" convention every other `ActionsCfg`/`StrategyCfg` flag follows. Every\none of those flags gates something that can spend gas, move resources, or reach\ncombat; radar is read-only and finds things a tick would otherwise miss silently --\nsee references/radar.md's incident writeup: `snapshot.incoming_fleets` alone missed\na real attack because it only ever lists future arrivals, not resolved ones. Do not\n\"fix\" this default to `False` by pattern-matching the other flags in this file; that\nwould reproduce the exact gap this field exists to close.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "RadarCfg",
       "type": "object"
     },
     "StorageCfg": {
+      "additionalProperties": false,
       "properties": {
         "hours_to_cap_trigger": {
           "default": 2.0,
@@ -365,6 +373,7 @@
       "type": "object"
     },
     "StrategyCfg": {
+      "additionalProperties": false,
       "description": "Phase 2 (docs/SPEC.md \u00a75.4/\u00a75.6) added `resource_weights`/`max_alternatives`;\nPhase 3 adds the four fields below. All are additive \u2014 an older `policy.json` with\nno `strategy` key, or one that sets `strategy` but omits these newer keys, still\nloads (defaults below reproduce pre-Phase-3 behaviour exactly), but a policy file\nthat sets one of these new keys is rejected by any agent build predating this field\n(`Policy.model_config` is `extra=\"forbid\"`).",
       "properties": {
         "allow_agent_action_override": {
@@ -431,7 +440,7 @@
           "type": "array"
         },
         "resource_weights": {
-          "$ref": "#/$defs/Resources"
+          "$ref": "#/$defs/PolicyResources"
         },
         "ship_targets": {
           "items": {
@@ -454,6 +463,7 @@
       "type": "string"
     },
     "WalletEngineCfg": {
+      "additionalProperties": false,
       "properties": {
         "provider": {
           "default": "keystore",
@@ -507,7 +517,7 @@
       "$ref": "#/$defs/RadarCfg"
     },
     "reserves": {
-      "$ref": "#/$defs/Resources"
+      "$ref": "#/$defs/PolicyResources"
     },
     "signer": {
       "anyOf": [

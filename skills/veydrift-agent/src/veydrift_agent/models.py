@@ -137,6 +137,14 @@ class Base(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=False)
 
 
+class PolicyBase(Base):
+    """Base for every model reachable from `Policy`: an unknown or misspelled key is a hard
+    error at every nesting level, not just the top. API-response models stay on tolerant
+    `Base`; a policy file is the operator's own input and must never silently drop a key."""
+
+    model_config = ConfigDict(extra="forbid", frozen=False)
+
+
 class Resources(Base):
     """A metal/crystal/deuterium triple. Used for holdings, costs, caps and reserves."""
 
@@ -150,6 +158,18 @@ class Resources(Base):
             and self.crystal >= cost.crystal
             and self.deuterium >= cost.deuterium
         )
+
+
+class PolicyResources(Resources, PolicyBase):
+    """`Resources` as it appears inside a policy file (`reserves`, `strategy.resource_weights`):
+    same fields, but unknown keys are rejected. Accepts a plain `Resources` instance too."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_resources(cls, value: Any) -> Any:
+        if isinstance(value, Resources) and not isinstance(value, PolicyResources):
+            return value.model_dump()
+        return value
 
 
 class CrawlerProduction(Base):
@@ -599,14 +619,14 @@ class CoordinationReport(Base):
 # --------------------------------------------------------------------------------------
 
 
-class Cadence(Base):
+class Cadence(PolicyBase):
     economy_minutes: int = 10
     research_minutes: int = 10
     fleet_minutes: int = 10
     universe_hours: int = 24
 
 
-class Limits(Base):
+class Limits(PolicyBase):
     gas_per_tx_wei: int
     gas_per_day_wei: int
     eth_gas_floor_wei: int
@@ -615,11 +635,11 @@ class Limits(Base):
     field_warn_pct: int = 80
 
 
-class StorageCfg(Base):
+class StorageCfg(PolicyBase):
     hours_to_cap_trigger: float = 2.0
 
 
-class ActionsCfg(Base):
+class ActionsCfg(PolicyBase):
     allow_building: bool = True
     allow_research: bool = True
     allow_defense: bool = False
@@ -693,7 +713,7 @@ class ActionsCfg(Base):
     allow_delegation: bool = False
 
 
-class EscalationCfg(Base):
+class EscalationCfg(PolicyBase):
     on_incoming_fleet: bool = True
     on_game_paused: bool = True
     on_abi_hash_change: bool = True
@@ -701,12 +721,12 @@ class EscalationCfg(Base):
     on_revert_count: int = 2
 
 
-class WalletEngineCfg(Base):
+class WalletEngineCfg(PolicyBase):
     provider: Literal["keystore", "envkey"] = "keystore"
     require_confirmation: bool = True
 
 
-class RadarCfg(Base):
+class RadarCfg(PolicyBase):
     """Gates the `vd tick` integration of radar.py's incoming-fleet / resolved-attack /
     debris check, scoped to `policy.planets` (empty == every owned planet, same
     convention `Policy.planets` already uses for the snapshot itself).
@@ -723,7 +743,7 @@ class RadarCfg(Base):
     enabled: bool = True
 
 
-class EntityTarget(Base):
+class EntityTarget(PolicyBase):
     """One declared standing-count target (Phase 3 of the general-strategy-engine
     program, docs/SPEC.md §5.4/§5.6): "I want N of this ship/defense." Resolved against
     `ids.py`'s `*_NAMES` maps case-insensitively via `name`, or directly via `id` —
@@ -737,7 +757,7 @@ class EntityTarget(Base):
     count: int = 0
 
 
-class StrategyCfg(Base):
+class StrategyCfg(PolicyBase):
     """Phase 2 (docs/SPEC.md §5.4/§5.6) added `resource_weights`/`max_alternatives`;
     Phase 3 adds the four fields below. All are additive — an older `policy.json` with
     no `strategy` key, or one that sets `strategy` but omits these newer keys, still
@@ -749,7 +769,7 @@ class StrategyCfg(Base):
     #: scalar for payback scoring. Default 1:1:1 preserves the assumption plan.py's
     #: `_energy_candidate` already made implicitly (it summed metal+crystal+deuterium
     #: unweighted) before this field existed.
-    resource_weights: Resources = Field(default_factory=lambda: Resources(metal=1, crystal=1, deuterium=1))
+    resource_weights: PolicyResources = Field(default_factory=lambda: PolicyResources(metal=1, crystal=1, deuterium=1))
     #: Caps `Action.alternatives` so `proposals.jsonl` stays bounded.
     max_alternatives: int = 5
 
@@ -845,12 +865,12 @@ class StrategyCfg(Base):
     production_batch: bool = False
 
 
-class JevWeights(Base):
+class JevWeights(PolicyBase):
     """Weights `jev_engine` combines per-candidate judgments with (`references/jev-engine.md`).
     Each term is normalised to 0..1 before weighting; the sum is divided out, so only the
     ratios matter. `economy` is the only term computed entirely by code (payback hours)."""
 
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    model_config = ConfigDict(extra="forbid", frozen=False, allow_inf_nan=False)
 
     fit: float = Field(0.30, ge=0, le=100)
     urgency: float = Field(0.25, ge=0, le=100)
@@ -871,12 +891,12 @@ class JevWeights(Base):
         return self
 
 
-class JevCfg(Base):
+class JevCfg(PolicyBase):
     """Settings for the `jev` decision engine. Read only when `engine.kind == "jev"`. The
     TypeSafe API key comes from the `TYPESAFE_API_KEY` environment variable, never from
     this file, and the API base URL is a code constant, never configurable here."""
 
-    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    model_config = ConfigDict(extra="forbid", frozen=False, allow_inf_nan=False)
 
     #: TypeSafe System One model id.
     model: str = "jev-latest"
@@ -905,21 +925,18 @@ class JevCfg(Base):
     allow_hold: bool = False
 
 
-class EngineCfg(Base):
+class EngineCfg(PolicyBase):
     """Which decision engine proposes each tick's action. `ladder` (default) is `plan.py`'s
     fixed-order ladder; `jev` ranks every legal candidate with TypeSafe's Jev model and falls
     back to the ladder on any error or low-confidence result. Vetoes (killswitch, health,
     pause, pending tx, resolvable mission, incoming fleet) and the storage-overflow deadline
     run first under both engines."""
 
-    model_config = ConfigDict(extra="forbid")
-
     kind: Literal["ladder", "jev"] = "ladder"
     jev: JevCfg = Field(default_factory=JevCfg)
 
 
-class Policy(Base):
-    model_config = ConfigDict(extra="forbid")  # unknown keys are a hard error, never ignored
+class Policy(PolicyBase):
 
     version: Literal[1] = 1
     tier: Tier = Tier.ADVISOR
@@ -938,7 +955,7 @@ class Policy(Base):
     chain_id: int = 8453
     cadence: Cadence = Field(default_factory=Cadence)
     limits: Limits
-    reserves: Resources = Field(default_factory=Resources)
+    reserves: PolicyResources = Field(default_factory=PolicyResources)
     storage: StorageCfg = Field(default_factory=StorageCfg)
     actions: ActionsCfg = Field(default_factory=ActionsCfg)
     escalation: EscalationCfg = Field(default_factory=EscalationCfg)

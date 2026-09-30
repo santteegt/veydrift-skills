@@ -93,7 +93,7 @@ a diagnostic surface, consulted manually, not a new automatic rotation.
 | `building` | `select_building_candidate` (per planet) | Only planets whose `QueueKind.BUILDING` queue is currently empty |
 | `research` | `select_research_candidate` | Only when `snapshot.research_queue is None` |
 | `shipyard` | `select_shipyard_candidate` | None needed — self-gates on `economy_on_track` internally |
-| `unlock_chain` | `select_unlock_chain_candidate` | None — reached unconditionally, same as the real ladder would in this situation |
+| `unlock_chain` | `select_unlock_chain_candidate` | None needed — self-gates per step internally: a building step needs `allow_building` and that planet's building queue empty, a research step needs `allow_research` and `snapshot.research_queue is None` |
 
 Unlike the five per-planet families above (which call a bare `generate_*` and report
 *every* viable candidate), these five call the same `select_*` functions `plan.py` itself

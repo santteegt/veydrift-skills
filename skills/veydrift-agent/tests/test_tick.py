@@ -762,6 +762,64 @@ def test_ticks_whose_only_difference_is_alternatives_are_not_deduped(isolated_ho
     assert len(log.read_proposals()) == 2
 
 
+_PIN_TX_TO = "0xf397910F005151b09644228573a4353818D3755d"
+
+
+def _tx_with_pin(**pin_fields) -> UnsignedTx:
+    return UnsignedTx(
+        to=_PIN_TX_TO,
+        data="0x165715e3" + "00" * 32,
+        gas=None,
+        onchain_pin=OnchainPin(ok=True, dependencies_ok=True, **pin_fields),
+    )
+
+
+def test_ticks_differing_only_in_onchain_pin_checked_at_and_block_dedup(isolated_home, monkeypatch):
+    """`walletctl build` re-stamps `onchain_pin.checked_at`/`block` on every build; those two
+    must not make an otherwise identical on-chain proposal unique."""
+    _write_policy()
+    _patch_common(
+        monkeypatch,
+        live_addresses={_PIN_TX_TO},
+        unsigned_tx=_tx_with_pin(checked_at="2026-09-29T10:00:00Z", block="100"),
+    )
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    _patch_common(
+        monkeypatch,
+        live_addresses={_PIN_TX_TO},
+        unsigned_tx=_tx_with_pin(checked_at="2026-09-29T10:00:07Z", block="101"),
+    )
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    assert r2.exit_code == 0, r2.output
+
+    assert load_agent_state().tick_count == 1
+    proposals = log.read_proposals()
+    assert len(proposals) == 1
+    assert "duplicate" in r2.output.lower()
+    # What is written is untouched: the volatile fields are still recorded.
+    assert proposals[0]["tx"]["onchain_pin"]["checked_at"] == "2026-09-29T10:00:00Z"
+    assert proposals[0]["tx"]["onchain_pin"]["block"] == "100"
+
+
+def test_ticks_differing_in_onchain_pin_verdict_are_not_deduped(isolated_home, monkeypatch):
+    """A real pin change (`ok` flipping) must still be a new proposal, not swallowed alongside
+    the volatile `checked_at`/`block`."""
+    _write_policy()
+    _patch_common(monkeypatch, live_addresses={_PIN_TX_TO}, unsigned_tx=_tx_with_pin(checked_at="t1", block="100"))
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    drifted = _tx_with_pin(checked_at="t1", block="100").model_copy(
+        update={"onchain_pin": OnchainPin(ok=False, dependencies_ok=True, problems=["drift"], checked_at="t1", block="100")}
+    )
+    _patch_common(monkeypatch, live_addresses={_PIN_TX_TO}, unsigned_tx=drifted)
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    assert r2.exit_code == 0, r2.output
+
+    assert load_agent_state().tick_count == 2
+    assert len(log.read_proposals()) == 2
+
+
 def test_fingerprint_excluded_keys_does_not_contain_alternatives():
     assert "alternatives" not in tick._FINGERPRINT_EXCLUDED_KEYS
 

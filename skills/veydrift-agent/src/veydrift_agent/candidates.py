@@ -106,10 +106,16 @@ class Candidate:
 ALLOW_SHIPS_FALSE_BASIS = "policy.actions.allow_ships=false"
 
 #: Prefix of `generate_crawler_candidates`' `score_basis` when the live
-#: `crawlerProduction.capped` flag is already true: a Crawler that adds nothing. Not
-#: `"locked:"`-prefixed, so the ladder's `select_shipyard_candidate` still treats it as
-#: selectable; the pool does not.
+#: `crawlerProduction.capped` flag is already true: a Crawler that adds no production. Not
+#: `"locked:"`-prefixed, so `select_shipyard_candidate` and `collect_pool` both match this
+#: constant explicitly to keep it out of the winner pick (it stays visible as an alternative).
 CRAWLER_AT_CAP_BASIS_PREFIX = "at boost cap"
+
+
+def _is_selectable_ship(candidate: Candidate) -> bool:
+    """False for a `"locked:"` ship and for a Crawler already at its boost cap."""
+    basis = candidate.score_basis
+    return not basis.startswith("locked:") and not basis.startswith(CRAWLER_AT_CAP_BASIS_PREFIX)
 
 
 def is_non_selectable(candidate: Candidate) -> str | None:
@@ -2227,6 +2233,8 @@ def select_shipyard_candidate(
     separately-rotated view here when that flag is on, so "first" means "first in the
     rotated walk," not always literally `policy.planets`'s declared order. This function
     itself has no rotation logic of its own; it just walks whatever list it's given.
+    A Crawler already at its boost cap is likewise never the winner (it adds no production);
+    it stays in `alternatives` with its explanatory basis.
     Phase 3: both branches now filter out `"locked:"` candidates before picking a winner
     (pre-Phase-3, `generate_ship_candidates` could never yield a locked entry, so no
     filter was needed there; Crawler/`ship_targets` now can). Among selectable ships, the
@@ -2238,7 +2246,7 @@ def select_shipyard_candidate(
     alternatives: list[Candidate] = []
     for planet in target_planets:
         ships = generate_ship_candidates(snapshot, policy, planet)
-        selectable_ships = [c for c in ships if not c.score_basis.startswith("locked:")]
+        selectable_ships = [c for c in ships if _is_selectable_ship(c)]
         # `policy.strategy.production_batch`: one batch in place of a single stock-keeping order --
         # but never in place of a *scored* single (the energy-driven Solar Satellite, a Crawler),
         # which is a more urgent kind of work than topping up a declared stock target.

@@ -123,22 +123,27 @@ def _scan_ladder_bands(
     `policy.strategy.planet_rotation`'s own rotated view is irrelevant to a snapshot of
     "what's on offer right now" and is deliberately not threaded through here.
 
-    Two of the five `select_*` functions (storage, shipyard) already self-gate on their
-    own real-time precondition internally (queue-empty, `economy_on_track`) -- calling
-    them directly is enough. The other three do not; `plan.py` applies the gate itself
-    before calling them, so this function replicates the exact same external check
-    (verbatim from `plan_next_action`) rather than surfacing a "winner" that would
-    actually revert or simply not be submittable right now:
+    Three of the five `select_*` functions (storage, shipyard, unlock-chain) already
+    self-gate on their own real-time preconditions internally -- calling them directly is
+    enough. The other two do not; `plan.py` applies the gate itself before calling them,
+    so this function replicates the exact same external check (verbatim from
+    `plan_next_action`) rather than surfacing a "winner" that would actually revert or
+    simply not be submittable right now:
 
     - Building: only for planets whose own `QueueKind.BUILDING` queue is currently empty
       -- a planet with a build already queued cannot start another regardless of what
       `select_building_candidate` would otherwise pick for it.
     - Research: only when `snapshot.research_queue is None` -- the account-wide research
       queue, not per-planet.
-    - Unlock-chain has no queue precondition of its own to replicate (its own generator
-      never assumes the building queue is idle -- it's a Band reached only once bands 1-3
-      have already found nothing at all, so this survey reports it unconditionally, same
-      as the real ladder would evaluate it in that situation)."""
+
+    Unlock-chain needs no replicated check because `generate_unlock_chain_candidates`
+    applies both itself, per step: a building-upgrade step is dropped unless
+    `policy.actions.allow_building` is set and that planet's `QueueKind.BUILDING` queue
+    is empty, and a research step is dropped unless `policy.actions.allow_research` is
+    set and `snapshot.research_queue is None`. So on a planet with a busy building queue
+    only research-shaped unlock steps can surface, and vice versa. (The rung is also only
+    reached by the real ladder once bands 1-3 have found nothing, but this survey reports
+    it regardless of that.)"""
     findings: list[OpportunityFinding] = []
 
     def _add(family: str, winner: candidates.Candidate | None) -> None:

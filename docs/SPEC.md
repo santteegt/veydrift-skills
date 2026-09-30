@@ -914,7 +914,7 @@ rung `8b`.
 rubric), `weights` (`fit`/`urgency`/`focus`/`economy`/`threat`), `min_confidence`,
 `min_confidence_high_stakes`, `min_margin`, `timeout_s`, `max_candidates`, `payback_reference_hours`,
 `high_stakes_only_when_idle` and `allow_hold`, all read only when `kind` is `"jev"`. Every class is
-`extra="forbid"` (unlike `StrategyCfg`) and rejects `Infinity`/`NaN`; each weight is `0..100`,
+`extra="forbid"` (like every policy section) and rejects `Infinity`/`NaN`; each weight is `0..100`,
 `payback_reference_hours` is in `(0, 10000]`, and at least one of `fit`/`urgency`/`focus` must be `> 0`
 (criterion 81.8). The API key is never a policy field: it comes from the
 `TYPESAFE_API_KEY` environment variable. Because `Policy` is `extra="forbid"`, a policy file that sets

@@ -1164,10 +1164,8 @@ def test_property_the_ladders_band_2_to_8_winner_is_pooled_or_refused_as_a_guard
         reasons = {candidates._rejection_reason(c, snapshot, policy) for c in matching}
         reasons.discard(None)
         assert reasons, f"{label}: generated, filtered by nothing, yet absent from the pool"
-        if reasons == {"non_selectable"}:
-            # A Crawler already at its boost cap: the ladder still proposes it, the pool will not.
-            assert action.entity_id == ids.Ship.CRAWLER, label
-            continue
+        # The ladder never proposes a non-selectable candidate either (the at-cap Crawler included).
+        assert "non_selectable" not in reasons, f"{label}: the ladder proposed a non-selectable candidate"
         for reason in reasons:
             assert reason in _MIRRORED_BY_GUARD, f"{label}: refused as {reason!r}, which no guard gate mirrors"
             report = _guard_report(action, snapshot, policy)
