@@ -13,6 +13,11 @@ skills are not versioned in lockstep.
 
 ## [1.28.0] - 2026-09-29
 
+### Fixed
+- Jev engine: each `fit_c<i>`/`urgency_c<i>` question now carries its candidate inline instead of naming
+  `candidates[i]`; a live run showed the model resolving positional lookups off by one and scoring the
+  wrong candidate. A 24-candidate request is about 11,000 estimated tokens, 60 about 27,000.
+
 ### Added
 - **The jev decision engine** (`policy.engine.kind = "jev"`; default `"ladder"`, unchanged). Vetoes and
   the storage-overflow deadline decide first; then `candidates.collect_pool` builds every legal candidate

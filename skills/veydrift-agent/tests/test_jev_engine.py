@@ -185,8 +185,24 @@ def test_questions_have_exactly_the_documented_ids_and_shapes():
         fit, urg = questions[f"fit_c{i}"], questions[f"urgency_c{i}"]
         assert fit.kind == urg.kind == "score"
         assert len(fit.criteria) == 5 and len(urg.criteria) == 4
-        assert f"`candidates[{i}]`" in fit.instructions
-        assert f"`candidates[{i}]`" in urg.instructions and f"`candidates[{i}].facts`" in urg.instructions
+        assert set(fit.instructions) == set(urg.instructions) == {"question", "candidate"}
+        assert "`strategy_intent`" in fit.instructions["question"]
+        assert "`facts`" in urg.instructions["question"] and "`situation`" in urg.instructions["question"]
+
+
+def test_per_candidate_questions_embed_their_own_candidate_and_no_positional_path():
+    snapshot, policy = two_planet(), jev_policy()
+    pool = pool_of(snapshot, policy)
+    state, questions = jev_engine.build_request(snapshot, policy, pool)
+
+    for qid, spec in questions.items():
+        assert "candidates[" not in json.dumps(spec.instructions), qid
+    for i, cand in enumerate(state["candidates"]):
+        for prefix in ("fit", "urgency"):
+            embedded = questions[f"{prefix}_c{i}"].instructions["candidate"]
+            assert embedded["id"] == f"c{i}" == cand["id"]
+            assert embedded == cand
+            assert embedded is not cand
 
 
 def test_the_state_has_the_documented_shape():
@@ -383,8 +399,28 @@ def test_a_24_candidate_request_stays_well_under_the_token_limits():
     assert len(pool) == 24
     state, questions = jev_engine.build_request(snapshot, policy, pool)
     estimate = jev.estimate_tokens(state, questions)
-    assert estimate < 20_000
+    # Measured 11,050 with each candidate inlined into its two questions.
+    assert estimate < 14_000
+    assert _state_plus_longest_question(state, questions) < 32_000
+
+
+def _state_plus_longest_question(state, questions):
+    longest = max(len(json.dumps(asdict(q), separators=(",", ":"))) // 4 for q in questions.values())
+    return len(json.dumps(state, separators=(",", ":"))) // 4 + longest
+
+
+def test_a_60_candidate_request_stays_under_the_request_limit():
+    snapshot = two_planet()
+    policy = jev_policy(max_candidates=60, high_stakes_only_when_idle=False)
+    pool = pool_of(snapshot, policy, **target_kwargs())
+    pool = (pool * 2)[:60]  # the fixtures yield fewer than 60 distinct candidates; repeats are the worst case
+    assert len(pool) == 60
+    state, questions = jev_engine.build_request(snapshot, policy, pool)
+    estimate = jev.estimate_tokens(state, questions)
+    # Measured about 27,000 (about 450 tokens per candidate); the pre-flight limit is 48,000.
+    assert estimate < jev.MAX_ESTIMATED_TOKENS
     assert estimate < 32_000
+    assert _state_plus_longest_question(state, questions) < 32_000
 
 
 def test_the_payload_carries_no_wallet_signer_address_coordinate_or_raw_planet_id():

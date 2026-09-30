@@ -169,7 +169,9 @@ generation index.
 
 One request: a `state` object and `2N + 2` questions for `N` pooled candidates. `vd engine
 pool` prints the exact request offline and an estimated size; the ceiling is 48,000 estimated
-tokens (`request_too_large` beyond that), far above a full pool.
+tokens (`request_too_large` beyond that). A 24-candidate pool measures about 11,000 estimated
+tokens and the 60-candidate maximum about 27,000; state plus the longest single question stays
+under 4,000, far below the API's 32k cap for that pair.
 
 **Never sent:** the wallet, the signer, any address, any coordinates, any raw planet id,
 any resource amount, cost, rate, timestamp or fleet composition. Planets appear only as
@@ -216,8 +218,17 @@ Missile and debris-harvest families never appear there; a real tick supplies the
 | --- | --- | --- |
 | `tick_focus` | Choice | which **group** of activity best serves the strategy now: `economy`, `research`, `fleet_defense`, `unlock`, `logistics`, `expansion`, `offense` (only groups present in the pool), plus `hold`. Each option carries a `what`/`not_for` description. |
 | `threat` | Noul | probability that a planet is attacked within a few hours, from `situation.threats` and defense posture only |
-| `fit_c<i>` | Score, 5 levels | how well candidate `i` serves the strategy. Levels, low to high: works against it; unrelated; supports it indirectly; directly supports it; is its top priority or immediate next step |
-| `urgency_c<i>` | Score, 4 levels | what is lost by postponing it. Levels: can wait many hours; doing it soon helps a little; time-sensitive (wastes production, leaves a queue idle long, blocks a declared target); critical now (risks losing resources or assets) |
+| `fit_c<i>` | Score, 5 levels | how well the candidate embedded in the question serves the strategy. Levels, low to high: works against it; unrelated; supports it indirectly; directly supports it; is its top priority or immediate next step |
+| `urgency_c<i>` | Score, 4 levels | what is lost by postponing the embedded candidate. Levels: can wait many hours; doing it soon helps a little; time-sensitive (wastes production, leaves a queue idle long, blocks a declared target); critical now (risks losing resources or assets) |
+
+**Each `fit_c<i>` / `urgency_c<i>` question carries its own candidate inline**: its instructions
+are `{"question": "...the candidate below...", "candidate": {id, group, planet, what, facts}}`,
+and no question refers to a candidate by array position. Positional lookups (`candidates[16]`)
+proved unreliable in a live run: the model resolved an index one off and scored a neighbouring
+candidate, which flipped the pick. Named fields (`strategy_intent`, `situation`) are still
+referenced by name, and `state.candidates` stays in the state so `tick_focus` sees what is on
+offer. The cost is size: each candidate appears three times, about 450 estimated tokens per
+candidate.
 
 Scores are normalised to 0..1 from the API's own level legend. The composite for candidate
 `i`, each term in 0..1:
@@ -392,7 +403,8 @@ jev have chosen differently here" without a tick.
   checks are the pool's and the guard's, and no cost-scaling function exists.
 - The model judges qualitative fit; it does not generate actions or arguments.
 - One request per tick (two under a manual override with jev configured). A pool of a couple of
-  dozen candidates is a few thousand tokens, a tiny per-tick cost; `vd engine pool` prints the
+  dozen candidates is roughly 11,000 estimated tokens (each candidate is sent inline with its
+  two questions), still a small per-tick cost; `vd engine pool` prints the
   estimate for your own policy.
 - Decisions are not reproducible bit for bit: the model may answer slightly differently for the
   same state. The dedup fingerprint is stable under probability jitter only while the pick itself

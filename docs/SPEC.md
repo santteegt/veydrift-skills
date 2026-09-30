@@ -729,7 +729,7 @@ killswitch path stays ladder-only). Vocabulary and code map:
   the base URL a code constant.
 - **Engine** (`jev_engine.decide`): vetoes, deadline, the ladder's own pick (fallback and agreement
   reference), the pool, one request (`state` with every game number bucketed by code and planets as
-  labels; questions `tick_focus` Choice, `threat` Noul, per-candidate `fit`/`urgency` Scores), a
+  labels; questions `tick_focus` Choice, `threat` Noul, per-candidate `fit`/`urgency` Scores, each carrying its candidate inline -- never a positional `candidates[i]` path, which a live run showed the model resolving off by one), a
   weighted composite (`policy.engine.jev.weights`), then gates on minimum confidence (over the
   winner's weighted judgments), a higher floor for a high-stakes winner (`candidates.HIGH_STAKES_FAMILIES`:
   colonize, attack, missile, logistics-deploy), the high-stakes endorsement gate (below), and a minimum

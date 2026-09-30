@@ -577,21 +577,31 @@ def build_request(
             },
         ),
     }
-    for i in range(len(pool)):
+    # Each per-candidate question carries its own candidate inline. A positional path
+    # (`candidates[i]`) proved unreliable live: the model resolved indices off by one and
+    # scored the wrong candidate. The named fields (`strategy_intent`, `situation`) stay
+    # by reference -- they are names, not positions.
+    for i, candidate in enumerate(state["candidates"]):
         questions[f"fit_c{i}"] = QuestionSpec(
             kind="score",
-            instructions=(
-                f"How well does `candidates[{i}]` serve the strategy in `strategy_intent`? "
-                "Judge the kind of development, not its cost."
-            ),
+            instructions={
+                "question": (
+                    "How well does the candidate below serve the strategy in `strategy_intent`? "
+                    "Judge the kind of development, not its cost."
+                ),
+                "candidate": dict(candidate),
+            },
             criteria=list(_FIT_LEVELS),
         )
         questions[f"urgency_c{i}"] = QuestionSpec(
             kind="score",
-            instructions=(
-                f"How much is lost by postponing `candidates[{i}]` to a later turn, judging from "
-                f"`candidates[{i}].facts` and `situation`?"
-            ),
+            instructions={
+                "question": (
+                    "How much is lost by postponing the candidate below to a later turn, judging from "
+                    "its `facts` and `situation`?"
+                ),
+                "candidate": dict(candidate),
+            },
             criteria=list(_URGENCY_LEVELS),
         )
     return state, questions
