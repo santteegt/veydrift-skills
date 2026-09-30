@@ -14,16 +14,29 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from veydrift_agent.models import Action, EngineTrace, Policy, Resources, Snapshot
 
 if TYPE_CHECKING:
+    from veydrift_agent.candidates import PoolEntry
     from veydrift_agent.engine import EngineContext
-    from veydrift_agent.jev import JevBackend
+    from veydrift_agent.jev import JevBackend, QuestionSpec
 
 #: Off-chain rule for a confident "hold" judgment (`policy.engine.jev.allow_hold`).
 HOLD_RULE = "9j:hold"
+
+
+def build_request(
+    snapshot: Snapshot,
+    policy: Policy,
+    pool: list[PoolEntry],
+    context: EngineContext | None = None,
+) -> tuple[dict[str, Any], dict[str, QuestionSpec]]:
+    """The exact `(state, questions)` the engine sends for `pool`. Pure, no network --
+    `vd engine pool` prints it. Candidate ids are `c0..c{n-1}` in pool order; questions are
+    `tick_focus`, `threat`, `fit_c<i>`, `urgency_c<i>`."""
+    raise NotImplementedError
 
 
 def decide(
