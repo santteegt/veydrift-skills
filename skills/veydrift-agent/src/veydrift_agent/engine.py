@@ -210,6 +210,7 @@ def pool(
         plan_mod._target_planets(snapshot_model, policy_model),
         high_stakes_only_when_idle=jev_cfg.high_stakes_only_when_idle,
         max_candidates=jev_cfg.max_candidates,
+        proactive_storage_hours=jev_cfg.proactive_storage_hours,
     )
     rows = [
         {

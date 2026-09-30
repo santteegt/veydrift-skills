@@ -60,6 +60,7 @@ ladder; switch the kind and write an intent:
     "timeout_s": 5.0,
     "max_candidates": 24,
     "payback_reference_hours": 24.0,
+    "proactive_storage_hours": 24.0,
     "high_stakes_only_when_idle": true,
     "allow_hold": false
   }
@@ -77,7 +78,8 @@ ladder; switch the kind and write an intent:
   hard error, not a silent default. `intent` is capped at 1000 characters; empty uses a
   built-in rubric (balanced, energy-safe growth, no risky military action).
 - Numbers are validated at load: no `Infinity`/`NaN` anywhere in the `engine` block; each weight
-  is `0..100`; `payback_reference_hours` is in `(0, 10000]`; and at least one of `fit`, `urgency`
+  is `0..100`; `payback_reference_hours` is in `(0, 10000]`; `proactive_storage_hours` is in
+  `(0, 720]`; and at least one of `fit`, `urgency`
   or `focus` must be above 0, because those are the judgments that carry a confidence (an
   economy/threat-only weighting would make every confidence gate pass vacuously).
 - `vd doctor` prints the configured kind, whether the key is set (never its value) and
@@ -130,6 +132,7 @@ reported as `rejected` in the trace and by `vd engine pool`. Fixed order:
 | `energy_unknown` | the planet reports no energy balance |
 | `fleet_slots` | a fleet mission with no known free slot (unknown counts as none) |
 | `economy_not_on_track` | the undeclared default Rocket Launcher (the filler used only when `defense_targets` is empty) while `economy_on_track` does not hold, as in the ladder; declared ship and defense targets are unaffected |
+| `storage_not_needed` | a proactive storage upgrade whose resource does not fill within `proactive_storage_hours` (default 24) at current production, unless the current cap blocks another building on that planet. The ladder never lets proactive storage win; without this filter the engine, when nothing else is legal, would spend on storage nowhere near full |
 | `batch_vs_scored_single` | a production batch on a planet that has a scored single ship order |
 | `high_stakes_not_idle` | colonize/attack/missile/deploy while anything else survived (see below) |
 | `duplicate` | the same action reached twice (same call identity; research dedups by technology and prefers the first target planet) |

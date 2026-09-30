@@ -1172,3 +1172,62 @@ def test_property_the_ladders_band_2_to_8_winner_is_pooled_or_refused_as_a_guard
             gate = next(v for v in report.verdicts if v.gate == _MIRRORED_BY_GUARD[reason])
             assert gate.status is GuardStatus.BLOCK, f"{label}: pool says {reason!r} but guard {gate.gate} is {gate.status}: {gate.detail}"
     assert winners > 0, f"{name}: the ladder never produced a band 2-8 action -- the property was vacuous"
+
+
+# --------------------------------------------------------------------------------------
+# Proactive storage: pooled only when it fills soon, or when the cap blocks another build.
+# --------------------------------------------------------------------------------------
+
+
+def _storage(pool: list[PoolEntry]) -> set[tuple[int | None, int | None]]:
+    return {(e.candidate.action.planet_id, e.candidate.action.entity_id) for e in pool if e.candidate.family == "storage"}
+
+
+def test_proactive_storage_far_from_full_is_not_pooled_with_a_window():
+    snapshot = rich_snapshot()  # 5M of each resource held against a 10M cap, filling in days
+    everything, _ = pool_of(snapshot, make_policy(), max_candidates=500)
+    assert _storage(everything), "without a window every proactive storage upgrade is pooled"
+
+    windowed, rejected = pool_of(snapshot, make_policy(), max_candidates=500, proactive_storage_hours=24)
+    assert _storage(windowed) == set()
+    assert rejected["storage_not_needed"] == len(_storage(everything))
+    assert {e.candidate.family for e in windowed} - {"storage"}, "the rest of the pool is untouched"
+
+
+def test_proactive_storage_filling_within_the_window_is_pooled():
+    planet = rich_planet()
+    planet = planet.model_copy(
+        update={
+            "resources_as_of_now": planet.resources_as_of_now.model_copy(update={"metal": 9_990_000}),
+            "production_per_hour": planet.production_per_hour.model_copy(update={"metal": 1_000}),  # 10h to cap
+        }
+    )
+    pool, _ = pool_of(rich_snapshot(planet), make_policy(), max_candidates=500, proactive_storage_hours=24)
+    assert _storage(pool) == {(planet.planet_id, ids.Building.METAL_STORAGE)}
+
+    narrow, _ = pool_of(rich_snapshot(planet), make_policy(), max_candidates=500, proactive_storage_hours=5)
+    assert _storage(narrow) == set(), "10h to cap is outside a 5h window"
+
+
+def test_proactive_storage_that_would_unblock_another_build_is_needed():
+    snapshot = rich_snapshot()
+    entries, _ = pool_of(snapshot, make_policy(), max_candidates=500)
+    planet = snapshot.planets[0]
+    builds = [e for e in entries if e.candidate.action.kind is ActionKind.BUILD and e.candidate.family != "storage"]
+    priciest = max(e.candidate.action.cost.metal for e in builds)
+    assert priciest > 0
+
+    # Not filling (no metal production), but the cap sits just below the priciest build's metal cost.
+    capped = planet.model_copy(
+        update={
+            "resources_as_of_now": planet.resources_as_of_now.model_copy(update={"metal": 0}),
+            "production_per_hour": planet.production_per_hour.model_copy(update={"metal": 0}),
+            "storage_caps": planet.storage_caps.model_copy(update={"metal": priciest - 1}),
+        }
+    )
+    needed = candidates._storage_needed(entries, [capped], 24)
+    assert (planet.planet_id, ids.Building.METAL_STORAGE) in needed
+
+    roomy = capped.model_copy(update={"storage_caps": capped.storage_caps.model_copy(update={"metal": priciest * 10})})
+    assert (planet.planet_id, ids.Building.METAL_STORAGE) not in candidates._storage_needed(entries, [roomy], 24)
+    assert candidates._storage_needed(entries, [roomy], None) is None, "no window means no filtering"

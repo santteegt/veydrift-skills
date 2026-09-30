@@ -228,6 +228,13 @@
           "title": "Payback Reference Hours",
           "type": "number"
         },
+        "proactive_storage_hours": {
+          "default": 24.0,
+          "exclusiveMinimum": 0,
+          "maximum": 720,
+          "title": "Proactive Storage Hours",
+          "type": "number"
+        },
         "timeout_s": {
           "default": 5.0,
           "maximum": 30,

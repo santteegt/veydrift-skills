@@ -79,6 +79,7 @@ def pool_of(snapshot: Snapshot, policy: Policy, **kwargs: Any) -> list[PoolEntry
         plan._target_planets(snapshot, policy),
         high_stakes_only_when_idle=cfg.high_stakes_only_when_idle,
         max_candidates=cfg.max_candidates,
+        proactive_storage_hours=cfg.proactive_storage_hours,
         **kwargs,
     )
     return pool
@@ -860,8 +861,33 @@ def test_an_empty_pool_falls_back_without_a_call():
     assert backend.calls == [] and result[1].pool_size == 0
 
 
-# --------------------------------------------------------------------------------------
-# High-stakes winners must be endorsed, and must respect the ladder's meaning of "idle".
+def test_the_engine_passes_the_proactive_storage_window_to_the_pool(monkeypatch):
+    snapshot, policy = one_planet(), jev_policy(proactive_storage_hours=6.0)
+    seen: dict[str, Any] = {}
+    real = candidates.collect_pool
+
+    def spy(*args: Any, **kwargs: Any):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(candidates, "collect_pool", spy)
+    run(snapshot, policy, FakeBackend(scripted()))
+    assert seen["proactive_storage_hours"] == 6.0
+
+
+def test_storage_far_from_full_is_not_the_engines_only_option(monkeypatch):
+    # The live case: the only legal moves are proactive storage upgrades nowhere near full. The
+    # ladder proposes nothing there; the jev engine must not spend on them either.
+    for name in dir(candidates):
+        if name.startswith("generate_") and name.endswith("_candidates") and name != "generate_proactive_storage_candidates":
+            monkeypatch.setattr(candidates, name, lambda *a, **k: [])
+    snapshot = two_planet()  # storage far from full on both planets
+
+    backend = FakeBackend(scripted())
+    action, trace = run(snapshot, jev_policy(), backend)
+    assert trace.fallback_reason == "empty_pool" and backend.calls == []
+    assert trace.rejected.get("storage_not_needed", 0) > 0
+    assert action.engine == "ladder"
 # --------------------------------------------------------------------------------------
 
 

@@ -1005,6 +1005,7 @@ wrote /Users/santteegt/.veydrift/policy.json</pre></div>
         <tr><td><code>jev.timeout_s</code></td><td>float</td><td><code>0.5</code>-<code>30</code>; time budget for the request (one attempt may take up to this long per network phase; a timeout is not retried, a fast failure may retry once): not a hard deadline</td><td><code>5.0</code></td></tr>
         <tr><td><code>jev.max_candidates</code></td><td>int</td><td><code>2</code>-<code>60</code>; pool size cap</td><td><code>24</code></td></tr>
         <tr><td><code>jev.payback_reference_hours</code></td><td>float</td><td><code>&gt; 0</code> and at most <code>10000</code>; the payback at which the economy term scores 0.5</td><td><code>24.0</code></td></tr>
+        <tr><td><code>jev.proactive_storage_hours</code></td><td>float</td><td><code>&gt; 0</code> and at most <code>720</code>; a proactive storage upgrade is considered only when its resource fills within this many hours, or when the cap blocks another building</td><td><code>24.0</code></td></tr>
         <tr><td><code>jev.high_stakes_only_when_idle</code></td><td>bool</td><td><code>true</code>: Colonize/Attack/Missile/Deploy enter the pool only when nothing else is legal, and are only taken when the ladder itself has nothing ordinary to do and the model endorses them</td><td><code>true</code></td></tr>
         <tr><td><code>jev.allow_hold</code></td><td>bool</td><td><code>true</code>: a confident "wait" judgment returns a NO-OP instead of the best candidate</td><td><code>false</code></td></tr>
       </tbody>

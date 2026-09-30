@@ -892,6 +892,7 @@ def decide(
         target_planets,
         high_stakes_only_when_idle=cfg.high_stakes_only_when_idle,
         max_candidates=cfg.max_candidates,
+        proactive_storage_hours=cfg.proactive_storage_hours,
         **target_kwargs,
     )
     fields: dict[str, Any] = {

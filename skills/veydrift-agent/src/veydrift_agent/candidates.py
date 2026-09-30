@@ -3524,6 +3524,36 @@ def _pre_trim(entries: list[PoolEntry], max_candidates: int) -> list[PoolEntry]:
     return kept
 
 
+def _storage_needed(
+    entries: list[PoolEntry], target_planets: list[PlanetSnapshot], window_hours: float | None
+) -> set[tuple[int, int]] | None:
+    """`(planet_id, storage building id)` pairs worth a proactive storage upgrade: the resource
+    fills within `window_hours` at current production, or some other building candidate on that
+    planet costs more of it than the current cap holds. `None` when `window_hours` is `None`
+    (no filtering)."""
+    if window_hours is None:
+        return None
+    needed: set[tuple[int, int]] = set()
+    for planet in target_planets:
+        for index, label in enumerate(_RESOURCE_LABELS):
+            hours = calc.hours_to_cap(
+                getattr(planet.resources_as_of_now, label),
+                getattr(planet.production_per_hour, label),
+                getattr(planet.storage_caps, label),
+            )
+            if hours is not None and hours <= window_hours:
+                needed.add((planet.planet_id, _STORAGE_BUILDING_FOR_RESOURCE[index]))
+    caps = {planet.planet_id: planet.storage_caps for planet in target_planets}
+    for entry in entries:
+        action = entry.candidate.action
+        if action.kind is not ActionKind.BUILD or entry.candidate.family == "storage" or action.planet_id not in caps:
+            continue
+        index = _exceeds_storage_cap(action.cost, caps[action.planet_id])
+        if index is not None:
+            needed.add((action.planet_id, _STORAGE_BUILDING_FOR_RESOURCE[index]))
+    return needed
+
+
 def collect_pool(
     snapshot: Snapshot,
     policy: Policy,
@@ -3536,6 +3566,7 @@ def collect_pool(
     missile_targets: dict[int, tuple[str, dict[int, int], bool | None]] | None = None,
     high_stakes_only_when_idle: bool = True,
     max_candidates: int = 24,
+    proactive_storage_hours: float | None = None,
 ) -> tuple[list[PoolEntry], dict[str, int]]:
     """Every legal candidate across every band, as `(pool, rejected_counts)`.
 
@@ -3558,6 +3589,12 @@ def collect_pool(
         `defense_targets` is empty, recognised by `DEFAULT_ROCKET_LAUNCHER_BASIS`) is pooled only
         while `economy_on_track` holds, as `select_shipyard_candidate` requires. Declared targets
         are unaffected.
+    9c. `storage_not_needed` -- with `proactive_storage_hours` set, a proactive storage upgrade is
+        pooled only when its resource fills within that many hours at current production, or when
+        the current cap blocks another building on the same planet (the upgrade is the remedy).
+        The ladder never lets a proactive storage upgrade win, so without this the jev engine would
+        spend on storage that is nowhere near full whenever nothing else is legal. `None` keeps them
+        all.
     10. `batch_vs_scored_single` -- a scored single ship order on the same planet outranks a
         production batch (AGENTS.md section 5).
     11. `high_stakes_not_idle` -- with `high_stakes_only_when_idle`, the `HIGH_STAKES_FAMILIES`
@@ -3611,10 +3648,18 @@ def collect_pool(
 
     survivors: list[PoolEntry] = []
     on_track = economy_on_track(snapshot, target_planets)
+    needed_storage = _storage_needed(entries, target_planets, proactive_storage_hours)
     for entry in entries:
         reason = _rejection_reason(entry.candidate, snapshot, policy)
         if reason is None and not on_track and entry.candidate.score_basis == DEFAULT_ROCKET_LAUNCHER_BASIS:
             reason = "economy_not_on_track"
+        if (
+            reason is None
+            and needed_storage is not None
+            and entry.candidate.family == "storage"
+            and (entry.candidate.action.planet_id, entry.candidate.action.entity_id) not in needed_storage
+        ):
+            reason = "storage_not_needed"
         if reason is None:
             survivors.append(entry)
         else:

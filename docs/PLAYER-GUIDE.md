@@ -506,6 +506,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `jev.timeout_s` | float | `0.5`-`30`; time budget for the request (one attempt may take up to this long per network phase; a timeout is not retried, a fast failure may retry once): not a hard deadline | `5.0` |
 | `jev.max_candidates` | int | `2`-`60`; pool size cap | `24` |
 | `jev.payback_reference_hours` | float | `> 0` and at most `10000`; the payback at which the economy term scores 0.5 | `24.0` |
+| `jev.proactive_storage_hours` | float | `> 0` and at most `720`; a proactive storage upgrade is considered only when its resource fills within this many hours, or when the cap blocks another building | `24.0` |
 | `jev.high_stakes_only_when_idle` | bool | `true`: Colonize/Attack/Missile/Deploy enter the pool only when nothing else is legal, and are only taken when the ladder itself has nothing ordinary to do and the model endorses them | `true` |
 | `jev.allow_hold` | bool | `true`: a confident "wait" judgment returns a NO-OP instead of the best candidate | `false` |
 

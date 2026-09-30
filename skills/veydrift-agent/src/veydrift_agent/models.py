@@ -919,6 +919,9 @@ class JevCfg(PolicyBase):
     max_candidates: int = Field(24, ge=2, le=60)
     #: `H0` in the economy term `H0 / (H0 + payback_hours)`.
     payback_reference_hours: float = Field(24.0, gt=0, le=10000)
+    #: A proactive storage upgrade enters the pool only when its resource fills within this many
+    #: hours, or when the current cap blocks another building on that planet.
+    proactive_storage_hours: float = Field(24.0, gt=0, le=720)
     #: Colonize/Attack/Missile/Deploy enter the pool only when nothing else is selectable.
     high_stakes_only_when_idle: bool = True
     #: Let a confident "hold" judgment return a NOOP instead of the best candidate.

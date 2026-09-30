@@ -718,12 +718,16 @@ killswitch path stays ladder-only). Vocabulary and code map:
 - **Pool** (`candidates.collect_pool`): every generator on every unrotated target planet (research
   once), then hard filters (`locked`, `allow_flag`, `non_selectable`, `planet_missing`, `queue_busy`,
   `storage_cap`, `spend_unverifiable`, `unaffordable`, `reserve`, `fields`, `energy_unknown`,
-  `fleet_slots`, `economy_not_on_track`, `batch_vs_scored_single`, `high_stakes_not_idle`, `duplicate`), each counted by
+  `fleet_slots`, `economy_not_on_track`, `storage_not_needed`, `batch_vs_scored_single`, `high_stakes_not_idle`, `duplicate`), each counted by
   reason, then a deterministic per-family pre-trim to `max_candidates`. The filters mirror every
   guard BLOCK a snapshot can decide, and add what the guard does not check (`allow_building`,
   `allow_research`, `allow_fleet_noncombat`, queue idleness). The undeclared default Rocket Launcher
   (the filler used only when `defense_targets` is empty) is pooled only while `economy_on_track`
-  holds (`economy_not_on_track`), as in the ladder; declared targets are unaffected.
+  holds (`economy_not_on_track`), as in the ladder; declared targets are unaffected. A proactive
+  storage upgrade is pooled only when its resource fills within `proactive_storage_hours` (default 24)
+  or the current cap blocks another building on that planet (`storage_not_needed`): the ladder never
+  lets proactive storage win, and without this a live run spent half a planet's holdings on storage
+  nowhere near full because nothing else was legal.
 - **Client** (`jev.py`): `JevBackend.ask` over the `typesafe-sdk` `system_one` call, the SDK imported
   lazily; every failure is a `JevError` with a fixed `reason`; the key is `TYPESAFE_API_KEY` only and
   the base URL a code constant.
@@ -920,7 +924,7 @@ rung `8b`.
 (`"jev-latest"`), `intent` (plain-language strategy, at most 1000 characters; empty uses a built-in
 rubric), `weights` (`fit`/`urgency`/`focus`/`economy`/`threat`), `min_confidence`,
 `min_confidence_high_stakes`, `min_margin`, `timeout_s`, `max_candidates`, `payback_reference_hours`,
-`high_stakes_only_when_idle` and `allow_hold`, all read only when `kind` is `"jev"`. Every class is
+`proactive_storage_hours` (`(0, 720]`), `high_stakes_only_when_idle` and `allow_hold`, all read only when `kind` is `"jev"`. Every class is
 `extra="forbid"` (like every policy section) and rejects `Infinity`/`NaN`; each weight is `0..100`,
 `payback_reference_hours` is in `(0, 10000]`, and at least one of `fit`/`urgency`/`focus` must be `> 0`
 (criterion 81.8). The API key is never a policy field: it comes from the
@@ -2515,8 +2519,12 @@ Acceptance criteria (numbering follows the corrections above):
       Pinned by `test_pool.py::test_property_every_pooled_entry_is_generated_legal_and_never_blocked_by_the_snapshot_gates`
       and `test_pool.py::test_property_the_ladders_band_2_to_8_winner_is_pooled_or_refused_as_a_guard_would`,
       with the per-filter tests in the same file (including
-      `test_the_undeclared_default_rocket_launcher_needs_the_economy_on_track` and
-      `test_declared_defense_targets_are_pooled_even_when_the_economy_is_idle`). Re-run them when touching either the pool or a guard gate.
+      `test_the_undeclared_default_rocket_launcher_needs_the_economy_on_track`,
+      `test_declared_defense_targets_are_pooled_even_when_the_economy_is_idle`,
+      `test_proactive_storage_far_from_full_is_not_pooled_with_a_window`,
+      `test_proactive_storage_filling_within_the_window_is_pooled`,
+      `test_proactive_storage_that_would_unblock_another_build_is_needed`, and
+      `test_jev_engine.py::test_storage_far_from_full_is_not_the_engines_only_option`). Re-run them when touching either the pool or a guard gate.
 81.3. **Every fallback returns the ladder's own action.** Each `JevError` reason, an empty pool, a missing
       answer, low confidence, low confidence at the high-stakes floor, a high-stakes gate refusal (81.7), a thin margin, and an exception
       inside the engine yield the action `plan_next_action` returns, with `Action.engine == "ladder"` and

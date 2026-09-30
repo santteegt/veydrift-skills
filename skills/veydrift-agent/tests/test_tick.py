@@ -5464,6 +5464,7 @@ def _agreeing_responder(snapshot, policy):
         plan_mod._target_planets(snapshot, policy),
         high_stakes_only_when_idle=cfg.high_stakes_only_when_idle,
         max_candidates=cfg.max_candidates,
+        proactive_storage_hours=cfg.proactive_storage_hours,
         **empty,
     )
     key = candidates.pool_key(ladder)

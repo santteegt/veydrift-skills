@@ -44,6 +44,9 @@ skills are not versioned in lockstep.
   Answers with out-of-range values (legend, score span, confidence/probability, probabilities not
   summing to 1) are `malformed`, as are a non-finite composite or margin.
 - Pool reason `economy_not_on_track`: the undeclared default Rocket Launcher needs `economy_on_track`.
+- `engine.jev.proactive_storage_hours` (default 24, at most 720) and pool reason `storage_not_needed`: a
+  proactive storage upgrade is pooled only when its resource fills within the window or the cap blocks
+  another building on that planet.
 
 ### Changed
 - `plan.py` exposes `veto_action`, `deadline_action`, `RULE_BY_FAMILY` and `finalize_candidate`
