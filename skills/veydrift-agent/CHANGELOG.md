@@ -23,6 +23,10 @@ skills are not versioned in lockstep.
   and `.block`, which every `walletctl build` re-stamps, so two identical ticks always differed
   (regression from the on-chain pin verdict in 1.24.0). Those two fields are now excluded from the
   fingerprint only — `ok`/`dependencies_ok`/`problems` still count, and `proposals.jsonl` is unchanged.
+- Docs: `opportunities._scan_ladder_bands`'s docstring and `references/opportunities.md` said the
+  unlock-chain family has no queue precondition. `generate_unlock_chain_candidates` does check
+  queues — per step, a building step needs `allow_building` and an empty building queue on that
+  planet, a research step needs `allow_research` and an empty research queue. No behaviour change.
 
 ## [1.27.1] - 2026-09-29
 
