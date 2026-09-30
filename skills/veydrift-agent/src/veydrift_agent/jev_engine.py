@@ -723,14 +723,59 @@ def _kind(s: _Scored) -> _Kind:
     return base
 
 
-def _margin(scored: list[_Scored]) -> float | None:
-    """Winner composite minus the best composite of a *different kind* of action; `None` when
+def _margin(scored: list[_Scored], winner: _Scored) -> float | None:
+    """`winner`'s composite minus the best composite of a *different kind* of action; `None` when
     every entry is the winner's kind (nothing to be confused with). Identical candidates on
-    symmetric planets tie by construction and say nothing about the decision."""
-    winner = scored[0]
+    symmetric planets tie by construction and say nothing about the decision. Used for
+    high-stakes winners, which must beat every other move outright."""
     kind = _kind(winner)
-    rivals = [s.composite for s in scored[1:] if _kind(s) != kind]
+    rivals = [s.composite for s in scored if s is not winner and _kind(s) != kind]
     return winner.composite - max(rivals) if rivals else None
+
+
+def _group_confidence(best: _Scored, focus_confidence: float, policy: Policy) -> float:
+    """Confidence of the judgments that decide *which kind of development* wins: `tick_focus`
+    and the group's best candidate's fit, each only when weighted. Urgency is a per-item
+    preference and counts only when neither fit nor focus is weighted (the policy validator
+    guarantees one of the three is)."""
+    w = policy.engine.jev.weights
+    confidences: list[float] = []
+    if w.focus > 0:
+        confidences.append(focus_confidence)
+    if w.fit > 0:
+        confidences.append(best.fit_confidence)
+    if not confidences and w.urgency > 0:
+        confidences.append(best.urgency_confidence)
+    if not confidences:
+        raise JevError("malformed", "no weighted judgment carries a confidence")
+    return min(confidences)
+
+
+def _group_margin(scored: list[_Scored]) -> float | None:
+    """Best composite of the winning group minus the best composite of any other group; `None`
+    when only one group is on offer."""
+    group = scored[0].entry.group
+    rivals = [s.composite for s in scored if s.entry.group != group]
+    return scored[0].composite - max(rivals) if rivals else None
+
+
+def _item_pick(scored: list[_Scored], min_margin: float) -> _Scored:
+    """Within the winning group, the candidates the model rated as a near-tie (composite within
+    `min_margin` of the group's best) are an acceptable-alternatives set, not a judgment worth
+    gating: take the first of them in pool order (band, then generation index), the ladder's own
+    deterministic priority order, which already honours declared priorities. Only entries with
+    the same high-stakes status as the top one are eligible, so pool order never promotes a
+    high-stakes move the model did not rank first."""
+    top = scored[0]
+    high = top.entry.candidate.family in candidates.HIGH_STAKES_FAMILIES
+    near = [
+        s
+        for s in scored
+        if s.entry.group == top.entry.group
+        and (s.entry.candidate.family in candidates.HIGH_STAKES_FAMILIES) == high
+        and s.composite >= top.composite - min_margin
+    ]
+    return min(near, key=lambda s: (s.entry.band, s.entry.index))
 
 
 def _high_stakes_reason(
@@ -875,19 +920,31 @@ def decide(
         return fall_back(err.reason)
     focus_answer = answers.choices["tick_focus"]
     threat = answers.nouls["threat"]
-    winner = scored[0]
     if not all(math.isfinite(s.composite) for s in scored):
         return fall_back("malformed")
+    # Two stages. The group stage is the real judgment -- which kind of development this tick
+    # serves -- and is gated on the group-deciding judgments and the lead over other groups.
+    # The item stage picks among same-group near-ties in the ladder's own order, ungated: several
+    # equally rated legal options are a harmless preference, not uncertainty worth a fallback.
+    best = scored[0]
+    winner = _item_pick(scored, cfg.min_margin)
+    high_stakes = winner.entry.candidate.family in candidates.HIGH_STAKES_FAMILIES
     try:
-        conf = _confidence(winner, focus_answer.confidence, policy)
+        conf = (
+            _confidence(winner, focus_answer.confidence, policy)
+            if high_stakes
+            else _group_confidence(best, focus_answer.confidence, policy)
+        )
     except JevError as err:
         return fall_back(err.reason)
-    rival_margin = _margin(scored)
-    if rival_margin is not None and not math.isfinite(rival_margin):
-        return fall_back("malformed")
+    group_margin = _group_margin(scored)
+    kind_margin = _margin(scored, winner) if high_stakes else None
+    for value in (group_margin, kind_margin):
+        if value is not None and not math.isfinite(value):
+            return fall_back("malformed")
     diagnostics: dict[str, Any] = {
         "winner_confidence": _r(conf),
-        "margin": None if rival_margin is None else _r(rival_margin),
+        "margin": None if group_margin is None else _r(group_margin),
         "focus_probabilities": {k: round(v, 4) for k, v in focus_answer.probabilities.items()},
         "threat": _r(threat),
         "top": [_judgment(s) for s in scored[:5]],
@@ -913,14 +970,18 @@ def decide(
     fields["agrees_with_ladder"] = agrees
     if conf < cfg.min_confidence:
         return fall_back("low_confidence")
-    if winner.entry.candidate.family in candidates.HIGH_STAKES_FAMILIES:
+    if group_margin is not None and group_margin < cfg.min_margin:
+        return fall_back("low_margin")
+    if high_stakes:
+        # The strict path: every weighted judgment's confidence (urgency included), a lead over
+        # every other kind of move, then ladder idleness and model endorsement.
         if conf < cfg.min_confidence_high_stakes:
             return fall_back("low_confidence_high_stakes")
+        if kind_margin is not None and kind_margin < cfg.min_margin:
+            return fall_back("low_margin")
         reason = _high_stakes_reason(winner, ladder_action, focus_answer, cfg)
         if reason is not None:
             return fall_back(reason)
-    if rival_margin is not None and rival_margin < cfg.min_margin:
-        return fall_back("low_margin")
 
     # Alternatives in pool order (band, then generation index), never composite order, so the
     # action -- and its dedup fingerprint -- does not move when probabilities jitter.

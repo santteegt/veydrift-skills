@@ -52,6 +52,10 @@ skills are not versioned in lockstep.
   mission type, origin and target for a fleet or missile launch), so identical candidates on symmetric planets
   no longer force `low_margin` while two attacks from different origins or on different targets must clear it.
   A pool of one kind skips the gate and the trace's `margin` is `null`.
+- The jev engine decides in two stages. The group stage (which kind of development) is gated on `tick_focus`
+  and the group's best `fit` confidence and on the lead over other groups; same-group near-ties are taken in
+  the ladder's own order, ungated. Low urgency confidence alone no longer forces a fallback. High-stakes
+  winners keep the strict path: every judgment's confidence, the kind margin, idleness and endorsement.
 - `timeout_s` is a per-attempt budget, not a deadline: one attempt may take up to `timeout_s` per network phase;
   a timeout is not retried, a fast failure may retry once within the budget.
 - A score up to 5% of the legend's span past either end parses and clamps to `0..1`; further out is `malformed`.

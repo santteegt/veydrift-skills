@@ -246,8 +246,23 @@ urgency 0.25, focus 0.15, economy 0.25, threat 0.05; only the ratios matter, and
 drops its term (and its confidence, below). Ties break by ladder band order, then generation
 order (`test_ties_break_by_band_then_generation_index`).
 
-**Confidence** is the **minimum** confidence over the judgments with a positive weight that
-fed the winner: its `fit`, its `urgency` and `tick_focus`. (A Noul carries no confidence.)
+**Two stages.** The decision is split the way the model's judgments are reliable:
+
+1. *Group stage: which kind of development.* The winning group is the group of the top composite.
+   Its **confidence** is the minimum over the group-deciding judgments with a positive weight:
+   `tick_focus` and the group's best candidate's `fit` (urgency counts only when neither is
+   weighted). Its **margin** is the group's best composite minus the best composite of any other
+   group.
+2. *Item stage: which candidate of that group.* Every candidate of the winning group whose composite
+   is within `min_margin` of the group's best is an acceptable alternative. The first of them in pool
+   order (band, then generation index: the ladder's own priority order, which honours declared
+   priorities such as `research_priority`) is taken. This stage has no confidence gate: several
+   equally rated legal options of the same kind are a harmless preference, not uncertainty worth a
+   fallback. Only candidates with the same high-stakes status as the top one are eligible.
+
+A **high-stakes** winner does not use the group-stage shortcuts: its confidence is the minimum over
+*every* weighted judgment (its `fit`, its `urgency` and `tick_focus`), and it must also lead every
+other *kind* of move by `min_margin` (below). (A Noul carries no confidence.)
 
 ## 7. Gates and fallbacks
 
@@ -255,12 +270,13 @@ A hold (below) is checked first. Then the winner must pass, in this order, or th
 
 | Gate | Setting (default) | Falls back with |
 | --- | --- | --- |
-| confidence at least `min_confidence` (inclusive) | 0.5 | `low_confidence` |
+| group-stage confidence at least `min_confidence` (inclusive; for a high-stakes winner, the strict all-judgment confidence) | 0.5 | `low_confidence` |
+| group lead over the best other group at least `min_margin` (skipped when only one group is on offer) | 0.03 | `low_margin` |
 | a high-stakes winner (colonize, attack, missile, deploy) needs the higher floor | `min_confidence_high_stakes` 0.75 | `low_confidence_high_stakes` |
+| a high-stakes winner must lead every other *kind* of move (skipped when no entry is of a different kind) | `min_margin` 0.03 | `low_margin` |
 | a high-stakes winner needs the ladder to be idle (below) | `high_stakes_only_when_idle` (on) | `high_stakes_not_idle` |
 | a high-stakes winner is refused when `tick_focus` chose hold | none; applies even with `allow_hold` off | `high_stakes_hold` |
 | a high-stakes winner needs model endorsement (below) | normalized fit at least 0.75 | `high_stakes_not_endorsed` |
-| composite lead over the best entry of a *different kind* at least `min_margin` (skipped when no entry is of a different kind, or for a one-candidate pool) | 0.03 | `low_margin` |
 
 **High-stakes gates.** A high-stakes winner is taken only when all of these hold; the three
 checks after the confidence floor run in the order listed.
@@ -281,14 +297,19 @@ fit, so a split answer can average past it: half the probability on "directly su
 high-stakes confidence floor (`min_confidence_high_stakes`), because the confidence of a split
 answer is low. Keep that floor high.
 
-**Margin.** The margin is the winner's composite minus the best composite among entries of a
-different kind. Kind is `(family, function, entity)`; a fleet or missile launch also carries its
-mission type, origin planet and target, so two attacks from different origins, or on different
-targets, are different kinds and must clear `min_margin`. The same upgrade on two symmetric
-planets is one kind, so identical candidates tie without forcing `low_margin`. With no entry of a
-different kind (a pool holding only one kind) there is nothing to be confused with: the gate is
-skipped and the trace reports `margin: null` (omitted from `vd engine compare`'s output and from
-the panel line), never a made-up number.
+**Margins.** The trace's `margin` is the group margin. With only one group on offer there is no
+rival kind of development: the group gate is skipped and the trace reports `margin: null`
+(omitted from `vd engine compare`'s output and from the panel line), never a made-up number. A
+high-stakes winner is additionally held to a *kind* margin: its composite minus the best composite
+among entries of a different kind. Kind is `(family, function, entity)`, and a fleet or missile
+launch also carries its mission type, origin planet and target, so two attacks from different
+origins, or on different targets, are different kinds and must clear `min_margin`; the same move on
+two symmetric planets is one kind.
+
+Why two stages: live runs showed Jev deciding *which kind of development* with near-certainty while
+spreading its per-item judgments (urgency above all) across several equally good options of that
+kind. Gating on those spread judgments sent clear-cut ticks to the ladder, which is exactly the
+starvation this engine exists to avoid.
 
 **Hold.** With `allow_hold` on, a `tick_focus` of `hold` with probability at least 0.5 and
 confidence at least `min_confidence` returns a NOOP with rule `9j:hold` (`engine: "jev"`)
@@ -384,8 +405,9 @@ jev have chosen differently here" without a tick.
   (this also favours already-developed planets, section 12); raise `urgency` to favour
   work that prevents waste; `focus` is the group-level nudge; `threat` only ever lifts defense.
 - **Thresholds.** Raise `min_confidence`/`min_margin` to hand more ticks to the ladder; lower
-  them to trust the model more. A high fallback rate under `low_margin` usually means the pool
-  holds several near-equivalent candidates, which is fine.
+  them to trust the model more. A high fallback rate under `low_margin` means two *groups* keep
+  scoring alike (e.g. economy versus research): sharpen the intent so it says which matters more.
+  Near-equivalent candidates within one group never cause it.
 - **`timeout_s`** (0.5-30) is a time budget, not a hard deadline. One attempt may take up to
   `timeout_s` per phase (connect, read, write, pool) and a timeout is never retried; a fast
   failure (connection error, 429, 5xx) may retry once, and only if the retry still fits the

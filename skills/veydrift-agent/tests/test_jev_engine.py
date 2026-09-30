@@ -480,8 +480,16 @@ def test_composition_matches_the_formula_by_hand():
         assert j.composite == pytest.approx(expected(i, pool[i]), abs=1e-4)
         assert j.fit == pytest.approx(fits[i], abs=1e-4)
         assert j.urgency == pytest.approx(urgs[i], abs=1e-4)
-    assert action.entity_id == pool[ranked[0]].candidate.action.entity_id
-    assert trace.margin == pytest.approx(expected(ranked[0], pool[ranked[0]]) - expected(ranked[1], pool[ranked[1]]), abs=1e-4)
+    best = ranked[0]
+    group = pool[best].group
+    near = [
+        i for i in range(n)
+        if pool[i].group == group and expected(i, pool[i]) >= expected(best, pool[best]) - policy.engine.jev.min_margin
+    ]
+    pick = min(near, key=lambda i: (pool[i].band, pool[i].index))
+    assert action.entity_id == pool[pick].candidate.action.entity_id
+    rival = max(expected(i, pool[i]) for i in range(n) if pool[i].group != group)
+    assert trace.margin == pytest.approx(expected(best, pool[best]) - rival, abs=1e-4)
 
 
 def test_weights_are_normalised_so_only_ratios_matter():
@@ -728,18 +736,58 @@ def test_high_stakes_winners_need_the_higher_floor(monkeypatch):
     action, trace = run(snapshot, policy, FakeBackend(strong), **target_kwargs())
     assert trace.engine == "jev" and action.rule == "8d:colonize" and action.engine == "jev"
 
+    # urgency confidence alone still sinks a high-stakes winner
+    shaky = scripted(fits={at: 1.0}, urgs={at: 1.0}, fit_conf=0.9, urg_conf=0.3, focus_conf=0.9, default_fit=0.0, default_urg=0.0, focus="expansion")
+    result = run(snapshot, policy, FakeBackend(shaky), **target_kwargs())
+    assert result[1].fallback_reason in {"low_confidence", "low_confidence_high_stakes"}
+
     # the same 0.6 confidence is fine for a non-high-stakes winner
     other = 1 - at
     ok = scripted(fits={other: 1.0}, urgs={other: 1.0}, fit_conf=0.6, urg_conf=0.6, default_fit=0.0, default_urg=0.0)
     assert run(snapshot, policy, FakeBackend(ok), **target_kwargs())[1].engine == "jev"
 
 
-def test_a_thin_margin_falls_back():
-    snapshot, policy = one_planet(), jev_policy(min_margin=0.03)
-    # Every judgment ties; only the code-computed economy term separates the entries.
+def test_a_thin_margin_between_groups_falls_back(monkeypatch):
+    snapshot = two_planet()
+    # Only the model-judged fit/urgency terms count, so equal judgments are an exact tie.
+    policy = jev_policy(min_margin=0.03, weights=JevWeights(fit=1, urgency=1, focus=0, economy=0, threat=0))
+    full = pool_of(snapshot, policy)
+    mine = next(e for e in full if e.candidate.family == "mine")
+    research = next(e for e in full if e.candidate.family == "research")
+    pool = sorted([mine, research], key=lambda e: (e.band, e.index))
+    monkeypatch.setattr(candidates, "collect_pool", lambda *a, **k: (pool, {}))
     result = run(snapshot, policy, FakeBackend(scripted()))
     assert_fell_back(snapshot, policy, result, "low_margin")
     assert result[1].margin is not None and result[1].margin < 0.03
+
+
+def test_equally_rated_candidates_of_one_group_take_the_ladder_order(monkeypatch):
+    snapshot, policy = one_planet(), jev_policy(min_margin=0.03)
+    pool = [e for e in pool_of(snapshot, policy) if e.group == "economy"]
+    assert len(pool) > 1
+    monkeypatch.setattr(candidates, "collect_pool", lambda *a, **k: (pool, {}))
+    # Every judgment ties: a harmless preference among legal options, not a fallback.
+    action, trace = run(snapshot, policy, FakeBackend(scripted()))
+    assert trace.engine == "jev" and trace.fallback_reason is None and trace.margin is None
+    ranked = {j.id: j.composite for j in trace.top}
+    best = max(ranked.values())
+    near = [e for i, e in enumerate(pool) if f"c{i}" in ranked and ranked[f"c{i}"] >= best - 0.03]
+    first = min(near, key=lambda e: (e.band, e.index))
+    assert candidates.pool_key(action) == candidates.pool_key(first.candidate.action)
+
+
+def test_low_urgency_confidence_alone_does_not_fall_back_for_an_ordinary_pick():
+    snapshot, policy = two_planet(), jev_policy()
+    _action, trace = run(snapshot, policy, FakeBackend(scripted(urg_conf=0.1, fit_conf=0.9, focus_conf=0.9)))
+    assert trace.engine == "jev" and trace.fallback_reason is None
+    assert trace.winner_confidence == 0.9
+
+
+def test_low_focus_or_fit_confidence_still_falls_back():
+    snapshot, policy = two_planet(), jev_policy()
+    for responder in (scripted(focus_conf=0.2), scripted(fit_conf=0.2)):
+        result = run(snapshot, policy, FakeBackend(responder))
+        assert_fell_back(snapshot, policy, result, "low_confidence")
 
 
 def test_a_clear_margin_passes():
@@ -1039,19 +1087,18 @@ def test_identical_candidates_on_symmetric_planets_do_not_starve_the_margin_gate
     assert first.composite == second.composite, "the twins tie"
     assert {first.id, second.id} == {f"c{i}" for i in twins}
     assert action.planet_id == pool[twins[0]].candidate.action.planet_id, "the tie goes to the lower generation index"
-    rival = max(j.composite for j in trace.top if j.id not in {first.id, second.id})
-    assert trace.margin == pytest.approx(first.composite - rival, abs=1e-4)
-    assert trace.margin >= 0.03
+    assert trace.margin is not None and trace.margin >= 0.03
 
 
-def test_the_margin_is_still_measured_against_a_different_kind_of_action():
+def test_two_upgrades_rated_alike_in_one_group_are_decided_not_deferred():
     snapshot, policy = two_planet(), jev_policy(min_margin=0.03)
     pool = pool_of(snapshot, policy)
     metal = next(i for i, e in enumerate(pool) if e.candidate.action.entity_id == ids.Building.METAL_MINE)
     crystal = next(i for i, e in enumerate(pool) if e.candidate.action.entity_id == ids.Building.CRYSTAL_MINE)
-    # Two different upgrades that score alike: that is a genuinely thin margin.
-    result = run(snapshot, policy, FakeBackend(scripted(fits={metal: 1.0, crystal: 1.0}, urgs={metal: 1.0, crystal: 1.0}, default_fit=0.0, default_urg=0.0)))
-    assert result[1].fallback_reason == "low_margin"
+    responder = scripted(fits={metal: 1.0, crystal: 1.0}, urgs={metal: 1.0, crystal: 1.0}, default_fit=0.0, default_urg=0.0, focus="economy")
+    action, trace = run(snapshot, policy, FakeBackend(responder))
+    assert trace.engine == "jev" and trace.fallback_reason is None
+    assert action.entity_id in {ids.Building.METAL_MINE, ids.Building.CRYSTAL_MINE}
 
 
 def test_a_pool_of_one_kind_only_has_no_rival_to_be_confused_with(monkeypatch):
@@ -1308,13 +1355,13 @@ def test_scenarios_against_the_live_backend(capsys):
         snapshot, policy = scenario_inputs(spec)
         action, trace = jev_engine.decide(snapshot, policy, backend=jev.TypeSafeBackend())
         if trace.fallback_reason is not None:
-            fallbacks.append(f"{path.stem}: {trace.fallback_reason}")
-        elif not acceptable(action, spec["acceptable"]):
-            wrong.append(f"{path.stem}: {action.rule} {action.function} {action.entity_name}")
+            fallbacks.append(f"{path.stem}: {trace.fallback_reason} -> ladder {action.rule} {action.entity_name}")
+        if not acceptable(action, spec["acceptable"]):
+            wrong.append(f"{path.stem}: {trace.engine} {action.rule} {action.function} {action.entity_name}")
     with capsys.disabled():
         print(f"\njev live scenarios: {len(SCENARIO_FILES)} run, {len(fallbacks)} fell back {fallbacks}, {len(wrong)} unacceptable {wrong}")
-    assert not wrong
-    assert len(fallbacks) <= len(SCENARIO_FILES) / 2
+    assert not wrong, "every scenario's final action, jev pick or ladder fallback, must be acceptable"
+    assert len(fallbacks) <= 1
 
 
 def test_two_attacks_from_different_origins_are_different_kinds_and_must_clear_the_margin():
@@ -1328,7 +1375,6 @@ def test_two_attacks_from_different_origins_are_different_kinds_and_must_clear_t
     both = scripted(fits={i: 1.0 for i in attacks}, urgs={i: 1.0 for i in attacks}, default_fit=0.0, default_urg=0.0, focus="offense")
     result = run(snapshot, policy, FakeBackend(both), **target_kwargs())
     assert_fell_back(snapshot, policy, result, "low_margin", **target_kwargs())
-    assert result[1].margin is not None and result[1].margin < 0.2
 
     # with one origin clearly ahead the margin is real and the attack is taken
     action, trace = run(snapshot, policy, FakeBackend(endorsing(attacks[0], focus="offense")), **target_kwargs())

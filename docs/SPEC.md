@@ -730,10 +730,17 @@ killswitch path stays ladder-only). Vocabulary and code map:
 - **Engine** (`jev_engine.decide`): vetoes, deadline, the ladder's own pick (fallback and agreement
   reference), the pool, one request (`state` with every game number bucketed by code and planets as
   labels; questions `tick_focus` Choice, `threat` Noul, per-candidate `fit`/`urgency` Scores, each carrying its candidate inline -- never a positional `candidates[i]` path, which a live run showed the model resolving off by one), a
-  weighted composite (`policy.engine.jev.weights`), then gates on minimum confidence (over the
-  winner's weighted judgments), a higher floor for a high-stakes winner (`candidates.HIGH_STAKES_FAMILIES`:
-  colonize, attack, missile, logistics-deploy), the high-stakes endorsement gate (below), and a minimum
-  margin measured against the best entry of a different kind (`(family, function, entity)`, plus mission type, origin and target for a launch; skipped, and `null` in the trace, when none).
+  weighted composite (`policy.engine.jev.weights`), then decides in two stages. The *group stage* (which
+  kind of development) is gated on minimum confidence over the group-deciding judgments (`tick_focus` and
+  the group's best `fit`; urgency only when neither is weighted) and on a minimum lead over the best other
+  group (skipped, and `null` in the trace, when only one group is on offer). The *item stage* takes the
+  first same-group candidate in pool order (the ladder's priority order) among those within `min_margin` of
+  the group's best, ungated. A high-stakes winner (`candidates.HIGH_STAKES_FAMILIES`: colonize, attack,
+  missile, logistics-deploy) instead needs the minimum confidence over every weighted judgment, a higher
+  floor, a lead over every other kind of move (`(family, function, entity)`, plus mission type, origin and
+  target for a launch), and the high-stakes endorsement gate (below). Live runs motivated the split: Jev
+  judges the kind of development near-certainly while spreading per-item judgments across equally good
+  options, and gating on those sent clear-cut ticks to the ladder.
   A high-stakes winner is taken only when the ladder's own pick is not an ordinary on-chain action
   (`high_stakes_not_idle`, with `high_stakes_only_when_idle` on), `tick_focus` did not choose hold
   (`high_stakes_hold`, even with `allow_hold` off) and the model endorses it: normalized `fit` at least
@@ -2516,7 +2523,8 @@ Acceptance criteria (numbering follows the corrections above):
       the reason recorded; an engine failure never fails a tick.
       Pinned by `test_jev_engine.py::test_every_jev_error_falls_back_to_the_ladder_action`,
       `test_low_confidence_falls_back`, `test_high_stakes_winners_need_the_higher_floor`,
-      `test_a_thin_margin_falls_back`, `test_an_empty_pool_falls_back_without_a_call`,
+      `test_a_thin_margin_between_groups_falls_back`, `test_low_focus_or_fit_confidence_still_falls_back`,
+      `test_an_empty_pool_falls_back_without_a_call`,
       `test_a_missing_answer_is_a_malformed_fallback`,
       `test_engine.py::test_an_exception_inside_the_jev_engine_falls_back_to_the_ladder` and
       `test_tick.py::test_an_engine_exception_never_fails_the_tick`.
@@ -2576,11 +2584,13 @@ Acceptance criteria (numbering follows the corrections above):
       a weight vector with no confidence-bearing judgment, is a `malformed` fallback (confidence is never
       vacuously 1.0). A TypeSafe answer is validated by value: an empty or mis-sized score legend, a score
       more than 5% of the span past either end of the legend (less is clamped into `0..1`), a confidence/noul/probability outside `[0, 1]`, choice probabilities not
-      summing to 1 (tolerance 0.05) or naming an unasked option are `malformed`. The margin is measured against
-      the best entry of a different kind, so identical candidates on symmetric planets do not force `low_margin`.
-      Kind is `(family, function, entity)`; a fleet or missile launch adds mission type, origin planet, target
-      planet and target coordinates, so two attacks from different origins or on different targets must clear
-      `min_margin`. A pool of a single kind skips the gate and the trace's `margin` is `null`.
+      summing to 1 (tolerance 0.05) or naming an unasked option are `malformed`. The reported margin is the
+      group margin; same-group near-ties are an ungated item-stage choice in pool order, so identical
+      candidates on symmetric planets, or equally rated upgrades, never force `low_margin`, and low urgency
+      confidence alone never forces `low_confidence` for an ordinary pick. A high-stakes winner must also clear
+      a kind margin: kind is `(family, function, entity)`, and a fleet or missile launch adds mission type,
+      origin planet, target planet and target coordinates, so two attacks from different origins or on
+      different targets must clear `min_margin`. With one group on offer the trace's `margin` is `null`.
       Pinned by `test_models_engine.py::test_non_finite_weights_are_rejected`,
       `test_non_finite_cfg_numbers_are_rejected`, `test_weights_are_bounded_to_0_100`,
       `test_payback_reference_hours_is_bounded`, `test_weights_without_a_judgment_term_are_rejected`,
@@ -2589,8 +2599,10 @@ Acceptance criteria (numbering follows the corrections above):
       `test_a_non_finite_composite_is_a_malformed_fallback`,
       `test_an_all_zero_weight_vector_is_malformed_not_a_division_by_zero`,
       `test_confidence_is_never_vacuously_certain`,
-      `test_identical_candidates_on_symmetric_planets_do_not_starve_the_margin_gate` and
-      `test_the_margin_is_still_measured_against_a_different_kind_of_action`,
+      `test_identical_candidates_on_symmetric_planets_do_not_starve_the_margin_gate`,
+      `test_two_upgrades_rated_alike_in_one_group_are_decided_not_deferred`,
+      `test_equally_rated_candidates_of_one_group_take_the_ladder_order`,
+      `test_low_urgency_confidence_alone_does_not_fall_back_for_an_ordinary_pick`,
       `test_a_pool_of_one_kind_only_has_no_rival_to_be_confused_with`,
       `test_two_attacks_from_different_origins_are_different_kinds_and_must_clear_the_margin`;
       `test_jev.py::test_a_score_a_hair_past_the_end_of_its_legend_parses_and_clamps`.
