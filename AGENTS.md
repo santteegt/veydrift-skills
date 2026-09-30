@@ -80,7 +80,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1508 Python tests** (1506 passed + 2 skipped: the opt-in `VEYDRIFT_JEV_LIVE_TESTS=1`
+baseline: **1582 Python tests** (1580 passed + 2 skipped: the opt-in `VEYDRIFT_JEV_LIVE_TESTS=1`
 live TypeSafe tests, which also need `TYPESAFE_API_KEY`), **399 TypeScript tests** (396 passed + 3
 intentionally skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain
 check), both suites green. Run both before calling any change done; they are independent
@@ -234,8 +234,14 @@ touching related code, re-run the check named alongside each one.
   `allow_fleet_noncombat`, queue idleness). Re-run `tests/test_pool.py`'s two property tests when
   touching either the pool or a guard gate.
 - **Any jev failure or weak result runs the ladder.** Every `JevError`, `empty_pool`,
-  `low_confidence*`, `low_margin` and an unexpected exception returns `plan_next_action`'s own
-  action with `EngineTrace.fallback_reason`; an engine problem never fails a tick.
+  `low_confidence*`, `high_stakes_*`, `low_margin` and an unexpected exception returns
+  `plan_next_action`'s own action with `EngineTrace.fallback_reason`; an engine problem never fails a
+  tick. Non-finite or out-of-range answers and non-finite weights are `malformed`, never computed through.
+- **A high-stakes jev pick (colonize, attack, missile, deploy) needs model endorsement and ladder
+  idleness, else the ladder decides.** Fit at least `HIGH_STAKES_MIN_FIT`, `tick_focus` on its group,
+  not hold, and the ladder's own pick not an ordinary on-chain action (`jev_engine._high_stakes_reason`).
+  `HIGH_STAKES_RULES` derives from `candidates.HIGH_STAKES_FAMILIES`; keep the pool's filter and the
+  gate on that one set.
 - **`Action.engine` is provenance only.** `guard.py` never reads it; a manual override is always
   `"ladder"`.
 - **Nothing identifying goes to TypeSafe.** No wallet, signer, address, coordinate or raw planet id
@@ -243,7 +249,10 @@ touching related code, re-run the check named alongside each one.
   constant in `jev.py`, never a policy field or an environment override; the key is
   `TYPESAFE_API_KEY` only, and is a default scrubbed secret.
 - **The `engine` proposal field is excluded from the dedup fingerprint, and rationale/alternatives
-  carry no probabilities.** Alternatives are in band order, never composite order.
+  carry no probabilities.** Alternatives are in band order, never composite order. This makes dedup
+  stable only while the pick is stable: a result near a gate threshold can flip between the jev pick
+  and the ladder fallback tick to tick (no hysteresis). The override record's
+  `planner_would_have_proposed` keeps the ladder shape under both engines.
 - **`policy.strategy.planet_rotation` (the ladder engine only; default `false`) is the only thing allowed to
   change which planet three ladder rungs (`6:building-queue-empty`, `8b:unlock-chain`,
   `8:shipyard-idle`) walk first — never a re-scoring of candidates.** Off, `plan.py`

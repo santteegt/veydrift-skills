@@ -501,12 +501,12 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `kind` | string enum | exactly `"ladder"` or `"jev"` | `"ladder"` |
 | `jev.model` | string | the TypeSafe model id | `"jev-latest"` |
 | `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric | `""` |
-| `jev.weights` | object | `fit`, `urgency`, `focus`, `economy`, `threat`, each `>= 0`, at least one `> 0`; only the ratios matter | `0.30 / 0.25 / 0.15 / 0.25 / 0.05` |
+| `jev.weights` | object | `fit`, `urgency`, `focus`, `economy`, `threat`, each `0`-`100`, at least one of `fit`/`urgency`/`focus` `> 0`; only the ratios matter | `0.30 / 0.25 / 0.15 / 0.25 / 0.05` |
 | `jev.min_confidence` / `min_confidence_high_stakes` / `min_margin` | float | `0`-`1`; below them the ladder decides instead | `0.5` / `0.75` / `0.03` |
-| `jev.timeout_s` | float | `0.5`-`30`; total budget for the request, retry included | `5.0` |
+| `jev.timeout_s` | float | `0.5`-`30`; time budget for the request (each attempt gets half per network phase, at most one retry): about this long in the normal case, not a hard deadline | `5.0` |
 | `jev.max_candidates` | int | `2`-`60`; pool size cap | `24` |
-| `jev.payback_reference_hours` | float | `> 0`; the payback at which the economy term scores 0.5 | `24.0` |
-| `jev.high_stakes_only_when_idle` | bool | `true`: Colonize/Attack/Missile enter the pool only when nothing else is legal | `true` |
+| `jev.payback_reference_hours` | float | `> 0` and at most `10000`; the payback at which the economy term scores 0.5 | `24.0` |
+| `jev.high_stakes_only_when_idle` | bool | `true`: Colonize/Attack/Missile/Deploy enter the pool only when nothing else is legal, and are only taken when the ladder itself has nothing ordinary to do and the model endorses them | `true` |
 | `jev.allow_hold` | bool | `true`: a confident "wait" judgment returns a NO-OP instead of the best candidate | `false` |
 
 **`strategy`**
@@ -659,7 +659,7 @@ report gets one `engine:` line. `vd plan run --engine jev` does the same offline
 snapshot file.
 
 Cost is one short request per tick. Its limits are real: it judges qualitative fit, not
-numbers, and its choices are not reproducible bit for bit. If a young colony gets ignored
+numbers, and its choices are not reproducible bit for bit (a result near a confidence or margin threshold can flip between the jev pick and the ladder from one tick to the next). If a young colony gets ignored
 under jev (the economy term favours established planets), say so in the intent, lower
 `weights.economy`, or go back to the ladder with `planet_rotation` on — rotation applies to
 the ladder only. The full reference is `skills/veydrift-agent/references/jev-engine.md`.
@@ -1291,7 +1291,7 @@ asks it to invent numbers it doesn't have.
 | `walletctl verify-abi` shows a mismatch | A pinned contract's implementation on the chain has changed since this repo's pin (or the chain could not be read — the output says which). **Every write is blocked until this is resolved** — that's deliberate, not overly cautious. See `skills/veydrift-wallet/references/abi-pinning.md` for the re-pin recipe (`npm run repin`). |
 | Guards read `24/27 pass (block)` and nothing was submitted, at tier 1 | Correct and expected — see §10. This is not an error state. |
 | Two agent sessions on the same machine seem to share tick counts / a killswitch | They do — `$VEYDRIFT_HOME` is per-machine, not per-session, unless you override it. |
-| A tick says `engine: jev -> ladder fallback (<reason>)` | The jev engine could not give a confident answer, so the ladder decided (§6a). `missing_key`/`auth`: check `TYPESAFE_API_KEY`; `timeout`/`connection`/`server`: transient; `low_confidence`/`low_margin`: the model wasn't sure. The proposal is a normal ladder proposal. |
+| A tick says `engine: jev -> ladder fallback (<reason>)` | The jev engine could not give a confident answer, so the ladder decided (§6a). `missing_key`/`auth`: check `TYPESAFE_API_KEY`; `timeout`/`connection`/`server`: transient; `low_confidence`/`low_margin`: the model wasn't sure; `high_stakes_*`: a colonize/attack/missile/deploy pick wasn't endorsed strongly enough, or the ladder had ordinary work to do. The proposal is a normal ladder proposal. |
 | `policy.json` edits get rejected | The schema is validated strictly — an unrecognized key or a missing required field is a hard stop, not a warning. Read the error; it names the exact field. |
 | `incoming: none` but you were attacked | Expected — that field only ever lists *future* arrivals; it can't show an attack that has already resolved. Check the `radar:` line instead (§10), or run `vd radar check` (§11a) directly — its second signal reads your mission archive specifically to catch this case. |
 

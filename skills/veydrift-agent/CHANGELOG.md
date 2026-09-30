@@ -30,10 +30,28 @@ skills are not versioned in lockstep.
   ladder|policy|jev` (default `ladder`, offline); `vd doctor` reports the engine kind, whether
   `TYPESAFE_API_KEY` is set and whether the SDK imports.
 - `TYPESAFE_API_KEY` is a default scrubbed secret. `typesafe-sdk` is a dependency, imported lazily.
+- High-stakes gate: a jev winner in colonize, attack, missile or deploy (`candidates.HIGH_STAKES_FAMILIES`)
+  falls back to the ladder after the confidence floors unless the ladder's own pick is idle or high-stakes
+  (`high_stakes_not_idle`), `tick_focus` is not hold (`high_stakes_hold`, even with `allow_hold` off) and
+  the model endorses it: fit at least 0.75 and `tick_focus` on its group (`high_stakes_not_endorsed`).
+- Config and answer validation: `engine.jev` rejects `Infinity`/`NaN`, weights outside `0..100`,
+  `payback_reference_hours` outside `(0, 10000]` and weights with no positive `fit`/`urgency`/`focus`.
+  Answers with out-of-range values (legend, score span, confidence/probability, probabilities not
+  summing to 1) are `malformed`, as are a non-finite composite or margin.
+- Pool reason `economy_not_on_track`: the undeclared default Rocket Launcher needs `economy_on_track`.
 
 ### Changed
 - `plan.py` exposes `veto_action`, `deadline_action`, `RULE_BY_FAMILY` and `finalize_candidate`
   (`plan_next_action` composes them; no behaviour change, still pure and offline).
+- The jev margin is measured against the best entry of a different kind (`(family, function, entity)`),
+  so identical candidates on symmetric planets no longer force `low_margin`.
+- `timeout_s` is a budget, not a deadline: each attempt gets `timeout_s / 2` per network phase and at most
+  one retry starts within the budget (about `timeout_s` in the normal case).
+- Planet role sent to TypeSafe is `listed first`/`other`. Under a manual override with jev, the comparison
+  trace goes to the fingerprint-excluded `engine` field and `planner_would_have_proposed` keeps the ladder
+  shape. `vd engine pool --json` has no `note` key.
+- Known limit: dedup is stable under probability jitter only while the pick is stable; a result near a gate
+  threshold can flip between the jev pick and the ladder fallback (no hysteresis).
 
 ## [1.27.1] - 2026-09-29
 

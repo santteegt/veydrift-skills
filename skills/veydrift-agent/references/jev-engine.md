@@ -76,6 +76,10 @@ ladder; switch the kind and write an intent:
 - `engine` is `extra="forbid"` throughout: an unknown key, including a typo inside `jev`, is a
   hard error, not a silent default. `intent` is capped at 1000 characters; empty uses a
   built-in rubric (balanced, energy-safe growth, no risky military action).
+- Numbers are validated at load: no `Infinity`/`NaN` anywhere in the `engine` block; each weight
+  is `0..100`; `payback_reference_hours` is in `(0, 10000]`; and at least one of `fit`, `urgency`
+  or `focus` must be above 0, because those are the judgments that carry a confidence (an
+  economy/threat-only weighting would make every confidence gate pass vacuously).
 - `vd doctor` prints the configured kind, whether the key is set (never its value) and
   whether the SDK is importable.
 
@@ -125,8 +129,9 @@ reported as `rejected` in the trace and by `vd engine pool`. Fixed order:
 | `fields` | the planet has no free field, or field data is missing |
 | `energy_unknown` | the planet reports no energy balance |
 | `fleet_slots` | a fleet mission with no known free slot (unknown counts as none) |
+| `economy_not_on_track` | the undeclared default Rocket Launcher (the filler used only when `defense_targets` is empty) while `economy_on_track` does not hold, as in the ladder; declared ship and defense targets are unaffected |
 | `batch_vs_scored_single` | a production batch on a planet that has a scored single ship order |
-| `high_stakes_not_idle` | colonize/attack/missile while anything else survived (see below) |
+| `high_stakes_not_idle` | colonize/attack/missile/deploy while anything else survived (see below) |
 | `duplicate` | the same action reached twice (same call identity; research dedups by technology and prefers the first target planet) |
 
 The flag each kind needs: `allow_building` (upgrades), `allow_research`, `allow_ships`,
@@ -148,9 +153,11 @@ whether the economy is already active (`situation.economy_active`), the value-ce
 warning (the guard still escalates a large spend), a candidate's position among declared
 priorities, and an energy-limited planet.
 
-**High stakes.** Colonize, Attack and Missile are pooled only when nothing else survived
+**High stakes.** Colonize, Attack, Missile and Deploy (`candidates.HIGH_STAKES_FAMILIES`; Deploy
+moves the whole fleet to another planet for good) are pooled only when nothing else survived
 (`policy.engine.jev.high_stakes_only_when_idle`, default `true`); switching it off lets them
-compete, still subject to their flags and to the stricter confidence floor (section 7).
+compete, still subject to their flags and to the gates in section 7 (confidence floor, ladder
+idleness, model endorsement).
 
 **Deterministic pre-trim.** With more survivors than `max_candidates`, each family is ranked
 (scored ascending by payback, then generation order) and families take one entry each per
@@ -166,8 +173,8 @@ tokens (`request_too_large` beyond that), far above a full pool.
 
 **Never sent:** the wallet, the signer, any address, any coordinates, any raw planet id,
 any resource amount, cost, rate, timestamp or fleet composition. Planets appear only as
-labels (`planet A`, `planet B`, ... in target-planet order; `home` for the first, `colony`
-for the rest); the label-to-id map never leaves the process. A transport names its endpoints
+labels (`planet A`, `planet B`, ... in target-planet order; the role sent with each is `listed
+first` for the first target planet and `other` for the rest); the label-to-id map never leaves the process. A transport names its endpoints
 by label; a harvest, colonize or attack names no coordinates at all.
 `tests/test_jev_engine.py::test_the_payload_carries_no_wallet_signer_address_coordinate_or_raw_planet_id`
 pins this.
@@ -233,13 +240,34 @@ fed the winner: its `fit`, its `urgency` and `tick_focus`. (A Noul carries no co
 
 ## 7. Gates and fallbacks
 
-The winner must pass, in this order, or the ladder decides:
+A hold (below) is checked first. Then the winner must pass, in this order, or the ladder decides:
 
 | Gate | Setting (default) | Falls back with |
 | --- | --- | --- |
 | confidence at least `min_confidence` (inclusive) | 0.5 | `low_confidence` |
-| a colonize/attack/missile winner needs the higher floor | `min_confidence_high_stakes` 0.75 | `low_confidence_high_stakes` |
-| composite lead over the runner-up at least `min_margin` (skipped for a one-candidate pool) | 0.03 | `low_margin` |
+| a high-stakes winner (colonize, attack, missile, deploy) needs the higher floor | `min_confidence_high_stakes` 0.75 | `low_confidence_high_stakes` |
+| a high-stakes winner needs the ladder to be idle (below) | `high_stakes_only_when_idle` (on) | `high_stakes_not_idle` |
+| a high-stakes winner is refused when `tick_focus` chose hold | none; applies even with `allow_hold` off | `high_stakes_hold` |
+| a high-stakes winner needs model endorsement (below) | normalized fit at least 0.75 | `high_stakes_not_endorsed` |
+| composite lead over the best entry of a *different kind* at least `min_margin` (skipped when no entry is of a different kind, or for a one-candidate pool) | 0.03 | `low_margin` |
+
+**High-stakes gates.** A high-stakes winner is taken only when all of these hold; the three
+checks after the confidence floor run in the order listed.
+
+- *Ladder idle.* With `high_stakes_only_when_idle` on, the ladder reaches its deploy, colonize,
+  attack and missile rungs (`8c:logistics-deploy`, `8d:colonize`, `8e:attack`, `8f:missile`) only
+  when every earlier band proposed nothing at all, affordable or not. So if the ladder's own pick is
+  an on-chain action under any other rule, something ordinary is pending and the ladder's pick
+  stands (`high_stakes_not_idle`). A ladder pick that is itself one of those four rules, or a
+  non-on-chain pick, passes.
+- *Not hold.* `tick_focus` must not have chosen `hold` (`high_stakes_hold`), whatever `allow_hold` is.
+- *Endorsed.* The winner's normalized `fit` is at least 0.75 ("directly supports" on the five-level
+  scale) **and** `tick_focus` chose the winner's own group; otherwise `high_stakes_not_endorsed`.
+
+**Margin.** The margin is the winner's composite minus the best composite among entries of a
+different kind, where kind is `(family, function, entity)`. The same upgrade on two symmetric
+planets is one kind, so identical candidates tie without forcing `low_margin`. With no entry of a
+different kind the margin is 1.0 and the gate is skipped.
 
 **Hold.** With `allow_hold` on, a `tick_focus` of `hold` with probability at least 0.5 and
 confidence at least `min_confidence` returns a NOOP with rule `9j:hold` (`engine: "jev"`)
@@ -253,12 +281,12 @@ configured):
 | --- | --- |
 | `missing_key` | `TYPESAFE_API_KEY` unset or blank |
 | `sdk_missing` | `typesafe-sdk` not importable |
-| `timeout`, `connection` | the request timed out or could not connect (one retry at most, inside `timeout_s`) |
+| `timeout`, `connection` | the request timed out or could not connect (one retry at most, within the `timeout_s` budget; see Tuning) |
 | `rate_limited`, `auth`, `bad_request`, `server` | the matching TypeSafe API error class |
-| `malformed` | an answer missing, of the wrong type or non-finite for any asked question |
+| `malformed` | an answer missing, of the wrong type, non-finite or out of range for any asked question: an empty or mis-sized score legend, a score outside the legend's span, a confidence, noul or probability outside 0..1, choice probabilities that do not sum to 1 (tolerance 0.05) or name an option that was not asked; also a non-finite composite or margin, or a weight vector with no confidence-bearing judgment |
 | `request_too_large` | estimated request over 48,000 tokens |
 | `empty_pool` | nothing legal to choose from |
-| `low_confidence`, `low_confidence_high_stakes`, `low_margin` | the gates above |
+| `low_confidence`, `low_confidence_high_stakes`, `high_stakes_not_idle`, `high_stakes_hold`, `high_stakes_not_endorsed`, `low_margin` | the gates above |
 | `engine_error:<Class>` | an unexpected exception inside the engine; the ladder ran instead, the tick did not fail |
 
 A veto or the deadline is not a fallback: it is recorded as `pre_empted_by`, holding the rule
@@ -278,12 +306,14 @@ ladder's action) and `test_vetoes_and_the_deadline_never_call_the_backend`.
   `focus_probabilities`, `threat`, and the top five judgments with their composite scores).
   `null` under the ladder. It is **excluded from the dedup fingerprint** because latency,
   request id and probabilities jitter between otherwise identical ticks; what the engine chose
-  is already in the fingerprinted fields.
+  is already in the fingerprinted fields. On a manual-override tick it holds the trace of the
+  comparison call (below), not a decision of the engine.
 - **The chosen action** carries `Action.engine` (`"jev"`, or `"ladder"` after a fallback and
   for every manual override). Its rationale is the ladder-style rationale plus "Selected by the
   jev engine from N legal candidates (<group> focus)", and its alternatives are the other
   pooled candidates in band order, never composite order, so neither carries a probability and
-  a repeat pick still dedups (`test_a_second_jev_tick_differing_only_in_probabilities_and_latency_is_deduped`).
+  a repeat pick still dedups while the pick is stable (`test_a_second_jev_tick_differing_only_in_probabilities_and_latency_is_deduped`;
+  see section 11 for when it is not).
 - **`actions.jsonl`**: the sent-action record gains an `engine` field.
 - **`strategy.md`**: a narrated line for a jev action ends with `[engine=jev]`.
 - **Report panel**, one line, only when jev is configured:
@@ -292,14 +322,18 @@ ladder's action) and `test_vetoes_and_the_deadline_never_call_the_backend`.
   1b:game-paused`.
 - **A manual override** (`vd tick --action`) is never an engine decision, but the
   "planner would have proposed" comparison runs the configured engine, so under jev it costs
-  one request and its record gains `engine` and `fallback_reason` (never probabilities). Under
-  the ladder the record is unchanged.
+  one request. The `planner_would_have_proposed` record keeps the ladder's shape for both
+  engines (`rule`, `kind`, `function`, `rationale`; no `engine` or `fallback_reason` key), because
+  anything derived from the TypeSafe call would defeat dedup. Under jev the comparison's trace goes
+  into the proposal's fingerprint-excluded `engine` field, and the panel line shows it; that line
+  describes the comparison, not the operator's action.
 
 ## 9. CLI
 
 - `vd engine pool --snapshot F --policy F [--json]`: offline, no key. Prints the pool
   (band, group, family, planet, entity, score basis), the rejection counts, the exact `state`
-  and `questions`, and an estimated token count.
+  and `questions`, and an estimated token count. `--json` prints `pool`, `rejected` and
+  `request` (`state`, `questions`, `estimated_tokens`).
 - `vd engine compare --snapshot F --policy F [--json]`: runs the ladder and the jev engine on
   the same input (jev needs the key and the network for a real answer). Exit codes: `0` the
   picks agree (also when a veto or the deadline decided both), `1` they disagree, `3` jev fell
@@ -323,14 +357,16 @@ jev have chosen differently here" without a tick.
   candidate's `what` and `group`, so use those words (research, defense, colony, mines,
   storage, ships). Do not put numbers or thresholds in it (it cannot count); numbers belong in
   `reserves`, `limits` and `policy.strategy`.
-- **Weights.** Raise `fit` to follow the intent more; raise `economy` to favour fast payback
+- **Weights** (each `0..100`, only ratios matter). Raise `fit` to follow the intent more; raise `economy` to favour fast payback
   (this also favours already-developed planets, section 12); raise `urgency` to favour
   work that prevents waste; `focus` is the group-level nudge; `threat` only ever lifts defense.
 - **Thresholds.** Raise `min_confidence`/`min_margin` to hand more ticks to the ladder; lower
   them to trust the model more. A high fallback rate under `low_margin` usually means the pool
   holds several near-equivalent candidates, which is fine.
-- **`timeout_s`** (0.5-30) is the total budget, retry included; a tick waits at most that long.
-  **`max_candidates`** (2-60) caps the pool after the pre-trim.
+- **`timeout_s`** (0.5-30) is a time budget, not a hard deadline. Each network attempt gets
+  `timeout_s / 2` per phase (connect, read, write, pool) and at most one retry is started within
+  the budget, so a failing call takes about `timeout_s` in the normal case; a peer that trickles
+  bytes is bounded per chunk, not overall. **`max_candidates`** (2-60) caps the pool after the pre-trim.
 - **Declared targets still matter**: `ship_targets`, `defense_targets`, `research_priority` and
   `building_priority` shape which candidates exist and appear in the facts.
 
@@ -346,7 +382,10 @@ jev have chosen differently here" without a tick.
   dozen candidates is a few thousand tokens, a tiny per-tick cost; `vd engine pool` prints the
   estimate for your own policy.
 - Decisions are not reproducible bit for bit: the model may answer slightly differently for the
-  same state. Dedup stays stable (section 8) but the pick itself is not guaranteed to repeat.
+  same state. The dedup fingerprint is stable under probability jitter only while the pick itself
+  is stable. A result near a gate threshold (`min_confidence`, `min_margin`, the high-stakes
+  floors) can flip between the jev pick and the ladder fallback from one tick to the next, and
+  there is no hysteresis: such a flip is a different proposal, not a duplicate.
 - The ladder's diagnostics (`opportunities:` and the playbook's derivations) describe the
   ladder's bands; under jev they remain accurate as descriptions of what each band would pick.
 
@@ -378,5 +417,6 @@ intent, lower `weights.economy`, or return to the ladder with `planet_rotation` 
   require_confirmation` governs whether `tick` sends automatically, and `walletctl send`
   still needs `--confirm`.
 - Combat stays gated: Attack and Missile need `allow_combat` (and `operator` tier) and only
-  enter the pool when nothing else is legal, under the higher confidence floor.
+  enter the pool when nothing else is legal. Like Colonize and Deploy, a winner of these also needs
+  the higher confidence floor, ladder idleness and model endorsement, else the ladder decides.
 - A jev failure never fails a tick and never blocks one: it is a ladder decision with a reason.
