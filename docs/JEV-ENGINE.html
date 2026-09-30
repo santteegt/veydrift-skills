@@ -223,6 +223,16 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
 .step-num { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-family: "Plex Mono", monospace; font-size: 12px; font-weight: 600; }
 .codeblock-head span:last-child { color: var(--ink-faint); font-weight: 500; letter-spacing: 0; text-transform: none; }
 @media (max-width: 880px) { .split { grid-template-columns: 1fr; } }
+.glossary { display: grid; grid-template-columns: 170px 1fr; gap: 0; margin: 0 0 22px; border-top: 1px solid var(--border-soft); }
+.glossary dt, .glossary dd { padding: 11px 0; border-bottom: 1px solid var(--border-soft); margin: 0; }
+.glossary dt { font-weight: 600; font-size: 14px; padding-right: 16px; }
+.glossary dd { font-size: 14.5px; color: var(--ink-dim); }
+.glossary dd code, .glossary dt code { font-size: 12.5px; }
+@media (max-width: 880px) {
+  .glossary { grid-template-columns: 1fr; }
+  .glossary dt { border-bottom: none; padding-bottom: 2px; }
+  .glossary dd { padding-top: 0; }
+}
 </style>
 </head>
 <body>
@@ -294,8 +304,73 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   </div>
 </section>
 
-<section class="chapter" id="j2" data-num="02" data-label="How a tick decides">
-  <div class="chapter-head"><span class="chapter-num">02</span><h2 class="chapter-title">How a tick decides</h2></div>
+<section class="chapter" id="j2" data-num="02" data-label="Key concepts">
+  <div class="chapter-head"><span class="chapter-num">02</span><h2 class="chapter-title">Key concepts</h2></div>
+  <p>The rest of this guide uses a small vocabulary. Read this chapter once and the others will follow. Terms are grouped by where they live: the system around the engine, how candidates are organised, and the engine's own decision.</p>
+
+  <h3>The system around the engine</h3>
+  <dl class="glossary">
+    <dt>Tick</dt><dd>One run of <code>vd tick</code>: read the game state, choose <em>at most one</em> action, check it, and (at a high enough tier) send it. The agent is scheduled to tick periodically.</dd>
+    <dt>Snapshot</dt><dd>The game state read from Veydrift's API at the start of a tick: planets, buildings, queues, resources, research, incoming fleets. Every decision is made against it.</dd>
+    <dt><code>policy.json</code></dt><dd>Your configuration in <code>$VEYDRIFT_HOME</code>: the tier, which kinds of action are allowed (<code>policy.actions</code>), priorities and targets (<code>policy.strategy</code>), spending limits, and <code>policy.engine</code>.</dd>
+    <dt>Tier</dt><dd>How much the agent may do on its own: <code>advisor</code> only proposes, <code>economy</code> may send economic actions, <code>operator</code> may also send fleet actions. The engine never changes the tier rules.</dd>
+    <dt>The ladder</dt><dd>The default decision engine (<code>plan.plan_next_action</code>). It walks a fixed sequence of rungs and returns the first match. The jev engine is the alternative, and the ladder is always its fallback.</dd>
+    <dt>Vetoes and the deadline</dt><dd>The ladder's first rungs, shared by both engines. Vetoes stop or escalate a tick for safety reasons (killswitch, unhealthy API, maintenance pause, unreconciled transaction, a mission to resolve, an incoming hostile fleet). The storage-overflow deadline spends or stores resources that are about to hit their cap. When either fires, no engine chooses anything.</dd>
+    <dt>Rule</dt><dd>A short id naming the ladder rung that produced an action, such as <code>6:building-queue-empty</code> or <code>7:research-queue-empty</code>. A jev pick carries the rule of its family, so logs, briefs and the guard read it the same way.</dd>
+    <dt>Brief</dt><dd>The structured explanation attached to every proposed action: its goal, prerequisites, queue impact, timing, risks, and which figures were read from the game versus computed. Both engines attach one.</dd>
+    <dt>Guard</dt><dd><code>guard.py</code>: 27 independent checks run on every chosen action (tier, affordability, reserves, energy, gas, and more). It can allow, block or escalate to a human, whichever engine chose.</dd>
+    <dt><code>walletctl</code></dt><dd>The separate wallet skill, the only component that builds calldata, signs or sends. It re-checks every transaction against its own allowlist.</dd>
+  </dl>
+
+  <h3>From candidates to groups</h3>
+  <p>A <strong>candidate</strong> is one concrete legal move, such as "upgrade Metal Mine on planet A to level 12". Candidates are produced by <strong>generators</strong> in <code>candidates.py</code>, one per kind of move, and each generator labels its candidates with a <strong>family</strong> (17 in all). The engine does not reason about 17 families. It folds them into seven <strong>groups</strong>, the "kinds of development" Jev is asked to choose between:</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Group</th><th>Families in it</th><th>What it means</th><th class="num">Band</th></tr></thead>
+    <tbody>
+      <tr><td><code>economy</code></td><td>mine, energy, storage, infrastructure, crawler</td><td>raise resource income, secure energy, avoid wasted production</td><td class="num">2</td></tr>
+      <tr><td><code>research</code></td><td>research</td><td>start researching a technology</td><td class="num">3</td></tr>
+      <tr><td><code>fleet_defense</code></td><td>ship, defense, batch</td><td>produce ships or planetary defenses, including a multi-item batch</td><td class="num">4</td></tr>
+      <tr><td><code>unlock</code></td><td>unlock</td><td>a building or research step whose only purpose is to unlock a declared target that cannot be built yet</td><td class="num">5</td></tr>
+      <tr><td><code>logistics</code></td><td>transport, deploy, harvest, foreign harvest</td><td>move resources or fleets between your own planets, or collect debris</td><td class="num">6</td></tr>
+      <tr><td><code>expansion</code></td><td>colonize</td><td>settle a new planet with a Colony Ship</td><td class="num">7</td></tr>
+      <tr><td><code>offense</code></td><td>attack, missile</td><td>strike another player's planet</td><td class="num">8–9</td></tr>
+    </tbody>
+  </table></div>
+  <p>A few placements look surprising at first:</p>
+  <ul>
+    <li><strong>Crawler</strong> is built in the shipyard but sits in <code>economy</code>, because its only effect is boosting mine output. For the same reason a <strong>Solar Satellite</strong> proposed as energy supply is <code>economy</code>, not <code>fleet_defense</code>.</li>
+    <li><strong>Unlock</strong> steps can be building upgrades or research, but they get their own group because their value lies entirely in what they unlock.</li>
+    <li><strong>Deploy</strong> is <code>logistics</code>, yet it permanently moves the whole fleet to another planet, so it is also high-stakes (below).</li>
+  </ul>
+  <dl class="glossary">
+    <dt>Band</dt><dd>The ladder's old precedence number for a family, shown in the table: 2 is building, 3 research, 4 shipyard, up to 9 for missiles. The ladder uses it to decide which family goes first. The jev engine uses it <em>only</em> to break ties deterministically, never to rank groups against each other.</dd>
+    <dt>Generation order</dt><dd>Within a band, candidates keep the order their generator produced them in. That order encodes the ladder's own priorities, with your declared priorities (such as <code>research_priority</code>) first. Together, band then generation order is "the ladder's priority order" used to break ties.</dd>
+    <dt>Pool</dt><dd>Every candidate that survives the legality filters this tick, across every band and every planet (<code>candidates.collect_pool</code>). The model can only choose from the pool; it cannot invent a move or change its arguments. A group is "present" only if the pool holds at least one of its candidates.</dd>
+    <dt>High-stakes</dt><dd>Colonize, Attack, Missile and Deploy: moves that consume a hard-to-replace asset, risk a fleet, or cannot be undone. They enter the pool only when nothing else is legal, and a high-stakes winner must pass a stricter path (<a href="#j5">chapter 05</a>).</dd>
+    <dt>Intent</dt><dd>Your strategy in plain language (<code>policy.engine.jev.intent</code>), for example "Focus on research, starting with Laser Technology." Every judgment is made against it. Without one, a built-in default is used: balanced, energy-safe growth, no risky military action.</dd>
+  </dl>
+
+  <h3>The engine's decision</h3>
+  <dl class="glossary">
+    <dt>Choice, Noul, Score</dt><dd>The three answer types Jev returns. A <strong>Choice</strong> picks one of the named options and gives a probability for each. A <strong>Noul</strong> is the probability that a statement is true. A <strong>Score</strong> places an item on a ladder of 2 to 10 described levels; the engine rescales it to 0–1.</dd>
+    <dt><code>tick_focus</code></dt><dd>The Choice question asking which group best serves your intent right now. Its options are the groups present in the pool, plus <code>hold</code> ("waiting is better").</dd>
+    <dt>Fit and urgency</dt><dd>Two Score questions asked about every candidate: how well it serves the intent, and how much is lost by postponing it.</dd>
+    <dt>Confidence</dt><dd>How concentrated an answer's probabilities are, from 0 to 1. A high value means the model settled on one option; a low value means it spread its probability, often because several options look equally good.</dd>
+    <dt>Composite score</dt><dd>One number per candidate: a weighted blend of fit, urgency, the probability <code>tick_focus</code> gave its group, a payback term computed by code, and threat for defenses. Weights come from <code>policy.engine.jev.weights</code>.</dd>
+    <dt>Margin</dt><dd>How far the winning group's best composite leads the best candidate of any other group. A tiny margin means two kinds of development scored alike, and the ladder decides instead.</dd>
+    <dt>Group stage and item stage</dt><dd>The decision in two steps. The <em>group stage</em> picks the kind of development and is the step that must be confident and clear. The <em>item stage</em> then picks among that group's near-equal candidates in the ladder's own priority order. <a href="#j5">Chapter 05</a> explains why.</dd>
+    <dt>Fallback</dt><dd>Handing the tick to the ladder when the engine cannot give a trustworthy answer: an error, an empty pool, low confidence, a thin margin or a refused high-stakes move. The ladder's exact action is used and the reason is recorded.</dd>
+    <dt>Trace</dt><dd>The engine's record of what it did this tick (<code>EngineTrace</code>): the model, latency, pool size, rejection counts, the ladder's own pick and whether they agree, confidence, margin and the top judgments. It is logged in <code>proposals.jsonl</code> as the <code>engine</code> block.</dd>
+  </dl>
+
+  <div class="callout note">
+    <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <div><strong class="callout-title">An example, end to end</strong><p>A pool holds three mine upgrades (<code>economy</code>) and four technologies (<code>research</code>), and the intent says "focus on research". Jev puts nearly all of <code>tick_focus</code> on <code>research</code> and scores the technologies' fit highly but about equally. The group stage picks <code>research</code> confidently and clearly ahead of <code>economy</code>. The item stage takes the first of the near-equal technologies in the ladder's order, which puts your declared <code>research_priority</code> first. The result is a <code>startResearch</code> action with rule <code>7:research-queue-empty</code> and <code>engine: "jev"</code>, which then goes through the guard like any other action.</p></div>
+  </div>
+</section>
+
+<section class="chapter" id="j3" data-num="03" data-label="How a tick decides">
+  <div class="chapter-head"><span class="chapter-num">03</span><h2 class="chapter-title">How a tick decides</h2></div>
   <p>Everything before and after the decision is unchanged. The tick still fetches the snapshot, still runs the guard's 27 gates on whatever was chosen, and still hands on-chain actions to <code>walletctl</code>, which re-checks them independently. Only the choice in the middle differs.</p>
 
   <div class="diagram-frame">
@@ -385,14 +460,14 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   <ol>
     <li><strong>Vetoes</strong> (<code>plan.veto_action</code>) and the <strong>storage-overflow deadline</strong> (<code>plan.deadline_action</code>) are the same code the ladder runs first. When one fires, no model is called; the trace records <code>pre_empted_by</code>.</li>
     <li>The ladder's own pick is computed anyway. It is pure and cheap, and it is both the fallback and the reference for <code>agrees_with_ladder</code>.</li>
-    <li><strong>The pool</strong> (<code>candidates.collect_pool</code>) holds every legal candidate. The model can only choose from it; it cannot invent an action or an argument.</li>
+    <li><strong>The pool</strong> (<code>candidates.collect_pool</code>, see <a href="#j2">Key concepts</a>) holds every legal candidate. The model can only choose from it; it cannot invent an action or an argument.</li>
     <li><strong>One request</strong> carries a compact <code>state</code> and <code>2N + 2</code> questions for <code>N</code> candidates, all answered in parallel.</li>
     <li><strong>Composition and gates</strong> produce a winner, or a <code>fallback_reason</code> and the ladder's action.</li>
   </ol>
 </section>
 
-<section class="chapter" id="j3" data-num="03" data-label="What the model sees">
-  <div class="chapter-head"><span class="chapter-num">03</span><h2 class="chapter-title">What the model sees, and what it never sees</h2></div>
+<section class="chapter" id="j4" data-num="04" data-label="What the model sees">
+  <div class="chapter-head"><span class="chapter-num">04</span><h2 class="chapter-title">What the model sees, and what it never sees</h2></div>
   <div class="split">
     <div class="panel good">
       <h4>Sent</h4>
@@ -432,7 +507,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   <div class="table-wrap"><table>
     <thead><tr><th>Question</th><th>Kind</th><th>Asks</th></tr></thead>
     <tbody>
-      <tr><td><code>tick_focus</code></td><td>Choice</td><td>Which group of activity serves the strategy now: <code>economy</code>, <code>research</code>, <code>fleet_defense</code>, <code>unlock</code>, <code>logistics</code>, <code>expansion</code>, <code>offense</code> (only groups present), or <code>hold</code>.</td></tr>
+      <tr><td><code>tick_focus</code></td><td>Choice</td><td>Which <a href="#j2">group</a> of activity serves the strategy now: <code>economy</code>, <code>research</code>, <code>fleet_defense</code>, <code>unlock</code>, <code>logistics</code>, <code>expansion</code>, <code>offense</code> (only groups present), or <code>hold</code>.</td></tr>
       <tr><td><code>threat</code></td><td>Noul</td><td>Is a planet likely to be attacked within a few hours, judging only threats and defense posture?</td></tr>
       <tr><td><code>fit_c&lt;i&gt;</code></td><td>Score · 5</td><td>How well this candidate serves the strategy: works against it → unrelated → supports it indirectly → directly supports it → its top priority or next step.</td></tr>
       <tr><td><code>urgency_c&lt;i&gt;</code></td><td>Score · 4</td><td>What is lost by postponing it: nothing for hours → a little → time-sensitive (wasted production, idle queue, blocked target) → critical now.</td></tr>
@@ -444,8 +519,8 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
   </div>
 </section>
 
-<section class="chapter" id="j4" data-num="04" data-label="How the choice is made">
-  <div class="chapter-head"><span class="chapter-num">04</span><h2 class="chapter-title">How the choice is made</h2></div>
+<section class="chapter" id="j5" data-num="05" data-label="How the choice is made">
+  <div class="chapter-head"><span class="chapter-num">05</span><h2 class="chapter-title">How the choice is made</h2></div>
   <p>Each candidate gets a composite score, every term normalised to 0..1:</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>composite</span><span>jev_engine._compose</span></div>
@@ -459,8 +534,8 @@ defaults: fit 0.30 · urgency 0.25 · focus 0.15 · economy 0.25 · threat 0.05 
   <h3>Two stages</h3>
   <p>Live runs showed Jev deciding <em>which kind of development</em> with near-certainty while spreading its per-item judgments, urgency above all, across several equally good options of that kind. Gating on those spread judgments sent clear-cut ticks back to the ladder, including the building-starves-research case the engine exists to fix. So the decision is split where the judgments are reliable:</p>
   <ol>
-    <li><strong>Group stage.</strong> The winning group is the group of the top composite. It must clear <code>min_confidence</code> on the judgments that decide the group (<code>tick_focus</code> and the group's best fit) and lead every other group by <code>min_margin</code>.</li>
-    <li><strong>Item stage.</strong> Among the group's candidates within <code>min_margin</code> of its best, the first in the ladder's own priority order is taken. That order already honours declared priorities such as <code>research_priority</code>. There is no confidence gate here: several equally rated legal options are a harmless preference, not uncertainty.</li>
+    <li><strong>Group stage.</strong> The winning <a href="#j2">group</a> (the kind of development) is the group of the top composite. It must clear <code>min_confidence</code> on the judgments that decide the group (<code>tick_focus</code> and the group's best fit) and lead every other group by <code>min_margin</code>.</li>
+    <li><strong>Item stage.</strong> Among the group's candidates within <code>min_margin</code> of its best, the first in the ladder's own priority order (lowest band, then generation order) is taken. That order already honours declared priorities such as <code>research_priority</code>. There is no confidence gate here: several equally rated legal options are a harmless preference, not uncertainty.</li>
   </ol>
 
   <h3>The strict path for high-stakes moves</h3>
@@ -478,8 +553,8 @@ defaults: fit 0.30 · urgency 0.25 · focus 0.15 · economy 0.25 · threat 0.05 
   </div>
 </section>
 
-<section class="chapter" id="j5" data-num="05" data-label="Fallbacks">
-  <div class="chapter-head"><span class="chapter-num">05</span><h2 class="chapter-title">When the ladder decides instead</h2></div>
+<section class="chapter" id="j6" data-num="06" data-label="Fallbacks">
+  <div class="chapter-head"><span class="chapter-num">06</span><h2 class="chapter-title">When the ladder decides instead</h2></div>
   <p>Every path below returns exactly the action <code>plan_next_action</code> would have returned, with the reason in the trace. The engine is never the reason a tick fails.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>fallback_reason</th><th>Meaning</th></tr></thead>
@@ -496,8 +571,8 @@ defaults: fit 0.30 · urgency 0.25 · focus 0.15 · economy 0.25 · threat 0.05 
   </table></div>
 </section>
 
-<section class="chapter" id="j6" data-num="06" data-label="Turning it on">
-  <div class="chapter-head"><span class="chapter-num">06</span><h2 class="chapter-title">Turning it on</h2></div>
+<section class="chapter" id="j7" data-num="07" data-label="Turning it on">
+  <div class="chapter-head"><span class="chapter-num">07</span><h2 class="chapter-title">Turning it on</h2></div>
   <p>Add one block to <code>$VEYDRIFT_HOME/policy.json</code>. The default is the ladder; switch the kind and write an intent.</p>
   <div class="codeblock">
     <div class="codeblock-head"><span>policy.json</span><span>engine block</span></div>
@@ -566,8 +641,8 @@ vd doctor                            <span class="c-comment"># engine: jev · TY
   <p>A high rate of <code>low_margin</code> fallbacks means two groups keep scoring alike; sharpen the intent so it says which matters more.</p>
 </section>
 
-<section class="chapter" id="j7" data-num="07" data-label="What gets logged">
-  <div class="chapter-head"><span class="chapter-num">07</span><h2 class="chapter-title">What gets logged</h2></div>
+<section class="chapter" id="j8" data-num="08" data-label="What gets logged">
+  <div class="chapter-head"><span class="chapter-num">08</span><h2 class="chapter-title">What gets logged</h2></div>
   <ul>
     <li><strong><code>proposals.jsonl</code></strong> gains an <code>engine</code> block when jev is configured: model, request id, latency, input tokens, pool size, rejection counts, the ladder's pick and agreement, winner confidence, margin, focus probabilities, threat and the top five judgments. With the ladder configured it is <code>null</code>.</li>
     <li>The <code>engine</code> block is <strong>excluded from the dedup fingerprint</strong>, and rationale and alternatives never contain probabilities, so a repeat tick whose pick is unchanged still deduplicates.</li>
@@ -576,8 +651,8 @@ vd doctor                            <span class="c-comment"># engine: jev · TY
   </ul>
 </section>
 
-<section class="chapter" id="j8" data-num="08" data-label="Safety">
-  <div class="chapter-head"><span class="chapter-num">08</span><h2 class="chapter-title">What does not change</h2></div>
+<section class="chapter" id="j9" data-num="09" data-label="Safety">
+  <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">What does not change</h2></div>
   <div class="callout note">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
     <div><strong class="callout-title">The engine chooses; it does not authorise</strong><p>Every jev pick goes through the same 27 guard gates and the same wallet allowlist as a ladder pick. Tiers, <code>require_confirmation</code>, the killswitch and the CLI-level <code>--confirm</code> are untouched, and <code>veydrift-agent</code> still never signs anything.</p></div>
@@ -590,8 +665,8 @@ vd doctor                            <span class="c-comment"># engine: jev · TY
   </ul>
 </section>
 
-<section class="chapter" id="j9" data-num="09" data-label="Implementation map">
-  <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">Implementation map</h2></div>
+<section class="chapter" id="j10" data-num="10" data-label="Implementation map">
+  <div class="chapter-head"><span class="chapter-num">10</span><h2 class="chapter-title">Implementation map</h2></div>
   <p>The feature adds three modules and makes targeted changes to five existing ones in <code>skills/veydrift-agent/src/veydrift_agent/</code>. The wallet skill is untouched.</p>
   <div>
     <div class="module-row"><span class="module-name">jev_engine.py</span><span class="module-lines">1004</span><span class="module-desc">The engine: <code>build_request</code> (state, buckets, questions), <code>_compose</code>, the two-stage and high-stakes gates, and <code>decide</code>, which finalizes the winner with its family's ladder rule or returns the ladder's action.</span></div>
@@ -613,8 +688,8 @@ vd doctor                            <span class="c-comment"># engine: jev · TY
   </ul>
 </section>
 
-<section class="chapter" id="j10" data-num="10" data-label="How it was built">
-  <div class="chapter-head"><span class="chapter-num">10</span><h2 class="chapter-title">How it was built</h2></div>
+<section class="chapter" id="j11" data-num="11" data-label="How it was built">
+  <div class="chapter-head"><span class="chapter-num">11</span><h2 class="chapter-title">How it was built</h2></div>
   <p>The feature was built with the multi-model workflow described in <code>AGENTS.md</code>: an Opus orchestrator planned and froze the shared interfaces, <code>veydrift-builder</code> agents on Sonnet 5.5 built scoped work packages in parallel inside a dedicated git worktree, and <code>veydrift-judge</code> on Opus 5.5 reviewed the result adversarially.</p>
   <div class="steps">
     <div class="step"><span class="step-num">1</span><div><strong>Evaluate.</strong> TypeSafe's live documentation (primitives, confidence, SDK, known weaknesses) ruled out a raw-state engine and shaped the "Jev judges, code decides" design. The plan was approved before any code was written.</div></div>
@@ -627,8 +702,8 @@ vd doctor                            <span class="c-comment"># engine: jev · TY
   </div>
 </section>
 
-<section class="chapter" id="j11" data-num="11" data-label="Verification">
-  <div class="chapter-head"><span class="chapter-num">11</span><h2 class="chapter-title">Verification</h2></div>
+<section class="chapter" id="j12" data-num="12" data-label="Verification">
+  <div class="chapter-head"><span class="chapter-num">12</span><h2 class="chapter-title">Verification</h2></div>
   <div class="table-wrap"><table>
     <thead><tr><th>Layer</th><th>What it proves</th></tr></thead>
     <tbody>
@@ -647,8 +722,8 @@ VEYDRIFT_JEV_LIVE_TESTS=1 uv run --directory skills/veydrift-agent \
   </div>
 </section>
 
-<section class="chapter" id="j12" data-num="12" data-label="Known limits">
-  <div class="chapter-head"><span class="chapter-num">12</span><h2 class="chapter-title">Known limits</h2></div>
+<section class="chapter" id="j13" data-num="13" data-label="Known limits">
+  <div class="chapter-head"><span class="chapter-num">13</span><h2 class="chapter-title">Known limits</h2></div>
   <ul>
     <li><strong>No hysteresis.</strong> A result close to a gate threshold can flip between the jev pick and the ladder's from one tick to the next. Dedup holds only while the pick itself is stable.</li>
     <li><strong><code>timeout_s</code> is a budget, not a deadline.</strong> One attempt may take up to <code>timeout_s</code> per network phase; a peer that trickles bytes is bounded per chunk, not overall.</li>
@@ -670,9 +745,10 @@ VEYDRIFT_JEV_LIVE_TESTS=1 uv run --directory skills/veydrift-agent \
   var target = document.getElementById('tocInline');
   if (!target) return;
   var items = [
-    ['02','How a tick decides'], ['03','What the model sees'], ['04','How the choice is made'],
-    ['05','Fallbacks'], ['06','Turning it on'], ['07','What gets logged'], ['08','Safety'],
-    ['09','Implementation map'], ['10','How it was built'], ['11','Verification'], ['12','Known limits']
+    ['02','Key concepts'], ['03','How a tick decides'], ['04','What the model sees'],
+    ['05','How the choice is made'], ['06','Fallbacks'], ['07','Turning it on'], ['08','What gets logged'],
+    ['09','Safety'], ['10','Implementation map'], ['11','How it was built'], ['12','Verification'],
+    ['13','Known limits']
   ];
   items.forEach(function(it){
     var a = document.createElement('a');
