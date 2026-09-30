@@ -56,6 +56,8 @@ DEFAULT_SECRET_ENV_VARS: tuple[str, ...] = (
     # An RPC URL usually embeds the provider's API key. `walletctl` keeps it out of the errors it
     # reports, but this is the backstop for anything that slips through.
     "VEYDRIFT_RPC_URL",
+    # The `jev` decision engine's TypeSafe API key (`jev.py`).
+    "TYPESAFE_API_KEY",
 )
 
 

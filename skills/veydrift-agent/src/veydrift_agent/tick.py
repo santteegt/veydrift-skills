@@ -2494,7 +2494,7 @@ def _load_override_action(path: Path, policy_model: Policy) -> Action:
         action = Action.model_validate(raw)
     except Exception as exc:  # pydantic.ValidationError
         raise typer.BadParameter(f"{path} failed Action validation: {exc}") from exc
-    return action.model_copy(update={"source": "manual_override"})
+    return action.model_copy(update={"source": "manual_override", "engine": "ladder"})
 
 
 @app.callback(invoke_without_command=True)

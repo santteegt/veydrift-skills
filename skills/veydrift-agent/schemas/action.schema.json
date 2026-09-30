@@ -329,6 +329,15 @@
       "default": null,
       "title": "Delegate"
     },
+    "engine": {
+      "default": "ladder",
+      "enum": [
+        "ladder",
+        "jev"
+      ],
+      "title": "Engine",
+      "type": "string"
+    },
     "entity_id": {
       "anyOf": [
         {

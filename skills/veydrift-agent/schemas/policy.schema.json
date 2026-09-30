@@ -77,6 +77,26 @@
       "title": "Cadence",
       "type": "object"
     },
+    "EngineCfg": {
+      "additionalProperties": false,
+      "description": "Which decision engine proposes each tick's action. `ladder` (default) is `plan.py`'s\nfixed-order ladder; `jev` ranks every legal candidate with TypeSafe's Jev model and falls\nback to the ladder on any error or low-confidence result. Vetoes (killswitch, health,\npause, pending tx, resolvable mission, incoming fleet) and the storage-overflow deadline\nrun first under both engines.",
+      "properties": {
+        "jev": {
+          "$ref": "#/$defs/JevCfg"
+        },
+        "kind": {
+          "default": "ladder",
+          "enum": [
+            "ladder",
+            "jev"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "title": "EngineCfg",
+      "type": "object"
+    },
     "EntityTarget": {
       "description": "One declared standing-count target (Phase 3 of the general-strategy-engine\nprogram, docs/SPEC.md \u00a75.4/\u00a75.6): \"I want N of this ship/defense.\" Resolved against\n`ids.py`'s `*_NAMES` maps case-insensitively via `name`, or directly via `id` \u2014\nexactly one of the two should be set. `candidates.py` resolves `name` at generation\ntime and raises loudly (`ValueError`) on an unknown name rather than treating it as\n\"no target\" \u2014 `Policy` is `extra=\"forbid\"`, so a typo in a key is already a hard\nstop; a typo in a *value* here must be too, for the same reason.",
       "properties": {
@@ -142,6 +162,117 @@
         }
       },
       "title": "EscalationCfg",
+      "type": "object"
+    },
+    "JevCfg": {
+      "additionalProperties": false,
+      "description": "Settings for the `jev` decision engine. Read only when `engine.kind == \"jev\"`. The\nTypeSafe API key comes from the `TYPESAFE_API_KEY` environment variable, never from\nthis file, and the API base URL is a code constant, never configurable here.",
+      "properties": {
+        "allow_hold": {
+          "default": false,
+          "title": "Allow Hold",
+          "type": "boolean"
+        },
+        "high_stakes_only_when_idle": {
+          "default": true,
+          "title": "High Stakes Only When Idle",
+          "type": "boolean"
+        },
+        "intent": {
+          "default": "",
+          "maxLength": 1000,
+          "title": "Intent",
+          "type": "string"
+        },
+        "max_candidates": {
+          "default": 24,
+          "maximum": 60,
+          "minimum": 2,
+          "title": "Max Candidates",
+          "type": "integer"
+        },
+        "min_confidence": {
+          "default": 0.5,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Min Confidence",
+          "type": "number"
+        },
+        "min_confidence_high_stakes": {
+          "default": 0.75,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Min Confidence High Stakes",
+          "type": "number"
+        },
+        "min_margin": {
+          "default": 0.03,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Min Margin",
+          "type": "number"
+        },
+        "model": {
+          "default": "jev-latest",
+          "title": "Model",
+          "type": "string"
+        },
+        "payback_reference_hours": {
+          "default": 24.0,
+          "exclusiveMinimum": 0,
+          "title": "Payback Reference Hours",
+          "type": "number"
+        },
+        "timeout_s": {
+          "default": 5.0,
+          "maximum": 30,
+          "minimum": 0.5,
+          "title": "Timeout S",
+          "type": "number"
+        },
+        "weights": {
+          "$ref": "#/$defs/JevWeights"
+        }
+      },
+      "title": "JevCfg",
+      "type": "object"
+    },
+    "JevWeights": {
+      "additionalProperties": false,
+      "description": "Weights `jev_engine` combines per-candidate judgments with (`references/jev-engine.md`).\nEach term is normalised to 0..1 before weighting; the sum is divided out, so only the\nratios matter. `economy` is the only term computed entirely by code (payback hours).",
+      "properties": {
+        "economy": {
+          "default": 0.25,
+          "minimum": 0,
+          "title": "Economy",
+          "type": "number"
+        },
+        "fit": {
+          "default": 0.3,
+          "minimum": 0,
+          "title": "Fit",
+          "type": "number"
+        },
+        "focus": {
+          "default": 0.15,
+          "minimum": 0,
+          "title": "Focus",
+          "type": "number"
+        },
+        "threat": {
+          "default": 0.05,
+          "minimum": 0,
+          "title": "Threat",
+          "type": "number"
+        },
+        "urgency": {
+          "default": 0.25,
+          "minimum": 0,
+          "title": "Urgency",
+          "type": "number"
+        }
+      },
+      "title": "JevWeights",
       "type": "object"
     },
     "Limits": {
@@ -349,6 +480,9 @@
       "default": 8453,
       "title": "Chain Id",
       "type": "integer"
+    },
+    "engine": {
+      "$ref": "#/$defs/EngineCfg"
     },
     "escalation": {
       "$ref": "#/$defs/EscalationCfg"

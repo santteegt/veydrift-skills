@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -845,6 +845,69 @@ class StrategyCfg(Base):
     production_batch: bool = False
 
 
+class JevWeights(Base):
+    """Weights `jev_engine` combines per-candidate judgments with (`references/jev-engine.md`).
+    Each term is normalised to 0..1 before weighting; the sum is divided out, so only the
+    ratios matter. `economy` is the only term computed entirely by code (payback hours)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fit: float = Field(0.30, ge=0)
+    urgency: float = Field(0.25, ge=0)
+    focus: float = Field(0.15, ge=0)
+    economy: float = Field(0.25, ge=0)
+    threat: float = Field(0.05, ge=0)
+
+    @model_validator(mode="after")
+    def _some_weight_is_positive(self) -> JevWeights:
+        if self.fit + self.urgency + self.focus + self.economy + self.threat <= 0:
+            raise ValueError("at least one engine.jev.weights entry must be > 0")
+        return self
+
+
+class JevCfg(Base):
+    """Settings for the `jev` decision engine. Read only when `engine.kind == "jev"`. The
+    TypeSafe API key comes from the `TYPESAFE_API_KEY` environment variable, never from
+    this file, and the API base URL is a code constant, never configurable here."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: TypeSafe System One model id.
+    model: str = "jev-latest"
+    #: The player's strategy in plain language. Empty uses a built-in balanced-growth rubric.
+    intent: str = Field("", max_length=1000)
+    weights: JevWeights = Field(default_factory=JevWeights)
+    #: Below this (minimum confidence over the winner's judgments) the ladder decides instead.
+    min_confidence: float = Field(0.5, ge=0, le=1)
+    #: The same floor for colonize/attack/missile winners.
+    min_confidence_high_stakes: float = Field(0.75, ge=0, le=1)
+    #: A composite lead over the runner-up smaller than this is a coin toss; the ladder decides.
+    min_margin: float = Field(0.03, ge=0, le=1)
+    #: Total budget for the TypeSafe call, retries included.
+    timeout_s: float = Field(5.0, ge=0.5, le=30)
+    #: Pool size cap, after the deterministic per-family pre-trim.
+    max_candidates: int = Field(24, ge=2, le=60)
+    #: `H0` in the economy term `H0 / (H0 + payback_hours)`.
+    payback_reference_hours: float = Field(24.0, gt=0)
+    #: Colonize/Attack/Missile enter the pool only when nothing else is selectable.
+    high_stakes_only_when_idle: bool = True
+    #: Let a confident "hold" judgment return a NOOP instead of the best candidate.
+    allow_hold: bool = False
+
+
+class EngineCfg(Base):
+    """Which decision engine proposes each tick's action. `ladder` (default) is `plan.py`'s
+    fixed-order ladder; `jev` ranks every legal candidate with TypeSafe's Jev model and falls
+    back to the ladder on any error or low-confidence result. Vetoes (killswitch, health,
+    pause, pending tx, resolvable mission, incoming fleet) and the storage-overflow deadline
+    run first under both engines."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["ladder", "jev"] = "ladder"
+    jev: JevCfg = Field(default_factory=JevCfg)
+
+
 class Policy(Base):
     model_config = ConfigDict(extra="forbid")  # unknown keys are a hard error, never ignored
 
@@ -872,6 +935,7 @@ class Policy(Base):
     wallet_engine: WalletEngineCfg = Field(default_factory=WalletEngineCfg)
     strategy: StrategyCfg = Field(default_factory=StrategyCfg)
     radar: RadarCfg = Field(default_factory=RadarCfg)
+    engine: EngineCfg = Field(default_factory=EngineCfg)
 
     @field_validator("signer")
     @classmethod
@@ -1013,6 +1077,10 @@ class Action(Base):
     #: Purely a provenance tag for `proposals.jsonl`/`actions.jsonl` auditability -- never
     #: consulted by `guard.py` or any `Decision` logic.
     source: Literal["planner", "manual_override"] = "planner"
+    #: Which decision engine chose this `Action`: `"ladder"` (`plan.py`, and every manual
+    #: override) or `"jev"` (`jev_engine.py`). Provenance only -- never read by `guard.py`
+    #: or any `Decision` logic. A `jev` fallback to the ladder reports `"ladder"`.
+    engine: Literal["ladder", "jev"] = "ladder"
 
     # ----------------------------------------------------------------------------------
     # Fleet-mission fields (Phase 5c). All `None`/empty for every other `ActionKind` —
@@ -1193,6 +1261,60 @@ class Action(Base):
 
     def is_onchain(self) -> bool:
         return self.function is not None
+
+
+# --------------------------------------------------------------------------------------
+# Decision-engine trace (`engine.py` / `jev_engine.py`). Logged in `proposals.jsonl`'s
+# `engine` field, which is excluded from the dedup fingerprint.
+# --------------------------------------------------------------------------------------
+
+
+class EngineJudgment(Base):
+    """One pooled candidate's judgments and composite score, as the jev engine saw them.
+    All values are 0..1."""
+
+    id: str
+    family: str
+    entity_name: str | None = None
+    planet_id: int | None = None
+    fit: float | None = None
+    fit_confidence: float | None = None
+    urgency: float | None = None
+    urgency_confidence: float | None = None
+    focus: float | None = None
+    economy: float | None = None
+    threat: float | None = None
+    composite: float | None = None
+
+
+class EngineTrace(Base):
+    """What the decision engine did this tick. `engine` is the engine that actually chose the
+    action (`"ladder"` after a fallback); `configured` is `policy.engine.kind`."""
+
+    engine: Literal["ladder", "jev"] = "ladder"
+    configured: Literal["ladder", "jev"] = "ladder"
+    model: str | None = None
+    request_id: str | None = None
+    latency_ms: int | None = None
+    input_tokens: int | None = None
+    #: Why a configured `jev` engine handed the decision to the ladder, e.g. `"timeout"`,
+    #: `"missing_key"`, `"low_confidence"`, `"low_margin"`, `"empty_pool"`,
+    #: `"engine_error:KeyError"`. `None` when jev decided, or when `configured == "ladder"`.
+    fallback_reason: str | None = None
+    #: The rule of a veto or the storage-overflow deadline that decided before any engine ran.
+    pre_empted_by: str | None = None
+    pool_size: int | None = None
+    #: Candidates dropped from the pool, counted by reason code.
+    rejected: dict[str, int] = Field(default_factory=dict)
+    #: The ladder's own pick (rule/function/planet_id/entity_id/entity_name), for agreement tracking.
+    ladder_pick: dict[str, Any] | None = None
+    agrees_with_ladder: bool | None = None
+    winner_confidence: float | None = None
+    margin: float | None = None
+    focus_probabilities: dict[str, float] = Field(default_factory=dict)
+    threat: float | None = None
+    #: Top of the composite ranking, highest first, capped at 5.
+    top: list[EngineJudgment] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------------------

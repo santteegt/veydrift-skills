@@ -42,5 +42,21 @@
     "fleet_home_planet_id": null,
     "planet_rotation": false,
     "production_batch": false
+  },
+  "engine": {
+    "kind": "ladder",
+    "jev": {
+      "model": "jev-latest",
+      "intent": "",
+      "weights": { "fit": 0.30, "urgency": 0.25, "focus": 0.15, "economy": 0.25, "threat": 0.05 },
+      "min_confidence": 0.5,
+      "min_confidence_high_stakes": 0.75,
+      "min_margin": 0.03,
+      "timeout_s": 5.0,
+      "max_candidates": 24,
+      "payback_reference_hours": 24.0,
+      "high_stakes_only_when_idle": true,
+      "allow_hold": false
+    }
   }
 }

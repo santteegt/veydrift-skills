@@ -30,6 +30,7 @@ _SUBAPPS: list[tuple[str, str, str]] = [
     ("veydrift_agent.tick", "tick", "Run one loop iteration"),
     ("veydrift_agent.log", "log", "Read and summarise the action and strategy logs"),
     ("veydrift_agent.radar", "radar", "Monitor tracked planets for incoming attacks, resolved battles, and debris"),
+    ("veydrift_agent.engine", "engine", "Inspect and compare decision engines (ladder vs jev)"),
 ]
 
 _MISSING: list[str] = []
@@ -54,6 +55,12 @@ def doctor() -> None:
     typer.echo(f"wired:   {', '.join(wired) or '(none)'}")
     if _MISSING:
         typer.echo(f"missing: {', '.join(_MISSING)}")
+    try:
+        from veydrift_agent.engine import doctor_lines
+    except ImportError:
+        return
+    for line in doctor_lines():
+        typer.echo(line)
 
 
 if __name__ == "__main__":
