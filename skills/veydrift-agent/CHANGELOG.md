@@ -19,6 +19,10 @@ skills are not versioned in lockstep.
   them, so a typo such as `allow_agent_action_overide` left the intended flag at its default with no
   warning. A policy file that carries a stray key will now fail to load and must have it removed or
   corrected. API-response models are unchanged and stay tolerant.
+- Proposal dedup never matched an on-chain proposal: the fingerprint hashed `tx.onchain_pin.checked_at`
+  and `.block`, which every `walletctl build` re-stamps, so two identical ticks always differed
+  (regression from the on-chain pin verdict in 1.24.0). Those two fields are now excluded from the
+  fingerprint only — `ok`/`dependencies_ok`/`problems` still count, and `proposals.jsonl` is unchanged.
 
 ## [1.27.1] - 2026-09-29
 

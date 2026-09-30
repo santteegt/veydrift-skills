@@ -3160,6 +3160,12 @@ def _send_and_await(
 #: documents for itself above.
 _FINGERPRINT_EXCLUDED_KEYS = {"ts", "tick", "human_activity_check", "brief"}
 
+#: Volatile fields of the record's `tx.onchain_pin` (`OnchainPin`): `walletctl build` stamps
+#: `checked_at`/`block` afresh on every build, so hashing them would make every on-chain
+#: proposal unique. `ok`/`dependencies_ok`/`applies_to`/`problems`/`warnings` stay in, so a real
+#: change in the pin verdict is still a new proposal.
+_FINGERPRINT_EXCLUDED_ONCHAIN_PIN_KEYS = {"checked_at", "block"}
+
 
 def _fingerprint_proposal(record: dict[str, Any]) -> str:
     """Stable content fingerprint of a proposals.jsonl record, excluding `_FINGERPRINT_
@@ -3170,7 +3176,9 @@ def _fingerprint_proposal(record: dict[str, Any]) -> str:
     tick to tick even when this tick's own proposed action is a genuine content-identical
     repeat of the last one; `brief` (`brief.py`) carries live observed facts (resource
     amounts, queue seconds-remaining) that vary the same way. Including any of these
-    would silently defeat dedup on almost every tick. `sort_keys=True`
+    would silently defeat dedup on almost every tick. The same goes for `tx.onchain_pin`'s
+    `checked_at`/`block` (`_FINGERPRINT_EXCLUDED_ONCHAIN_PIN_KEYS`), re-stamped by every build;
+    the rest of the record, `tx` included, is untouched. `sort_keys=True`
     makes this order-independent even though `guard_verdicts` is already
     gate-order-deterministic; `default=str` covers any non-JSON-native value the same way
     `log.py`'s own serialisation would. Computed over the in-memory record, deliberately
@@ -3178,6 +3186,10 @@ def _fingerprint_proposal(record: dict[str, Any]) -> str:
     scrubs secrets/hex before writing, and comparing pre-scrub to post-scrub content
     risks a false match or mismatch from the scrub step itself."""
     comparable = {k: v for k, v in record.items() if k not in _FINGERPRINT_EXCLUDED_KEYS}
+    tx = comparable.get("tx")
+    if isinstance(tx, dict) and isinstance(tx.get("onchain_pin"), dict):
+        pin = {k: v for k, v in tx["onchain_pin"].items() if k not in _FINGERPRINT_EXCLUDED_ONCHAIN_PIN_KEYS}
+        comparable = {**comparable, "tx": {**tx, "onchain_pin": pin}}
     return hashlib.sha256(json.dumps(comparable, sort_keys=True, default=str).encode()).hexdigest()
 
 
