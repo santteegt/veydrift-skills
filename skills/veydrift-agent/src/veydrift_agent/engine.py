@@ -15,11 +15,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+import importlib.util
+import json
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 import typer
+from rich.console import Console
 
+from veydrift_agent import candidates
 from veydrift_agent import plan as plan_mod
 from veydrift_agent.models import (
     Action,
@@ -64,11 +70,243 @@ def decide(
 ) -> tuple[Action, EngineTrace]:
     """Decide this tick's single `Action` with the configured engine (or `engine_override`).
     Keyword arguments mirror `plan.plan_next_action` exactly."""
-    raise NotImplementedError
+    kind = engine_override or policy.engine.kind
+
+    def _ladder() -> Action:
+        # Through the module attribute, never a bound import: tests monkeypatch it.
+        return plan_mod.plan_next_action(
+            snapshot,
+            policy,
+            killswitch_active=killswitch_active,
+            pending_tx_unreconciled=pending_tx_unreconciled,
+            resolvable_mission_ids=resolvable_mission_ids,
+            own_planet_debris=own_planet_debris,
+            foreign_debris_targets=foreign_debris_targets,
+            colonize_targets=colonize_targets,
+            attack_targets=attack_targets,
+            missile_targets=missile_targets,
+            last_attended_planet_id=last_attended_planet_id,
+        )
+
+    if kind != "jev":
+        return _ladder(), EngineTrace(engine="ladder", configured="ladder")
+
+    if killswitch_active:
+        # The killswitch halts before any network call: no jev import, no backend.
+        halt = _ladder()
+        return halt, EngineTrace(engine="ladder", configured="jev", pre_empted_by=halt.rule)
+
+    try:
+        from veydrift_agent import jev_engine
+
+        return jev_engine.decide(
+            snapshot,
+            policy,
+            pending_tx_unreconciled=pending_tx_unreconciled,
+            resolvable_mission_ids=resolvable_mission_ids,
+            own_planet_debris=own_planet_debris,
+            foreign_debris_targets=foreign_debris_targets,
+            colonize_targets=colonize_targets,
+            attack_targets=attack_targets,
+            missile_targets=missile_targets,
+            last_attended_planet_id=last_attended_planet_id,
+            context=context,
+            backend=backend,
+        )
+    except Exception as exc:  # noqa: BLE001 -- the engine is never the reason a tick fails
+        return _ladder(), EngineTrace(
+            engine="ladder", configured="jev", fallback_reason=f"engine_error:{type(exc).__name__}"
+        )
+
+
+def describe_trace(trace: EngineTrace) -> str:
+    """One line describing what a *configured-jev* engine did, for the tick report and
+    `vd plan run`: `jev (jev-1.13.0, 140ms, confidence 0.71, agrees with ladder)`,
+    `jev -> ladder fallback (timeout)` or `jev pre-empted by 1b:game-paused`."""
+    if trace.pre_empted_by:
+        return f"jev pre-empted by {trace.pre_empted_by}"
+    if trace.engine != "jev":
+        return f"jev -> ladder fallback ({trace.fallback_reason or 'unknown'})"
+    parts: list[str] = []
+    if trace.model:
+        parts.append(trace.model)
+    if trace.latency_ms is not None:
+        parts.append(f"{trace.latency_ms}ms")
+    if trace.winner_confidence is not None:
+        parts.append(f"confidence {trace.winner_confidence:.2f}")
+    if trace.agrees_with_ladder is not None:
+        parts.append("agrees with ladder" if trace.agrees_with_ladder else "differs from ladder")
+    return f"jev ({', '.join(parts)})" if parts else "jev"
 
 
 def doctor_lines() -> list[str]:
     """Lines `vd doctor` prints about the decision engine: the configured kind (from
     `$VEYDRIFT_HOME/policy.json` if present), whether `TYPESAFE_API_KEY` is set (never its
-    value), and whether `typesafe_sdk` imports."""
-    return []
+    value), and whether `typesafe_sdk` is importable. Read-only: never creates a file and
+    never imports the SDK."""
+    from veydrift_agent.jev import API_KEY_ENV
+    from veydrift_agent.state import veydrift_home
+
+    path = Path(veydrift_home()) / "policy.json"
+    if not path.exists():
+        kind = "ladder (no policy.json)"
+    else:
+        try:
+            kind = Policy.model_validate(json.loads(path.read_text())).engine.kind
+        except (OSError, ValueError):
+            kind = "unknown (policy.json invalid)"
+    key = "set" if os.environ.get(API_KEY_ENV, "").strip() else "unset"
+    try:
+        sdk = "importable" if importlib.util.find_spec("typesafe_sdk") is not None else "missing"
+    except (ImportError, ValueError):
+        sdk = "missing"
+    return [f"engine: {kind}", f"{API_KEY_ENV}: {key}", f"typesafe-sdk: {sdk}"]
+
+
+# --------------------------------------------------------------------------------------
+# CLI -- `pool` is offline (no network, no key); `compare` runs the jev engine, so a real
+# jev answer needs the key and the network (without them jev falls back to the ladder).
+# --------------------------------------------------------------------------------------
+
+
+def _load(snapshot: Path, policy: Path, console: Console) -> tuple[Snapshot, Policy]:
+    try:
+        return (
+            Snapshot.model_validate(json.loads(snapshot.read_text())),
+            Policy.model_validate(json.loads(policy.read_text())),
+        )
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]failed to load snapshot/policy: {exc}[/red]")
+        raise typer.Exit(code=4) from exc
+
+
+def _same_pick(a: Action, b: Action) -> bool:
+    """Do two actions name the same call? Off-chain actions compare by kind and rule."""
+    if a.is_onchain() and b.is_onchain():
+        return candidates.pool_key(a) == candidates.pool_key(b)
+    return a.kind == b.kind and a.rule == b.rule
+
+
+def _describe(action: Action) -> str:
+    if action.function:
+        return f"{action.rule}  {action.function}(planet={action.planet_id}, entity={action.entity_id})"
+    return f"{action.rule}  {action.kind.value}"
+
+
+@app.command()
+def pool(
+    snapshot: Path = typer.Option(..., "--snapshot", help="Path to a Snapshot JSON file."),  # noqa: B008
+    policy: Path = typer.Option(..., "--policy", help="Path to a Policy JSON file."),  # noqa: B008
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+) -> None:
+    """Show the candidate pool the jev engine would choose from, and the exact request it would
+    send. Offline: no network, no API key."""
+    console = Console()
+    snapshot_model, policy_model = _load(snapshot, policy, console)
+    jev_cfg = policy_model.engine.jev
+    entries, rejected = candidates.collect_pool(
+        snapshot_model,
+        policy_model,
+        plan_mod._target_planets(snapshot_model, policy_model),
+        high_stakes_only_when_idle=jev_cfg.high_stakes_only_when_idle,
+        max_candidates=jev_cfg.max_candidates,
+    )
+    rows = [
+        {
+            "id": f"c{i}",
+            "band": e.band,
+            "group": e.group,
+            "family": e.candidate.family,
+            "planet_id": e.candidate.action.planet_id,
+            "entity": e.candidate.action.entity_name or e.candidate.action.function,
+            "score_basis": e.candidate.score_basis,
+        }
+        for i, e in enumerate(entries)
+    ]
+
+    request: dict[str, Any] | None = None
+    note: str | None = None
+    try:
+        from veydrift_agent import jev, jev_engine
+
+        state, questions = jev_engine.build_request(snapshot_model, policy_model, entries, None)
+        request = {
+            "state": state,
+            "questions": {qid: asdict(q) for qid, q in questions.items()},
+            "estimated_tokens": jev.estimate_tokens(state, questions),
+        }
+    except NotImplementedError:
+        note = "jev_engine.build_request is not implemented yet; showing the pool only."
+
+    if json_output:
+        typer.echo(
+            json.dumps({"pool": rows, "rejected": rejected, "request": request, "note": note}, indent=2, default=str)
+        )
+        return
+
+    typer.echo(f"pool: {len(rows)} candidate(s)")
+    for row in rows:
+        typer.echo(
+            f"  {row['id']:>4}  band {row['band']}  {row['group']:<13} {row['family']:<15} "
+            f"planet={row['planet_id']}  {row['entity']}  -- {row['score_basis']}"
+        )
+    typer.echo("rejected: " + (", ".join(f"{k}={v}" for k, v in sorted(rejected.items())) or "none"))
+    if note:
+        typer.echo(f"note: {note}")
+    if request is not None:
+        typer.echo(f"estimated request size: ~{request['estimated_tokens']} tokens")
+        typer.echo("state:")
+        typer.echo(json.dumps(request["state"], indent=2, default=str))
+        typer.echo("questions:")
+        typer.echo(json.dumps(request["questions"], indent=2, default=str))
+
+
+@app.command()
+def compare(
+    snapshot: Path = typer.Option(..., "--snapshot", help="Path to a Snapshot JSON file."),  # noqa: B008
+    policy: Path = typer.Option(..., "--policy", help="Path to a Policy JSON file."),  # noqa: B008
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+) -> None:
+    """Run the jev engine and the ladder on the same input and compare their picks. Needs
+    TYPESAFE_API_KEY and the network for a real jev answer; without them jev falls back to the
+    ladder. Exit codes: 0 agree, 1 disagree, 3 jev fell back to the ladder, 4 load error."""
+    console = Console()
+    snapshot_model, policy_model = _load(snapshot, policy, console)
+    ladder_action = plan_mod.plan_next_action(snapshot_model, policy_model)
+    jev_action, trace = decide(snapshot_model, policy_model, engine_override="jev")
+
+    fell_back = trace.fallback_reason is not None
+    agree = _same_pick(ladder_action, jev_action)
+    code = 3 if fell_back else (0 if agree else 1)
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "ladder": json.loads(ladder_action.model_dump_json()),
+                    "jev": json.loads(jev_action.model_dump_json()),
+                    "trace": trace.model_dump(mode="json"),
+                    "agree": agree,
+                    "fallback": fell_back,
+                },
+                indent=2,
+            )
+        )
+        raise typer.Exit(code=code)
+
+    typer.echo(f"ladder: {_describe(ladder_action)}")
+    typer.echo(f"jev:    {_describe(jev_action)}  (engine={jev_action.engine})")
+    verdict = "FALLBACK" if fell_back else ("agree" if agree else "DISAGREE")
+    typer.echo(f"result: {verdict}")
+    if trace.fallback_reason:
+        typer.echo(f"fallback_reason: {trace.fallback_reason}")
+    if trace.pre_empted_by:
+        typer.echo(f"pre_empted_by: {trace.pre_empted_by}")
+    if trace.winner_confidence is not None:
+        typer.echo(f"confidence: {trace.winner_confidence:.2f}")
+    if trace.margin is not None:
+        typer.echo(f"margin: {trace.margin:.3f}")
+    for j in trace.top:
+        composite = f"{j.composite:.3f}" if j.composite is not None else "n/a"
+        typer.echo(f"  {j.id:>4} {j.family:<15} {j.entity_name or '-'}  composite={composite}")
+    raise typer.Exit(code=code)

@@ -1,0 +1,14 @@
+{
+  "description": "Two developed planets, a declared research priority and a research-heavy intent: pick that technology (research runs through the first planet).",
+  "snapshot": {"builder": "rich_two"},
+  "policy_overrides": {
+    "strategy": {"research_priority": ["Laser Technology"]}
+  },
+  "intent": "Focus on research, starting with Laser Technology.",
+  "responder": {
+    "fit_keywords": {"Laser Technology": 0.95, "Research": 0.7},
+    "default_fit": 0.3,
+    "urgency_by_group": {"research": 0.6}
+  },
+  "acceptable": [{"function": "startResearch", "entity_name": "Laser Technology"}]
+}

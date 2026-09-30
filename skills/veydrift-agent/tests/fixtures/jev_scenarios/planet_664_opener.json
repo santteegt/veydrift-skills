@@ -1,0 +1,8 @@
+{
+  "description": "A fresh planet 664: the energy-first opener. Only Solar Plant and storage are legal; the strategy is plain growth.",
+  "snapshot": "planet_664.json",
+  "policy_overrides": {},
+  "intent": "Grow the economy steadily.",
+  "responder": {"fit_keywords": {"Solar Plant": 0.75}, "default_fit": 0.3},
+  "acceptable": [{"function": "startBuildingUpgrade", "entity_name": "Solar Plant"}]
+}

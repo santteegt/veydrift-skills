@@ -1,0 +1,12 @@
+{
+  "description": "A hot planet: Fusion Reactor, Solar Plant, Solar Satellite and Energy Technology are all legal.",
+  "snapshot": "planet_hot.json",
+  "policy_overrides": {},
+  "intent": "Get the energy supply healthy before anything else.",
+  "responder": {"fit_keywords": {"Fusion": 0.9, "Solar Plant": 0.8, "Solar Satellite": 0.6}, "default_fit": 0.25},
+  "acceptable": [
+    {"function": "startBuildingUpgrade", "entity_name": "Fusion Reactor"},
+    {"function": "startBuildingUpgrade", "entity_name": "Solar Plant"},
+    {"function": "startShipProduction", "entity_name": "Solar Satellite"}
+  ]
+}

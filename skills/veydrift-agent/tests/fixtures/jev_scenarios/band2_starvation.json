@@ -1,0 +1,12 @@
+{
+  "description": "Building queue idle AND research queue idle. The ladder always builds first (band 2); a research-heavy intent should pick research.",
+  "snapshot": {"builder": "rich_one"},
+  "policy_overrides": {},
+  "intent": "Prioritize research and technology above everything else; buildings only as needed.",
+  "responder": {
+    "fit_keywords": {"Research": 0.95},
+    "default_fit": 0.3,
+    "urgency_by_group": {"research": 0.6}
+  },
+  "acceptable": [{"function": "startResearch"}]
+}

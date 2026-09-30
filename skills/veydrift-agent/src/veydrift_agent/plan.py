@@ -575,8 +575,18 @@ def run(
             "reproduce today's behaviour -- this offline entrypoint never reads agent-state.json."
         ),
     ),
+    engine: str = typer.Option(
+        "ladder",
+        "--engine",
+        help=(
+            "ladder (default): the fixed-order ladder, offline. policy: whichever engine "
+            "policy.engine.kind names. jev: force the jev engine (needs TYPESAFE_API_KEY and "
+            "the network; falls back to the ladder on any failure)."
+        ),
+    ),
 ) -> None:
-    """Decide the next action from a snapshot + policy file. Offline; no network calls."""
+    """Decide the next action from a snapshot + policy file. Offline with the default
+    `--engine ladder`; `--engine policy|jev` may call TypeSafe."""
     console = Console()
     try:
         snapshot_model = Snapshot.model_validate(json.loads(snapshot.read_text()))
@@ -585,13 +595,31 @@ def run(
         console.print(f"[red]failed to load snapshot/policy: {exc}[/red]")
         raise typer.Exit(code=4) from exc
 
-    action = plan_next_action(
-        snapshot_model,
-        policy_model,
-        killswitch_active=killswitch,
-        pending_tx_unreconciled=pending_tx,
-        last_attended_planet_id=last_attended_planet_id,
-    )
+    if engine not in ("ladder", "policy", "jev"):
+        console.print(f"[red]--engine must be ladder, policy or jev, not {engine!r}[/red]")
+        raise typer.Exit(code=2)
+
+    trace = None
+    if engine == "ladder":
+        action = plan_next_action(
+            snapshot_model,
+            policy_model,
+            killswitch_active=killswitch,
+            pending_tx_unreconciled=pending_tx,
+            last_attended_planet_id=last_attended_planet_id,
+        )
+    else:
+        from veydrift_agent import engine as engine_mod  # lazy: engine.py imports this module
+
+        action, trace = engine_mod.decide(
+            snapshot_model,
+            policy_model,
+            killswitch_active=killswitch,
+            pending_tx_unreconciled=pending_tx,
+            last_attended_planet_id=last_attended_planet_id,
+            engine_override=None if engine == "policy" else "jev",
+        )
+    show_trace = trace is not None and trace.configured == "jev"
 
     if json_output:
         typer.echo(action.model_dump_json(indent=2))
@@ -607,6 +635,8 @@ def run(
     if action.cost.metal or action.cost.crystal or action.cost.deuterium:
         body.append(f"cost:      M {action.cost.metal}  C {action.cost.crystal}  D {action.cost.deuterium}")
     body.append(f"why:       {action.rationale}")
+    if show_trace:
+        body.append(f"engine:    {engine_mod.describe_trace(trace)}")
     if action.alternatives:
         body.append(f"alts:      {len(action.alternatives)} considered and not selected (see --json for detail)")
     if action.brief is not None:

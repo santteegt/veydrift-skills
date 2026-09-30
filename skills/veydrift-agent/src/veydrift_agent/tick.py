@@ -91,6 +91,7 @@ from rich.console import Console
 from veydrift_agent import alliance_ids, guard as guard_mod
 from veydrift_agent import brief as brief_mod
 from veydrift_agent import coordination as coordination_mod
+from veydrift_agent import engine as engine_mod
 from veydrift_agent import http, ids, log, read
 from veydrift_agent import opportunities as opportunities_mod
 from veydrift_agent import plan as plan_mod
@@ -107,6 +108,7 @@ from veydrift_agent.models import (
     AllianceState,
     CoordinationReport,
     Decision,
+    EngineTrace,
     GameMaintenance,
     GuardReport,
     GuardStatus,
@@ -1595,16 +1597,28 @@ def _describe_override(
     attack_targets: dict[int, tuple[str, Resources, bool | None]],
     missile_targets: dict[int, tuple[str, dict[int, int], bool | None]],
     last_attended_planet_id: int | None,
+    context: engine_mod.EngineContext | None = None,
 ) -> tuple[dict[str, Any], str]:
     """`(override_record, override_line)` for a `vd tick --action`-supplied action --
     the code-enforced disagreement record `references/manual-action-override.md`
     promises: the operator never has to hand-describe what the planner would have
-    proposed instead, because this calls `plan_next_action` itself, with the exact same
-    inputs `_run_tick`'s own planner branch would have used, purely for comparison. This
-    is a pure, side-effect-free call over data already in hand (the fetched `snapshot`),
-    so it costs nothing beyond the CPU time of a second scoring pass, and its result is
-    never executed -- only recorded, in `proposals.jsonl` (`override_record`), `logs/
-    strategy.md` and the printed tick report (`override_line`, both via `_finish_tick`).
+    proposed instead, because this calls `engine_mod.decide` itself -- the *configured*
+    engine, so the comparison is against what a normal tick would really have proposed --
+    with the exact same inputs `_run_tick`'s own planner branch would have used, purely for
+    comparison. Under `policy.engine.kind == "ladder"` (the default) that is a pure,
+    side-effect-free call over data already in hand (the fetched `snapshot`), so it costs
+    nothing beyond the CPU time of a second scoring pass. Under `"jev"` it is the jev
+    engine's own call: one TypeSafe request (network, the API key), bounded by
+    `policy.engine.jev.timeout_s`, and any failure is a ladder fallback, never a failed tick.
+    Its result is never executed -- only recorded, in `proposals.jsonl` (`override_record`),
+    `logs/strategy.md` and the printed tick report (`override_line`, both via `_finish_tick`).
+
+    `planner_would_have_proposed` gains `"engine"` and `"fallback_reason"` keys only when
+    `policy.engine.kind == "jev"`: the record is part of the dedup fingerprint, so a
+    default-policy record must stay byte-identical to what it was before the engine existed.
+    Only the engine name and fallback reason go in -- never probabilities or latency, which
+    would jitter the fingerprint. The override tick's own `engine_trace` (the report panel)
+    is `None`: the executed-or-proposed action is the operator's, not an engine's.
 
     `last_attended_planet_id` must be the exact same value `_run_tick`'s own planner
     branch would pass -- otherwise the "planner would have proposed" record silently
@@ -1617,7 +1631,7 @@ def _describe_override(
     this, since `plan_next_action` here makes no network call, but there is nothing to
     compare against a halt in the first place, and `guard.py`'s `killswitch` gate BLOCKs
     any action unconditionally regardless of source."""
-    planner_choice = plan_mod.plan_next_action(
+    planner_choice, planner_trace = engine_mod.decide(
         snapshot,
         policy_model,
         killswitch_active=False,
@@ -1629,6 +1643,7 @@ def _describe_override(
         attack_targets=attack_targets,
         missile_targets=missile_targets,
         last_attended_planet_id=last_attended_planet_id,
+        context=context,
     )
     record = {
         "operator_action": {
@@ -1643,6 +1658,9 @@ def _describe_override(
             "rationale": planner_choice.rationale,
         },
     }
+    if policy_model.engine.kind == "jev":
+        record["planner_would_have_proposed"]["engine"] = planner_choice.engine
+        record["planner_would_have_proposed"]["fallback_reason"] = planner_trace.fallback_reason
     line = (
         f"OVERRIDE: operator chose {override_action.rule or override_action.function or override_action.kind.value} "
         f"({override_action.rationale}) instead of the planner's "
@@ -2402,17 +2420,22 @@ def _proposal_lines(
     confirm_hint: str | None = None,
     override_line: str | None = None,
     extra_lines: list[str] | None = None,
+    engine_line: str | None = None,
 ) -> list[str]:
     verb = "EXECUTE" if executed else "PROPOSE"
     if action.kind in (ActionKind.NOOP, ActionKind.ESCALATE, ActionKind.HALT):
         lines = [f"{action.kind.value.upper():9s} {action.rationale}"]
         if override_line:
             lines.append(f"  {override_line}")
+        if engine_line:
+            lines.append(f"  {engine_line}")
         return lines
     header = f"{verb:9s} {action.function}(planet={action.planet_id}, entity={action.entity_id})"
     lines = [header]
     if override_line:
         lines.append(f"  {override_line}")
+    if engine_line:
+        lines.append(f"  {engine_line}")
     if action.cost.metal or action.cost.crystal or action.cost.deuterium:
         lines.append(f"  cost:   M {action.cost.metal}  C {action.cost.crystal}  D {action.cost.deuterium}")
     lines.append(f"  why:    {action.rationale}")
@@ -2683,6 +2706,12 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     rotation_pointer = agent_state.last_attended_planet_id if policy_model.strategy.planet_rotation else None
     override_record: dict[str, Any] | None = None
     override_line: str | None = None
+    # `engine_mod.decide` dispatches on `policy.engine.kind` (the ladder, by default -- exactly
+    # `plan_next_action`, offline). `engine_trace` stays `None` on the override path: the
+    # action is the operator's, so no engine chose it (`_describe_override` records what the
+    # configured engine would have proposed instead, in `override_record`).
+    engine_trace: EngineTrace | None = None
+    engine_context = engine_mod.EngineContext(radar_report=radar_report, alliance_state=alliance_state)
     if override_action is not None:
         # A manual override never went through plan.py's _finalize (the planner's own
         # brief.attach call site) -- attach one here so an override's proposal report/
@@ -2709,9 +2738,10 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             attack_targets=attack_targets,
             missile_targets=missile_targets,
             last_attended_planet_id=rotation_pointer,
+            context=engine_context,
         )
     else:
-        action = plan_mod.plan_next_action(
+        action, engine_trace = engine_mod.decide(
             snapshot,
             policy_model,
             killswitch_active=False,
@@ -2723,6 +2753,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
             attack_targets=attack_targets,
             missile_targets=missile_targets,
             last_attended_planet_id=rotation_pointer,
+            context=engine_context,
         )
 
     # Step 6: guard. Gather live-only facts ONLY when the action is on-chain -- an
@@ -2910,6 +2941,7 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         opportunity_report=opportunity_report,
         coordination_report=coordination_report,
         calldata_only_note=calldata_only_note,
+        engine_trace=engine_trace,
     )
 
 
@@ -3109,6 +3141,7 @@ def _send_and_await(
         "entity_id": action.entity_id,
         "gas_wei": cost_to_charge or 0,
         "block": block,
+        "engine": action.engine,
     }
 
     if status == "reverted":
@@ -3158,7 +3191,11 @@ def _send_and_await(
 #: action itself is a genuine content-identical repeat -- including it would silently
 #: defeat dedup on almost every tick, the same reasoning `human_activity_check` already
 #: documents for itself above.
-_FINGERPRINT_EXCLUDED_KEYS = {"ts", "tick", "human_activity_check", "brief"}
+#:
+#: "engine" (the `EngineTrace`: latency, request id, probabilities, confidence) is excluded
+#: for the same reason: it jitters between otherwise-identical proposals. What the engine
+#: chose is already in the fingerprinted fields (rule, function, rationale, alternatives).
+_FINGERPRINT_EXCLUDED_KEYS = {"ts", "tick", "human_activity_check", "brief", "engine"}
 
 
 def _fingerprint_proposal(record: dict[str, Any]) -> str:
@@ -3236,7 +3273,13 @@ def _finish_tick(
     opportunity_report: OpportunityReport | None = None,
     coordination_report: CoordinationReport | None = None,
     calldata_only_note: str | None = None,
+    engine_trace: EngineTrace | None = None,
 ) -> None:
+    # Only a configured-jev tick records an engine block; ladder (the default) records None,
+    # which `_FINGERPRINT_EXCLUDED_KEYS` keeps out of the dedup fingerprint.
+    engine_record = (
+        engine_trace.model_dump(mode="json") if engine_trace is not None and engine_trace.configured != "ladder" else None
+    )
     proposal_record = {
         "ts": now.isoformat(),
         "tick": agent_state.tick_count + 1,  # prospective; corrected below if not a duplicate
@@ -3268,6 +3311,7 @@ def _finish_tick(
         "radar": radar_report.model_dump() if radar_report is not None else None,
         "opportunities": opportunity_report.model_dump() if opportunity_report is not None else None,
         "coordination": coordination_report.model_dump() if coordination_report is not None else None,
+        "engine": engine_record,
     }
 
     # Dedup: a content-identical repeat of the immediately-previous logged proposal (e.g.
@@ -3365,6 +3409,7 @@ def _finish_tick(
             confirm_hint=confirm_hint,
             override_line=override_line,
             extra_lines=panel_extras,
+            engine_line=f"engine: {engine_mod.describe_trace(engine_trace)}" if engine_trace is not None and engine_record is not None else None,
         ),
         duplicate_of=duplicate_note,
         human_activity_line=human_activity_line,
@@ -3439,7 +3484,11 @@ def _finish_tick(
     non_passing = [(v.gate, v.status.value) for v in guard_report.verdicts if v.status is not GuardStatus.PASS]
     structural = guard_mod.is_structural_tier_block(non_passing)
     if (action.kind is ActionKind.ESCALATE or guard_report.decision is not Decision.ALLOW) and not structural and not is_duplicate:
-        log.append_strategy(f"tick {agent_state.tick_count}: {action.rule} -- {action.rationale} (guard={guard_report.decision.value})", now=now)
+        engine_tag = " [engine=jev]" if action.engine == "jev" else ""
+        log.append_strategy(
+            f"tick {agent_state.tick_count}: {action.rule} -- {action.rationale} (guard={guard_report.decision.value}){engine_tag}",
+            now=now,
+        )
 
     extra_md_parts: list[str] = []
     if action.brief is not None:

@@ -23,7 +23,7 @@ import respx
 from typer.testing import CliRunner
 
 from veydrift_agent import guard as guard_mod
-from veydrift_agent import http, ids, log, tick
+from veydrift_agent import http, ids, jev_engine, log, tick
 from veydrift_agent import plan as plan_mod
 from veydrift_agent.models import (
     Action,
@@ -37,6 +37,7 @@ from veydrift_agent.models import (
     AlternativeNote,
     Decision,
     EnergyBalance,
+    EngineTrace,
     Entity,
     GameMaintenance,
     GuardReport,
@@ -5134,3 +5135,361 @@ def test_a_provider_that_signs_as_someone_else_than_policy_signer_escalates(isol
     assert result.exit_code == 0, result.output
     verdicts = {v["gate"]: v for v in log.read_proposals()[0]["guard_verdicts"]}
     assert verdicts["signer"]["status"] == "escalate"
+
+
+# --------------------------------------------------------------------------------------
+# Decision-engine wiring (`engine.py`, `policy.engine.kind`): the tick asks
+# `engine_mod.decide` for its action instead of `plan_next_action`. `jev_engine.decide` is
+# monkeypatched throughout -- these tests pin what `tick.py` does with an engine's
+# `(Action, EngineTrace)`, never how the engine chose. Sending, confirmation, tiers and the
+# guard are exactly what they were.
+# --------------------------------------------------------------------------------------
+
+_ENGINE_SENTINEL_KEY = "ts-sentinel-tick-key-0123456789abcdef"
+
+
+def _jev_trace(**overrides) -> EngineTrace:
+    base = dict(
+        engine="jev",
+        configured="jev",
+        model="jev-1.13.0",
+        request_id="req-1",
+        latency_ms=140,
+        winner_confidence=0.71,
+        agrees_with_ladder=True,
+        margin=0.12,
+        focus_probabilities={"economy": 0.6, "research": 0.4},
+    )
+    base.update(overrides)
+    return EngineTrace(**base)
+
+
+def _jev_build_action(**overrides) -> Action:
+    return _build_action().model_copy(update={"engine": "jev", "rationale": "jev pick", **overrides})
+
+
+def _patch_jev(monkeypatch, action=None, trace=None):
+    """Route the jev engine to a canned `(Action, EngineTrace)` and record its kwargs."""
+    calls: list[dict] = []
+    canned = (action or _jev_build_action(), trace or _jev_trace())
+
+    def _fake(snapshot, policy, **kwargs):
+        calls.append(kwargs)
+        return canned
+
+    monkeypatch.setattr(jev_engine, "decide", _fake)
+    return calls
+
+
+def _flat_output(output: str) -> str:
+    return " ".join(output.replace("│", " ").split())
+
+
+def test_jev_tick_records_the_engine_block_and_prints_one_panel_line(isolated_home, monkeypatch):
+    _write_policy(engine={"kind": "jev"})
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx)
+    calls = _patch_jev(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert "killswitch_active" not in calls[0]
+    # radar/alliance are computed before the plan step and handed to the engine.
+    assert calls[0]["context"].radar_report is not None
+    assert calls[0]["context"].alliance_state is None  # allow_alliance defaults off
+    record = log.read_proposals()[0]
+    assert record["engine"]["configured"] == "jev"
+    assert record["engine"]["engine"] == "jev"
+    assert record["engine"]["model"] == "jev-1.13.0"
+    assert record["engine"]["winner_confidence"] == 0.71
+    assert record["function"] == "startBuildingUpgrade"
+    assert record["rationale"] == "jev pick"
+    flat = _flat_output(result.output)
+    assert "engine: jev (jev-1.13.0, 140ms, confidence 0.71, agrees with ladder)" in flat
+    assert flat.count("engine: jev") == 1
+
+
+def test_a_jev_action_at_tier_economy_still_stops_at_the_confirmation_hint(isolated_home, monkeypatch, tmp_path):
+    """jev drives real sends exactly as the ladder does: same guard, same
+    `require_confirmation` gate, same `walletctl send --confirm` handoff."""
+    _write_policy(tier="economy", engine={"kind": "jev"})  # require_confirmation defaults true
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, gas=1_000_000_000, built_tx_path=built_tx_path)
+    _patch_jev(monkeypatch)
+    guarded: list[Action] = []
+
+    def _spy_guard(action, *a, **kw):
+        guarded.append(action)
+        return guard_mod.GuardReport(decision=guard_mod.Decision.ALLOW, verdicts=[])
+
+    monkeypatch.setattr(guard_mod, "evaluate_guardrails", _spy_guard)
+
+    result = runner.invoke(tick.app, [])  # NOT --dry-run
+
+    assert result.exit_code == 0, result.output
+    assert len(guarded) == 1 and guarded[0].engine == "jev"  # the guard saw the jev action, unchanged
+    assert "AWAITING HUMAN CONFIRMATION" in result.output
+    assert f"walletctl send --tx {built_tx_path} --confirm" in list(log.ticks_dir().glob("*.md"))[0].read_text()
+    assert not log.actions_path().exists()  # _patch_common's send stub would raise if reached
+    assert log.read_proposals()[0]["executed"] is False
+
+
+def test_a_jev_action_sent_automatically_is_tagged_in_actions_jsonl(isolated_home, monkeypatch, tmp_path):
+    _write_policy(tier="economy", engine={"kind": "jev"}, wallet_engine={"provider": "keystore", "require_confirmation": False})
+    built_tx_path = tmp_path / "built-tx.json"
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _patch_common(monkeypatch, live_addresses={_LIVE_ADDR}, unsigned_tx=tx, gas=1_000_000_000, built_tx_path=built_tx_path)
+    _patch_jev(monkeypatch)
+    _allow_guard(monkeypatch)
+    monkeypatch.setattr(tick, "_walletctl_send", lambda tx_path, *, tier, provider: ("0x" + "cc" * 32, None))
+    monkeypatch.setattr(tick, "_walletctl_receipt", lambda h: {"status": "success", "blockNumber": "0x64", "actualCostWei": "1"})
+    monkeypatch.setattr(tick, "_await_indexed", lambda **kw: True)
+
+    result = runner.invoke(tick.app, [])
+
+    assert result.exit_code == 0, result.output
+    actions = log.read_actions()
+    assert len(actions) == 1
+    assert actions[0]["status"] == "success"
+    assert actions[0]["engine"] == "jev"
+
+
+def test_a_ladder_action_is_tagged_ladder_in_actions_jsonl(isolated_home, monkeypatch):
+    unsigned_tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=156_540)
+    _allow_simulate(monkeypatch)
+    monkeypatch.setattr(tick, "_walletctl_send", lambda tx_path, *, tier, provider: ("0x" + "cc" * 32, None))
+    monkeypatch.setattr(tick, "_walletctl_receipt", lambda h: {"status": "success", "blockNumber": "0x64", "actualCostWei": "1"})
+    monkeypatch.setattr(tick, "_await_indexed", lambda **kw: True)
+    tick._send_and_await(
+        _economy_policy(), AgentState(), _build_action(), unsigned_tx, _healthy_snapshot(), datetime.now(UTC), gas_cost_wei_estimate=1
+    )
+    assert log.read_actions()[0]["engine"] == "ladder"
+
+
+def test_a_second_jev_tick_differing_only_in_probabilities_and_latency_is_deduped(isolated_home, monkeypatch):
+    _write_policy(engine={"kind": "jev"})
+    _patch_common(monkeypatch)
+    _patch_jev(monkeypatch, trace=_jev_trace())
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+
+    _patch_jev(
+        monkeypatch,
+        trace=_jev_trace(
+            latency_ms=333,
+            request_id="req-2",
+            winner_confidence=0.66,
+            margin=0.2,
+            focus_probabilities={"economy": 0.55, "research": 0.45},
+        ),
+    )
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+
+    assert r2.exit_code == 0, r2.output
+    assert "duplicate" in r2.output.lower()
+    assert load_agent_state().tick_count == 1
+    assert len(log.read_proposals()) == 1
+
+
+def test_a_fallback_trace_is_recorded_and_reported(isolated_home, monkeypatch):
+    _write_policy(engine={"kind": "jev"})
+    _patch_common(monkeypatch)
+    trace = EngineTrace(engine="ladder", configured="jev", fallback_reason="timeout")
+    _patch_jev(monkeypatch, action=_build_action(), trace=trace)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    record = log.read_proposals()[0]
+    assert record["engine"]["engine"] == "ladder"
+    assert record["engine"]["configured"] == "jev"
+    assert record["engine"]["fallback_reason"] == "timeout"
+    assert "engine: jev -> ladder fallback (timeout)" in _flat_output(result.output)
+
+
+def test_an_engine_exception_never_fails_the_tick(isolated_home, monkeypatch):
+    _write_policy(engine={"kind": "jev"})
+    _patch_common(monkeypatch)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("engine blew up")
+
+    monkeypatch.setattr(jev_engine, "decide", _boom)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    record = log.read_proposals()[0]
+    assert record["function"] == "startBuildingUpgrade"  # the (patched) ladder's action
+    assert record["engine"]["fallback_reason"] == "engine_error:RuntimeError"
+    assert "engine: jev -> ladder fallback (engine_error:RuntimeError)" in _flat_output(result.output)
+
+
+def test_a_pre_empted_jev_tick_says_which_rule_decided(isolated_home, monkeypatch):
+    _write_policy(engine={"kind": "jev"})
+    _patch_common(monkeypatch)
+    noop = Action(kind=ActionKind.NOOP, rule="1b:game-paused", rationale="paused")
+    _patch_jev(monkeypatch, action=noop, trace=EngineTrace(engine="ladder", configured="jev", pre_empted_by="1b:game-paused"))
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "engine: jev pre-empted by 1b:game-paused" in _flat_output(result.output)
+    assert log.read_proposals()[0]["engine"]["pre_empted_by"] == "1b:game-paused"
+
+
+@respx.mock
+def test_killswitch_with_jev_configured_never_reaches_the_jev_engine(isolated_home, monkeypatch):
+    _write_policy(engine={"kind": "jev"})
+    from veydrift_agent.state import killswitch_path
+
+    killswitch_path().touch()
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json={"ok": True, "readiness": {"ready": True}}))
+
+    def _boom(*a, **kw):
+        raise AssertionError("the killswitch path must never call an engine")
+
+    monkeypatch.setattr(jev_engine, "decide", _boom)
+    monkeypatch.setattr(tick, "_fetch_snapshot", _boom)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    record = log.read_proposals()[0]
+    assert record["kind"] == "halt"
+    assert record["engine"] is None
+    assert "engine:" not in _flat_output(result.output)
+
+
+def test_override_with_jev_records_what_the_jev_engine_would_have_proposed(isolated_home, monkeypatch, tmp_path):
+    _write_policy_allowing_override(engine={"kind": "jev"})
+    _patch_common(monkeypatch)
+    trace = EngineTrace(engine="ladder", configured="jev", fallback_reason="timeout", latency_ms=5000)
+    calls = _patch_jev(monkeypatch, action=_build_action(), trace=trace)
+    action_file = _write_override_action_file(tmp_path)
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1  # the comparison went through the configured engine
+    record = log.read_proposals()[0]
+    assert record["source"] == "manual_override"
+    would = record["override"]["planner_would_have_proposed"]
+    assert would["engine"] == "ladder"
+    assert would["fallback_reason"] == "timeout"
+    assert "latency_ms" not in would  # only stable strings: the override record is fingerprinted
+    assert record["engine"] is None  # the action is the operator's, not an engine's
+
+
+def test_override_record_is_unchanged_under_the_default_ladder_engine(isolated_home, monkeypatch, tmp_path):
+    _write_policy_allowing_override()
+    _patch_common(monkeypatch)
+    action_file = _write_override_action_file(tmp_path)
+
+    result = runner.invoke(tick.app, ["--dry-run", "--action", str(action_file)])
+
+    assert result.exit_code == 0, result.output
+    record = log.read_proposals()[0]
+    assert set(record["override"]["planner_would_have_proposed"]) == {"rule", "kind", "function", "rationale"}
+    assert record["engine"] is None
+
+
+def test_default_policy_records_no_engine_block_and_prints_no_engine_line(isolated_home, monkeypatch):
+    _write_policy()
+    _patch_common(monkeypatch)
+
+    def _never(*a, **kw):
+        raise AssertionError("jev_engine must not be used under the default policy")
+
+    monkeypatch.setattr(jev_engine, "decide", _never)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert log.read_proposals()[0]["engine"] is None
+    assert "engine:" not in _flat_output(result.output)
+
+
+def test_fingerprint_of_a_default_policy_proposal_is_what_it_was_before_the_engine_existed(isolated_home, monkeypatch):
+    """A ladder record now carries `"engine": null`. Because `engine` is excluded from the
+    fingerprint, the hash must equal the one computed over the record as it looked before
+    the key existed -- otherwise every existing account would see one spurious
+    non-duplicate proposal on upgrade."""
+    import hashlib
+
+    _write_policy()
+    _patch_common(monkeypatch)
+    records: list[dict] = []
+    real = tick._fingerprint_proposal
+
+    def _spy(record):
+        records.append(dict(record))
+        return real(record)
+
+    monkeypatch.setattr(tick, "_fingerprint_proposal", _spy)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    record = records[0]
+    assert record["engine"] is None
+    old_excluded = {"ts", "tick", "human_activity_check", "brief"}  # the set before this feature
+    old_record = {k: v for k, v in record.items() if k != "engine"}  # the record before this feature
+    expected = hashlib.sha256(
+        json.dumps({k: v for k, v in old_record.items() if k not in old_excluded}, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    assert real(record) == expected
+    assert load_agent_state().last_proposal_fingerprint == expected
+
+
+def test_engine_is_a_fingerprint_excluded_key():
+    assert "engine" in tick._FINGERPRINT_EXCLUDED_KEYS
+
+
+def test_strategy_narration_carries_an_engine_tag_only_for_a_jev_action(isolated_home, monkeypatch):
+    escalate = Action(kind=ActionKind.ESCALATE, rule="4:incoming-fleet", rationale="fleet incoming")
+    _write_policy(engine={"kind": "jev"})
+    _patch_common(monkeypatch)
+    _patch_jev(monkeypatch, action=escalate.model_copy(update={"engine": "jev"}))
+    assert runner.invoke(tick.app, ["--dry-run"]).exit_code == 0
+    text = log.strategy_path().read_text()
+    assert "fleet incoming (guard=" in text
+    assert "[engine=jev]" in text
+
+
+def test_strategy_narration_has_no_engine_tag_for_a_ladder_action(isolated_home, monkeypatch):
+    escalate = Action(kind=ActionKind.ESCALATE, rule="4:incoming-fleet", rationale="fleet incoming")
+    _write_policy()
+    _patch_common(monkeypatch, action=escalate)
+    assert runner.invoke(tick.app, ["--dry-run"]).exit_code == 0
+    text = log.strategy_path().read_text()
+    assert "fleet incoming (guard=" in text
+    assert "[engine=" not in text
+
+
+def test_the_typesafe_key_never_reaches_a_log_or_a_tick_report(isolated_home, monkeypatch):
+    """Even if a trace or rationale somehow carried the key, the log scrub redacts it in
+    every file the tick writes (`TYPESAFE_API_KEY` is a default secret env var)."""
+    monkeypatch.setenv("TYPESAFE_API_KEY", _ENGINE_SENTINEL_KEY)
+    escalate = Action(
+        kind=ActionKind.ESCALATE,
+        rule="4:incoming-fleet",
+        rationale=f"leaked {_ENGINE_SENTINEL_KEY}",
+        engine="jev",
+    )
+    _write_policy(engine={"kind": "jev"})
+    _patch_common(monkeypatch)
+    _patch_jev(monkeypatch, action=escalate, trace=_jev_trace(request_id=_ENGINE_SENTINEL_KEY))
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    from veydrift_agent.state import veydrift_home
+
+    written = "".join(p.read_text() for p in Path(veydrift_home()).rglob("*") if p.is_file())
+    assert log.read_proposals()  # something was written, so the check below is not vacuous
+    assert "REDACTED" in written
+    assert _ENGINE_SENTINEL_KEY not in written

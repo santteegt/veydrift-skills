@@ -1,0 +1,16 @@
+{
+  "description": "Metal is half an hour from its storage cap: the storage-overflow deadline decides, no model call.",
+  "snapshot": "planet_664.json",
+  "planet_patches": {
+    "664": {
+      "resources": {"metal": 9500, "crystal": 1000, "deuterium": 0},
+      "resources_as_of_now": {"metal": 9500, "crystal": 1000, "deuterium": 0},
+      "production_per_hour": {"metal": 1000, "crystal": 0, "deuterium": 0}
+    }
+  },
+  "policy_overrides": {},
+  "intent": "Grow the economy steadily.",
+  "responder": {"fit_keywords": {}, "default_fit": 0.5},
+  "acceptable": [{"rule_prefix": "5:"}],
+  "backend_not_called": true
+}

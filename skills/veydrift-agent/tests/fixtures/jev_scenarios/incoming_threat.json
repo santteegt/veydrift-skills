@@ -1,0 +1,21 @@
+{
+  "description": "A hostile fleet is inbound, escalation.on_incoming_fleet is off, defense is allowed: build defense.",
+  "snapshot": {"builder": "rich_one"},
+  "snapshot_patch": {
+    "incoming_fleets": [
+      {"mission_id": "9", "mission_type": 3, "mission_type_name": "Attack", "hostile": true}
+    ]
+  },
+  "policy_overrides": {
+    "escalation": {"on_incoming_fleet": false},
+    "strategy": {"defense_targets": [{"name": "Rocket Launcher", "count": 20}]}
+  },
+  "intent": "Grow the economy, but keep the planet safe from attack.",
+  "responder": {
+    "fit_keywords": {"Rocket Launcher": 0.85},
+    "default_fit": 0.3,
+    "urgency_by_group": {"fleet_defense": 0.95},
+    "threat": 0.9
+  },
+  "acceptable": [{"function": "startDefenseProduction", "entity_name": "Rocket Launcher"}]
+}
