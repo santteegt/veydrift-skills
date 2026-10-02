@@ -467,7 +467,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
 </section>
 
 <section class="chapter" id="j4" data-num="04" data-label="What the model sees">
-  <div class="chapter-head"><span class="chapter-num">04</span><h2 class="chapter-title">What the model sees, and what it never sees</h2></div>
+  <div class="chapter-head"><span class="chapter-num">04</span><h2 class="chapter-title">What the model sees</h2></div>
   <div class="split">
     <div class="panel good">
       <h4>Sent</h4>
@@ -554,8 +554,8 @@ defaults: fit 0.30 · urgency 0.25 · focus 0.15 · economy 0.25 · threat 0.05 
 </section>
 
 <section class="chapter" id="j6" data-num="06" data-label="Fallbacks">
-  <div class="chapter-head"><span class="chapter-num">06</span><h2 class="chapter-title">When the ladder decides instead</h2></div>
-  <p>Every path below returns exactly the action <code>plan_next_action</code> would have returned, with the reason in the trace. The engine is never the reason a tick fails.</p>
+  <div class="chapter-head"><span class="chapter-num">06</span><h2 class="chapter-title">Fallbacks</h2></div>
+  <p>A fallback is a tick where the ladder decides instead of jev. Every path below returns exactly the action <code>plan_next_action</code> would have returned, with the reason in the trace. The engine is never the reason a tick fails.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>fallback_reason</th><th>Meaning</th></tr></thead>
     <tbody>
@@ -652,7 +652,8 @@ vd doctor                            <span class="c-comment"># engine: jev · TY
 </section>
 
 <section class="chapter" id="j9" data-num="09" data-label="Safety">
-  <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">What does not change</h2></div>
+  <div class="chapter-head"><span class="chapter-num">09</span><h2 class="chapter-title">Safety</h2></div>
+  <p>Turning the engine on changes who chooses the action. It does not change what is allowed: every safeguard below works exactly as it does under the ladder.</p>
   <div class="callout note">
     <svg class="callout-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/></svg>
     <div><strong class="callout-title">The engine chooses; it does not authorise</strong><p>Every jev pick goes through the same 27 guard gates and the same wallet allowlist as a ladder pick. Tiers, <code>require_confirmation</code>, the killswitch and the CLI-level <code>--confirm</code> are untouched, and <code>veydrift-agent</code> still never signs anything.</p></div>
