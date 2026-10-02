@@ -172,6 +172,18 @@
       "additionalProperties": false,
       "description": "Settings for the `jev` decision engine. Read only when `engine.kind == \"jev\"`. The\nTypeSafe API key comes from the `TYPESAFE_API_KEY` environment variable, never from\nthis file, and the API base URL is a code constant, never configurable here.",
       "properties": {
+        "adaptive_intent": {
+          "default": false,
+          "title": "Adaptive Intent",
+          "type": "boolean"
+        },
+        "adaptive_intent_default_hours": {
+          "default": 6.0,
+          "exclusiveMinimum": 0,
+          "maximum": 72,
+          "title": "Adaptive Intent Default Hours",
+          "type": "number"
+        },
         "allow_hold": {
           "default": false,
           "title": "Allow Hold",

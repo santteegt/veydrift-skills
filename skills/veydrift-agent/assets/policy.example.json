@@ -57,7 +57,9 @@
       "payback_reference_hours": 24.0,
       "proactive_storage_hours": 24.0,
       "high_stakes_only_when_idle": true,
-      "allow_hold": false
+      "allow_hold": false,
+      "adaptive_intent": false,
+      "adaptive_intent_default_hours": 6.0
     }
   }
 }

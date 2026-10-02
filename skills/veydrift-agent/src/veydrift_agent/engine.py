@@ -19,6 +19,7 @@ import importlib.util
 import json
 import os
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -36,6 +37,7 @@ from veydrift_agent.models import (
     Resources,
     Snapshot,
 )
+from veydrift_agent.state import IntentOverride
 
 if TYPE_CHECKING:
     from veydrift_agent.jev import JevBackend
@@ -44,12 +46,36 @@ app = typer.Typer(no_args_is_help=True, help="Inspect and compare decision engin
 
 
 @dataclass(frozen=True)
+class EffectiveIntent:
+    """The strategy text the jev engine judges against this tick, and where it came from.
+
+    `source` is `"agent"` only for a live override; `override` is the stored override when one
+    was found (used or not). `note` says why a stored override was not used. `expired` tells the
+    tick to remove the file and log the expiry once."""
+
+    text: str
+    source: Literal["policy", "default", "agent"]
+    override: IntentOverride | None = None
+    note: str | None = None
+    expired: bool = False
+
+
+@dataclass(frozen=True)
 class EngineContext:
     """Tick-only inputs an engine may use as context. The ladder ignores them."""
 
     radar_report: RadarReport | None = None
     alliance_state: AllianceState | None = None
+    #: The resolved intent (`resolve_effective_intent`). `None` uses `policy.engine.jev.intent`.
+    intent: EffectiveIntent | None = None
 
+
+def resolve_effective_intent(policy: Policy, *, now: datetime) -> EffectiveIntent:
+    """Which intent this tick judges against: a live agent override (only while
+    `policy.engine.jev.adaptive_intent` is true, unexpired, and free of identifying text), else
+    the policy intent, else the built-in default. Never raises: an unreadable override file is
+    reported in `note` and ignored."""
+    raise NotImplementedError
 
 def decide(
     snapshot: Snapshot,

@@ -891,6 +891,35 @@ class JevWeights(PolicyBase):
         return self
 
 
+#: Longest lifetime an agent-set intent override may have, in hours.
+ADAPTIVE_INTENT_MAX_HOURS = 72
+
+_INTENT_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40,}")
+_INTENT_COORDINATES_RE = re.compile(r"\b\d+:\d+:\d+\b")
+
+
+def intent_text_problems(
+    text: str, *, wallet: str | None = None, signer: str | None = None, planet_ids: list[int] | tuple[int, ...] = ()
+) -> list[str]:
+    """Why `text` must not be sent to TypeSafe as a strategy intent; empty when it is fine. The
+    intent is the one free-text field that reaches the model verbatim, so it is held to the same
+    rule as the rest of the payload: no address, no coordinates, no wallet or signer, no raw
+    planet id. Applied to `policy.engine.jev.intent` at load and to every agent override."""
+    problems: list[str] = []
+    if _INTENT_ADDRESS_RE.search(text):
+        problems.append("contains an address")
+    if _INTENT_COORDINATES_RE.search(text):
+        problems.append("contains coordinates")
+    lowered = text.lower()
+    for label, value in (("wallet", wallet), ("signer", signer)):
+        if value and value.lower() in lowered:
+            problems.append(f"contains the {label} address")
+    for planet_id in planet_ids:
+        if re.search(rf"\b{planet_id}\b", text):
+            problems.append(f"contains planet id {planet_id}")
+    return problems
+
+
 class JevCfg(PolicyBase):
     """Settings for the `jev` decision engine. Read only when `engine.kind == "jev"`. The
     TypeSafe API key comes from the `TYPESAFE_API_KEY` environment variable, never from
@@ -926,6 +955,11 @@ class JevCfg(PolicyBase):
     high_stakes_only_when_idle: bool = True
     #: Let a confident "hold" judgment return a NOOP instead of the best candidate.
     allow_hold: bool = False
+    #: Let an agent set a standing, expiring override of `intent` (`vd engine intent set`), used by
+    #: every tick until it expires or is cleared. Off: any stored override is ignored.
+    adaptive_intent: bool = False
+    #: Lifetime of an override set without `--ttl`, in hours (at most `ADAPTIVE_INTENT_MAX_HOURS`).
+    adaptive_intent_default_hours: float = Field(6.0, gt=0, le=72)
 
 
 class EngineCfg(PolicyBase):
@@ -978,6 +1012,19 @@ class Policy(PolicyBase):
     def _signer_differs_from_wallet(self) -> Policy:
         if self.signer is not None and self.signer.lower() == self.wallet.lower():
             raise ValueError("signer equals wallet: omit signer to sign as the wallet itself")
+        return self
+
+    @model_validator(mode="after")
+    def _intent_carries_nothing_identifying(self) -> Policy:
+        problems = intent_text_problems(
+            self.engine.jev.intent, wallet=self.wallet, signer=self.signer, planet_ids=self.planets
+        )
+        if problems:
+            raise ValueError(
+                "engine.jev.intent is sent to TypeSafe and must not identify the account ("
+                + "; ".join(problems)
+                + "): describe the strategy without addresses, coordinates or planet ids"
+            )
         return self
 
 
@@ -1340,13 +1387,24 @@ class EngineTrace(Base):
     ladder_pick: dict[str, Any] | None = None
     agrees_with_ladder: bool | None = None
     winner_confidence: float | None = None
-    #: Winner composite minus the best composite of a different kind; `None` when every pool
-    #: entry is the winner's kind (the margin gate is skipped).
+    #: The winning group's best composite minus the best composite of any other group; `None`
+    #: when only one group is on offer (the group margin gate is skipped).
     margin: float | None = None
     focus_probabilities: dict[str, float] = Field(default_factory=dict)
     threat: float | None = None
     #: Top of the composite ranking, highest first, capped at 5.
     top: list[EngineJudgment] = Field(default_factory=list)
+    #: The strategy text the engine judged against this tick, and where it came from: the policy,
+    #: the built-in default, or an agent override (`vd engine intent set`).
+    intent: str | None = None
+    intent_source: Literal["policy", "default", "agent"] | None = None
+    #: For an agent override: the reason given, when it was set and when it expires.
+    intent_reason: str | None = None
+    intent_set_at: datetime | None = None
+    intent_expires_at: datetime | None = None
+    #: Why a stored override was not used, e.g. "override expired", "override ignored:
+    #: adaptive_intent is off", "override file unreadable", "override rejected: contains coordinates".
+    intent_note: str | None = None
 
 
 # --------------------------------------------------------------------------------------

@@ -392,6 +392,62 @@ def save_radar_state(state: RadarState) -> None:
 
 
 # --------------------------------------------------------------------------------------
+# Intent override -- the jev engine's adaptive intent (`vd engine intent set`). A standing,
+# expiring replacement for `policy.engine.jev.intent`, honoured by every tick only while
+# `policy.engine.jev.adaptive_intent` is true. Same local-model, atomic-write convention as
+# RadarState above.
+# --------------------------------------------------------------------------------------
+
+
+class IntentOverrideError(Exception):
+    """`intent-override.json` exists but cannot be read as an `IntentOverride`. Callers treat
+    this as "no usable override" (the policy intent applies), never as a tick failure."""
+
+
+class IntentOverride(_Base):
+    version: int = 1
+    intent: str = Field(max_length=1000)
+    reason: str = Field(max_length=280)
+    set_at: datetime
+    expires_at: datetime
+
+
+def intent_override_path() -> Path:
+    return veydrift_home() / "intent-override.json"
+
+
+def load_intent_override() -> IntentOverride | None:
+    """`None` when no override is stored. Raises `IntentOverrideError` for an unreadable or
+    invalid file rather than guessing at its content."""
+    path = intent_override_path()
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text()
+        if not raw.strip():
+            return None
+        return IntentOverride.model_validate(json.loads(raw))
+    except (OSError, ValueError) as exc:
+        raise IntentOverrideError(f"{path.name} is unreadable: {type(exc).__name__}") from exc
+
+
+def save_intent_override(override: IntentOverride) -> None:
+    path = intent_override_path()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(override.model_dump_json(indent=2))
+    tmp.replace(path)  # atomic on POSIX -- a tick never reads a half-written override
+
+
+def clear_intent_override() -> bool:
+    """Remove a stored override. Returns whether there was one."""
+    path = intent_override_path()
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
+
+
+# --------------------------------------------------------------------------------------
 # Tick lockfile — a plain PID-stamped advisory lock (POSIX `fcntl.flock`). No new
 # dependency: `filelock` is not in `pyproject.toml` (frozen) and stdlib `fcntl` already
 # does exactly this on the only platform this ships to (`docs.md`/CI both being macOS/
