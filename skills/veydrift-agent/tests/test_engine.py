@@ -228,6 +228,23 @@ def test_an_exception_inside_the_jev_engine_falls_back_to_the_ladder(monkeypatch
     assert "secret" not in trace.model_dump_json()
 
 
+def test_an_engine_error_fallback_still_records_the_effective_intent(monkeypatch):
+    def _boom(*a, **kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(jev_engine, "decide", _boom)
+    snapshot = load_snapshot("planet_664.json")
+    policy = jev_policy(planets=[664])
+
+    _action, plain = engine_mod.decide(snapshot, policy)
+    assert plain.intent_source in ("policy", "default") and plain.intent
+
+    agent = engine_mod.EffectiveIntent("Defenses first while under raid.", "agent")
+    _action, steered = engine_mod.decide(snapshot, policy, context=engine_mod.EngineContext(intent=agent))
+    assert (steered.intent, steered.intent_source) == ("Defenses first while under raid.", "agent")
+    assert steered.fallback_reason == "engine_error:RuntimeError"
+
+
 def test_killswitch_with_jev_halts_without_calling_the_jev_engine(monkeypatch):
     def _never(*a, **kw):
         raise AssertionError("the killswitch must never reach jev_engine")

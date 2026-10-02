@@ -129,6 +129,7 @@ from veydrift_agent.state import (
     PendingTx,
     TickLockedError,
     UnresolvedProposal,
+    clear_intent_override,
     load_agent_state,
     load_radar_state,
     policy_path,
@@ -2426,6 +2427,7 @@ def _proposal_lines(
     override_line: str | None = None,
     extra_lines: list[str] | None = None,
     engine_line: str | None = None,
+    intent_line: str | None = None,
 ) -> list[str]:
     verb = "EXECUTE" if executed else "PROPOSE"
     if action.kind in (ActionKind.NOOP, ActionKind.ESCALATE, ActionKind.HALT):
@@ -2434,6 +2436,8 @@ def _proposal_lines(
             lines.append(f"  {override_line}")
         if engine_line:
             lines.append(f"  {engine_line}")
+        if intent_line:
+            lines.append(f"  {intent_line}")
         return lines
     header = f"{verb:9s} {action.function}(planet={action.planet_id}, entity={action.entity_id})"
     lines = [header]
@@ -2441,6 +2445,8 @@ def _proposal_lines(
         lines.append(f"  {override_line}")
     if engine_line:
         lines.append(f"  {engine_line}")
+    if intent_line:
+        lines.append(f"  {intent_line}")
     if action.cost.metal or action.cost.crystal or action.cost.deuterium:
         lines.append(f"  cost:   M {action.cost.metal}  C {action.cost.crystal}  D {action.cost.deuterium}")
     lines.append(f"  why:    {action.rationale}")
@@ -2564,6 +2570,46 @@ def main(
         raise typer.Exit(code=0)
 
 
+def _resolve_tick_intent(policy_model: Policy, now: datetime) -> engine_mod.EffectiveIntent | None:
+    """`engine_mod.resolve_effective_intent` for a configured jev engine, plus the one-time
+    cleanup of an expired override. `None` under the ladder, which has no intent."""
+    if policy_model.engine.kind != "jev":
+        return None
+    effective = engine_mod.resolve_effective_intent(policy_model, now=now)
+    if effective.expired:
+        clear_intent_override()
+        stored = effective.override.intent if effective.override is not None else ""
+        back_to = "policy" if policy_model.engine.jev.intent.strip() else "default"
+        log.append_strategy(f'intent override expired: "{stored}" -- back to the {back_to} intent', now=now)
+    return effective
+
+
+_INTENT_LINE_TEXT_MAX = 80
+
+
+def _intent_line(trace: EngineTrace | None) -> str | None:
+    """The one report line for a non-routine intent: an agent override driving the pick, or a
+    stored override that was not used. `None` for a plain policy/default intent."""
+    if trace is None or trace.configured == "ladder":
+        return None
+    if trace.intent_source == "agent":
+        text = trace.intent or ""
+        if len(text) > _INTENT_LINE_TEXT_MAX:
+            text = text[: _INTENT_LINE_TEXT_MAX - 1].rstrip() + "…"
+        details: list[str] = []
+        if trace.intent_expires_at is not None:
+            expires = trace.intent_expires_at
+            expires = expires.replace(tzinfo=UTC) if expires.tzinfo is None else expires.astimezone(UTC)
+            details.append(f"until {expires.strftime('%Y-%m-%d %H:%M')} UTC")
+        if trace.intent_reason:
+            details.append(f"reason: {trace.intent_reason}")
+        suffix = f" ({'; '.join(details)})" if details else ""
+        return f'intent: agent -- "{text}"{suffix}'
+    if trace.intent_note:
+        return f"intent: {trace.intent_source or 'policy'} ({trace.intent_note})"
+    return None
+
+
 def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, override_action: Action | None = None) -> None:
     now = datetime.now(UTC)
     agent_state = load_agent_state()
@@ -2592,6 +2638,12 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
         guard_report = guard_mod.evaluate_guardrails(action, halted_snapshot, policy_model, agent_state, killswitch_active=True, now=now)
         _finish_tick(policy_model, agent_state, halted_snapshot, action, guard_report, None, executed=False, format=format, now=now)
         return
+
+    # The intent the jev engine judges against this tick (a live agent override only while
+    # `adaptive_intent` is on). Resolved here -- after the killswitch halt above, which must do no
+    # extra work -- and only for a configured jev engine. An expired override is removed now, so its
+    # expiry is logged exactly once.
+    effective_intent = _resolve_tick_intent(policy_model, now)
 
     # Step 3 (part 1) + Step 4: reconcile what we can before the snapshot, fetch it, then
     # finish reconciling against its indexed block (see _reconcile_pending's docstring).
@@ -2717,7 +2769,9 @@ def _run_tick(policy_model: Policy, effective_dry_run: bool, format: str, *, ove
     # `_describe_override` makes (recorded only when jev is configured, and outside the dedup
     # fingerprint like every engine block).
     engine_trace: EngineTrace | None = None
-    engine_context = engine_mod.EngineContext(radar_report=radar_report, alliance_state=alliance_state)
+    engine_context = engine_mod.EngineContext(
+        radar_report=radar_report, alliance_state=alliance_state, intent=effective_intent
+    )
     if override_action is not None:
         # A manual override never went through plan.py's _finalize (the planner's own
         # brief.attach call site) -- attach one here so an override's proposal report/
@@ -3428,6 +3482,7 @@ def _finish_tick(
             override_line=override_line,
             extra_lines=panel_extras,
             engine_line=f"engine: {engine_mod.describe_trace(engine_trace)}" if engine_trace is not None and engine_record is not None else None,
+            intent_line=_intent_line(engine_trace) if engine_record is not None else None,
         ),
         duplicate_of=duplicate_note,
         human_activity_line=human_activity_line,
@@ -3502,7 +3557,10 @@ def _finish_tick(
     non_passing = [(v.gate, v.status.value) for v in guard_report.verdicts if v.status is not GuardStatus.PASS]
     structural = guard_mod.is_structural_tier_block(non_passing)
     if (action.kind is ActionKind.ESCALATE or guard_report.decision is not Decision.ALLOW) and not structural and not is_duplicate:
-        engine_tag = " [engine=jev]" if action.engine == "jev" else ""
+        engine_tag = ""
+        if action.engine == "jev":
+            agent_intent = engine_trace is not None and engine_trace.intent_source == "agent"
+            engine_tag = " [engine=jev intent=agent]" if agent_intent else " [engine=jev]"
         log.append_strategy(
             f"tick {agent_state.tick_count}: {action.rule} -- {action.rationale} (guard={guard_report.decision.value}){engine_tag}",
             now=now,
@@ -3592,6 +3650,9 @@ def _print_readiness() -> None:
     human_activity_checked = len(activity_checks)
     human_activity_hits = sum(1 for p in activity_checks if (p.get("human_activity_check") or {}).get("items_found"))
 
+    jev_proposals = [p for p in proposals if p.get("engine")]
+    agent_intent_proposals = sum(1 for p in jev_proposals if (p.get("engine") or {}).get("intent_source") == "agent")
+
     lines = [
         f"tick_count:        {agent_state.tick_count}",
         f"uptime:            {uptime}",
@@ -3605,6 +3666,11 @@ def _print_readiness() -> None:
         f"gas_spent_wei:     {gas_spent}",
         f"structural_tier_blocks: {structural_tier_blocks} (the `tier` gate BLOCKing alone -- expected below "
         "the function's minimum tier, NOT promotion evidence; see references/guardrails.md)",
+        *(
+            [f"agent-intent proposals: {agent_intent_proposals} of {len(jev_proposals)} jev proposals"]
+            if jev_proposals
+            else []
+        ),
         "guardrails_fired (substantive -- excludes the structural tier blocks counted above):",
     ]
     if gate_fires:

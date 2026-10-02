@@ -172,8 +172,17 @@ def decide(
             backend=backend,
         )
     except Exception as exc:  # noqa: BLE001 -- the engine is never the reason a tick fails
+        try:
+            from veydrift_agent import jev_engine
+
+            intent_fields = jev_engine.intent_trace_fields(policy, context)
+        except Exception:  # noqa: BLE001 -- the import itself may be what failed
+            intent_fields = {}
         return _ladder(), EngineTrace(
-            engine="ladder", configured="jev", fallback_reason=f"engine_error:{type(exc).__name__}"
+            engine="ladder",
+            configured="jev",
+            fallback_reason=f"engine_error:{type(exc).__name__}",
+            **intent_fields,
         )
 
 

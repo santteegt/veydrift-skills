@@ -13,6 +13,7 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, get_args
 
@@ -53,6 +54,7 @@ from veydrift_agent.models import (
     Snapshot,
     StrategyCfg,
 )
+from veydrift_agent.state import IntentOverride
 
 SIGNER = "0x1111111111111111111111111111111111111111"
 SCENARIOS = Path(FIXTURES) / "jev_scenarios"
@@ -1422,3 +1424,242 @@ def test_the_kind_of_a_launch_carries_mission_origin_and_target_but_an_upgrade_d
     assert jev_engine._kind(a) == jev_engine._kind(a)
     mines = [scored(e) for e in pool_of(two_planet(), jev_policy()) if e.candidate.family == "mine" and e.candidate.action.entity_id == ids.Building.METAL_MINE]
     assert jev_engine._kind(mines[0]) == jev_engine._kind(mines[1])
+
+
+# --------------------------------------------------------------------------------------
+# Adaptive intent: the effective intent reaches the request and every trace.
+# --------------------------------------------------------------------------------------
+
+AGENT_TEXT = "Turtle: defenses first while raided, then research."
+SET_AT = datetime(2026, 10, 2, 8, 0, tzinfo=UTC)
+EXPIRES_AT = datetime(2026, 10, 2, 14, 0, tzinfo=UTC)
+INTENT_KEYS = ("intent", "intent_source", "intent_reason", "intent_set_at", "intent_expires_at", "intent_note")
+
+
+def agent_intent(text: str = AGENT_TEXT, reason: str = "3 raids today") -> engine_mod.EffectiveIntent:
+    override = IntentOverride(intent=text, reason=reason, set_at=SET_AT, expires_at=EXPIRES_AT)
+    return engine_mod.EffectiveIntent(text, "agent", override=override)
+
+
+def agent_context(text: str = AGENT_TEXT, reason: str = "3 raids today") -> EngineContext:
+    return EngineContext(intent=agent_intent(text, reason))
+
+
+def assert_agent_fields(trace: EngineTrace, text: str = AGENT_TEXT, reason: str = "3 raids today") -> None:
+    assert trace.intent == text
+    assert trace.intent_source == "agent"
+    assert trace.intent_reason == reason
+    assert trace.intent_set_at == SET_AT
+    assert trace.intent_expires_at == EXPIRES_AT
+    assert trace.intent_note is None
+
+
+def assert_policy_fields(trace: EngineTrace, text: str) -> None:
+    assert trace.intent == text
+    assert trace.intent_source == "policy"
+    assert (trace.intent_reason, trace.intent_set_at, trace.intent_expires_at, trace.intent_note) == (None, None, None, None)
+
+
+def test_build_request_uses_the_agent_intent_text_and_source():
+    snapshot = one_planet()
+    policy = jev_policy(intent="Boom the economy.")
+    pool = pool_of(snapshot, policy)
+    state, _ = jev_engine.build_request(snapshot, policy, pool, agent_context())
+    assert state["strategy_intent"] == AGENT_TEXT
+    assert state["intent_source"] == "agent"
+    # nothing else in the request depends on the intent
+    plain, _ = jev_engine.build_request(snapshot, policy, pool)
+    assert {k: v for k, v in state.items() if k not in ("strategy_intent", "intent_source")} == {
+        k: v for k, v in plain.items() if k not in ("strategy_intent", "intent_source")
+    }
+
+
+def test_build_request_without_a_context_intent_is_unchanged():
+    snapshot = one_planet()
+    policy = jev_policy(intent="Boom the economy.")
+    pool = pool_of(snapshot, policy)
+    for context in (None, EngineContext(), EngineContext(intent=None)):
+        state, _ = jev_engine.build_request(snapshot, policy, pool, context)
+        assert (state["strategy_intent"], state["intent_source"]) == ("Boom the economy.", "policy")
+    empty = jev_policy(intent="")
+    state, _ = jev_engine.build_request(snapshot, empty, pool_of(snapshot, empty), EngineContext())
+    assert (state["strategy_intent"], state["intent_source"]) == (jev_engine.DEFAULT_INTENT, "default")
+
+
+def test_a_context_intent_of_policy_or_default_source_is_sent_as_given():
+    snapshot, policy = one_planet(), jev_policy(intent="Boom the economy.")
+    pool = pool_of(snapshot, policy)
+    for source in ("policy", "default"):
+        context = EngineContext(intent=engine_mod.EffectiveIntent("Whatever.", source, note="override expired"))
+        state, _ = jev_engine.build_request(snapshot, policy, pool, context)
+        assert (state["strategy_intent"], state["intent_source"]) == ("Whatever.", source)
+
+
+def test_the_payload_stays_clean_with_an_agent_intent():
+    snapshot = two_planet().model_copy(update={"wallet": WALLET})
+    policy = make_policy(
+        signer=SIGNER,
+        strategy=rich_strategy(),
+        engine=EngineCfg(kind="jev", jev=JevCfg(high_stakes_only_when_idle=False, max_candidates=60)),
+    )
+    pool = pool_of(snapshot, policy, **target_kwargs())
+    context = EngineContext(intent=agent_intent("Save for a colony ship; keep defenses topped up."))
+    state, questions = jev_engine.build_request(snapshot, policy, pool, context)
+    blob = json.dumps(state) + json.dumps({qid: asdict(q) for qid, q in questions.items()})
+
+    assert "Save for a colony ship" in blob
+    assert WALLET.lower() not in blob.lower()
+    assert SIGNER.lower() not in blob.lower()
+    assert not re.search(r"0x[0-9a-fA-F]{40}", blob)
+    assert not re.search(r"\d+:\d+:\d+", blob)
+    for planet in snapshot.planets:
+        assert not re.search(rf"\b{planet.planet_id}\b", blob)
+    # the reason and the set/expiry times are trace-only: they never reach the model
+    assert "raids" not in blob and "2026-10-02" not in blob
+
+
+def test_the_agent_intent_is_what_the_backend_receives():
+    snapshot, policy = one_planet(), jev_policy(intent="Boom the economy.")
+    backend = FakeBackend(scripted())
+    run(snapshot, policy, backend, context=agent_context())
+    state = backend.calls[0][0]
+    assert state["strategy_intent"] == AGENT_TEXT and state["intent_source"] == "agent"
+
+
+def test_every_trace_carries_the_policy_or_default_intent_when_no_context_intent_is_given():
+    snapshot, policy = one_planet(), jev_policy(intent="  Boom the economy. ")
+    _, success = run(snapshot, policy, FakeBackend(scripted()))
+    assert_policy_fields(success, "Boom the economy.")
+    _, default = run(snapshot, jev_policy(), FakeBackend(scripted()))
+    assert (default.intent, default.intent_source) == (jev_engine.DEFAULT_INTENT, "default")
+
+
+def test_a_note_with_no_override_reaches_the_trace():
+    snapshot, policy = one_planet(), jev_policy(intent="Boom the economy.")
+    context = EngineContext(intent=engine_mod.EffectiveIntent("Boom the economy.", "policy", note="override expired", expired=True))
+    _, trace = run(snapshot, policy, FakeBackend(scripted()), context=context)
+    assert trace.intent == "Boom the economy." and trace.intent_source == "policy"
+    assert trace.intent_note == "override expired"
+    assert (trace.intent_reason, trace.intent_set_at, trace.intent_expires_at) == (None, None, None)
+
+
+@pytest.mark.parametrize(("name", "make", "prefix"), _veto_cases(), ids=[c[0] for c in _veto_cases()])
+def test_a_pre_empted_trace_carries_the_intent(name, make, prefix):
+    snapshot, kwargs = make()
+    _, trace = run(snapshot, jev_policy(), FakeBackend(), context=agent_context(), **kwargs)
+    assert trace.pre_empted_by is not None
+    assert_agent_fields(trace)
+    _, plain = run(snapshot, jev_policy(intent="Boom."), FakeBackend(), **kwargs)
+    assert_policy_fields(plain, "Boom.")
+
+
+@pytest.mark.parametrize("reason", get_args(jev.JevErrorReason))
+def test_every_jev_error_fallback_carries_the_intent(reason):
+    snapshot, policy = two_planet(), jev_policy()
+    _, trace = run(snapshot, policy, FakeBackend(error=JevError(reason)), context=agent_context())
+    assert trace.fallback_reason == reason
+    assert_agent_fields(trace)
+
+
+def test_the_backend_construction_failure_fallback_carries_the_intent(monkeypatch):
+    def no_key(cfg):
+        raise JevError("missing_key")
+
+    monkeypatch.setattr(jev, "default_backend", no_key)
+    _, trace = jev_engine.decide(two_planet(), jev_policy(), context=agent_context())
+    assert trace.fallback_reason == "missing_key"
+    assert_agent_fields(trace)
+
+
+def test_an_empty_pool_fallback_carries_the_intent():
+    policy = make_policy(
+        actions=ActionsCfg(
+            allow_building=False,
+            allow_research=False,
+            allow_defense=False,
+            allow_ships=False,
+            allow_fleet_noncombat=False,
+            allow_combat=False,
+        ),
+        engine=EngineCfg(kind="jev"),
+    )
+    _, trace = run(one_planet(), policy, FakeBackend(), context=agent_context())
+    assert trace.fallback_reason == "empty_pool"
+    assert_agent_fields(trace)
+
+
+def test_a_malformed_answer_fallback_carries_the_intent():
+    snapshot, policy = one_planet(), jev_policy()
+
+    def drop_a_score(state, questions):
+        answers = scripted()(state, questions)
+        scores = {k: v for k, v in answers.scores.items() if k != "fit_c0"}
+        return JevAnswers(choices=answers.choices, scores=scores, nouls=answers.nouls)
+
+    _, trace = run(snapshot, policy, FakeBackend(drop_a_score), context=agent_context())
+    assert trace.fallback_reason == "malformed"
+    assert_agent_fields(trace)
+
+
+def test_low_confidence_and_low_margin_fallbacks_carry_the_intent():
+    snapshot, policy = one_planet(), jev_policy()
+    _, low = run(snapshot, policy, FakeBackend(scripted(fit_conf=0.1, focus_conf=0.1)), context=agent_context())
+    assert low.fallback_reason == "low_confidence"
+    assert_agent_fields(low)
+
+    snapshot, policy = two_planet(), jev_policy(min_margin=0.9)
+    _, margin = run(snapshot, policy, FakeBackend(scripted()), context=agent_context())
+    assert margin.fallback_reason == "low_margin"
+    assert_agent_fields(margin)
+
+
+def test_a_high_stakes_fallback_carries_the_intent():
+    snapshot, policy = only_high_stakes_setup()
+    _, trace = run(snapshot, policy, FakeBackend(endorsing(fit=0.0)), context=agent_context(), **target_kwargs())
+    assert trace.fallback_reason == "high_stakes_not_endorsed"
+    assert_agent_fields(trace)
+
+    snapshot, policy = only_high_stakes_setup(allow_hold=False)
+    _, hold = run(snapshot, policy, FakeBackend(endorsing(focus="hold")), context=agent_context(), **target_kwargs())
+    assert hold.fallback_reason == "high_stakes_hold"
+    assert_agent_fields(hold)
+
+
+def test_a_hold_trace_carries_the_intent():
+    snapshot, policy = one_planet(), jev_policy(allow_hold=True)
+    action, trace = run(snapshot, policy, FakeBackend(hold_answers(0.8)), context=agent_context())
+    assert action.rule == jev_engine.HOLD_RULE
+    assert_agent_fields(trace)
+
+
+def test_a_success_trace_carries_the_intent():
+    snapshot, policy = one_planet(), jev_policy()
+    action, trace = run(snapshot, policy, FakeBackend(scripted()), context=agent_context())
+    assert trace.engine == "jev" and action.engine == "jev"
+    assert_agent_fields(trace)
+
+
+def test_an_endorsed_high_stakes_pick_is_decided_identically_under_a_policy_and_an_agent_intent():
+    text = "Expand: claim a new colony as soon as it is safe."
+    snapshot, by_policy = only_high_stakes_setup(intent=text)
+    _, by_agent = only_high_stakes_setup()
+    assert by_agent.engine.jev.intent == "" and by_policy.engine.jev.intent == text
+
+    policy_action, policy_trace = run(snapshot, by_policy, FakeBackend(endorsing()), **target_kwargs())
+    agent_action, agent_trace = run(snapshot, by_agent, FakeBackend(endorsing()), context=agent_context(text), **target_kwargs())
+
+    assert policy_trace.engine == "jev" and policy_action.rule == "8d:colonize"
+    assert agent_action.model_dump() == policy_action.model_dump()
+
+    def without_intent(trace: EngineTrace) -> dict[str, Any]:
+        return {k: v for k, v in trace.model_dump().items() if k not in INTENT_KEYS}
+
+    assert without_intent(agent_trace) == without_intent(policy_trace)
+    assert (policy_trace.intent, policy_trace.intent_source) == (text, "policy")
+    assert (agent_trace.intent, agent_trace.intent_source) == (text, "agent")
+
+    # ... and the same gate refuses the same unendorsed pick under both
+    weak = endorsing(fit=0.0)
+    _, p_weak = run(snapshot, by_policy, FakeBackend(weak), **target_kwargs())
+    _, a_weak = run(snapshot, by_agent, FakeBackend(weak), context=agent_context(text), **target_kwargs())
+    assert p_weak.fallback_reason == a_weak.fallback_reason == "high_stakes_not_endorsed"

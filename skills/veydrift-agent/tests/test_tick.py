@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -5667,3 +5667,349 @@ def test_the_typesafe_key_never_reaches_a_log_or_a_tick_report(isolated_home, mo
     assert log.read_proposals()  # something was written, so the check below is not vacuous
     assert "REDACTED" in written
     assert _ENGINE_SENTINEL_KEY not in written
+
+
+# --------------------------------------------------------------------------------------
+# Adaptive intent (`policy.engine.jev.adaptive_intent`): the tick resolves the effective
+# intent, hands it to the engine through `EngineContext.intent`, cleans up an expired
+# override, and reports a non-routine intent. `jev_engine.decide` stays canned; the helper
+# below stamps the intent fields onto its trace with the real `intent_trace_fields`, so these
+# tests pin the tick's own wiring and what it does with a trace that carries an intent.
+# --------------------------------------------------------------------------------------
+
+_AGENT_INTENT = "Turtle: defenses first while raided"
+_AGENT_REASON = "3 raids today"
+
+
+def _write_adaptive_policy(*, adaptive: bool = True, intent: str = "", **overrides):
+    jev_cfg = {"adaptive_intent": adaptive, "intent": intent}
+    return _write_policy(engine={"kind": "jev", "jev": jev_cfg}, **overrides)
+
+
+def _store_override(*, text: str = _AGENT_INTENT, reason: str = _AGENT_REASON, hours: float = 5.0, **times):
+    from veydrift_agent.state import IntentOverride, save_intent_override
+
+    now = datetime.now(UTC)
+    override = IntentOverride(
+        intent=text,
+        reason=reason,
+        set_at=times.get("set_at", now - timedelta(hours=1)),
+        expires_at=times.get("expires_at", now + timedelta(hours=hours)),
+    )
+    save_intent_override(override)
+    return override
+
+
+def _patch_jev_with_intent(monkeypatch, action=None, trace=None):
+    """`_patch_jev`, except the canned trace carries the intent the tick handed over."""
+    calls: list[dict] = []
+
+    def _fake(snapshot, policy, **kwargs):
+        calls.append(kwargs)
+        stamped = (trace or _jev_trace()).model_copy(update=jev_engine.intent_trace_fields(policy, kwargs.get("context")))
+        return (action or _jev_build_action(), stamped)
+
+    monkeypatch.setattr(jev_engine, "decide", _fake)
+    return calls
+
+
+def _strategy_text() -> str:
+    return log.strategy_path().read_text() if log.strategy_path().exists() else ""
+
+
+def test_a_live_override_reaches_the_engine_the_record_and_the_panel(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path
+
+    _write_adaptive_policy(intent="Boom the economy.")
+    override = _store_override()
+    _patch_common(monkeypatch)
+    calls = _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    context = calls[0]["context"]
+    assert context.intent.source == "agent" and context.intent.text == _AGENT_INTENT
+    engine = log.read_proposals()[0]["engine"]
+    assert engine["intent"] == _AGENT_INTENT
+    assert engine["intent_source"] == "agent"
+    assert engine["intent_reason"] == _AGENT_REASON
+    assert engine["intent_note"] is None
+    assert datetime.fromisoformat(engine["intent_expires_at"]) == override.expires_at
+    flat = _flat_output(result.output)
+    until = override.expires_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M")
+    assert f'intent: agent -- "{_AGENT_INTENT}" (until {until} UTC; reason: {_AGENT_REASON})' in flat
+    assert flat.count("intent: agent") == 1
+    assert intent_override_path().exists()  # a live override is read, never consumed
+
+
+def test_a_long_override_text_is_truncated_in_the_panel_line(isolated_home, monkeypatch):
+    _write_adaptive_policy()
+    long_text = ("Defend " + "the home planets and keep every shield topped up " * 6).strip()
+    _store_override(text=long_text)
+    _patch_common(monkeypatch)
+    _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    expected = long_text[: tick._INTENT_LINE_TEXT_MAX - 1].rstrip() + "…"
+    assert len(expected) <= tick._INTENT_LINE_TEXT_MAX
+    assert f'intent: agent -- "{expected}"' in _flat_output(result.output)
+    assert long_text not in _flat_output(result.output)
+    assert log.read_proposals()[0]["engine"]["intent"] == long_text  # the record keeps the full text
+
+
+def test_a_policy_or_default_intent_prints_no_intent_line_and_no_override_fields(isolated_home, monkeypatch):
+    _write_adaptive_policy(intent="Boom the economy.")  # flag on, nothing stored
+    _patch_common(monkeypatch)
+    _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "intent:" not in _flat_output(result.output)
+    engine = log.read_proposals()[0]["engine"]
+    assert (engine["intent"], engine["intent_source"]) == ("Boom the economy.", "policy")
+    assert (engine["intent_reason"], engine["intent_set_at"], engine["intent_expires_at"], engine["intent_note"]) == (None,) * 4
+
+
+def test_the_strategy_narration_tag_names_an_agent_intent(isolated_home, monkeypatch):
+    # an address mismatch is a substantive BLOCK, so the tick narrates it to strategy.md
+    _write_adaptive_policy()
+    _store_override()
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={"0x000000000000000000000000000000000000dead"}, unsigned_tx=tx)
+    _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    narration = [ln for ln in _strategy_text().splitlines() if "tick 1:" in ln]
+    assert len(narration) == 1 and narration[0].endswith("[engine=jev intent=agent]")
+
+
+def test_the_strategy_narration_tag_is_unchanged_for_a_policy_intent(isolated_home, monkeypatch):
+    _write_adaptive_policy()  # nothing stored
+    tx = UnsignedTx(to=_LIVE_ADDR, data="0x165715e3" + "00" * 32, gas=None)
+    _patch_common(monkeypatch, live_addresses={"0x000000000000000000000000000000000000dead"}, unsigned_tx=tx)
+    _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    narration = [ln for ln in _strategy_text().splitlines() if "tick 1:" in ln]
+    assert len(narration) == 1 and narration[0].endswith("[engine=jev]") and "intent=agent" not in narration[0]
+
+
+def test_two_ticks_differing_only_in_override_text_with_the_same_pick_are_deduped(isolated_home, monkeypatch):
+    _write_adaptive_policy()
+    _store_override(text="Turtle: defenses first while raided")
+    _patch_common(monkeypatch)
+    _patch_jev_with_intent(monkeypatch)
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+    assert r1.exit_code == 0, r1.output
+    assert log.read_proposals()[0]["engine"]["intent"] == "Turtle: defenses first while raided"
+
+    _store_override(text="Expand: save for a colony ship", reason="new target")
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+
+    assert r2.exit_code == 0, r2.output
+    assert "duplicate" in r2.output.lower()
+    assert load_agent_state().tick_count == 1
+    assert len(log.read_proposals()) == 1
+
+
+def test_the_intent_fields_are_outside_the_dedup_fingerprint():
+    base = {"rule": "6:building-queue-empty", "engine": {"intent": "a", "intent_source": "agent", "intent_reason": "x"}}
+    other = {"rule": "6:building-queue-empty", "engine": {"intent": "b", "intent_source": "policy", "intent_note": "y"}}
+    assert tick._fingerprint_proposal(base) == tick._fingerprint_proposal(other)
+
+
+def test_an_expired_override_is_deleted_and_logged_exactly_once(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path
+
+    _write_adaptive_policy(intent="Boom the economy.")
+    now = datetime.now(UTC)
+    _store_override(set_at=now - timedelta(hours=7), expires_at=now - timedelta(minutes=1))
+    assert intent_override_path().exists()
+    _patch_common(monkeypatch)
+    calls = _patch_jev_with_intent(monkeypatch)
+
+    r1 = runner.invoke(tick.app, ["--dry-run"])
+
+    assert r1.exit_code == 0, r1.output
+    assert not intent_override_path().exists()
+    lines = [ln for ln in _strategy_text().splitlines() if "intent override expired" in ln]
+    assert len(lines) == 1
+    assert f'"{_AGENT_INTENT}"' in lines[0] and lines[0].endswith("back to the policy intent")
+    # the expiring tick itself already judged against the policy intent, and says why
+    assert calls[0]["context"].intent.source == "policy" and calls[0]["context"].intent.expired
+    engine = log.read_proposals()[0]["engine"]
+    assert (engine["intent"], engine["intent_source"], engine["intent_note"]) == ("Boom the economy.", "policy", "override expired")
+    assert "intent: policy (override expired)" in _flat_output(r1.output)
+
+    r2 = runner.invoke(tick.app, ["--dry-run"])
+
+    assert r2.exit_code == 0, r2.output
+    assert len([ln for ln in _strategy_text().splitlines() if "intent override expired" in ln]) == 1
+    assert "intent:" not in _flat_output(r2.output)
+
+
+def test_an_expired_override_falls_back_to_the_default_when_the_policy_has_no_intent(isolated_home, monkeypatch):
+    _write_adaptive_policy(intent="")
+    now = datetime.now(UTC)
+    _store_override(set_at=now - timedelta(hours=7), expires_at=now - timedelta(minutes=1))
+    _patch_common(monkeypatch)
+    _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    lines = [ln for ln in _strategy_text().splitlines() if "intent override expired" in ln]
+    assert len(lines) == 1 and lines[0].endswith("back to the default intent")
+    assert log.read_proposals()[0]["engine"]["intent_source"] == "default"
+
+
+def test_with_the_flag_off_a_stored_override_is_ignored_noted_and_kept(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path
+
+    _write_adaptive_policy(adaptive=False, intent="Boom the economy.")
+    _store_override()
+    _patch_common(monkeypatch)
+    calls = _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["context"].intent.source == "policy"
+    engine = log.read_proposals()[0]["engine"]
+    assert (engine["intent"], engine["intent_source"]) == ("Boom the economy.", "policy")
+    assert engine["intent_note"] == "override ignored: adaptive_intent is off"
+    assert "intent: policy (override ignored: adaptive_intent is off)" in _flat_output(result.output)
+    assert intent_override_path().exists()
+    assert "intent override expired" not in _strategy_text()
+
+
+def test_an_unreadable_override_file_is_noted_and_never_fails_the_tick(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path
+
+    _write_adaptive_policy(intent="Boom the economy.")
+    intent_override_path().write_text("{ not json")
+    _patch_common(monkeypatch)
+    _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    engine = log.read_proposals()[0]["engine"]
+    assert (engine["intent_source"], engine["intent_note"]) == ("policy", "override file unreadable")
+    assert "intent: policy (override file unreadable)" in _flat_output(result.output)
+    assert intent_override_path().exists()
+
+
+def test_a_ladder_policy_never_resolves_or_touches_an_override(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path
+
+    _write_policy()  # engine.kind is "ladder"
+    now = datetime.now(UTC)
+    _store_override(set_at=now - timedelta(hours=7), expires_at=now - timedelta(minutes=1))
+    _patch_common(monkeypatch)
+
+    def _never(*a, **kw):
+        raise AssertionError("a ladder tick must not resolve an intent")
+
+    monkeypatch.setattr(tick.engine_mod, "resolve_effective_intent", _never)
+    monkeypatch.setattr(jev_engine, "decide", _never)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    record = log.read_proposals()[0]
+    assert record["engine"] is None
+    assert "intent" not in _flat_output(result.output).replace("intent_", "")
+    assert intent_override_path().exists()  # not even an expired one is cleaned up
+    assert "intent override expired" not in _strategy_text()
+
+
+@respx.mock
+def test_the_killswitch_path_never_resolves_the_intent(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path, killswitch_path
+
+    _write_adaptive_policy()
+    now = datetime.now(UTC)
+    _store_override(set_at=now - timedelta(hours=7), expires_at=now - timedelta(minutes=1))
+    killswitch_path().touch()
+    respx.get(f"{BASE}/health").mock(return_value=httpx.Response(200, json={"ok": True, "readiness": {"ready": True}}))
+
+    def _boom(*a, **kw):
+        raise AssertionError("the killswitch path must not resolve an intent")
+
+    monkeypatch.setattr(tick.engine_mod, "resolve_effective_intent", _boom)
+    monkeypatch.setattr(jev_engine, "decide", _boom)
+    monkeypatch.setattr(tick, "_fetch_snapshot", _boom)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    record = log.read_proposals()[0]
+    assert record["kind"] == "halt" and record["engine"] is None
+    assert intent_override_path().exists()  # the halted tick did no cleanup
+    assert "intent override expired" not in _strategy_text()
+
+
+def test_a_default_ladder_tick_prints_no_intent_line(isolated_home, monkeypatch):
+    _write_policy()
+    _patch_common(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "intent:" not in _flat_output(result.output)
+    assert log.read_proposals()[0]["engine"] is None
+
+
+def test_intent_line_formats():
+    line = tick._intent_line
+    assert line(None) is None
+    assert line(EngineTrace(engine="ladder", configured="ladder")) is None
+    plain = EngineTrace(engine="jev", configured="jev", intent="Boom.", intent_source="policy")
+    assert line(plain) is None
+    noted = EngineTrace(engine="jev", configured="jev", intent="Boom.", intent_source="default", intent_note="override expired")
+    assert line(noted) == "intent: default (override expired)"
+    bare_agent = EngineTrace(engine="jev", configured="jev", intent="Defend.", intent_source="agent")
+    assert line(bare_agent) == 'intent: agent -- "Defend."'
+    naive = EngineTrace(
+        engine="jev",
+        configured="jev",
+        intent="Defend.",
+        intent_source="agent",
+        intent_reason="raids",
+        intent_expires_at=datetime(2026, 10, 2, 14, 0),  # noqa: DTZ001 -- a naive stamp is read as UTC
+    )
+    assert line(naive) == 'intent: agent -- "Defend." (until 2026-10-02 14:00 UTC; reason: raids)'
+
+
+def test_readiness_counts_agent_intent_proposals(isolated_home):
+    _write_policy()
+    log.log_proposal({"guard_verdicts": [], "engine": {"configured": "jev", "intent_source": "agent"}})
+    log.log_proposal({"guard_verdicts": [], "engine": {"configured": "jev", "intent_source": "policy"}})
+    log.log_proposal({"guard_verdicts": [], "engine": {"configured": "jev"}})  # recorded before intents existed
+    log.log_proposal({"guard_verdicts": [], "engine": None})  # a ladder proposal
+
+    result = runner.invoke(tick.app, ["--readiness"])
+
+    assert result.exit_code == 0, result.output
+    assert "agent-intent proposals: 1 of 3 jev proposals" in result.output
+    assert "proposals:         4" in result.output
+    assert "guardrails_fired (substantive" in result.output
+
+
+def test_readiness_shows_no_agent_intent_line_without_any_engine_block(isolated_home):
+    _write_policy()
+    log.log_proposal({"guard_verdicts": [], "engine": None})
+
+    result = runner.invoke(tick.app, ["--readiness"])
+
+    assert result.exit_code == 0, result.output
+    assert "agent-intent" not in result.output

@@ -545,10 +545,15 @@ def build_request(
     cfg = policy.engine.jev
     target_planets = plan_mod._target_planets(snapshot, policy)
     labels = _labels(target_planets)
-    intent = cfg.intent.strip()
+    if context is not None and context.intent is not None:
+        intent_text, intent_source = context.intent.text, context.intent.source
+    else:
+        policy_intent = cfg.intent.strip()
+        intent_text = policy_intent or DEFAULT_INTENT
+        intent_source = "policy" if policy_intent else "default"
     state: dict[str, Any] = {
-        "strategy_intent": intent or DEFAULT_INTENT,
-        "intent_source": "policy" if intent else "default",
+        "strategy_intent": intent_text,
+        "intent_source": intent_source,
         "situation": _situation(snapshot, policy, target_planets, labels, context),
         "candidates": [_candidate_entry(i, e, snapshot, policy, labels) for i, e in enumerate(pool)],
     }
@@ -833,6 +838,28 @@ def _ladder_pick(action: Action) -> dict[str, Any]:
     }
 
 
+def intent_trace_fields(policy: Policy, context: EngineContext | None) -> dict[str, Any]:
+    """The `EngineTrace` intent fields for this tick: the effective intent (`context.intent`,
+    else the policy intent or the default), plus the override's metadata when one is attached
+    and why a stored override was not used. Mirrors `build_request`'s choice of text/source."""
+    effective = context.intent if context is not None else None
+    if effective is None:
+        policy_intent = policy.engine.jev.intent.strip()
+        return {
+            "intent": policy_intent or DEFAULT_INTENT,
+            "intent_source": "policy" if policy_intent else "default",
+        }
+    fields: dict[str, Any] = {"intent": effective.text, "intent_source": effective.source}
+    override = effective.override
+    if override is not None:
+        fields["intent_reason"] = override.reason
+        fields["intent_set_at"] = override.set_at
+        fields["intent_expires_at"] = override.expires_at
+    if effective.note is not None:
+        fields["intent_note"] = effective.note
+    return fields
+
+
 def decide(
     snapshot: Snapshot,
     policy: Policy,
@@ -851,6 +878,7 @@ def decide(
     """Decide one `Action` with the jev engine. Never raises for a TypeSafe failure (that is
     a ladder fallback); `engine.decide` additionally catches anything unexpected."""
     cfg = policy.engine.jev
+    intent_fields = intent_trace_fields(policy, context)
 
     # Vetoes and the storage deadline decide first, with no model call. `plan_next_action`
     # would return the very same action (it runs the same two helpers first).
@@ -862,11 +890,11 @@ def decide(
         resolvable_mission_ids=resolvable_mission_ids,
     )
     if vetoed is not None:
-        return vetoed, EngineTrace(engine="ladder", configured="jev", pre_empted_by=vetoed.rule)
+        return vetoed, EngineTrace(engine="ladder", configured="jev", pre_empted_by=vetoed.rule, **intent_fields)
     target_planets = plan_mod._target_planets(snapshot, policy)
     deadline = plan_mod.deadline_action(snapshot, policy, target_planets)
     if deadline is not None:
-        return deadline, EngineTrace(engine="ladder", configured="jev", pre_empted_by=deadline.rule)
+        return deadline, EngineTrace(engine="ladder", configured="jev", pre_empted_by=deadline.rule, **intent_fields)
 
     target_kwargs: dict[str, Any] = {
         "own_planet_debris": own_planet_debris,
@@ -900,6 +928,7 @@ def decide(
         "pool_size": len(pool),
         "rejected": dict(rejected),
         "ladder_pick": _ladder_pick(ladder_action),
+        **intent_fields,
     }
 
     def fall_back(reason: str, **extra: Any) -> tuple[Action, EngineTrace]:
