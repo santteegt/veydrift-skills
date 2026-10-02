@@ -5,6 +5,7 @@ load time, and the shipped example policy stays valid."""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -108,8 +109,13 @@ WALLET = "0x224aba5d489675a7bd3ce07786fada466b46fa0f"
 SIGNER = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
 
 
-def _problems(text: str, **kwargs):
+def _raw_problems(text: str, **kwargs):
     return intent_text_problems(text, **kwargs)
+
+
+def _problems(text: str, **kwargs):
+    """The problems without their quoted snippet, so a test reads the kind of problem only."""
+    return [re.sub(r' \("[^"]*"\)$', "", p) for p in intent_text_problems(text, **kwargs)]
 
 
 @pytest.mark.parametrize(
@@ -143,8 +149,9 @@ def test_the_wallet_and_signer_are_flagged_case_insensitively():
     assert "contains the wallet address" in _problems(f"keep {WALLET[:20]}{WALLET[20:].upper()}", wallet=WALLET)
 
 
-def test_a_partial_wallet_is_not_a_wallet_match():
-    assert _problems(f"Keep {WALLET[:12]} funded", wallet=WALLET) == []
+def test_a_short_partial_wallet_is_not_a_wallet_match():
+    assert _problems(f"Keep {WALLET[:8]} funded", wallet=WALLET) == []  # six hex digits: far too short to mean it
+    assert _problems("Keep 224aba5 funded", wallet=WALLET) == []  # seven
 
 
 def test_a_wallet_that_is_not_given_is_not_checked_by_name():
@@ -169,14 +176,145 @@ def test_problems_accumulate():
     problems = _problems(f"At 7:291:1 near planet 664, wallet {WALLET}", wallet=WALLET, planet_ids=[664])
     assert problems == [
         "contains an address",
-        "contains coordinates",
         "contains the wallet address",
+        "contains coordinates",
         "contains planet id 664",
     ]
 
 
-def _example_with_intent(intent: str, **top) -> dict:
+# ---- matching hardening: every realistic bypass the judge found is caught ----------------
+
+W = "0x4e15e6643964f1a3d3a5af82d7683b9a30553aa1"  # a real-looking address, not a secret
+S = "0x1111111111111111111111111111111111111111"
+KNOWN = {"wallet": W, "signer": S, "planet_ids": [664], "coordinates": ["7:181:14"]}
+
+
+@pytest.mark.parametrize(
+    ("label", "text"),
+    [
+        ("plain address", "send to 0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"),
+        ("0X prefix", "send to 0XABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD"),
+        ("unprefixed 40 hex", "send to abcdefabcdefabcdefabcdefabcdefabcdefabcd"),
+        ("unprefixed 64 hex", "ref " + "ab" * 32),
+        ("wallet upper case", W.upper().replace("0X", "0x")),
+        ("wallet split by a space", W[:20] + " " + W[20:]),
+        ("wallet split by a zero-width joiner", W[:20] + "\u200d" + W[20:]),
+        ("wallet split by a zero-width space", W[:20] + "\u200b" + W[20:]),
+        ("wallet tail", "our wallet ending 30553aa1"),
+        ("wallet head", "our wallet starting 4e15e664"),
+        ("wallet fullwidth 0x", "\uff10\uff58" + W[2:]),
+        ("signer", S),
+        ("coordinates", "defend 7:181:14"),
+        ("coordinates spaced", "defend 7 : 181 : 14"),
+        ("coordinates fullwidth colon", "defend 7\uff1a181\uff1a14"),
+        ("coordinates fullwidth digits", "defend \uff17:\uff11\uff18\uff11:\uff11\uff14"),
+        ("coordinates slash", "defend 7/181/14"),
+        ("coordinates dash", "defend 7-181-14"),
+        ("coordinates dot", "defend 7.181.14"),
+        ("coordinates words", "defend galaxy 7 system 181 position 14"),
+        ("coordinates G S P", "defend G7 S181 P14"),
+        ("coordinates brackets", "defend [7:181:14]"),
+        ("some other coordinates", "defend 3:44:5"),
+        ("planet", "planet 664 first"),
+        ("planet hash", "planet #664 first"),
+        ("planet p", "p664 first"),
+        ("planet glued", "planet664 first"),
+        ("planet comma", "planet 6,64"),
+        ("planet underscore", "planet 6_64"),
+        ("planet leading zero", "planet 0664"),
+        ("planet fullwidth", "planet \uff16\uff16\uff14"),
+        ("planet arabic-indic digits", "planet \u0666\u0666\u0664"),
+        ("planet zero-width space", "planet 6\u200b64"),
+        ("planet in a list", "planets 664,999"),
+    ],
+)
+def test_every_realistic_bypass_is_caught(label, text):
+    assert _raw_problems(text, **KNOWN), label
+
+
+def test_two_part_coordinates_are_not_a_leak():
+    # "7:181" names a galaxy and a system, not a planet; documented as a deliberate gap.
+    assert _raw_problems("defend 7:181", **KNOWN) == []
+
+
+def test_deliberately_not_caught():
+    # Spelled-out numbers cannot be told from prose without a language model; accepted.
+    assert _raw_problems("planet six hundred sixty-four first", **KNOWN) == []
+    # A wallet both split by spaces and cut below eight hex digits is indistinguishable from prose.
+    assert _raw_problems("ends 3055 3aa1", **KNOWN) == []
+    # A 4-digit planet id spelled in words, or coordinates in prose without all three numbers.
+    assert _raw_problems("the home world in galaxy seven", **KNOWN) == []
+
+
+def test_a_generic_three_part_number_is_flagged_as_coordinates():
+    assert _problems("keep a 3:2:1 metal:crystal:deuterium ratio", **KNOWN) == ["contains coordinates"]
+    assert _problems("be aggressive after 14:00:00 UTC", **KNOWN) == ["contains coordinates"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Reach 16640 points and level 1664.",
+        "Keep 66 and 4 spare; aim for 6640.",
+        "Version 1:2 of the plan, 3 raids, 20:30 cutoff.",
+        "A quick 0xdeadbeef note.",  # an 8-digit hex word that is not part of the wallet
+        "Prefer defended, decaded, accede and deface-style words.",
+    ],
+)
+def test_ordinary_prose_with_nearby_numbers_is_not_flagged(text):
+    assert _raw_problems(text, **KNOWN) == []
+
+
+def test_a_known_coordinate_in_prose_is_flagged_even_when_it_is_a_coincidence():
+    # The separator-agnostic match cannot tell "7 mines, 181 energy, 14 ships" from a leak; it
+    # errs toward substituting the intent for a tick, which costs nothing.
+    assert _problems("Plan for 7 mines, then 181 energy, then 14 ships.", **KNOWN) == ["contains coordinates"]
+    # ...but only the account's own coordinates, and only with nothing numeric in between.
+    assert _raw_problems("Plan for 8 mines, then 181 energy, then 14 ships.", **KNOWN) == []
+    assert _raw_problems("Plan for 7 mines, 3 labs, then 181 energy and 14 ships.", **KNOWN) == []
+
+
+def test_each_problem_quotes_what_matched():
+    assert _raw_problems("defend G7 S181 P14", **KNOWN) == ['contains coordinates ("7 S181 P14")']
+    assert _raw_problems("defend 7:181:14", **KNOWN) == ['contains coordinates ("7:181:14")']
+    assert _raw_problems("go p664 first", **KNOWN) == ['contains planet id 664 ("p664")']
+    assert _raw_problems("ending 30553aa1", **KNOWN) == ['contains part of the wallet address ("30553aa1")']
+    (problem,) = _raw_problems("to 0x" + "ab" * 20)
+    assert problem == 'contains an address ("0x' + "ab" * 20 + '")'
+
+
+def test_a_long_snippet_is_truncated_in_the_message():
+    (problem,) = _raw_problems("ref " + "ab" * 60)
+    assert len(problem) < 100 and problem.endswith('\u2026")')
+
+
+def test_matching_is_fast_on_a_maximal_intent():
+    import time
+
+    text = ("3 " * 400)[:1000]
+    many = list(range(1000, 1600))
+    start = time.perf_counter()
+    intent_text_problems(text, wallet=W, signer=S, planet_ids=many, coordinates=[f"{i}:{i}:{i}" for i in range(300)])
+    assert time.perf_counter() - start < 0.5
+
+
+def test_a_ladder_policy_with_identifying_looking_intent_text_still_loads():
+    for text in ("Keep a 3:2:1 ratio", "Switch to raids after 14:00:00 UTC.", "Keep 664 deuterium spare."):
+        policy = Policy.model_validate(_example_with_intent(text, kind="ladder", planets=[664]))
+        assert policy.engine.jev.intent == text
+
+
+def test_the_same_intent_under_jev_fails_to_load_naming_the_snippet():
+    with pytest.raises(ValidationError) as excinfo:
+        Policy.model_validate(_example_with_intent("Keep a 3:2:1 ratio", kind="jev"))
+    message = str(excinfo.value)
+    assert '("3:2:1")' in message
+    assert "sent to TypeSafe" in message
+
+
+def _example_with_intent(intent: str, *, kind: str = "jev", **top) -> dict:
     raw = json.loads(EXAMPLE.read_text())
+    raw["engine"]["kind"] = kind
     raw["engine"]["jev"]["intent"] = intent
     raw.update(top)
     return raw

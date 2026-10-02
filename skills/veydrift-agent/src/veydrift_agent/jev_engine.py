@@ -18,6 +18,7 @@ hours-to-cap, defense posture), the state stays small, and each question is narr
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import re
 from dataclasses import dataclass
@@ -860,6 +861,74 @@ def intent_trace_fields(policy: Policy, context: EngineContext | None) -> dict[s
     return fields
 
 
+def _known_identifiers(snapshot: Snapshot, target_kwargs: dict[str, Any]) -> tuple[list[int], list[str]]:
+    """Every planet id and `"g:s:p"` coordinate this tick knows of: the account's planets (whatever
+    `policy.planets` says) and every target the planner was handed. The send-time intent check
+    holds the intent text against all of them."""
+    planet_ids: list[int] = [p.planet_id for p in snapshot.planets]
+    coordinates: list[str] = [p.coordinates for p in snapshot.planets if p.coordinates]
+    for key in ("own_planet_debris", "foreign_debris_targets", "attack_targets", "missile_targets"):
+        targets = target_kwargs.get(key) or {}
+        planet_ids.extend(targets)
+        for value in targets.values():
+            if isinstance(value, tuple) and value and isinstance(value[0], str):
+                coordinates.append(value[0])
+    for entry in target_kwargs.get("colonize_targets") or ():
+        if entry and isinstance(entry[0], str):
+            coordinates.append(entry[0])
+    return planet_ids, coordinates
+
+
+def sendable_context(
+    snapshot: Snapshot,
+    policy: Policy,
+    context: EngineContext | None,
+    target_kwargs: dict[str, Any],
+) -> tuple[EngineContext | None, dict[str, Any]]:
+    """The single choke point before any request leaves the machine: re-check the effective
+    intent text against the real account (`policy.wallet`/`signer`, every planet id and
+    coordinate in the snapshot and the targets), which the tick-time resolver could not see.
+
+    Returns `(context, trace_fields)`. When the text is clean that is `context` itself and no
+    fields. Otherwise the text is replaced -- an agent override by the policy intent (when that
+    passes the same check), else the built-in default; a policy intent by the default -- and
+    `trace_fields` carries the text actually sent plus a note saying why. Never raises."""
+    from veydrift_agent.engine import EffectiveIntent, EngineContext
+    from veydrift_agent.models import intent_text_problems
+
+    cfg = policy.engine.jev
+    effective = context.intent if context is not None else None
+    if effective is None:
+        policy_text = cfg.intent.strip()
+        effective = EffectiveIntent(policy_text or DEFAULT_INTENT, "policy" if policy_text else "default")
+    if effective.source == "default":
+        return context, {}
+    planet_ids, coordinates = _known_identifiers(snapshot, target_kwargs)
+
+    def check(text: str) -> list[str]:
+        return intent_text_problems(
+            text, wallet=policy.wallet, signer=policy.signer, planet_ids=planet_ids, coordinates=coordinates
+        )
+
+    problems = check(effective.text)
+    if not problems:
+        return context, {}
+    what = "override" if effective.source == "agent" else "policy intent"
+    note = f"{what} rejected at send time: " + "; ".join(problems)
+    if effective.note:
+        note += f"; {effective.note}"
+    policy_text = cfg.intent.strip()
+    if effective.source == "agent" and policy_text and not check(policy_text):
+        replacement = EffectiveIntent(policy_text, "policy", override=effective.override, note=note)
+    else:
+        replacement = EffectiveIntent(DEFAULT_INTENT, "default", override=effective.override, note=note)
+    if context is None:
+        new_context = EngineContext(intent=replacement)
+    else:
+        new_context = dataclasses.replace(context, intent=replacement)
+    return new_context, intent_trace_fields(policy, new_context)
+
+
 def decide(
     snapshot: Snapshot,
     policy: Policy,
@@ -936,6 +1005,17 @@ def decide(
 
     if not pool:
         return fall_back("empty_pool")
+
+    # Everything below this point may leave the machine: hold the intent against the real account.
+    try:
+        context, intent_override_fields = sendable_context(snapshot, policy, context, target_kwargs)
+    except Exception:  # noqa: BLE001 -- a check that cannot run must not send an unchecked override
+        from veydrift_agent.engine import EffectiveIntent, EngineContext
+
+        failed = EffectiveIntent(DEFAULT_INTENT, "default", note="intent check failed: built-in default used")
+        context = dataclasses.replace(context, intent=failed) if context is not None else EngineContext(intent=failed)
+        intent_override_fields = intent_trace_fields(policy, context)
+    fields.update(intent_override_fields)
 
     try:
         backend = backend or jev_mod.default_backend(cfg)

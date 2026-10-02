@@ -78,7 +78,7 @@ def resolve_effective_intent(policy: Policy, *, now: datetime) -> EffectiveInten
     the policy intent, else the built-in default. Never raises: an unreadable override file is
     reported in `note` and ignored."""
     from veydrift_agent.jev_engine import DEFAULT_INTENT
-    from veydrift_agent.models import intent_text_problems
+    from veydrift_agent.models import ADAPTIVE_INTENT_MAX_HOURS, intent_text_problems
     from veydrift_agent.state import IntentOverrideError, load_intent_override
 
     cfg = policy.engine.jev
@@ -97,10 +97,24 @@ def resolve_effective_intent(policy: Policy, *, now: datetime) -> EffectiveInten
         return standing("override file unreadable")
     if override is None:
         return standing()
-    if not cfg.adaptive_intent:
-        return standing("override ignored: adaptive_intent is off", override)
+    # Order matters: an expired override is cleaned up (and logged) even when the flag is off.
+    # Lifetime and version are enforced here, not trusted from the file: it may be hand-edited.
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
     if now >= override.expires_at:
         return standing("override expired", override, expired=True)
+    if not cfg.adaptive_intent:
+        return standing("override ignored: adaptive_intent is off", override)
+    if override.version != 1:
+        return standing("override rejected: unsupported version", override)
+    longest = timedelta(hours=ADAPTIVE_INTENT_MAX_HOURS)
+    if (
+        override.expires_at <= override.set_at
+        or override.expires_at - override.set_at > longest
+        or override.expires_at - now > longest
+        or override.set_at > now + timedelta(minutes=5)
+    ):
+        return standing("override rejected: lifetime", override)
     problems = intent_text_problems(override.intent, wallet=policy.wallet, signer=policy.signer, planet_ids=policy.planets)
     if problems:
         return standing("override rejected: " + "; ".join(problems), override)
@@ -108,6 +122,7 @@ def resolve_effective_intent(policy: Policy, *, now: datetime) -> EffectiveInten
     if not text:
         return standing("override rejected: empty", override)
     return EffectiveIntent(text, "agent", override=override)
+
 
 def decide(
     snapshot: Snapshot,
@@ -486,13 +501,18 @@ def intent_set(
     log.append_strategy(f'intent override set until {override.expires_at.isoformat()}: "{text}" -- {reason}', now=now)
 
     warnings: list[str] = []
+    if policy is not None and policy.resolve() != state.policy_path().resolve():
+        warnings.append(
+            f"ticks read {state.policy_path()}, not {policy}: the override was validated against {policy.name} "
+            "but is judged against the policy a tick loads"
+        )
     if policy_model.engine.kind != "jev":
         warnings.append('policy.engine.kind is not "jev": this override has no effect until the jev engine is enabled')
     if json_output:
         typer.echo(json.dumps({**_override_json(override), "replaced": replaced, "warnings": warnings}, indent=2))
         return
     for warning in warnings:
-        console.print(f"[yellow]warning: {escape(warning)}[/yellow]")
+        console.print(f"[yellow]warning: {escape(warning)}[/yellow]", highlight=False, soft_wrap=True)
     verb = "replaced" if replaced else "set"
     console.print(
         f"[green]intent override {verb}[/green] until {override.expires_at.isoformat()}\n"

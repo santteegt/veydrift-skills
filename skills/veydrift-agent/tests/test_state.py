@@ -461,6 +461,97 @@ def test_clear_intent_override_removes_an_unreadable_file(isolated_home):
     assert state.load_intent_override() is None
 
 
+def test_a_pathologically_nested_file_is_unreadable_not_a_crash(isolated_home):
+    state.intent_override_path().write_text("[" * 200_000 + "]" * 200_000)  # RecursionError in json
+    with pytest.raises(state.IntentOverrideError):
+        state.load_intent_override()
+
+
+def test_a_directory_where_the_file_should_be_is_unreadable(isolated_home):
+    state.intent_override_path().mkdir()
+    with pytest.raises(state.IntentOverrideError):
+        state.load_intent_override()
+
+
+def test_save_uses_a_unique_temp_file_in_the_same_directory(isolated_home, monkeypatch):
+    seen: list[str] = []
+    real = state.os.replace
+
+    def spy(src, dst):
+        seen.append(str(src))
+        return real(src, dst)
+
+    monkeypatch.setattr(state.os, "replace", spy)
+    state.save_intent_override(_override())
+    state.save_intent_override(_override(intent="Again."))
+    assert len(set(seen)) == 2  # never the same temp name twice
+    assert all(src.startswith(str(isolated_home)) for src in seen)
+    assert not [p for p in isolated_home.iterdir() if p.name != "intent-override.json"]
+
+
+def test_a_failed_save_leaves_no_temp_file_and_keeps_the_old_override(isolated_home, monkeypatch):
+    state.save_intent_override(_override(intent="Old."))
+
+    def boom(src, dst):
+        raise OSError("disk says no")
+
+    real = state.os.replace
+    monkeypatch.setattr(state.os, "replace", boom)
+    with pytest.raises(OSError, match="disk says no"):
+        state.save_intent_override(_override(intent="New."))
+    monkeypatch.setattr(state.os, "replace", real)
+    assert [p.name for p in isolated_home.iterdir()] == ["intent-override.json"]
+    loaded = state.load_intent_override()
+    assert loaded is not None and loaded.intent == "Old."
+
+
+def test_clear_with_expected_removes_only_that_override(isolated_home):
+    old = _override(intent="Old.")
+    state.save_intent_override(old)
+    assert state.clear_intent_override(old) is True
+    assert not state.intent_override_path().exists()
+    assert [p.name for p in isolated_home.iterdir()] == []  # no claim file left behind
+
+
+@pytest.mark.parametrize("field", ["intent", "set_at", "expires_at"])
+def test_clear_with_expected_keeps_an_override_that_differs_in_any_compared_field(isolated_home, field):
+    from datetime import timedelta
+
+    old = _override()
+    changed = {"intent": "Fresh.", "set_at": old.set_at + timedelta(hours=1), "expires_at": old.expires_at + timedelta(hours=1)}
+    fresh = _override(**{field: changed[field]})
+    state.save_intent_override(fresh)
+    assert state.clear_intent_override(old) is False
+    assert state.load_intent_override() == fresh
+    assert [p.name for p in isolated_home.iterdir()] == ["intent-override.json"]
+
+
+def test_clear_with_expected_never_raises_for_a_missing_file(isolated_home):
+    assert state.clear_intent_override(_override()) is False
+
+
+def test_clear_with_expected_keeps_an_unreadable_file(isolated_home):
+    state.intent_override_path().write_text("{not json")
+    assert state.clear_intent_override(_override()) is False
+    assert state.intent_override_path().read_text() == "{not json"
+
+
+def test_clear_with_expected_does_not_clobber_a_newer_file_that_appears_during_the_claim(isolated_home, monkeypatch):
+    # A newer override lands while the claimed (different) file is being put back: the newer one wins.
+    old, newer = _override(intent="Old."), _override(intent="Newer.")
+    state.save_intent_override(old)
+    real_link = state.os.link
+
+    def racing_link(src, dst):
+        state.save_intent_override(newer)
+        return real_link(src, dst)  # now raises FileExistsError
+
+    monkeypatch.setattr(state.os, "link", racing_link)
+    assert state.clear_intent_override(_override(intent="Not the stored one.")) is False
+    monkeypatch.setattr(state.os, "link", real_link)
+    assert state.load_intent_override() == newer
+
+
 # --------------------------------------------------------------------------------------
 # Tick lockfile
 # --------------------------------------------------------------------------------------

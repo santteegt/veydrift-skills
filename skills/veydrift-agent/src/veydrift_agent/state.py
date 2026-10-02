@@ -27,6 +27,8 @@ import errno
 import json
 import os
 import sys
+import tempfile
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -420,33 +422,86 @@ def intent_override_path() -> Path:
 
 def load_intent_override() -> IntentOverride | None:
     """`None` when no override is stored. Raises `IntentOverrideError` for an unreadable or
-    invalid file rather than guessing at its content."""
+    invalid file rather than guessing at its content. Any failure counts as unreadable --
+    including a pathological file (deep nesting raises `RecursionError`) -- so a bad file can
+    never fail a tick."""
     path = intent_override_path()
-    if not path.exists():
-        return None
     try:
+        if not path.exists():
+            return None
         raw = path.read_text()
         if not raw.strip():
             return None
         return IntentOverride.model_validate(json.loads(raw))
-    except (OSError, ValueError) as exc:
+    except Exception as exc:  # any failure at all, see the docstring
         raise IntentOverrideError(f"{path.name} is unreadable: {type(exc).__name__}") from exc
 
 
 def save_intent_override(override: IntentOverride) -> None:
     path = intent_override_path()
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(override.model_dump_json(indent=2))
-    tmp.replace(path)  # atomic on POSIX -- a tick never reads a half-written override
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A unique temp file in the same directory: two writers never share a temp name, and the
+    # final `os.replace` is atomic on POSIX -- a tick never reads a half-written override.
+    with tempfile.NamedTemporaryFile(
+        "w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+    ) as handle:
+        tmp = Path(handle.name)
+        try:
+            handle.write(override.model_dump_json(indent=2))
+            handle.flush()
+        except BaseException:
+            handle.close()
+            tmp.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
-def clear_intent_override() -> bool:
-    """Remove a stored override. Returns whether there was one."""
+def _same_override(a: IntentOverride, b: IntentOverride) -> bool:
+    return a.intent == b.intent and a.set_at == b.set_at and a.expires_at == b.expires_at
+
+
+def clear_intent_override(expected: IntentOverride | None = None) -> bool:
+    """Remove a stored override. Returns whether this call removed one; never raises for a
+    missing file.
+
+    With `expected`, only an override still equal to it (intent, `set_at`, `expires_at`) is
+    removed -- the tick's expiry cleanup, which must not delete a fresh override a concurrent
+    `vd engine intent set` wrote after the tick read the expired one. The file is first moved
+    aside (an atomic claim), compared, and put back when it is not `expected` (unless a newer
+    file has meanwhile appeared, which wins)."""
     path = intent_override_path()
-    if not path.exists():
+    if expected is None:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+    claim = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.claim")
+    try:
+        os.rename(path, claim)
+    except FileNotFoundError:
         return False
-    path.unlink()
-    return True
+    try:
+        try:
+            current: IntentOverride | None = IntentOverride.model_validate(json.loads(claim.read_text()))
+        except Exception:  # noqa: BLE001 -- an unreadable file is not `expected`
+            current = None
+        if current is not None and _same_override(current, expected):
+            return True
+        try:
+            os.link(claim, path)
+        except FileExistsError:
+            pass  # a newer override landed meanwhile: it stays, ours is dropped
+        except OSError:
+            if not path.exists():
+                os.replace(claim, path)
+        return False
+    finally:
+        claim.unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------------------------

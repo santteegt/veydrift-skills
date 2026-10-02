@@ -1663,3 +1663,130 @@ def test_an_endorsed_high_stakes_pick_is_decided_identically_under_a_policy_and_
     _, p_weak = run(snapshot, by_policy, FakeBackend(weak), **target_kwargs())
     _, a_weak = run(snapshot, by_agent, FakeBackend(weak), context=agent_context(text), **target_kwargs())
     assert p_weak.fallback_reason == a_weak.fallback_reason == "high_stakes_not_endorsed"
+
+
+# --------------------------------------------------------------------------------------
+# Send-time intent check: the one choke point before a request leaves the machine. The text
+# is held against the real account -- every snapshot planet id and coordinate, every target --
+# which the tick-time resolver could not see.
+# --------------------------------------------------------------------------------------
+
+
+def sent_to_backend(snapshot, policy, context=None, **kwargs):
+    backend = FakeBackend(scripted())
+    _, trace = run(snapshot, policy, backend, context=context, **kwargs)
+    assert backend.calls, "the engine never reached the backend"
+    return backend.calls[0][0], trace
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Defend planet 664 first.",
+        "Defend p664 first.",
+        "Hold the home world at 7/181/14.",
+        "Hold the home world at 7 : 181 : 14.",
+        "Hold galaxy 7 system 181 position 14.",
+        "Hold G7 S181 P14.",
+        "Our wallet ends 224aba5d.",
+        "Planet ٦٦٤ first.",
+    ],
+)
+def test_an_agent_override_that_names_the_account_is_replaced_before_the_backend_call(text):
+    snapshot, policy = one_planet(), jev_policy(intent="Boom the economy.")
+    state, trace = sent_to_backend(snapshot, policy, agent_context(text))
+    assert (state["strategy_intent"], state["intent_source"]) == ("Boom the economy.", "policy")
+    assert (trace.intent, trace.intent_source) == ("Boom the economy.", "policy")
+    assert trace.intent_note.startswith("override rejected at send time: contains ")
+    # the override that was rejected stays attached, as for every other rejection
+    assert (trace.intent_reason, trace.intent_set_at, trace.intent_expires_at) == ("3 raids today", SET_AT, EXPIRES_AT)
+
+
+def test_a_rejected_override_falls_back_to_the_default_when_the_policy_has_no_intent():
+    state, trace = sent_to_backend(one_planet(), jev_policy(), agent_context("Defend planet 664 first."))
+    assert (state["strategy_intent"], state["intent_source"]) == (jev_engine.DEFAULT_INTENT, "default")
+    assert (trace.intent, trace.intent_source) == (jev_engine.DEFAULT_INTENT, "default")
+    assert 'contains planet id 664 ("664")' in trace.intent_note
+
+
+def test_a_rejected_override_falls_back_to_the_default_when_the_policy_intent_is_bad_too():
+    policy = jev_policy(intent="Protect planet 664.")  # loads: planets == [] so 664 is unknown at load
+    state, trace = sent_to_backend(one_planet(), policy, agent_context("Defend planet 664 first."))
+    assert (state["strategy_intent"], state["intent_source"]) == (jev_engine.DEFAULT_INTENT, "default")
+    assert trace.intent_note.startswith("override rejected at send time")
+
+
+def test_a_policy_intent_naming_a_snapshot_planet_is_replaced_by_the_default():
+    policy = jev_policy(intent="Protect planet 664.")
+    state, trace = sent_to_backend(one_planet(), policy)  # no context at all
+    assert (state["strategy_intent"], state["intent_source"]) == (jev_engine.DEFAULT_INTENT, "default")
+    assert (trace.intent, trace.intent_source) == (jev_engine.DEFAULT_INTENT, "default")
+    assert trace.intent_note.startswith("policy intent rejected at send time: contains planet id 664")
+
+    # the same text arriving as a resolved policy-source context
+    ctx = EngineContext(intent=engine_mod.EffectiveIntent("Protect planet 664.", "policy"))
+    state, trace = sent_to_backend(one_planet(), policy, ctx)
+    assert state["intent_source"] == "default" and trace.intent_note.startswith("policy intent rejected")
+
+
+def test_an_earlier_note_is_kept_after_the_send_time_note():
+    ctx = EngineContext(intent=engine_mod.EffectiveIntent("Protect planet 664.", "policy", note="override expired"))
+    _, trace = sent_to_backend(one_planet(), jev_policy(intent="Protect planet 664."), ctx)
+    assert trace.intent_note.startswith("policy intent rejected at send time")
+    assert trace.intent_note.endswith("; override expired")
+
+
+def test_clean_text_passes_through_untouched():
+    snapshot, policy = one_planet(), jev_policy(intent="Boom the economy.")
+    state, trace = sent_to_backend(snapshot, policy, agent_context())
+    assert (state["strategy_intent"], state["intent_source"]) == (AGENT_TEXT, "agent")
+    assert_agent_fields(trace)
+
+
+def test_target_planet_ids_and_coordinates_are_checked_too():
+    from veydrift_agent.models import Resources
+
+    kwargs = {
+        "attack_targets": {90210: ("3:44:5", Resources(metal=1), True)},
+        "foreign_debris_targets": {4242: ("2:9:9", Resources(metal=1))},
+        "colonize_targets": [("5:6:7", 10_000)],
+    }
+    for text in ("Raid planet 90210.", "Harvest planet 4242.", "Hit 3/44/5 hard.", "Settle at 5 6 7 soon.", "Take 2-9-9."):
+        state, trace = sent_to_backend(one_planet(), jev_policy(intent="Boom the economy."), agent_context(text), **kwargs)
+        assert state["intent_source"] == "policy", text
+        assert "send time" in trace.intent_note, text
+
+
+def test_the_rejection_text_reaches_nothing_but_the_local_trace():
+    state, trace = sent_to_backend(one_planet(), jev_policy(), agent_context("Defend planet 664 first."))
+    assert "664" not in json.dumps(state)  # the note quoting it never goes anywhere near the request
+    assert "664" in trace.intent_note
+
+
+def test_a_failing_check_sends_the_default_and_never_raises(monkeypatch):
+    from veydrift_agent import models
+
+    def broken(*a, **kw):
+        raise RuntimeError("boom")
+
+    policy = jev_policy(intent="Boom.")
+    monkeypatch.setattr(models, "intent_text_problems", broken)
+    state, trace = sent_to_backend(one_planet(), policy, agent_context())
+    assert (state["strategy_intent"], state["intent_source"]) == (jev_engine.DEFAULT_INTENT, "default")
+    assert trace.intent_note == "intent check failed: built-in default used"
+
+
+def test_a_pre_empted_trace_keeps_its_intent_fields_and_sends_nothing():
+    backend = FakeBackend(scripted())
+    _, trace = run(one_planet(), jev_policy(), backend, context=agent_context("Defend planet 664 first."), pending_tx_unreconciled=True)
+    assert trace.pre_empted_by and backend.calls == []
+    assert (trace.intent, trace.intent_source) == ("Defend planet 664 first.", "agent")
+    assert trace.intent_note is None  # nothing was sent, so nothing was substituted
+
+
+def test_build_request_alone_does_not_substitute():
+    # `vd engine pool` prints this request and sends nothing; substitution is `decide`'s job.
+    policy = jev_policy(intent="Boom the economy.")
+    snapshot = one_planet()
+    state, _ = jev_engine.build_request(snapshot, policy, pool_of(snapshot, policy), agent_context("Defend planet 664 first."))
+    assert state["strategy_intent"] == "Defend planet 664 first."

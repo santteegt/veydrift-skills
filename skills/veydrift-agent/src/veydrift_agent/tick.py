@@ -2576,11 +2576,13 @@ def _resolve_tick_intent(policy_model: Policy, now: datetime) -> engine_mod.Effe
     if policy_model.engine.kind != "jev":
         return None
     effective = engine_mod.resolve_effective_intent(policy_model, now=now)
-    if effective.expired:
-        clear_intent_override()
-        stored = effective.override.intent if effective.override is not None else ""
+    # Only the very override this tick read is removed: a fresh one a concurrent `vd engine intent
+    # set` wrote since stays, and a file that already vanished is not logged as expired twice.
+    if effective.expired and effective.override is not None and clear_intent_override(effective.override):
         back_to = "policy" if policy_model.engine.jev.intent.strip() else "default"
-        log.append_strategy(f'intent override expired: "{stored}" -- back to the {back_to} intent', now=now)
+        log.append_strategy(
+            f'intent override expired: "{effective.override.intent}" -- back to the {back_to} intent', now=now
+        )
     return effective
 
 

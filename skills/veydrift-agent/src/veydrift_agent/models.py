@@ -16,6 +16,8 @@ Conventions
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Iterable
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
@@ -894,29 +896,106 @@ class JevWeights(PolicyBase):
 #: Longest lifetime an agent-set intent override may have, in hours.
 ADAPTIVE_INTENT_MAX_HOURS = 72
 
-_INTENT_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40,}")
-_INTENT_COORDINATES_RE = re.compile(r"\b\d+:\d+:\d+\b")
+_INTENT_ADDRESS_RE = re.compile(r"0x[0-9a-f]{40,}|(?<![0-9a-f])[0-9a-f]{40,}(?![0-9a-f])", re.IGNORECASE)
+_INTENT_HEX_TOKEN_RE = re.compile(r"[0-9a-f]{8,}", re.IGNORECASE)
+_INTENT_COORDINATES_RE = re.compile(r"(?<!\d)\d+\s*:\s*\d+\s*:\s*\d+(?!\d)")
+#: A number with the letters/`#` stuck to its front (`p664`, `#664`) and `6,64` / `6_64` digit groups.
+_INTENT_NUMBER_RE = re.compile(r"(?P<pre>[^\W\d_]*#?)(?P<num>\d+(?:[,_]\d+)*)")
+_SNIPPET_MAX = 48
+
+
+def _normalise_intent_text(text: str) -> str:
+    """NFKC (fullwidth digits/colons/`0x` become ASCII), then drop invisible format characters
+    (zero-width space/joiner, bidi marks) and map every other Unicode decimal digit to ASCII, so
+    the matchers below see what a reader would."""
+    out: list[str] = []
+    for ch in unicodedata.normalize("NFKC", text):
+        category = unicodedata.category(ch)
+        if category == "Cf":
+            continue
+        out.append(str(unicodedata.decimal(ch)) if category == "Nd" else ch)
+    return "".join(out)
+
+
+def _quoted(snippet: str) -> str:
+    snippet = " ".join(snippet.split())
+    if len(snippet) > _SNIPPET_MAX:
+        snippet = snippet[: _SNIPPET_MAX - 1] + "\u2026"
+    return f' ("{snippet}")'
 
 
 def intent_text_problems(
-    text: str, *, wallet: str | None = None, signer: str | None = None, planet_ids: list[int] | tuple[int, ...] = ()
+    text: str,
+    *,
+    wallet: str | None = None,
+    signer: str | None = None,
+    planet_ids: Iterable[int] = (),
+    coordinates: Iterable[str] = (),
 ) -> list[str]:
     """Why `text` must not be sent to TypeSafe as a strategy intent; empty when it is fine. The
     intent is the one free-text field that reaches the model verbatim, so it is held to the same
     rule as the rest of the payload: no address, no coordinates, no wallet or signer, no raw
-    planet id. Applied to `policy.engine.jev.intent` at load and to every agent override."""
+    planet id. Applied to `policy.engine.jev.intent` (while the jev engine is configured), to
+    every agent override, and -- with the live planet ids and `"g:s:p"` coordinates -- to the
+    text actually sent, at send time.
+
+    Matching is on a normalised copy (NFKC, invisible characters dropped, every Unicode digit as
+    ASCII, case-folded). It is a filter for realistic leaks, not a proof: spelled-out numbers
+    ("six hundred sixty-four"), a wallet split by spaces *and* shortened, or coordinates in
+    prose without all three numbers are not caught. Each problem quotes what matched."""
     problems: list[str] = []
-    if _INTENT_ADDRESS_RE.search(text):
-        problems.append("contains an address")
-    if _INTENT_COORDINATES_RE.search(text):
-        problems.append("contains coordinates")
-    lowered = text.lower()
+    norm = _normalise_intent_text(text)
+
+    # Addresses: any 0x-prefixed or bare run of 40+ hex digits.
+    match = _INTENT_ADDRESS_RE.search(norm)
+    if match:
+        problems.append("contains an address" + _quoted(match.group(0)))
+
+    # The account's own addresses, even split by spaces/invisible characters, or shortened to
+    # eight or more hex digits ("ending 30553aa1").
+    hex_only = re.sub(r"[^0-9a-f]", "", norm.lower())
+    tokens = [t.lower() for t in _INTENT_HEX_TOKEN_RE.findall(norm)]
     for label, value in (("wallet", wallet), ("signer", signer)):
-        if value and value.lower() in lowered:
+        if not value:
+            continue
+        digits = value.lower().removeprefix("0x")
+        if digits and digits in hex_only:
             problems.append(f"contains the {label} address")
-    for planet_id in planet_ids:
-        if re.search(rf"\b{planet_id}\b", text):
-            problems.append(f"contains planet id {planet_id}")
+            continue
+        part = next((t for t in tokens if t in digits), None)
+        if part is not None:
+            problems.append(f"contains part of the {label} address" + _quoted(part))
+
+    # Coordinates: any three colon-separated numbers, and each known coordinate in any spelling.
+    match = _INTENT_COORDINATES_RE.search(norm)
+    if match:
+        problems.append("contains coordinates" + _quoted(match.group(0)))
+
+    numbers: dict[int, str] = {}
+    for found in _INTENT_NUMBER_RE.finditer(norm):
+        whole = found.group("num")
+        snippet = found.group("pre") + whole
+        parts = re.split(r"[,_]", whole)
+        for value in (*parts, "".join(parts)):
+            if len(value) <= 30:
+                numbers.setdefault(int(value), snippet)
+
+    if not match:
+        for coordinate in dict.fromkeys(coordinates):
+            try:
+                g, s, p = (int(x) for x in coordinate.split(":"))
+            except ValueError:
+                continue
+            if not {g, s, p} <= numbers.keys():
+                continue
+            known = re.search(rf"(?<!\d){g}\D{{1,15}}{s}\D{{1,15}}{p}(?!\d)", norm)
+            if known:
+                problems.append("contains coordinates" + _quoted(known.group(0)))
+                break
+
+    for planet_id in dict.fromkeys(planet_ids):
+        if planet_id in numbers:
+            problems.append(f"contains planet id {planet_id}" + _quoted(numbers[planet_id]))
     return problems
 
 
@@ -1016,6 +1095,11 @@ class Policy(PolicyBase):
 
     @model_validator(mode="after")
     def _intent_carries_nothing_identifying(self) -> Policy:
+        # Only a configured jev engine ever sends the intent anywhere; under the ladder it is
+        # inert text, so a "3:2:1 ratio" there must not stop the policy from loading. (It is
+        # checked again at `vd engine intent set`, at tick resolution and at send time.)
+        if self.engine.kind != "jev":
+            return self
         problems = intent_text_problems(
             self.engine.jev.intent, wallet=self.wallet, signer=self.signer, planet_ids=self.planets
         )

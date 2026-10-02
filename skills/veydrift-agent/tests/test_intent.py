@@ -206,6 +206,86 @@ def test_a_hand_edited_override_with_naive_datetimes_does_not_raise():
         state.load_intent_override()
 
 
+def stored_raw(**changes: object) -> dict:
+    raw = {
+        "version": 1,
+        "intent": "Defenses first.",
+        "reason": "r",
+        "set_at": (NOW - timedelta(hours=1)).isoformat(),
+        "expires_at": (NOW + timedelta(hours=2)).isoformat(),
+    }
+    raw.update(changes)
+    return raw
+
+
+def write_raw(**changes: object) -> None:
+    state.intent_override_path().write_text(json.dumps(stored_raw(**changes)))
+
+
+@pytest.mark.parametrize(
+    ("label", "changes"),
+    [
+        ("lifetime over 72h", {"set_at": (NOW - timedelta(hours=1)).isoformat(), "expires_at": (NOW + timedelta(hours=72)).isoformat()}),
+        ("far future expiry", {"expires_at": "9999-12-31T23:59:59+00:00"}),
+        ("expires after the cap from now", {"set_at": (NOW - timedelta(hours=40)).isoformat(), "expires_at": (NOW + timedelta(hours=73)).isoformat()}),
+        ("expires before it was set", {"set_at": (NOW + timedelta(hours=5)).isoformat(), "expires_at": (NOW + timedelta(hours=2)).isoformat()}),
+        ("expires when it was set", {"set_at": (NOW + timedelta(hours=2)).isoformat(), "expires_at": (NOW + timedelta(hours=2)).isoformat()}),
+        ("set in the future", {"set_at": (NOW + timedelta(hours=1)).isoformat(), "expires_at": (NOW + timedelta(hours=3)).isoformat()}),
+    ],
+)
+def test_an_override_with_an_impossible_lifetime_is_rejected(label, changes):
+    write_raw(**changes)
+    result = engine_mod.resolve_effective_intent(make_policy(intent="Grow the economy."), now=NOW)
+    assert (result.text, result.source, result.note) == ("Grow the economy.", "policy", "override rejected: lifetime"), label
+    assert result.expired is False
+    assert result.override is not None
+
+
+def test_an_override_of_exactly_the_maximum_lifetime_is_honoured():
+    write_raw(set_at=NOW.isoformat(), expires_at=(NOW + timedelta(hours=72)).isoformat())
+    assert engine_mod.resolve_effective_intent(make_policy(), now=NOW).source == "agent"
+
+
+def test_a_set_at_a_few_minutes_ahead_is_clock_skew_not_rejected():
+    write_raw(set_at=(NOW + timedelta(minutes=4)).isoformat(), expires_at=(NOW + timedelta(hours=2)).isoformat())
+    assert engine_mod.resolve_effective_intent(make_policy(), now=NOW).source == "agent"
+    write_raw(set_at=(NOW + timedelta(minutes=6)).isoformat(), expires_at=(NOW + timedelta(hours=2)).isoformat())
+    assert engine_mod.resolve_effective_intent(make_policy(), now=NOW).note == "override rejected: lifetime"
+
+
+@pytest.mark.parametrize("version", [0, 2, 99])
+def test_an_override_of_an_unsupported_version_is_rejected(version):
+    write_raw(version=version)
+    result = engine_mod.resolve_effective_intent(make_policy(intent="Grow the economy."), now=NOW)
+    assert (result.source, result.note) == ("policy", "override rejected: unsupported version")
+
+
+def test_a_naive_now_is_read_as_utc():
+    store()
+    naive = NOW.replace(tzinfo=None)
+    assert engine_mod.resolve_effective_intent(make_policy(), now=naive).source == "agent"
+    store(expires_in=timedelta(minutes=-1))
+    assert engine_mod.resolve_effective_intent(make_policy(), now=naive).expired is True
+
+
+def test_an_expired_override_is_reported_expired_even_with_the_flag_off():
+    stored = store(expires_in=timedelta(minutes=-1))
+    result = engine_mod.resolve_effective_intent(make_policy(adaptive=False, intent="Grow the economy."), now=NOW)
+    assert (result.note, result.expired, result.override) == ("override expired", True, stored)
+
+
+def test_the_flag_off_note_still_wins_over_a_bad_lifetime():
+    write_raw(expires_at="9999-12-31T23:59:59+00:00")
+    result = engine_mod.resolve_effective_intent(make_policy(adaptive=False), now=NOW)
+    assert result.note == "override ignored: adaptive_intent is off"
+
+
+def test_a_pathologically_nested_file_is_ignored_with_the_unreadable_note():
+    state.intent_override_path().write_text("[" * 200_000)
+    result = engine_mod.resolve_effective_intent(make_policy(intent="Grow the economy."), now=NOW)
+    assert (result.source, result.note) == ("policy", "override file unreadable")
+
+
 # --------------------------------------------------------------------------------------
 # parse_ttl
 # --------------------------------------------------------------------------------------
@@ -657,3 +737,35 @@ def test_intent_help_lists_the_three_commands():
     assert result.exit_code == 0
     for name in ("set", "show", "clear"):
         assert name in result.output
+
+
+# ---- `set --policy` somewhere other than $VEYDRIFT_HOME/policy.json ----------------------
+
+
+def test_set_with_an_alternate_policy_notes_which_policy_ticks_read(tmp_path):
+    elsewhere = write_policy(tmp_path / "other-policy.json")
+    result = invoke_set(GOOD, "--reason", "raided", "--policy", str(elsewhere))
+    assert result.exit_code == 0
+    flat = " ".join(result.output.split())
+    assert "ticks read" in flat and str(state.policy_path()) in flat
+    assert state.load_intent_override() is not None  # still written
+
+
+def test_set_with_the_home_policy_path_given_explicitly_has_no_such_note():
+    path = write_policy()
+    result = invoke_set(GOOD, "--reason", "raided", "--policy", str(path))
+    assert result.exit_code == 0
+    assert "ticks read" not in result.output
+
+
+def test_set_json_carries_the_alternate_policy_note(tmp_path):
+    elsewhere = write_policy(tmp_path / "other-policy.json")
+    result = invoke_set(GOOD, "--reason", "raided", "--policy", str(elsewhere), "--json")
+    assert any("ticks read" in w for w in json.loads(result.output)["warnings"])
+
+
+def test_a_ladder_policy_with_a_three_part_ratio_in_its_intent_is_usable_by_the_cli():
+    state.policy_path().write_text(json.dumps(policy_dict(kind="ladder", intent="Keep a 3:2:1 ratio")))
+    result = runner.invoke(vd_app, ["engine", "intent", "show"])
+    assert result.exit_code == 0, result.output
+    assert "3:2:1" in result.output

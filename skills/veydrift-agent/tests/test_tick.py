@@ -6013,3 +6013,174 @@ def test_readiness_shows_no_agent_intent_line_without_any_engine_block(isolated_
 
     assert result.exit_code == 0, result.output
     assert "agent-intent" not in result.output
+
+
+# --------------------------------------------------------------------------------------
+# Adaptive intent, end to end: the real `jev_engine.decide` (not stubbed) with a fake backend
+# injected where the network client would be. What the backend receives is what would leave
+# the machine, so these are the tests that pin the privacy contract.
+# --------------------------------------------------------------------------------------
+
+
+def _run_e2e(monkeypatch, *, planets, policy_intent: str = ""):
+    _write_adaptive_policy(intent=policy_intent, planets=planets)
+    _patch_common(monkeypatch)
+    backend = jev_fakes.FakeBackend()
+    monkeypatch.setattr(jev, "default_backend", lambda cfg: backend)
+    result = runner.invoke(tick.app, ["--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert backend.calls, "the engine never reached the backend"
+    return backend.calls[0][0], result
+
+
+def test_e2e_a_stored_override_reaches_the_backend_as_the_strategy_intent(isolated_home, monkeypatch):
+    _store_override(text="Turtle up and research.")
+
+    sent, _ = _run_e2e(monkeypatch, planets=[664])
+
+    assert sent["strategy_intent"] == "Turtle up and research."
+    assert sent["intent_source"] == "agent"
+    engine = log.read_proposals()[0]["engine"]
+    assert (engine["intent"], engine["intent_source"], engine["intent_note"]) == ("Turtle up and research.", "agent", None)
+
+
+def test_e2e_a_planet_id_not_listed_in_the_policy_never_reaches_the_backend(isolated_home, monkeypatch):
+    # policy.planets == [] means "every planet": the tick-time check cannot know planet 664,
+    # only the snapshot does, so the send-time check must catch it.
+    _store_override(text="Defend planet 664 first.")
+
+    sent, result = _run_e2e(monkeypatch, planets=[], policy_intent="Boom the economy.")
+
+    assert "664" not in json.dumps(sent["strategy_intent"])
+    assert (sent["strategy_intent"], sent["intent_source"]) == ("Boom the economy.", "policy")
+    engine = log.read_proposals()[0]["engine"]
+    assert (engine["intent"], engine["intent_source"]) == ("Boom the economy.", "policy")
+    assert engine["intent_note"].startswith("override rejected at send time: contains planet id 664")
+    assert "intent: policy (override rejected at send time" in _flat_output(result.output)
+
+
+def test_e2e_with_no_policy_intent_the_default_is_sent(isolated_home, monkeypatch):
+    _store_override(text="Defend planet 664 first.")
+
+    sent, _ = _run_e2e(monkeypatch, planets=[])
+
+    assert (sent["strategy_intent"], sent["intent_source"]) == (jev_engine.DEFAULT_INTENT, "default")
+    assert "send time" in log.read_proposals()[0]["engine"]["intent_note"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Hold the home world at 7 : 181 : 14.", "Hold the home world at 7/181/14.", "Hold galaxy 7 system 181 position 14."],
+)
+def test_e2e_the_accounts_coordinates_in_any_spelling_never_reach_the_backend(isolated_home, monkeypatch, text):
+    _store_override(text=text)
+
+    sent, _ = _run_e2e(monkeypatch, planets=[664])
+
+    assert sent["intent_source"] == "default" and "181" not in sent["strategy_intent"]
+    assert "override rejected" in log.read_proposals()[0]["engine"]["intent_note"]  # at tick or at send time
+
+
+def test_e2e_a_policy_intent_that_names_a_snapshot_planet_is_replaced_by_the_default(isolated_home, monkeypatch):
+    # The policy loads (planets == [], so 664 is unknown at load), but the send-time check sees the snapshot.
+    sent, _ = _run_e2e(monkeypatch, planets=[], policy_intent="Keep planet 664 safe.")
+
+    assert (sent["strategy_intent"], sent["intent_source"]) == (jev_engine.DEFAULT_INTENT, "default")
+    assert log.read_proposals()[0]["engine"]["intent_note"].startswith("policy intent rejected at send time")
+
+
+def test_e2e_a_pathological_override_file_does_not_fail_the_tick(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path
+
+    _write_adaptive_policy()
+    _patch_common(monkeypatch)
+    intent_override_path().write_text("[" * 200_000 + "]" * 200_000)
+    backend = jev_fakes.FakeBackend()
+    monkeypatch.setattr(jev, "default_backend", lambda cfg: backend)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert backend.calls[0][0]["intent_source"] == "default"
+    assert log.read_proposals()[0]["engine"]["intent_note"] == "override file unreadable"
+
+
+def test_an_overlong_override_lifetime_is_not_honoured_by_a_tick(isolated_home, monkeypatch):
+    _store_override(text="Turtle up.", expires_at=datetime(9999, 1, 1, tzinfo=UTC))
+
+    sent, _ = _run_e2e(monkeypatch, planets=[664])
+
+    assert sent["intent_source"] == "default"
+    assert log.read_proposals()[0]["engine"]["intent_note"] == "override rejected: lifetime"
+
+
+# ---- expiry cleanup: never deletes a newer override, never crashes ------------------------
+
+
+def test_expiry_cleanup_leaves_an_override_set_after_the_tick_read_the_old_one(isolated_home, monkeypatch):
+    from veydrift_agent.state import IntentOverride, intent_override_path, save_intent_override
+
+    _write_adaptive_policy(intent="Boom the economy.")
+    now = datetime.now(UTC)
+    _store_override(set_at=now - timedelta(hours=7), expires_at=now - timedelta(minutes=1))
+    real = tick.engine_mod.resolve_effective_intent
+
+    def _race(policy, *, now):
+        effective = real(policy, now=now)  # reads the expired override ...
+        save_intent_override(  # ... then a concurrent `vd engine intent set` lands
+            IntentOverride(intent="fresh", reason="new", set_at=now, expires_at=now + timedelta(hours=6))
+        )
+        return effective
+
+    monkeypatch.setattr(tick.engine_mod, "resolve_effective_intent", _race)
+
+    effective = tick._resolve_tick_intent(load_policy_for_tests(), now)
+
+    assert effective.expired
+    assert intent_override_path().exists()
+    assert "fresh" in intent_override_path().read_text()
+    assert "intent override expired" not in _strategy_text()
+
+
+def test_expiry_cleanup_survives_the_file_vanishing_and_logs_nothing(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path
+
+    _write_adaptive_policy(intent="Boom the economy.")
+    now = datetime.now(UTC)
+    _store_override(set_at=now - timedelta(hours=7), expires_at=now - timedelta(minutes=1))
+    real = tick.engine_mod.resolve_effective_intent
+
+    def _vanish(policy, *, now):
+        effective = real(policy, now=now)
+        intent_override_path().unlink()  # another tick got there first
+        return effective
+
+    monkeypatch.setattr(tick.engine_mod, "resolve_effective_intent", _vanish)
+
+    effective = tick._resolve_tick_intent(load_policy_for_tests(), now)
+
+    assert effective.expired and not intent_override_path().exists()
+    assert "intent override expired" not in _strategy_text()
+
+
+def test_an_expired_override_is_cleaned_up_even_when_adaptive_intent_is_off(isolated_home, monkeypatch):
+    from veydrift_agent.state import intent_override_path
+
+    _write_adaptive_policy(adaptive=False, intent="Boom the economy.")
+    now = datetime.now(UTC)
+    _store_override(set_at=now - timedelta(hours=7), expires_at=now - timedelta(minutes=1))
+    _patch_common(monkeypatch)
+    _patch_jev_with_intent(monkeypatch)
+
+    result = runner.invoke(tick.app, ["--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert not intent_override_path().exists()
+    assert len([ln for ln in _strategy_text().splitlines() if "intent override expired" in ln]) == 1
+
+
+def load_policy_for_tests():
+    from veydrift_agent.models import Policy
+    from veydrift_agent.state import policy_path
+
+    return Policy.model_validate(json.loads(policy_path().read_text()))
