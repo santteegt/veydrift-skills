@@ -18,13 +18,15 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from veydrift_agent import candidates
 from veydrift_agent import plan as plan_mod
@@ -357,3 +359,202 @@ def compare(
         composite = f"{j.composite:.3f}" if j.composite is not None else "n/a"
         typer.echo(f"  {j.id:>4} {j.family:<15} {j.entity_name or '-'}  composite={composite}")
     raise typer.Exit(code=code)
+
+
+# --------------------------------------------------------------------------------------
+# `vd engine intent` -- the adaptive-intent override. `set` writes a standing, expiring
+# override of `policy.engine.jev.intent` (only while `adaptive_intent` is on); `show` reports
+# what a tick would judge against; `clear` removes it. Exit codes: 0 ok, 2 refused, 4 policy
+# load error. The override file is only ever deleted by `clear` or by the tick on expiry.
+# --------------------------------------------------------------------------------------
+
+#: Hard limits mirrored from `state.IntentOverride` (text 1000, reason 280).
+INTENT_TEXT_MAX = 1000
+INTENT_REASON_MAX = 280
+
+intent_app = typer.Typer(no_args_is_help=True, help="Set, show or clear the agent's standing intent override.")
+app.add_typer(intent_app, name="intent")
+
+_TTL_RE = re.compile(r"^\s*(\d+(?:\.\d*)?|\.\d+)\s*([mhd])?\s*$", re.IGNORECASE)
+_TTL_UNIT_HOURS = {"m": 1 / 60, "h": 1.0, "d": 24.0}
+
+
+def parse_ttl(raw: str) -> timedelta:
+    """`<number><unit>` with unit `m`, `h` or `d` (`90m`, `6h`, `1.5h`, `2d`); a bare number
+    means hours. Raises `ValueError` when unparsable. Range is not checked here."""
+    match = _TTL_RE.match(raw)
+    if match is None:
+        raise ValueError(f"cannot parse ttl {raw!r}: use <number><m|h|d>, e.g. 90m, 6h, 2d (a bare number is hours)")
+    hours = float(match.group(1)) * _TTL_UNIT_HOURS[(match.group(2) or "h").lower()]
+    try:
+        return timedelta(hours=hours)
+    except OverflowError as exc:
+        raise ValueError(f"ttl {raw!r} is out of range") from exc
+
+
+def _load_policy_or_exit(path: Path | None, console: Console) -> Policy:
+    """Load `path` (default `$VEYDRIFT_HOME/policy.json`); any failure prints and exits 4."""
+    from veydrift_agent import state
+
+    path = path or state.policy_path()
+    try:
+        return Policy.model_validate(json.loads(path.read_text()))
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]failed to load policy {escape(str(path))}: {escape(str(exc))}[/red]")
+        raise typer.Exit(code=4) from exc
+
+
+def _refuse(console: Console, problems: list[str]) -> None:
+    console.print("[red]refused: intent override not written[/red]")
+    for problem in problems:
+        console.print(f"[red]  - {escape(problem)}[/red]")
+    raise typer.Exit(code=2)
+
+
+def _override_json(override: IntentOverride) -> dict[str, Any]:
+    return json.loads(override.model_dump_json())
+
+
+@intent_app.command("set")
+def intent_set(
+    text: str = typer.Argument(..., help="The new strategy intent: plain prose, no addresses/coordinates/planet ids."),
+    reason: str = typer.Option(..., "--reason", help="Why the intent is changing (logged to strategy.md)."),
+    ttl: str = typer.Option(
+        None, "--ttl", help="Lifetime: <number><m|h|d> (90m, 6h, 2d); bare number = hours. Default from policy."
+    ),
+    policy: Path = typer.Option(None, "--policy", help="Path to policy.json (default: $VEYDRIFT_HOME/policy.json)."),  # noqa: B008
+    json_output: bool = typer.Option(False, "--json", help="Print the stored override as JSON."),
+) -> None:
+    """Set a standing intent override, honoured by every tick until it expires or is cleared.
+    Refused (exit 2) unless policy.engine.jev.adaptive_intent is true."""
+    from veydrift_agent import log, state
+    from veydrift_agent.models import ADAPTIVE_INTENT_MAX_HOURS, intent_text_problems
+
+    console = Console()
+    policy_model = _load_policy_or_exit(policy, console)
+    cfg = policy_model.engine.jev
+    text, reason = text.strip(), reason.strip()
+
+    problems: list[str] = []
+    if not cfg.adaptive_intent:
+        problems.append("policy.engine.jev.adaptive_intent is false: set it to true in policy.json to allow overrides")
+    if not text:
+        problems.append("intent text is empty")
+    elif len(text) > INTENT_TEXT_MAX:
+        problems.append(f"intent text is {len(text)} characters (maximum {INTENT_TEXT_MAX})")
+    else:
+        problems += [
+            f"intent {p}"
+            for p in intent_text_problems(
+                text, wallet=policy_model.wallet, signer=policy_model.signer, planet_ids=policy_model.planets
+            )
+        ]
+    if not reason:
+        problems.append("--reason is required and must not be empty")
+    elif len(reason) > INTENT_REASON_MAX:
+        problems.append(f"reason is {len(reason)} characters (maximum {INTENT_REASON_MAX})")
+    delta: timedelta | None = None
+    try:
+        delta = parse_ttl(ttl) if ttl is not None else timedelta(hours=cfg.adaptive_intent_default_hours)
+    except ValueError as exc:
+        problems.append(str(exc))
+    if delta is not None:
+        if delta <= timedelta(0):
+            problems.append("ttl must be greater than zero")
+        elif delta > timedelta(hours=ADAPTIVE_INTENT_MAX_HOURS):
+            problems.append(f"ttl exceeds the maximum of {ADAPTIVE_INTENT_MAX_HOURS}h")
+    if problems:
+        _refuse(console, problems)
+    assert delta is not None
+
+    now = datetime.now(UTC)
+    override = IntentOverride(intent=text, reason=reason, set_at=now, expires_at=now + delta)
+    try:
+        replaced = state.load_intent_override() is not None
+    except state.IntentOverrideError:
+        replaced = True  # an unreadable file is overwritten too
+    state.save_intent_override(override)
+    log.append_strategy(f'intent override set until {override.expires_at.isoformat()}: "{text}" -- {reason}', now=now)
+
+    warnings: list[str] = []
+    if policy_model.engine.kind != "jev":
+        warnings.append('policy.engine.kind is not "jev": this override has no effect until the jev engine is enabled')
+    if json_output:
+        typer.echo(json.dumps({**_override_json(override), "replaced": replaced, "warnings": warnings}, indent=2))
+        return
+    for warning in warnings:
+        console.print(f"[yellow]warning: {escape(warning)}[/yellow]")
+    verb = "replaced" if replaced else "set"
+    console.print(
+        f"[green]intent override {verb}[/green] until {override.expires_at.isoformat()}\n"
+        f"  intent: {escape(text)}\n  reason: {escape(reason)}",
+        highlight=False,
+        soft_wrap=True,
+    )
+
+
+@intent_app.command("show")
+def intent_show(
+    policy: Path = typer.Option(None, "--policy", help="Path to policy.json (default: $VEYDRIFT_HOME/policy.json)."),  # noqa: B008
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+) -> None:
+    """Show the intent a tick would judge against now, and where it comes from. Read-only: an
+    expired override file is reported, never deleted (the tick does that)."""
+    console = Console()
+    policy_model = _load_policy_or_exit(policy, console)
+    effective = resolve_effective_intent(policy_model, now=datetime.now(UTC))
+    override = effective.override
+    if override is None and policy_model.engine.kind != "jev":
+        # The resolver does not look for a file under the ladder; show it anyway, marked unused.
+        from veydrift_agent import state
+
+        try:
+            override = state.load_intent_override()
+        except state.IntentOverrideError:
+            override = None
+
+    if json_output:
+        typer.echo(
+            json.dumps(
+                {
+                    "engine_kind": policy_model.engine.kind,
+                    "adaptive_intent": policy_model.engine.jev.adaptive_intent,
+                    "intent": effective.text,
+                    "source": effective.source,
+                    "note": effective.note,
+                    "expired": effective.expired,
+                    "override": _override_json(override) if override is not None else None,
+                },
+                indent=2,
+            )
+        )
+        return
+
+    typer.echo(f"intent: {effective.text}")
+    typer.echo(f"source: {effective.source}")
+    if policy_model.engine.kind != "jev":
+        typer.echo('engine: ladder (the intent is not used until policy.engine.kind is "jev")')
+    if override is not None:
+        typer.echo(f"override reason: {override.reason}")
+        typer.echo(f"override set at: {override.set_at.isoformat()}")
+        typer.echo(f"override expires at: {override.expires_at.isoformat()}")
+        if effective.source != "agent":
+            typer.echo(f"override text (not in use): {override.intent}")
+    if effective.note:
+        typer.echo(f"note: {effective.note}")
+
+
+@intent_app.command("clear")
+def intent_clear(
+    reason: str = typer.Option(None, "--reason", help="Why the override is being removed (logged to strategy.md)."),
+    policy: Path = typer.Option(None, "--policy", help="Accepted for symmetry; clearing never reads the policy."),  # noqa: B008
+) -> None:
+    """Remove the stored override, if any. Always allowed, and exits 0 whether or not one existed."""
+    from veydrift_agent import log, state
+
+    if not state.clear_intent_override():
+        typer.echo("no intent override stored")
+        return
+    why = (reason or "").strip() or "no reason given"
+    log.append_strategy(f"intent override cleared -- {why}")
+    typer.echo("intent override cleared")

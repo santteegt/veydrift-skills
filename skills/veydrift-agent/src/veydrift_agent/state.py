@@ -32,7 +32,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 # --------------------------------------------------------------------------------------
 # $VEYDRIFT_HOME
@@ -408,8 +408,10 @@ class IntentOverride(_Base):
     version: int = 1
     intent: str = Field(max_length=1000)
     reason: str = Field(max_length=280)
-    set_at: datetime
-    expires_at: datetime
+    #: Timezone-aware only: a naive timestamp (a hand-edited file) cannot be compared with the
+    #: tick's clock, so it fails validation and the file counts as unreadable.
+    set_at: AwareDatetime
+    expires_at: AwareDatetime
 
 
 def intent_override_path() -> Path:

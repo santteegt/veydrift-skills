@@ -365,6 +365,103 @@ def test_radar_state_missing_wallets_field_loads_with_default(isolated_home):
 
 
 # --------------------------------------------------------------------------------------
+# Intent override (intent-override.json)
+# --------------------------------------------------------------------------------------
+
+
+def _override(**overrides):
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 10, 2, 12, 0, tzinfo=UTC)
+    fields = {
+        "intent": "Defenses first while under raid.",
+        "reason": "3 raids today",
+        "set_at": now,
+        "expires_at": now + timedelta(hours=6),
+    }
+    fields.update(overrides)
+    return state.IntentOverride(**fields)
+
+
+def test_intent_override_path_is_under_the_home(isolated_home):
+    assert state.intent_override_path() == isolated_home / "intent-override.json"
+
+
+def test_load_intent_override_is_none_when_missing(isolated_home):
+    assert state.load_intent_override() is None
+
+
+def test_load_intent_override_is_none_for_an_empty_file(isolated_home):
+    state.intent_override_path().write_text("")
+    assert state.load_intent_override() is None
+    state.intent_override_path().write_text("  \n")
+    assert state.load_intent_override() is None
+
+
+def test_save_and_load_intent_override_round_trips(isolated_home):
+    saved = _override()
+    state.save_intent_override(saved)
+    loaded = state.load_intent_override()
+    assert loaded == saved
+    assert loaded is not None
+    assert loaded.expires_at.tzinfo is not None
+    assert loaded.version == 1
+
+
+def test_save_intent_override_is_atomic_and_valid_json(isolated_home):
+    state.save_intent_override(_override())
+    on_disk = json.loads(state.intent_override_path().read_text())
+    assert on_disk["intent"] == "Defenses first while under raid."
+    assert not list(isolated_home.glob("*.tmp"))
+
+
+def test_save_intent_override_replaces_the_previous_one(isolated_home):
+    state.save_intent_override(_override(intent="First."))
+    state.save_intent_override(_override(intent="Second."))
+    loaded = state.load_intent_override()
+    assert loaded is not None
+    assert loaded.intent == "Second."
+
+
+def test_corrupt_json_raises_intent_override_error(isolated_home):
+    state.intent_override_path().write_text("{not json")
+    with pytest.raises(state.IntentOverrideError):
+        state.load_intent_override()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"version": 1},  # missing fields
+        {"version": 1, "intent": "x", "reason": "y", "set_at": "not a date", "expires_at": "2026-10-03T00:00:00Z"},
+        {"version": 1, "intent": 5, "reason": "y", "set_at": "2026-10-02T00:00:00Z", "expires_at": "2026-10-03T00:00:00Z"},
+        {"version": 1, "intent": "x" * 1001, "reason": "y", "set_at": "2026-10-02T00:00:00Z", "expires_at": "2026-10-03T00:00:00Z"},
+        {"version": 1, "intent": "x", "reason": "y" * 281, "set_at": "2026-10-02T00:00:00Z", "expires_at": "2026-10-03T00:00:00Z"},
+        ["a", "list"],
+        "a string",
+    ],
+)
+def test_invalid_shape_raises_intent_override_error(isolated_home, payload):
+    state.intent_override_path().write_text(json.dumps(payload))
+    with pytest.raises(state.IntentOverrideError):
+        state.load_intent_override()
+
+
+def test_clear_intent_override_reports_whether_one_existed(isolated_home):
+    assert state.clear_intent_override() is False
+    state.save_intent_override(_override())
+    assert state.clear_intent_override() is True
+    assert not state.intent_override_path().exists()
+    assert state.clear_intent_override() is False
+
+
+def test_clear_intent_override_removes_an_unreadable_file(isolated_home):
+    state.intent_override_path().write_text("{not json")
+    assert state.clear_intent_override() is True
+    assert state.load_intent_override() is None
+
+
+# --------------------------------------------------------------------------------------
 # Tick lockfile
 # --------------------------------------------------------------------------------------
 
