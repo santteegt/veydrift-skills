@@ -80,15 +80,24 @@ ladder; switch the kind and write an intent:
 - `engine` is `extra="forbid"` throughout: an unknown key, including a typo inside `jev`, is a
   hard error, not a silent default. `intent` is capped at 1000 characters; empty uses a
   built-in rubric (balanced, energy-safe growth, no risky military action).
-- **The intent is validated at load.** It is sent to TypeSafe verbatim, so a policy whose `intent`
-  contains any of these **fails to load** (every `vd` command that reads the policy then reports the
-  problems): an address (`0x` followed by 40 or more hex digits), coordinates (`7:291:1`), the
-  policy's `wallet` or `signer` address (case-insensitive), or a planet id from `policy.planets` as
-  a standalone number. A number inside a longer number is fine; a standalone number that equals a
-  planet id is refused, so write counts as words ("two planets") rather than digits. Describe the
-  strategy without identifiers. `tests/test_models_engine.py` pins each case
+- **The intent is validated at load, under the jev engine only.** It is sent to TypeSafe verbatim,
+  so a policy with `kind: "jev"` whose `intent` contains any of these **fails to load** (every `vd`
+  command that reads the policy then reports the problems, each quoting the matched text, for example
+  `contains planet id 664 ("p664")`): an address (`0x`/`0X` plus 40 hex digits, or a bare run of 40),
+  the policy's `wallet` or `signer` address (also split by spaces or invisible characters, or any
+  token of 8 or more hex characters that is part of it, such as "ending 30553aa1"), three numbers
+  joined by colons (`7:291:1`, and so also `3:2:1` or `14:00:00`), or a planet id from
+  `policy.planets` as a number token (`664`, `p664`, `planet664`, `#664`, `6,64`; `16640` is fine).
+  Matching runs on a normalised copy (Unicode NFKC, invisible format characters dropped, every Unicode
+  digit read as ASCII, case-folded), so fullwidth digits or a zero-width space do not hide anything.
+  Write counts as words ("two planets") and ratios as "3 to 2 to 1". Describe the strategy without
+  identifiers. Under the ladder (`kind` not `"jev"`) the policy loads whatever the intent says: it never
+  leaves the machine. The same text is checked again at `vd engine intent set`, at tick resolution and
+  at send time (section 3, section 6). `tests/test_models_engine.py` pins each case
   (`test_a_policy_whose_intent_identifies_the_account_fails_to_load`,
-  `test_a_planet_id_is_flagged_as_a_standalone_number`).
+  `test_a_planet_id_is_flagged_as_a_standalone_number`, `test_every_realistic_bypass_is_caught`,
+  `test_a_ladder_policy_with_identifying_looking_intent_text_still_loads`,
+  `test_the_same_intent_under_jev_fails_to_load_naming_the_snippet`).
 - `adaptive_intent` (default `false`) lets an agent set a standing, expiring replacement for
   `intent` (section 3). `adaptive_intent_default_hours` (default 6, in `(0, 72]`) is the lifetime
   of an override set without `--ttl`. Neither affects a tick unless `kind` is `"jev"`.
@@ -109,7 +118,7 @@ expires or is cleared, the policy intent applies again. Only the jev engine read
 has no intent.
 
 **Enabling.** Set `policy.engine.jev.adaptive_intent` to `true` (section 2). With it off, a stored
-override is ignored by every tick and `set` refuses to write one. `adaptive_intent_default_hours`
+override is ignored by every tick (an expired one is still cleaned up) and `set` refuses to write one. `adaptive_intent_default_hours`
 is the lifetime when `--ttl` is omitted (default 6); the maximum lifetime is **72 hours**,
 whatever the policy says (`models.ADAPTIVE_INTENT_MAX_HOURS`). The override lives in
 `$VEYDRIFT_HOME/intent-override.json`: one slot, replaced by each `set`, written atomically.
@@ -128,11 +137,14 @@ vd engine intent clear [--reason "raids stopped"]
   `2d`), a bare number meaning hours; it must be above zero and at most 72 hours. It is refused,
   exit **2**, with every problem listed, **nothing written and no `strategy.md` line**, when:
   `adaptive_intent` is off, the text or reason is empty or too long, the text fails the
-  validation of section 2 (address, coordinates, wallet or signer, planet id), or the TTL does not
-  parse or is out of range. On success it replaces any existing override (an unreadable file too)
-  and appends `intent override set until <expiry>: "<text>" -- <reason>` to `strategy.md`; under the
-  ladder (`kind` not `"jev"`) it still writes but warns that the override has no effect. `--json`
-  prints the stored override plus `replaced` and `warnings`.
+  validation of section 2 (address, coordinates, wallet or signer, planet id; applied here whatever
+  the engine kind), or the TTL does not parse or is out of range. On success it replaces any existing
+  override (an unreadable file too) and appends `intent override set until <expiry>: "<text>" --
+  <reason>` to `strategy.md`; under the ladder (`kind` not `"jev"`) it still writes but warns that the
+  override has no effect. With `--policy FILE` naming a file other than `$VEYDRIFT_HOME/policy.json` it
+  also warns that ticks read the home policy, not that file: the override was validated against one
+  policy but is judged against the other. `--json` prints the stored override plus `replaced` and
+  `warnings`.
 - **`show [--json]`** is read-only: the intent a tick would judge against now (`intent`),
   `source` (`policy`, `default` or `agent`), the override's reason, set time and expiry, and a
   `note` when a stored override is not in use. It reports an expired override and never deletes it
@@ -152,18 +164,28 @@ note on the trace:
 | --- | --- | --- |
 | `policy.engine.kind` is not `"jev"` | policy intent; the file is not read | none |
 | no override file, or an empty one | policy intent | none |
-| the file cannot be read: bad JSON, wrong shape, text or reason over the limits, or a timestamp without a timezone (a hand-edited file) | policy intent | `override file unreadable` |
+| the file cannot be read: bad JSON (including a pathologically nested file), wrong shape, text or reason over the limits, or a timestamp without a timezone (a hand-edited file) | policy intent | `override file unreadable` |
+| `now` is at or past `expires_at` (the boundary is exclusive) | policy intent; the tick removes the file, **even with the flag off** | `override expired` |
 | `adaptive_intent` is off | policy intent; the file is kept | `override ignored: adaptive_intent is off` |
-| `now` is at or past `expires_at` (the boundary is exclusive) | policy intent; the tick removes the file | `override expired` |
+| the stored `version` is not 1 | policy intent | `override rejected: unsupported version` |
+| the lifetime is not honest: more than 72 hours between `set_at` and `expires_at`, more than 72 hours left from now, `expires_at` not after `set_at`, or `set_at` more than 5 minutes in the future (a hand-edited file) | policy intent | `override rejected: lifetime` |
 | the stored text fails section 2's validation, or is blank (a hand-edited file) | policy intent | `override rejected: <problems>` |
 | otherwise | **the agent intent**, whitespace stripped | none |
 
-An empty policy intent falls to the built-in rubric (`intent_source: "default"`). The validation
-runs again at every tick, so editing the file by hand cannot get identifying text to TypeSafe.
-`tests/test_intent.py` pins each row (for example
+An empty policy intent falls to the built-in rubric (`intent_source: "default"`). The lifetime and
+version are enforced here rather than trusted from the file, so a hand-edited override cannot outlive
+the 72-hour ceiling. The text validation runs again at every tick, and once more, against the real
+planet ids and coordinates of the account, right before each request (section 6). A naive `now` is
+read as UTC. `tests/test_intent.py` pins each row (for example
 `test_an_override_is_ignored_when_the_flag_is_off`, `test_the_expiry_boundary_is_exclusive`,
 `test_a_hand_edited_override_with_identifying_text_is_rejected`,
-`test_a_hand_edited_override_with_naive_datetimes_does_not_raise`).
+`test_a_hand_edited_override_with_naive_datetimes_does_not_raise`,
+`test_an_override_with_an_impossible_lifetime_is_rejected`,
+`test_an_override_of_exactly_the_maximum_lifetime_is_honoured`,
+`test_a_set_at_a_few_minutes_ahead_is_clock_skew_not_rejected`,
+`test_an_override_of_an_unsupported_version_is_rejected`,
+`test_an_expired_override_is_reported_expired_even_with_the_flag_off`,
+`test_a_pathologically_nested_file_is_ignored_with_the_unreadable_note`).
 
 **What a tick does.** After the killswitch check (which does no extra work) and only under a
 configured jev engine:
@@ -171,8 +193,14 @@ configured jev engine:
 - An **expired** override is deleted and one `strategy.md` line is appended, `intent override
   expired: "<text>" -- back to the policy intent` (`default intent` when the policy has none), so
   the expiry is logged exactly once, because the file is then gone
-  (`tests/test_tick.py::test_an_expired_override_is_deleted_and_logged_exactly_once`). With the
-  flag off an expired file is not deleted: nothing is resolved from it.
+  (`tests/test_tick.py::test_an_expired_override_is_deleted_and_logged_exactly_once`). This happens
+  with `adaptive_intent` off too (`test_an_expired_override_is_cleaned_up_even_when_adaptive_intent_is_off`).
+  Only the override the tick read is deleted: one a concurrent `vd engine intent set` wrote since
+  stays, and a file that has already vanished is neither an error nor logged
+  (`test_expiry_cleanup_leaves_an_override_set_after_the_tick_read_the_old_one`,
+  `test_expiry_cleanup_survives_the_file_vanishing_and_logs_nothing`). An unreadable file, a
+  pathological one included, is ignored with a note and never fails the tick
+  (`test_e2e_a_pathological_override_file_does_not_fail_the_tick`).
 - The effective intent goes to the engine and onto every trace (section 9). A manual-override tick
   (`vd tick --action`) runs the same engine for its comparison, so it carries the intent too.
 - The report panel gains **one** line, only when an agent intent drove the tick or a stored
@@ -207,8 +235,10 @@ user's goals through a change of situation, never to change them.
   "ships", "mines", "storage") in priority order, with what to avoid, as the policy intent does
   (section 11). No numbers or thresholds.
 - **Never include identifiers.** No address, coordinates, wallet or signer, planet id, and no
-  standalone digits equal to a planet id: `set` refuses them, and a tick rejects them again from a
-  hand-edited file. Say "the colonies" or "the home planet".
+  standalone digits equal to a planet id, and no three-number ratio or time like `3:2:1` or `14:00:00`
+  (write "3 to 2 to 1"): `set` refuses them, a tick rejects them again from a hand-edited file, and
+  the send-time check replaces the text with the policy or default intent if one still gets through.
+  Say "the colonies" or "the home planet".
 - **Clear it when the situation passes**, with a reason (`vd engine intent clear --reason ...`),
   rather than leaving a stale override to run out.
 - Run `vd engine intent show` first: it says what is in force and why.
@@ -329,9 +359,56 @@ default rubric) and `intent_source` (`policy`, `default` or `agent`);
 `what` (a plain sentence) and `facts` (a few descriptive phrases).
 
 **The intent is the only free text that reaches the model, so it is validated.** The policy intent
-is checked at load and an override at `set` and again at every tick (section 3); an address,
-coordinates, the wallet or signer, or a planet id in it means the policy does not load, `set`
-refuses, or the tick uses the policy intent instead.
+is checked at load (under the jev engine; the ladder never sends it), an override at `set` and
+again at every tick (section 3); an address, coordinates, the wallet or signer, or a planet id in it
+means the policy does not load, `set` refuses, or the tick uses the policy intent instead.
+
+**The send-time check is the final guard.** Those checks cannot see the account: `policy.planets`
+may be empty or stale, and the targets are known only once the pool exists. So
+`jev_engine.sendable_context` re-checks the effective intent immediately before every TypeSafe request
+(it runs once a pool exists, so a veto, the deadline or an empty pool, which send nothing, never reach it) against the
+wallet and signer, **every planet id and coordinate in the snapshot**, and every target id and
+coordinate the pool was built from (attack, missile, foreign debris, own debris, colonize). A text that
+fails is replaced and the request carries the replacement:
+
+- a failing agent override gives way to the policy intent when that passes the same check, else to
+  the built-in default rubric;
+- a failing policy intent gives way to the default rubric;
+- the trace's `intent` and `intent_source` show the text actually sent, and `intent_note` says why, for
+  example `override rejected at send time: contains planet id 664 ("664")` (or `policy intent
+  rejected at send time: ...`; an earlier resolution note is kept after it);
+- if the check itself cannot run, the default rubric is sent with the note `intent check failed:
+  built-in default used`, never the unchecked text. Nothing here raises or fails a tick.
+
+`vd engine pool` prints the request *before* this substitution, so it shows what the policy intent
+alone would send. `tests/test_jev_engine.py` pins the check
+(`test_an_agent_override_that_names_the_account_is_replaced_before_the_backend_call`,
+`test_a_policy_intent_naming_a_snapshot_planet_is_replaced_by_the_default`,
+`test_target_planet_ids_and_coordinates_are_checked_too`,
+`test_a_failing_check_sends_the_default_and_never_raises`,
+`test_build_request_alone_does_not_substitute`), and `tests/test_tick.py` runs the real engine from an
+override file to the backend (`test_e2e_a_planet_id_not_listed_in_the_policy_never_reaches_the_backend`,
+`test_e2e_the_accounts_coordinates_in_any_spelling_never_reach_the_backend`).
+
+**What the matching catches** (`models.intent_text_problems`, on a normalised copy: NFKC, invisible
+format characters dropped, every Unicode digit read as ASCII, case-folded). Each problem quotes the
+matched snippet (at most 48 characters).
+
+- **Addresses:** `0x` or `0X` plus 40 hex digits, or a bare run of 40.
+- **Wallet and signer:** their hex found in the text with all non-hex characters removed (so spaces and
+  zero-width characters do not split it), or any token of 8 or more hex characters that is part of them.
+- **Coordinates:** any `n:n:n` (spaces around the colons allowed), which also flags a ratio or a clock
+  time; and, for the coordinates the account actually has, any spelling: `7/181/14`, `7-181-14`,
+  `galaxy 7 system 181 position 14`, `G7 S181 P14`, or the three numbers with at most 15 non-digit
+  characters between them. That last rule can flag a coincidence ("7 mines, then 181 energy, then 14
+  ships"); the cost is one tick on a substituted intent.
+- **Planet ids:** number tokens, including letters or `#` glued to the front (`p664`, `planet664`,
+  `#664`), digit groups (`6,64`, `6_64`) and leading zeros. A longer number (`16640`) does not match.
+
+**Deliberately not caught:** spelled-out numbers ("six hundred sixty-four"), two-part coordinates
+(`7:181`), ids with digits spaced apart, and a wallet that is both split by spaces and shortened below
+8 hex characters. These cannot be told from prose without a language model; the check is a filter for
+realistic leaks, not a proof (`test_deliberately_not_caught`, `test_two_part_coordinates_are_not_a_leak`).
 
 `situation` holds: whether an economy build or research is in progress, the research queue
 (`idle`/`busy`), fleet slots (`free`/`all in use`/`unknown`), threat buckets, the declared
@@ -502,7 +579,9 @@ ladder's action) and `test_vetoes_and_the_deadline_never_call_the_backend`.
   any fallback, an engine error, or a veto or deadline pre-emption):
   `intent` (the effective text), `intent_source` (`policy`, `default` or `agent`), and, only when an
   override is attached, `intent_reason`, `intent_set_at` and `intent_expires_at`; `intent_note`
-  says why a stored override was not used (the table in section 3). They are inside the excluded `engine`
+  says why a stored override was not used (the table in section 3) or why the text was replaced at
+  send time (section 6). `intent` and `intent_source` always show the text that was actually sent.
+  They are inside the excluded `engine`
   block, so an override changing the text or its expiry alone never makes a repeat pick a new
   proposal (`tests/test_tick.py::test_two_ticks_differing_only_in_override_text_with_the_same_pick_are_deduped`;
   every path: `tests/test_jev_engine.py::test_every_jev_error_fallback_carries_the_intent` and
@@ -537,7 +616,8 @@ ladder's action) and `test_vetoes_and_the_deadline_never_call_the_backend`.
 - `vd engine pool --snapshot F --policy F [--json]`: offline, no key. Prints the pool
   (band, group, family, planet, entity, score basis), the rejection counts, the exact `state`
   and `questions`, and an estimated token count. `--json` prints `pool`, `rejected` and
-  `request` (`state`, `questions`, `estimated_tokens`).
+  `request` (`state`, `questions`, `estimated_tokens`). The request is shown as built, before the
+  send-time intent check of section 6 could substitute the intent text.
 - `vd engine compare --snapshot F --policy F [--json]`: runs the ladder and the jev engine on
   the same input (jev needs the key and the network for a real answer). Exit codes: `0` the
   picks agree (also when a veto or the deadline decided both), `1` they disagree, `3` jev fell
@@ -632,7 +712,11 @@ intent, lower `weights.economy`, or return to the ladder with `planet_rotation` 
   enter the pool when nothing else is legal. Like Colonize and Deploy, a winner of these also needs
   the higher confidence floor, ladder idleness and model endorsement, else the ladder decides.
 - A jev failure never fails a tick and never blocks one: it is a ladder decision with a reason.
-- An agent intent override is honoured only with `adaptive_intent` on, before its expiry and
-  after the same validation as the policy intent; anything else is the policy intent, never an
-  error. It changes no gate, flag or tier (section 3 covers what it can change: what the model
-  endorses).
+- An agent intent override is honoured only with `adaptive_intent` on, before its expiry, with a
+  supported version and a lifetime of at most 72 hours, and after the same validation as the policy
+  intent; anything else is the policy intent, never an error. It changes no gate, flag or tier
+  (section 3 covers what it can change: what the model endorses).
+- The intent text is checked once more against the account's real planet ids, coordinates, wallet and
+  signer immediately before each TypeSafe request, and replaced by the policy or default intent if it
+  fails (section 6). That check, not the load-time one, is what a stale or empty `policy.planets`
+  cannot defeat.

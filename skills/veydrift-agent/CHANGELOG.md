@@ -19,23 +19,34 @@ skills are not versioned in lockstep.
   tick until it expires or is cleared. Lifetime defaults to `adaptive_intent_default_hours` (6) and is at
   most 72 hours. Stored in `$VEYDRIFT_HOME/intent-override.json` (`state.IntentOverride`); resolved once per
   jev tick by `engine.resolve_effective_intent`, which never raises: a flag off, expired, unreadable or
-  rejected override yields the policy intent with a note. The tick deletes an expired override once and logs
-  it to `strategy.md`. See `references/jev-engine.md` ("Adaptive intent").
+  rejected override yields the policy intent with a note. An override with an unsupported `version`, or a
+  lifetime over 72 hours (hand-edited file), is rejected. The tick deletes an expired override once, even with
+  the flag off, deleting only the one it read, and logs it to `strategy.md`. See `references/jev-engine.md`
+  ("Adaptive intent").
 - `vd engine intent set TEXT --reason R [--ttl 90m|6h|2d]`, `show [--json]` and `clear [--reason R]` (exit
   0 ok, 2 `set` refused, 4 policy load error). `set` is refused, with nothing written, when the flag is off,
-  the text or reason is empty or too long, the text identifies the account, or the TTL is out of range.
+  the text or reason is empty or too long, the text identifies the account, or the TTL is out of range. With
+  `--policy` naming a file other than the home policy, `set` warns that ticks read the home policy.
+- **Send-time intent check.** Right before every TypeSafe request, `jev_engine.sendable_context` re-checks the
+  effective intent against the wallet/signer and every planet id and coordinate in the snapshot and the targets.
+  A failing override is replaced by the policy intent (else the default rubric), a failing policy intent by the
+  default; the trace's `intent`/`intent_source` show the text sent and `intent_note` says why.
 - `EngineTrace` gains `intent`, `intent_source` (`policy`/`default`/`agent`), `intent_reason`,
   `intent_set_at`, `intent_expires_at` and `intent_note`, recorded on every engine trace (pre-empts and
   fallbacks included); the strategy.md narration tag is `[engine=jev intent=agent]` for an agent intent; the
   report shows one intent line for an agent intent or an unused override; `vd tick --readiness` counts
   agent-intent proposals.
-- `models.intent_text_problems` and `ADAPTIVE_INTENT_MAX_HOURS`; `adaptive_intent` and
+- `models.intent_text_problems` (normalised matching: NFKC, invisible characters, Unicode digits; `0X` and
+  unprefixed addresses, wallet fragments, any spelling of a known coordinate, embedded planet ids such as
+  `p664`; each problem quotes the match) and `ADAPTIVE_INTENT_MAX_HOURS`; `adaptive_intent` and
   `adaptive_intent_default_hours` in `assets/policy.example.json` and the policy schema.
 
 ### Changed
-- **Potentially breaking:** `policy.engine.jev.intent` is now validated at load. A policy whose intent
-  contains an address, coordinates, the wallet or signer, or a standalone planet id (a number equal to one of
-  `policy.planets`) no longer loads. Rewrite the intent without identifiers, using words for counts.
+- **Potentially breaking, jev policies only:** under `policy.engine.kind = "jev"`, `policy.engine.jev.intent`
+  is now validated at load. A policy whose intent contains an address, three numbers joined by colons (also a
+  ratio like `3:2:1`), the wallet or signer, or a number equal to one of `policy.planets` no longer loads; the
+  message quotes the match. Rewrite the intent without identifiers, using words for counts and ratios ("3 to 2
+  to 1"). A `"ladder"` policy loads whatever its intent says.
 
 ## [1.28.0] - 2026-09-29
 

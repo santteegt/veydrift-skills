@@ -500,7 +500,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | --- | --- | --- | --- |
 | `kind` | string enum | exactly `"ladder"` or `"jev"` | `"ladder"` |
 | `jev.model` | string | the TypeSafe model id | `"jev-latest"` |
-| `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric. It is sent to TypeSafe, so it must not contain an address, coordinates, your wallet or signer, or a planet id as a standalone number (write counts as words): a policy that does **fails to load** | `""` |
+| `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric. It is sent to TypeSafe, so under `kind: "jev"` it must not contain an address, coordinates (any three numbers joined by colons, so write "3 to 2 to 1", not `3:2:1`), your wallet or signer, or a planet id as a number (write counts as words): a jev policy that does **fails to load**, and the message quotes the offending text. A `"ladder"` policy loads whatever it says | `""` |
 | `jev.weights` | object | `fit`, `urgency`, `focus`, `economy`, `threat`, each `0`-`100`, at least one of `fit`/`urgency`/`focus` `> 0`; only the ratios matter | `0.30 / 0.25 / 0.15 / 0.25 / 0.05` |
 | `jev.min_confidence` / `min_confidence_high_stakes` / `min_margin` | float | `0`-`1`; below them the ladder decides instead | `0.5` / `0.75` / `0.03` |
 | `jev.timeout_s` | float | `0.5`-`30`; time budget for the request (one attempt may take up to this long per network phase; a timeout is not retried, a fast failure may retry once): not a hard deadline | `5.0` |
@@ -646,10 +646,14 @@ ladder and says why (`fallback_reason: missing_key`).
 "Upgrade Metal Mine to level 5 (pays back in 6-24 hours, costs a moderate share of the planet's
 resources, build time 2-8 hours)". Never your wallet, signer, any address, coordinates or raw
 planet ids (planets are "planet A", "planet B"), and every quantity is a coarse bucket. The
-intent is the one free-text field, so it is checked: your `intent` (and any override, below)
-is rejected if it contains an address, coordinates, your wallet or signer, or a planet id.
-`vd engine pool --snapshot S.json --policy P.json` prints the exact request offline, with no
-key.
+intent is the one free-text field, so it is checked: your `intent` (under jev) and any override
+(below) is rejected if it contains an address, coordinates, your wallet or signer, or a planet id,
+and the message quotes what matched. The text is checked once more, against your real planet ids and
+coordinates, right before each request, and replaced by your policy intent or the built-in rubric if
+it fails (`intent_note` in the trace says why). Spelled-out numbers ("six hundred sixty-four") are not
+caught, so do not write them either.
+`vd engine pool --snapshot S.json --policy P.json` prints the request offline, with no key (before
+that last substitution).
 
 **Trying it safely:**
 
@@ -678,7 +682,9 @@ While it is live it *replaces* your intent for every tick, scheduled ones includ
 `--ttl` (`90m`, `6h`, `2d`; default `adaptive_intent_default_hours`, at most 72 hours), then your
 own intent applies again and the next tick removes the file and notes it in `logs/strategy.md`.
 It is stored in `$VEYDRIFT_HOME/intent-override.json`. With the flag off, `set` is refused and
-any stored override is ignored. An override can never widen what is allowed: your `allow_*`
+any stored override is ignored (an expired one is still cleaned up). A hand-edited file that claims
+more than 72 hours, or an unknown `version`, is ignored too. Ticks read `$VEYDRIFT_HOME/policy.json`:
+`set --policy OTHER.json` warns when that is not the file you validated against. An override can never widen what is allowed: your `allow_*`
 flags, reserves, tier and the guard decide what is legal first. One caution: the safety gates
 for colonize/attack/missile/deploy are the same under any intent, but an agent intent that
 favours offence can make the model endorse an attack, so with `allow_combat` on keep an eye on

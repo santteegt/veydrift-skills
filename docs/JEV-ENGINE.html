@@ -257,7 +257,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
     </div>
     <div class="sidebar-nav" id="navList"></div>
     <div class="sidebar-foot">
-      <span class="build-pill">1796 TESTS · GREEN</span>
+      <span class="build-pill">1904 TESTS · GREEN</span>
       <div class="theme-toggle" role="group" aria-label="Theme">
         <button data-mode="light" aria-label="Light theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
         <button data-mode="dark" aria-label="Dark theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></svg></button>
@@ -472,7 +472,7 @@ footer.doc-foot { max-width: 800px; margin: 0 auto; padding: 0 40px 80px; color:
     <div class="panel good">
       <h4>Sent</h4>
       <ul>
-        <li>Your strategy intent, or a built-in default: balanced, energy-safe growth with no risky military action.</li>
+        <li>Your strategy intent, or a built-in default: balanced, energy-safe growth with no risky military action. The text is checked against your real account right before it is sent, and replaced if it fails (see Safety).</li>
         <li>A situation summary: whether anything is building or researching, queue states, fleet slots, threat counts, declared targets as text, and per planet its energy, hours-to-cap per resource and defense posture.</li>
         <li>Per candidate: a group, a planet label, a plain sentence ("Upgrade Metal Mine to level 12") and a few descriptive facts.</li>
       </ul>
@@ -609,7 +609,7 @@ vd doctor                            <span class="c-comment"># engine: jev · TY
     <li>Name specific targets when you have them: "starting with Laser Technology".</li>
     <li>Say what to avoid: "never attack", "no colonizing yet".</li>
     <li>Keep it to a sentence or two. It is judged against each candidate, not parsed as rules; hard limits still belong in <code>policy.actions</code>.</li>
-    <li>Leave out identifiers. An address, coordinates, your wallet or signer, or a planet id (a standalone number equal to one of <code>policy.planets</code>, so write counts as words) makes the policy fail to load.</li>
+    <li>Leave out identifiers. Under the jev engine, an address, coordinates (any three numbers joined by colons, so write "3 to 2 to 1", not <code>3:2:1</code>), your wallet or signer, or a planet id (a number equal to one of <code>policy.planets</code>, so write counts as words) makes the policy fail to load, and the message quotes the text that matched. A policy that keeps the ladder loads whatever its intent says, because the intent never leaves the machine.</li>
   </ul>
 
   <h3>Letting the agent adapt the intent</h3>
@@ -623,9 +623,9 @@ vd engine intent clear --reason "raids stopped"</pre></div>
   </div>
   <ul>
     <li><strong>Lifetime.</strong> <code>--ttl</code> is <code>90m</code>, <code>6h</code>, <code>2d</code> (a bare number is hours), above zero and at most 72 hours. Without it the lifetime is <code>adaptive_intent_default_hours</code> (6). The override is one slot in <code>$VEYDRIFT_HOME/intent-override.json</code>; each <code>set</code> replaces it.</li>
-    <li><strong>Refused, nothing written (exit 2)</strong> when the flag is off, the text or reason is empty or too long, the text carries an identifier, or the TTL is out of range. <code>--reason</code> is mandatory and is logged.</li>
-    <li><strong>Honoured only when valid.</strong> A tick uses the override only while <code>adaptive_intent</code> is on, it has not expired and its text still passes the same identifier check. In every other case (flag off, expired, an unreadable or hand-edited file, rejected text) the tick uses your intent and records why. It never fails a tick.</li>
-    <li><strong>What a tick does.</strong> An expired override is deleted once, with one <code>strategy.md</code> line. The report gets an <code>intent:</code> line when an agent intent drove the pick (or a stored override was not used), strategy lines are tagged <code>[engine=jev intent=agent]</code>, and <code>vd tick --readiness</code> counts agent-intent proposals.</li>
+    <li><strong>Refused, nothing written (exit 2)</strong> when the flag is off, the text or reason is empty or too long, the text carries an identifier, or the TTL is out of range. <code>--reason</code> is mandatory and is logged. <code>set --policy OTHER.json</code> warns that ticks read <code>$VEYDRIFT_HOME/policy.json</code>, not that file.</li>
+    <li><strong>Honoured only when valid.</strong> A tick uses the override only while <code>adaptive_intent</code> is on, it has not expired, its version and lifetime are valid (at most 72 hours, not set in the future, so a hand-edited file cannot outlive the ceiling) and its text still passes the same identifier check. In every other case (flag off, expired, an unreadable or hand-edited file, a bad version or lifetime, rejected text) the tick uses your intent and records why. It never fails a tick.</li>
+    <li><strong>What a tick does.</strong> An expired override is deleted once, with one <code>strategy.md</code> line, even with the flag off. Only the override the tick read is deleted: one set a moment later survives. The report gets an <code>intent:</code> line when an agent intent drove the pick (or a stored override was not used), strategy lines are tagged <code>[engine=jev intent=agent]</code>, and <code>vd tick --readiness</code> counts agent-intent proposals.</li>
     <li><strong>What the agent should write.</strong> One sentence naming kinds of development, derived from your own intent and within <code>policy.actions</code>; a concrete reason; the shortest TTL that covers the situation, re-evaluated on expiry; no identifiers; cleared when the situation passes.</li>
   </ul>
   <div class="callout warn">
@@ -670,7 +670,7 @@ vd engine intent clear --reason "raids stopped"</pre></div>
   <div class="chapter-head"><span class="chapter-num">08</span><h2 class="chapter-title">What gets logged</h2></div>
   <ul>
     <li><strong><code>proposals.jsonl</code></strong> gains an <code>engine</code> block when jev is configured: model, request id, latency, input tokens, pool size, rejection counts, the ladder's pick and agreement, winner confidence, margin, focus probabilities, threat, the top five judgments and the <strong>intent fields</strong>. With the ladder configured it is <code>null</code>.</li>
-    <li><strong>The intent fields are on every engine record</strong>, whichever way the tick went (a decision, a hold, any fallback, an engine error, a veto or deadline pre-emption): <code>intent</code> (the text judged against), <code>intent_source</code> (<code>policy</code>, <code>default</code> or <code>agent</code>), and for an override its <code>intent_reason</code>, <code>intent_set_at</code> and <code>intent_expires_at</code>. <code>intent_note</code> says why a stored override was not used: <code>override expired</code>, <code>override ignored: adaptive_intent is off</code>, <code>override file unreadable</code> or <code>override rejected: …</code>.</li>
+    <li><strong>The intent fields are on every engine record</strong>, whichever way the tick went (a decision, a hold, any fallback, an engine error, a veto or deadline pre-emption): <code>intent</code> (the text actually sent), <code>intent_source</code> (<code>policy</code>, <code>default</code> or <code>agent</code>), and for an override its <code>intent_reason</code>, <code>intent_set_at</code> and <code>intent_expires_at</code>. <code>intent_note</code> says why a stored override was not used: <code>override expired</code>, <code>override ignored: adaptive_intent is off</code>, <code>override file unreadable</code>, <code>override rejected: unsupported version</code>, <code>override rejected: lifetime</code> or <code>override rejected: …</code>; or why the text was replaced at send time, for example <code>override rejected at send time: contains planet id 664 ("664")</code>.</li>
     <li>The <code>engine</code> block is <strong>excluded from the dedup fingerprint</strong>, and rationale and alternatives never contain probabilities, so a repeat tick whose pick is unchanged still deduplicates.</li>
     <li><code>Action.engine</code> (<code>"ladder"</code> or <code>"jev"</code>) records provenance only; the guard never reads it. <code>actions.jsonl</code> carries it, and <code>logs/strategy.md</code> tags jev picks with <code>[engine=jev]</code>, or <code>[engine=jev intent=agent]</code> under an agent override; setting, clearing and expiring an override each add a line there too.</li>
     <li>On a manual override (<code>vd tick --action</code>), the "planner would have proposed" record keeps the ladder's shape for both engines; the comparison trace goes in the excluded <code>engine</code> field.</li>
@@ -689,6 +689,7 @@ vd engine intent clear --reason "raids stopped"</pre></div>
     <li>The killswitch path never imports the engine, and vetoes and the storage deadline never call TypeSafe.</li>
     <li><code>plan_next_action</code> stays pure and offline; the only network call is under <code>engine.py</code>.</li>
     <li>The TypeSafe base URL is a code constant, so an environment variable cannot redirect game state to another host.</li>
+    <li><strong>The send-time check is the final guard for the intent text.</strong> Right before every request, the effective intent is checked against your wallet and signer, every planet id and coordinate in the snapshot and every target the pool was built from, whatever <code>policy.planets</code> lists. A failing agent override is replaced by your policy intent if that passes, else by the built-in rubric; a failing policy intent by the rubric. The trace shows the text actually sent and says why. Matching is on a normalised copy (Unicode digits, invisible characters, <code>0X</code> and unprefixed addresses, <code>p664</code>, <code>7/181/14</code>, "galaxy 7 system 181 position 14"), and each message quotes what matched.</li>
   </ul>
 </section>
 
@@ -696,14 +697,14 @@ vd engine intent clear --reason "raids stopped"</pre></div>
   <div class="chapter-head"><span class="chapter-num">10</span><h2 class="chapter-title">Implementation map</h2></div>
   <p>The feature adds three modules and makes targeted changes to six existing ones in <code>skills/veydrift-agent/src/veydrift_agent/</code>. The wallet skill is untouched.</p>
   <div>
-    <div class="module-row"><span class="module-name">jev_engine.py</span><span class="module-lines">1033</span><span class="module-desc">The engine: <code>build_request</code> (state, buckets, questions), <code>_compose</code>, the two-stage and high-stakes gates, and <code>decide</code>, which finalizes the winner with its family's ladder rule or returns the ladder's action.</span></div>
+    <div class="module-row"><span class="module-name">jev_engine.py</span><span class="module-lines">1113</span><span class="module-desc">The engine: <code>build_request</code> (state, buckets, questions), <code>_compose</code>, the two-stage and high-stakes gates, and <code>decide</code>, which finalizes the winner with its family's ladder rule or returns the ladder's action. <code>sendable_context</code> is the send-time intent check.</span></div>
     <div class="module-row"><span class="module-name">jev.py</span><span class="module-lines">358</span><span class="module-desc">The TypeSafe client behind a <code>JevBackend</code> protocol: lazy SDK import, constant base URL, fixed <code>JevError</code> reasons that never carry request content, value-level answer validation, one retry for fast failures only.</span></div>
-    <div class="module-row"><span class="module-name">engine.py</span><span class="module-lines">569</span><span class="module-desc"><code>decide</code> dispatches ladder or jev and turns any engine exception into a ladder fallback; <code>vd engine pool|compare</code>; <code>vd doctor</code> lines. Adaptive intent: <code>EffectiveIntent</code>, <code>resolve_effective_intent</code> (never raises), <code>parse_ttl</code> and the <code>vd engine intent set|show|clear</code> commands.</span></div>
+    <div class="module-row"><span class="module-name">engine.py</span><span class="module-lines">589</span><span class="module-desc"><code>decide</code> dispatches ladder or jev and turns any engine exception into a ladder fallback; <code>vd engine pool|compare</code>; <code>vd doctor</code> lines. Adaptive intent: <code>EffectiveIntent</code>, <code>resolve_effective_intent</code> (never raises), <code>parse_ttl</code> and the <code>vd engine intent set|show|clear</code> commands.</span></div>
     <div class="module-row"><span class="module-name">candidates.py</span><span class="module-lines">+475</span><span class="module-desc"><code>collect_pool</code> and its filters, <code>BAND_BY_FAMILY</code>/<code>GROUP_BY_FAMILY</code>, <code>HIGH_STAKES_FAMILIES</code>, <code>is_non_selectable</code>, the storage-window check.</span></div>
     <div class="module-row"><span class="module-name">plan.py</span><span class="module-lines">+141</span><span class="module-desc"><code>veto_action</code> and <code>deadline_action</code> extracted with no behaviour change, <code>RULE_BY_FAMILY</code>, public <code>finalize_candidate</code>, <code>vd plan run --engine</code>.</span></div>
-    <div class="module-row"><span class="module-name">models.py</span><span class="module-lines">+193</span><span class="module-desc"><code>EngineCfg</code>/<code>JevCfg</code>/<code>JevWeights</code> (unknown keys, Infinity and NaN rejected), <code>Action.engine</code>, <code>EngineTrace</code>/<code>EngineJudgment</code> (with the intent fields), <code>intent_text_problems</code> and the <code>Policy</code> check that keeps identifiers out of the intent.</span></div>
-    <div class="module-row"><span class="module-name">tick.py</span><span class="module-lines">+140</span><span class="module-desc">Dispatch at the plan step, a ladder-only killswitch path, the <code>engine</code> record and its fingerprint exclusion, the panel line, the override comparison; intent resolution, expiry cleanup, the intent line, the narration tag and the readiness count.</span></div>
-    <div class="module-row"><span class="module-name">state.py</span><span class="module-lines">+58</span><span class="module-desc"><code>IntentOverride</code> (timezone-aware timestamps only) and <code>intent-override.json</code>: atomic save, load that raises <code>IntentOverrideError</code> for an unreadable file, clear.</span></div>
+    <div class="module-row"><span class="module-name">models.py</span><span class="module-lines">+277</span><span class="module-desc"><code>EngineCfg</code>/<code>JevCfg</code>/<code>JevWeights</code> (unknown keys, Infinity and NaN rejected), <code>Action.engine</code>, <code>EngineTrace</code>/<code>EngineJudgment</code> (with the intent fields), <code>intent_text_problems</code> (normalised matching, quoted snippets) and the <code>Policy</code> check that keeps identifiers out of the intent under the jev engine.</span></div>
+    <div class="module-row"><span class="module-name">tick.py</span><span class="module-lines">+142</span><span class="module-desc">Dispatch at the plan step, a ladder-only killswitch path, the <code>engine</code> record and its fingerprint exclusion, the panel line, the override comparison; intent resolution, expiry cleanup, the intent line, the narration tag and the readiness count.</span></div>
+    <div class="module-row"><span class="module-name">state.py</span><span class="module-lines">+114</span><span class="module-desc"><code>IntentOverride</code> (timezone-aware timestamps only) and <code>intent-override.json</code>: atomic save through a unique temp file, load that raises <code>IntentOverrideError</code> for any unreadable file (a pathological one included), and clear, which with <code>expected</code> removes only the override a tick read.</span></div>
     <div class="module-row"><span class="module-name">log.py</span><span class="module-lines">+2</span><span class="module-desc"><code>TYPESAFE_API_KEY</code> added to the secrets scrubbed from every log.</span></div>
   </div>
 
@@ -712,8 +713,8 @@ vd engine intent clear --reason "raids stopped"</pre></div>
     <li>The engine never runs inside <code>plan_next_action</code>; vetoes and the deadline run before any engine.</li>
     <li>The pool comes only from <code>collect_pool</code>, and its filters must keep mirroring the guard's BLOCK gates. Two property tests enforce this across fixtures and a policy matrix.</li>
     <li>Any failure or weak result runs the ladder, and a winner is always a candidate from the pool.</li>
-    <li>Nothing identifying is sent; every number is bucketed by code, and the intent (policy or override) passes <code>intent_text_problems</code>.</li>
-    <li>An intent override is honoured only with <code>adaptive_intent</code> on and before it expires; any other case uses the policy intent and never fails a tick.</li>
+    <li>Nothing identifying is sent; every number is bucketed by code, and the intent (policy or override) passes <code>intent_text_problems</code>, finally at send time against the real account.</li>
+    <li>An intent override is honoured only with <code>adaptive_intent</code> on, before it expires, with a supported version and a lifetime of at most 72 hours; any other case uses the policy intent and never fails a tick.</li>
     <li>The effective intent and its source are on every engine trace.</li>
   </ul>
 </section>
@@ -729,6 +730,10 @@ vd engine intent clear --reason "raids stopped"</pre></div>
     <div class="step"><span class="step-num">5</span><div><strong>Judge pass 2</strong> verified every fix and found nothing of substance; five small follow-ups were fixed.</div></div>
     <div class="step"><span class="step-num">6</span><div><strong>Merge main.</strong> Four unrelated defects found along the way were fixed on <code>main</code> separately and merged in.</div></div>
     <div class="step"><span class="step-num">7</span><div><strong>Live runs</strong> against the real API found three things no fake could: the off-by-one positional lookup, over-strict gating that sent clear-cut ticks to the ladder (fixed with the two-stage gate), and storage upgrades bought when nothing else was legal (fixed with <code>proactive_storage_hours</code>).</div></div>
+    <div class="step"><span class="step-num">8</span><div><strong>Adaptive intent: freeze interfaces (WP0).</strong> The orchestrator added the override model and its storage, the policy flags, the effective-intent type and the resolver <code>resolve_effective_intent</code>, with tests, so the next two packages could not collide.</div></div>
+    <div class="step"><span class="step-num">9</span><div><strong>Build in parallel.</strong> WP-1 (the <code>vd engine intent set|show|clear</code> commands) alongside WP-2 (carrying the intent through the engine, the trace and the tick), both on Sonnet 5.5; then WP-3 (documentation and the 1.29.0 release notes).</div></div>
+    <div class="step"><span class="step-num">10</span><div><strong>Judge pass</strong> on Opus 5.5 found real defects: with <code>policy.planets</code> empty, an override could carry a raw planet id to TypeSafe; a hand-edited override's lifetime past 72 hours was honoured; several ways round the identifier matching (<code>0X</code> addresses, fullwidth digits, zero-width characters, <code>p664</code>, other coordinate spellings); the new validator broke ladder policies that merely mentioned a ratio like <code>3:2:1</code>; an expiry cleanup could delete an override set a moment later; and a deeply nested file crashed the loader with a recursion error.</div></div>
+    <div class="step"><span class="step-num">11</span><div><strong>Fix.</strong> All of them were fixed, and the matching was rewritten on a normalised copy. The final guard is a send-time check that holds the text against the real account right before each request, so the earlier checks no longer have to be perfect. End-to-end tests run the real engine from an override file to the backend.</div></div>
   </div>
 </section>
 
@@ -740,13 +745,14 @@ vd engine intent clear --reason "raids stopped"</pre></div>
       <tr><td>Pool property tests</td><td>Every pooled entry passes the real guard's snapshot-decidable gates; any ladder winner missing from the pool was refused for a reason a guard gate mirrors.</td></tr>
       <tr><td>Engine tests</td><td>Composition math, both gate stages, the high-stakes path, every fallback reason returning the ladder's exact action, payload hygiene, dedup stability.</td></tr>
       <tr><td>Client tests</td><td>The real SDK over a mock transport: request shape, base-URL pinning, error mapping, retry counts, value validation, secrets never in errors.</td></tr>
-      <tr><td>Tick tests</td><td>The engine record, fingerprint exclusion, killswitch isolation, override records, key scrubbing, adaptive-intent expiry, panel line and readiness count, and that the default policy behaves exactly as before.</td></tr>
+      <tr><td>Tick tests</td><td>The engine record, fingerprint exclusion, killswitch isolation, override records, key scrubbing, adaptive-intent expiry (including the cleanup race), panel line and readiness count, and that the default policy behaves exactly as before. End-to-end tests run an override file through the real engine and assert what the backend receives.</td></tr>
+      <tr><td>Intent matching tests</td><td>A table of realistic bypasses (case, fullwidth and zero-width tricks, split wallets, coordinate spellings, planet-id forms) that must be caught, ordinary prose that must not, the deliberate gaps, quoted snippets, and the send-time substitution on every path.</td></tr>
       <tr><td>Live scenarios (opt-in)</td><td>Six scenarios against real Jev: openers on two planet types, storage near cap, building-starves-research, an incoming threat, a multi-planet research intent. Latest run: 6 of 6 decided by jev, none unacceptable.</td></tr>
     </tbody>
   </table></div>
   <div class="codeblock">
     <div class="codeblock-head"><span>shell</span><span>from the repo root</span></div>
-    <div class="codeblock-body"><pre>uv run --directory skills/veydrift-agent pytest -q          <span class="c-comment"># 1796 passed, 2 live-only skipped</span>
+    <div class="codeblock-body"><pre>uv run --directory skills/veydrift-agent pytest -q          <span class="c-comment"># 1904 passed, 2 live-only skipped</span>
 VEYDRIFT_JEV_LIVE_TESTS=1 uv run --directory skills/veydrift-agent \
   pytest -q -s -k live tests/test_jev.py tests/test_jev_engine.py   <span class="c-comment"># needs TYPESAFE_API_KEY</span></pre></div>
   </div>
@@ -760,6 +766,7 @@ VEYDRIFT_JEV_LIVE_TESTS=1 uv run --directory skills/veydrift-agent \
     <li><strong>Endorsement reads an expected fit.</strong> The high-stakes confidence floor is what catches split answers.</li>
     <li><strong>Offline commands see less.</strong> <code>vd engine pool</code>, <code>compare</code> and <code>plan run</code> fetch no live targets, so Colonize, Attack, Missile and debris harvest never appear there, and threats read as unknown.</li>
     <li><strong>An agent intent can endorse a high-stakes move under the same gates.</strong> With <code>allow_combat</code> on, an override that favours offence can lead the model to endorse an attack that every gate permits. Nothing blocks it by design; audit it through <code>intent_source</code> on the engine records, and keep offence out of an override unless your own intent asks for it.</li>
+    <li><strong>The intent check is a filter, not a proof.</strong> Spelled-out numbers ("six hundred sixty-four"), two-part coordinates, ids with spaced-out digits and a wallet that is both split and shortened below 8 hex characters are deliberately not caught. It also errs toward flagging: any three numbers joined by colons count as coordinates, and the account's own three coordinate numbers in prose can match by coincidence. The cost is one tick on a substituted intent. <code>vd engine pool</code> prints the request before that substitution.</li>
     <li><strong>Judgment quality is validated by six live scenarios, not a season of play.</strong> Start at advisor tier and read the engine blocks before trusting it with sends.</li>
   </ul>
 </section>

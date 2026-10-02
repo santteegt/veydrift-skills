@@ -199,7 +199,9 @@ changes (raids, a new colony, saving for a target): `vd engine intent set "<one 
 flag the command is refused; do not edit `policy.json` to get around it. Follow the guidance in
 `references/jev-engine.md` ("Adaptive intent"): stay within the user's standing intent and
 `policy.actions`, give a concrete reason, prefer short TTLs, and never put addresses, coordinates
-or planet ids in the text (they are refused). An override never changes a guardrail.
+or planet ids in the text (they are refused, as is a three-number ratio like `3:2:1`; write "3 to 2
+to 1"), and the text is checked again against the account right before it is sent. An override never
+changes a guardrail.
 
 The economic band's actual choices — which mine, which energy source — are **derived from
 the planet's live traits** (temperature, multipliers, current levels), not hardcoded per

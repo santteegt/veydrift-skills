@@ -80,7 +80,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1798 Python tests** (1796 passed + 2 skipped: the opt-in `VEYDRIFT_JEV_LIVE_TESTS=1`
+baseline: **1906 Python tests** (1904 passed + 2 skipped: the opt-in `VEYDRIFT_JEV_LIVE_TESTS=1`
 live TypeSafe tests, which also need `TYPESAFE_API_KEY`), **399 TypeScript tests** (396 passed + 3
 intentionally skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain
 check), both suites green. Run both before calling any change done; they are independent
@@ -250,12 +250,20 @@ touching related code, re-run the check named alongside each one.
   `TYPESAFE_API_KEY` only, and is a default scrubbed secret.
 - **An intent override (`$VEYDRIFT_HOME/intent-override.json`, `vd engine intent`) is honoured only with
   `policy.engine.jev.adaptive_intent` on at tick time and before its `expires_at`.** Off, expired, unreadable
-  (including a timestamp without a timezone) or rejected, the policy intent applies with an `intent_note`; the
-  resolver (`engine.resolve_effective_intent`) never raises, so an override never fails a tick. `set` refuses
-  (exit 2, nothing written) when the flag is off. The lifetime is at most `ADAPTIVE_INTENT_MAX_HOURS` (72).
-- **Every intent sent to TypeSafe passes `models.intent_text_problems`:** the policy intent at `Policy` load
-  (a failing policy does not load), an override at `set` and again at every tick. Keep it on every path that
-  can put text in `strategy_intent`.
+  (including a timestamp without a timezone or a pathological file), of an unsupported `version` or a lifetime
+  over `ADAPTIVE_INTENT_MAX_HOURS` (72), or rejected, the policy intent applies with an `intent_note`; the
+  resolver (`engine.resolve_effective_intent`) never raises, so an override never fails a tick. The
+  resolver, not the file, enforces version and lifetime. `set` refuses (exit 2, nothing written) when the
+  flag is off. Expiry cleanup deletes only the override the tick read (`clear_intent_override(expected)`),
+  with the flag off too.
+- **Every intent sent to TypeSafe passes `models.intent_text_problems`; the send-time check is the final
+  guard.** The policy intent is checked at `Policy` load only under `kind: "jev"` (a ladder policy loads
+  whatever its intent says), an override at `set` and at every tick, and `jev_engine.sendable_context`
+  re-checks the text against the wallet/signer and every snapshot and target planet id and coordinate
+  immediately before each request, substituting the policy intent or the default. `policy.planets` can be
+  empty or stale, so only that check sees the real account. Keep it on every path that can put text in
+  `strategy_intent`. Matching is on a normalised copy and deliberately misses spelled-out numbers,
+  two-part coordinates and digit-spaced ids; a three-number ratio like `3:2:1` is refused under jev.
 - **The effective intent is on every engine trace** (`intent`, `intent_source`, and the override's reason and
   times or `intent_note`), including pre-empts and fallbacks (`jev_engine.intent_trace_fields`). It is inside
   the dedup-excluded `engine` block, and no gate reads it.
