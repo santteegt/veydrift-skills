@@ -500,7 +500,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | --- | --- | --- | --- |
 | `kind` | string enum | exactly `"ladder"` or `"jev"` | `"ladder"` |
 | `jev.model` | string | the TypeSafe model id | `"jev-latest"` |
-| `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric | `""` |
+| `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric. It is sent to TypeSafe, so it must not contain an address, coordinates, your wallet or signer, or a planet id as a standalone number (write counts as words): a policy that does **fails to load** | `""` |
 | `jev.weights` | object | `fit`, `urgency`, `focus`, `economy`, `threat`, each `0`-`100`, at least one of `fit`/`urgency`/`focus` `> 0`; only the ratios matter | `0.30 / 0.25 / 0.15 / 0.25 / 0.05` |
 | `jev.min_confidence` / `min_confidence_high_stakes` / `min_margin` | float | `0`-`1`; below them the ladder decides instead | `0.5` / `0.75` / `0.03` |
 | `jev.timeout_s` | float | `0.5`-`30`; time budget for the request (one attempt may take up to this long per network phase; a timeout is not retried, a fast failure may retry once): not a hard deadline | `5.0` |
@@ -509,6 +509,8 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | `jev.proactive_storage_hours` | float | `> 0` and at most `720`; a proactive storage upgrade is considered only when its resource fills within this many hours, or when the cap blocks another building | `24.0` |
 | `jev.high_stakes_only_when_idle` | bool | `true`: Colonize/Attack/Missile/Deploy enter the pool only when nothing else is legal, and are only taken when the ladder itself has nothing ordinary to do and the model endorses them | `true` |
 | `jev.allow_hold` | bool | `true`: a confident "wait" judgment returns a NO-OP instead of the best candidate | `false` |
+| `jev.adaptive_intent` | bool | `true`: the agent may set a standing, expiring override of `intent` (`vd engine intent set`), used by every tick until it expires or is cleared. `false`: any stored override is ignored and `set` is refused | `false` |
+| `jev.adaptive_intent_default_hours` | float | `> 0` and at most `72`; the lifetime of an override set without `--ttl` | `6.0` |
 
 **`strategy`**
 
@@ -643,7 +645,9 @@ ladder and says why (`fallback_reason: missing_key`).
 **What leaves your machine:** a paragraph of intent, plus per-candidate sentences like
 "Upgrade Metal Mine to level 5 (pays back in 6-24 hours, costs a moderate share of the planet's
 resources, build time 2-8 hours)". Never your wallet, signer, any address, coordinates or raw
-planet ids (planets are "planet A", "planet B"), and every quantity is a coarse bucket.
+planet ids (planets are "planet A", "planet B"), and every quantity is a coarse bucket. The
+intent is the one free-text field, so it is checked: your `intent` (and any override, below)
+is rejected if it contains an address, coordinates, your wallet or signer, or a planet id.
 `vd engine pool --snapshot S.json --policy P.json` prints the exact request offline, with no
 key.
 
@@ -658,6 +662,30 @@ Exit `0` = they agree, `1` = they disagree, `3` = jev fell back to the ladder. K
 decided, its confidence, whether it agreed with the ladder, the top candidates); the tick
 report gets one `engine:` line. `vd plan run --engine jev` does the same offline against a
 snapshot file.
+
+**Letting the agent adapt the intent.** A fixed intent can't react when your situation changes
+(a raid, a new colony, saving for a target). If you set `"adaptive_intent": true` under `jev`, the
+agent running the skill may store a standing, expiring override of your intent:
+
+```bash
+vd engine intent set "Defense first while raids continue; keep research going slowly." \
+    --reason "three attacks on the colonies today" --ttl 6h
+vd engine intent show       # what the next tick will judge against, and why
+vd engine intent clear --reason "raids stopped"
+```
+
+While it is live it *replaces* your intent for every tick, scheduled ones included. It lasts
+`--ttl` (`90m`, `6h`, `2d`; default `adaptive_intent_default_hours`, at most 72 hours), then your
+own intent applies again and the next tick removes the file and notes it in `logs/strategy.md`.
+It is stored in `$VEYDRIFT_HOME/intent-override.json`. With the flag off, `set` is refused and
+any stored override is ignored. An override can never widen what is allowed: your `allow_*`
+flags, reserves, tier and the guard decide what is legal first. One caution: the safety gates
+for colonize/attack/missile/deploy are the same under any intent, but an agent intent that
+favours offence can make the model endorse an attack, so with `allow_combat` on keep an eye on
+what the agent writes. Every `engine` record in `proposals.jsonl` carries `intent`,
+`intent_source` (`policy`, `default` or `agent`) and the override's reason and expiry, so you can
+audit which picks an agent steered; the report adds an `intent:` line for an agent intent, and
+`vd tick --readiness` counts agent-intent proposals.
 
 Cost is one short request per tick. Its limits are real: it judges qualitative fit, not
 numbers, and its choices are not reproducible bit for bit (a result near a confidence or margin threshold can flip between the jev pick and the ladder from one tick to the next). If a young colony gets ignored

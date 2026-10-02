@@ -799,7 +799,7 @@ by any of this — it keeps its own, separate, higher-precedence reachability pa
 
 `planet_rotation` applies to the ladder engine only. Under `policy.engine.kind = "jev"` the
 candidates of every planet are compared in one pool instead of walked, so there is nothing to
-rotate (`references/jev-engine.md` §12 says why that is acceptable and what it costs).
+rotate (`references/jev-engine.md` §13 says why that is acceptable and what it costs).
 
 **The problem.** Three rungs — 6 (building queue empty), 8b (unlock-chain), and 8
 (shipyard idle) — walk `policy.planets` in list order and return on the first planet

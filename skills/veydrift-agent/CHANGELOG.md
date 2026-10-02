@@ -11,6 +11,32 @@ skills are not versioned in lockstep.
 
 ## [Unreleased]
 
+## [1.29.0] - 2026-10-02
+
+### Added
+- **Adaptive intent** for the jev engine: with `policy.engine.jev.adaptive_intent` on (default `false`), an
+  agent can store a standing, expiring override of `policy.engine.jev.intent` that replaces it for every
+  tick until it expires or is cleared. Lifetime defaults to `adaptive_intent_default_hours` (6) and is at
+  most 72 hours. Stored in `$VEYDRIFT_HOME/intent-override.json` (`state.IntentOverride`); resolved once per
+  jev tick by `engine.resolve_effective_intent`, which never raises: a flag off, expired, unreadable or
+  rejected override yields the policy intent with a note. The tick deletes an expired override once and logs
+  it to `strategy.md`. See `references/jev-engine.md` ("Adaptive intent").
+- `vd engine intent set TEXT --reason R [--ttl 90m|6h|2d]`, `show [--json]` and `clear [--reason R]` (exit
+  0 ok, 2 `set` refused, 4 policy load error). `set` is refused, with nothing written, when the flag is off,
+  the text or reason is empty or too long, the text identifies the account, or the TTL is out of range.
+- `EngineTrace` gains `intent`, `intent_source` (`policy`/`default`/`agent`), `intent_reason`,
+  `intent_set_at`, `intent_expires_at` and `intent_note`, recorded on every engine trace (pre-empts and
+  fallbacks included); the strategy.md narration tag is `[engine=jev intent=agent]` for an agent intent; the
+  report shows one intent line for an agent intent or an unused override; `vd tick --readiness` counts
+  agent-intent proposals.
+- `models.intent_text_problems` and `ADAPTIVE_INTENT_MAX_HOURS`; `adaptive_intent` and
+  `adaptive_intent_default_hours` in `assets/policy.example.json` and the policy schema.
+
+### Changed
+- **Potentially breaking:** `policy.engine.jev.intent` is now validated at load. A policy whose intent
+  contains an address, coordinates, the wallet or signer, or a standalone planet id (a number equal to one of
+  `policy.planets`) no longer loads. Rewrite the intent without identifiers, using words for counts.
+
 ## [1.28.0] - 2026-09-29
 
 ### Fixed

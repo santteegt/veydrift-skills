@@ -15,17 +15,18 @@ questions, composition, gates), `jev.py` (the TypeSafe client), `candidates.py`'
 
 1. When to use it, and when not to
 2. Enabling it
-3. Decision flow
-4. The candidate pool
-5. What is sent to TypeSafe, and what never is
-6. The questions and the composite score
-7. Gates and fallbacks
-8. What gets logged
-9. CLI
-10. Tuning
-11. Limits
-12. Why cross-planet scoring is acceptable here
-13. Safety
+3. Adaptive intent
+4. Decision flow
+5. The candidate pool
+6. What is sent to TypeSafe, and what never is
+7. The questions and the composite score
+8. Gates and fallbacks
+9. What gets logged
+10. CLI
+11. Tuning
+12. Limits
+13. Why cross-planet scoring is acceptable here
+14. Safety
 
 ## 1. When to use it, and when not to
 
@@ -62,7 +63,9 @@ ladder; switch the kind and write an intent:
     "payback_reference_hours": 24.0,
     "proactive_storage_hours": 24.0,
     "high_stakes_only_when_idle": true,
-    "allow_hold": false
+    "allow_hold": false,
+    "adaptive_intent": false,
+    "adaptive_intent_default_hours": 6.0
   }
 }
 ```
@@ -77,6 +80,18 @@ ladder; switch the kind and write an intent:
 - `engine` is `extra="forbid"` throughout: an unknown key, including a typo inside `jev`, is a
   hard error, not a silent default. `intent` is capped at 1000 characters; empty uses a
   built-in rubric (balanced, energy-safe growth, no risky military action).
+- **The intent is validated at load.** It is sent to TypeSafe verbatim, so a policy whose `intent`
+  contains any of these **fails to load** (every `vd` command that reads the policy then reports the
+  problems): an address (`0x` followed by 40 or more hex digits), coordinates (`7:291:1`), the
+  policy's `wallet` or `signer` address (case-insensitive), or a planet id from `policy.planets` as
+  a standalone number. A number inside a longer number is fine; a standalone number that equals a
+  planet id is refused, so write counts as words ("two planets") rather than digits. Describe the
+  strategy without identifiers. `tests/test_models_engine.py` pins each case
+  (`test_a_policy_whose_intent_identifies_the_account_fails_to_load`,
+  `test_a_planet_id_is_flagged_as_a_standalone_number`).
+- `adaptive_intent` (default `false`) lets an agent set a standing, expiring replacement for
+  `intent` (section 3). `adaptive_intent_default_hours` (default 6, in `(0, 72]`) is the lifetime
+  of an override set without `--ttl`. Neither affects a tick unless `kind` is `"jev"`.
 - Numbers are validated at load: no `Infinity`/`NaN` anywhere in the `engine` block; each weight
   is `0..100`; `payback_reference_hours` is in `(0, 10000]`; `proactive_storage_hours` is in
   `(0, 720]`; and at least one of `fit`, `urgency`
@@ -85,7 +100,131 @@ ladder; switch the kind and write an intent:
 - `vd doctor` prints the configured kind, whether the key is set (never its value) and
   whether the SDK is importable.
 
-## 3. Decision flow
+## 3. Adaptive intent
+
+A standing, expiring **override of `policy.engine.jev.intent`**. While one is live it *replaces*
+the policy intent for every tick (scheduled ones included), so the engine follows a change of
+situation (a raid, a new colony, saving for a target) without anyone editing `policy.json`. When it
+expires or is cleared, the policy intent applies again. Only the jev engine reads it; the ladder
+has no intent.
+
+**Enabling.** Set `policy.engine.jev.adaptive_intent` to `true` (section 2). With it off, a stored
+override is ignored by every tick and `set` refuses to write one. `adaptive_intent_default_hours`
+is the lifetime when `--ttl` is omitted (default 6); the maximum lifetime is **72 hours**,
+whatever the policy says (`models.ADAPTIVE_INTENT_MAX_HOURS`). The override lives in
+`$VEYDRIFT_HOME/intent-override.json`: one slot, replaced by each `set`, written atomically.
+
+**Commands** (`vd engine intent`; `--policy FILE` overrides `$VEYDRIFT_HOME/policy.json`):
+
+```bash
+vd engine intent set "Defense first while raids continue; keep research going slowly." \
+    --reason "three attacks on the colonies today" --ttl 6h
+vd engine intent show [--json]
+vd engine intent clear [--reason "raids stopped"]
+```
+
+- **`set TEXT --reason R [--ttl T] [--json]`**. `--reason` is required (at most 280 characters);
+  `TEXT` is at most 1000. `T` is `<number><unit>` with unit `m`, `h` or `d` (`90m`, `6h`, `1.5h`,
+  `2d`), a bare number meaning hours; it must be above zero and at most 72 hours. It is refused,
+  exit **2**, with every problem listed, **nothing written and no `strategy.md` line**, when:
+  `adaptive_intent` is off, the text or reason is empty or too long, the text fails the
+  validation of section 2 (address, coordinates, wallet or signer, planet id), or the TTL does not
+  parse or is out of range. On success it replaces any existing override (an unreadable file too)
+  and appends `intent override set until <expiry>: "<text>" -- <reason>` to `strategy.md`; under the
+  ladder (`kind` not `"jev"`) it still writes but warns that the override has no effect. `--json`
+  prints the stored override plus `replaced` and `warnings`.
+- **`show [--json]`** is read-only: the intent a tick would judge against now (`intent`),
+  `source` (`policy`, `default` or `agent`), the override's reason, set time and expiry, and a
+  `note` when a stored override is not in use. It reports an expired override and never deletes it
+  (the tick does). Under the ladder it prints the stored override marked unused. `--json` keys:
+  `engine_kind`, `adaptive_intent`, `intent`, `source`, `note`, `expired`, `override`.
+- **`clear [--reason R]`** removes the file (an unreadable one too) and appends `intent override
+  cleared -- <reason>`. It never reads the policy, works with the flag off, and exits 0 whether or
+  not an override existed.
+- Exit codes: **0** done, **2** `set` refused, **4** the policy failed to load (`set` and `show`).
+
+**Resolution.** `engine.resolve_effective_intent` runs once per jev tick, in this order; the first
+case that applies wins, and **none of them raises or fails a tick**. Every case but the last
+returns the policy intent (the built-in rubric when the policy intent is empty) and records its
+note on the trace:
+
+| Case | Result | `intent_note` |
+| --- | --- | --- |
+| `policy.engine.kind` is not `"jev"` | policy intent; the file is not read | none |
+| no override file, or an empty one | policy intent | none |
+| the file cannot be read: bad JSON, wrong shape, text or reason over the limits, or a timestamp without a timezone (a hand-edited file) | policy intent | `override file unreadable` |
+| `adaptive_intent` is off | policy intent; the file is kept | `override ignored: adaptive_intent is off` |
+| `now` is at or past `expires_at` (the boundary is exclusive) | policy intent; the tick removes the file | `override expired` |
+| the stored text fails section 2's validation, or is blank (a hand-edited file) | policy intent | `override rejected: <problems>` |
+| otherwise | **the agent intent**, whitespace stripped | none |
+
+An empty policy intent falls to the built-in rubric (`intent_source: "default"`). The validation
+runs again at every tick, so editing the file by hand cannot get identifying text to TypeSafe.
+`tests/test_intent.py` pins each row (for example
+`test_an_override_is_ignored_when_the_flag_is_off`, `test_the_expiry_boundary_is_exclusive`,
+`test_a_hand_edited_override_with_identifying_text_is_rejected`,
+`test_a_hand_edited_override_with_naive_datetimes_does_not_raise`).
+
+**What a tick does.** After the killswitch check (which does no extra work) and only under a
+configured jev engine:
+
+- An **expired** override is deleted and one `strategy.md` line is appended, `intent override
+  expired: "<text>" -- back to the policy intent` (`default intent` when the policy has none), so
+  the expiry is logged exactly once, because the file is then gone
+  (`tests/test_tick.py::test_an_expired_override_is_deleted_and_logged_exactly_once`). With the
+  flag off an expired file is not deleted: nothing is resolved from it.
+- The effective intent goes to the engine and onto every trace (section 9). A manual-override tick
+  (`vd tick --action`) runs the same engine for its comparison, so it carries the intent too.
+- The report panel gains **one** line, only when an agent intent drove the tick or a stored
+  override was not used: `intent: agent -- "<text, 80 characters at most>" (until <date time> UTC;
+  reason: <reason>)`, or `intent: policy (override expired)`. A plain policy or default intent
+  prints nothing, so default reports are unchanged.
+- A jev narration line in `strategy.md` ends `[engine=jev intent=agent]` when an agent intent was
+  in force, `[engine=jev]` otherwise.
+- `vd tick --readiness` adds `agent-intent proposals: N of M jev proposals`, so promotion evidence
+  separates ticks an agent steered from ticks the policy steered. It is absent until a jev
+  proposal exists.
+
+Under the ladder none of this happens: the tick never reads the file, and the record's `engine`
+block stays `null` (`tests/test_tick.py::test_a_ladder_policy_never_resolves_or_touches_an_override`).
+
+**Guidance for an agent setting one.** Only with `adaptive_intent` on, and only to follow the
+user's goals through a change of situation, never to change them.
+
+- **Stay inside the user's standing intent and `policy.actions`.** Derive the override from the
+  policy intent: it narrows or re-weights what the user already asked for, for a while; it does not
+  invent a strategy. An override cannot widen what is permitted: the `allow_*` flags, `reserves`,
+  `limits` and the tier decide what is legal before the model sees anything, and the guard and the
+  wallet re-check the winner. Do not add wording the user never asked for, above all offence,
+  colonizing or deploying (see the high-stakes note below).
+- **Always give a concrete reason**, naming what you observed ("three raids on the colonies today",
+  "saving for the fourth colony ship"). It is logged to `strategy.md`, the trace and the report,
+  and it is what a human reads to decide whether to keep the override.
+- **Prefer short TTLs and re-evaluate on expiry.** Pick the shortest lifetime that covers the
+  situation (a few hours, not the 72-hour ceiling); when it lapses, look at the account again and
+  set a new one only if the situation still holds. Do not renew on reflex.
+- **Write one clear sentence naming kinds of development** ("defense", "research", "colony growth",
+  "ships", "mines", "storage") in priority order, with what to avoid, as the policy intent does
+  (section 11). No numbers or thresholds.
+- **Never include identifiers.** No address, coordinates, wallet or signer, planet id, and no
+  standalone digits equal to a planet id: `set` refuses them, and a tick rejects them again from a
+  hand-edited file. Say "the colonies" or "the home planet".
+- **Clear it when the situation passes**, with a reason (`vd engine intent clear --reason ...`),
+  rather than leaving a stale override to run out.
+- Run `vd engine intent show` first: it says what is in force and why.
+
+**High stakes under an agent intent.** An agent intent changes nothing about the gates. A high-stakes
+pick (colonize, attack, missile, deploy) needs the same confidence floor, ladder idleness, margin and
+model endorsement as under a policy intent (section 8), plus its allow flag (`allow_combat`,
+`strategy.colonize`, `allow_fleet_noncombat`) and the tier. What does change is what the model
+*endorses*: an intent that favours offence can make it endorse an attack the policy intent would
+not, so **with `allow_combat` on, an agent intent can lead to a combat pick that every gate allows**.
+Keep offence out of an override unless the standing intent already asks for it. The trace records
+`intent_source`, and the override's reason, set time and expiry, on every engine record, so
+`proposals.jsonl` shows which picks an agent steered
+(`tests/test_jev_engine.py::test_an_endorsed_high_stakes_pick_is_decided_identically_under_a_policy_and_an_agent_intent`).
+
+## 4. Decision flow
 
 `engine.decide` is what `vd tick` calls in place of `plan.plan_next_action`:
 
@@ -96,11 +235,11 @@ ladder; switch the kind and write an intent:
    with no request. A loss-avoidance deadline is not a matter of taste.
 3. The ladder's own pick is computed anyway (pure and cheap): it is the fallback and the
    reference for `agrees_with_ladder`.
-4. **Pool**: `candidates.collect_pool` builds every legal, selectable candidate (section 4). An
+4. **Pool**: `candidates.collect_pool` builds every legal, selectable candidate (section 5). An
    empty pool falls back with `empty_pool`, no request.
-5. **One request** to TypeSafe (section 5), all questions in parallel.
-6. **Composition**: a weighted score per candidate (section 6).
-7. **Gates** (section 7). The winner is finalized with the rule literal of its family
+5. **One request** to TypeSafe (section 6), all questions in parallel.
+6. **Composition**: a weighted score per candidate (section 7).
+7. **Gates** (section 8). The winner is finalized with the rule literal of its family
    (`plan.RULE_BY_FAMILY`, the same `6:`/`7:`/`8...` rules the ladder uses, so brief goals,
    narration and the storage gate keep working) and tagged `Action.engine = "jev"`. Any
    failure of a gate, any `JevError`, or any unexpected exception returns the **ladder's**
@@ -109,7 +248,7 @@ ladder; switch the kind and write an intent:
 `plan_next_action` itself never calls the network; `vd plan run` stays offline unless you pass
 `--engine policy|jev`.
 
-## 4. The candidate pool
+## 5. The candidate pool
 
 The pool is the only thing the model chooses from; it cannot invent an action or an argument.
 `collect_pool` runs every candidate generator on **every** target planet (unrotated;
@@ -159,7 +298,7 @@ priorities, and an energy-limited planet.
 **High stakes.** Colonize, Attack, Missile and Deploy (`candidates.HIGH_STAKES_FAMILIES`; Deploy
 moves the whole fleet to another planet for good) are pooled only when nothing else survived
 (`policy.engine.jev.high_stakes_only_when_idle`, default `true`); switching it off lets them
-compete, still subject to their flags and to the gates in section 7 (confidence floor, ladder
+compete, still subject to their flags and to the gates in section 8 (confidence floor, ladder
 idleness, model endorsement).
 
 **Deterministic pre-trim.** With more survivors than `max_candidates`, each family is ranked
@@ -168,7 +307,7 @@ round in band order, so every family present keeps a slot before any gets a seco
 number dropped is reported as `pre_trim`, not a rejection. The pool is ordered by band, then
 generation index.
 
-## 5. What is sent to TypeSafe, and what never is
+## 6. What is sent to TypeSafe, and what never is
 
 One request: a `state` object and `2N + 2` questions for `N` pooled candidates. `vd engine
 pool` prints the exact request offline and an estimated size; the ceiling is 48,000 estimated
@@ -184,9 +323,15 @@ by label; a harvest, colonize or attack names no coordinates at all.
 `tests/test_jev_engine.py::test_the_payload_carries_no_wallet_signer_address_coordinate_or_raw_planet_id`
 pins this.
 
-**Sent:** `strategy_intent` (your text, or the default rubric) and `intent_source`;
+**Sent:** `strategy_intent` (the effective intent: the policy text, an agent override, or the
+default rubric) and `intent_source` (`policy`, `default` or `agent`);
 `situation`; and one entry per candidate: `id` (`c0`, `c1`, ...), `group`, `planet` label,
 `what` (a plain sentence) and `facts` (a few descriptive phrases).
+
+**The intent is the only free text that reaches the model, so it is validated.** The policy intent
+is checked at load and an override at `set` and again at every tick (section 3); an address,
+coordinates, the wallet or signer, or a planet id in it means the policy does not load, `set`
+refuses, or the tick uses the policy intent instead.
 
 `situation` holds: whether an economy build or research is in progress, the research queue
 (`idle`/`busy`), fleet slots (`free`/`all in use`/`unknown`), threat buckets, the declared
@@ -215,7 +360,7 @@ lost", "consumes a Colony Ship") and its declared-priority position ("named rese
 `vd engine pool` and `vd engine compare` fetch no live targets, so the Colonize, Attack,
 Missile and debris-harvest families never appear there; a real tick supplies them.
 
-## 6. The questions and the composite score
+## 7. The questions and the composite score
 
 | Question | Kind | What it asks |
 | --- | --- | --- |
@@ -267,7 +412,7 @@ A **high-stakes** winner does not use the group-stage shortcuts: its confidence 
 *every* weighted judgment (its `fit`, its `urgency` and `tick_focus`), and it must also lead every
 other *kind* of move by `min_margin` (below). (A Noul carries no confidence.)
 
-## 7. Gates and fallbacks
+## 8. Gates and fallbacks
 
 A hold (below) is checked first. Then the winner must pass, in this order, or the ladder decides:
 
@@ -343,28 +488,40 @@ class name, HTTP status and request id.
 `test_every_jev_error_falls_back_to_the_ladder_action` (each error returns exactly the
 ladder's action) and `test_vetoes_and_the_deadline_never_call_the_backend`.
 
-## 8. What gets logged
+## 9. What gets logged
 
 - **`proposals.jsonl` `engine` block**: the full trace (engine that decided, configured kind,
   model, request id, latency, input tokens, `fallback_reason`, `pre_empted_by`, `pool_size`,
   `rejected`, `ladder_pick`, `agrees_with_ladder`, `winner_confidence`, `margin`,
-  `focus_probabilities`, `threat`, and the top five judgments with their composite scores).
-  `null` under the ladder. It is **excluded from the dedup fingerprint** because latency,
+  `focus_probabilities`, `threat`, the top five judgments with their composite scores, and the
+  **intent fields**, below). `null` under the ladder. It is **excluded from the dedup fingerprint** because latency,
   request id and probabilities jitter between otherwise identical ticks; what the engine chose
   is already in the fingerprinted fields. On a manual-override tick it holds the trace of the
   comparison call (below), not a decision of the engine.
+- **The intent fields, on every engine record**, whichever way the tick went (a decision, a hold,
+  any fallback, an engine error, or a veto or deadline pre-emption):
+  `intent` (the effective text), `intent_source` (`policy`, `default` or `agent`), and, only when an
+  override is attached, `intent_reason`, `intent_set_at` and `intent_expires_at`; `intent_note`
+  says why a stored override was not used (the table in section 3). They are inside the excluded `engine`
+  block, so an override changing the text or its expiry alone never makes a repeat pick a new
+  proposal (`tests/test_tick.py::test_two_ticks_differing_only_in_override_text_with_the_same_pick_are_deduped`;
+  every path: `tests/test_jev_engine.py::test_every_jev_error_fallback_carries_the_intent` and
+  siblings).
 - **The chosen action** carries `Action.engine` (`"jev"`, or `"ladder"` after a fallback and
   for every manual override). Its rationale is the ladder-style rationale plus "Selected by the
   jev engine from N legal candidates (<group> focus)", and its alternatives are the other
   pooled candidates in band order, never composite order, so neither carries a probability and
   a repeat pick still dedups while the pick is stable (`test_a_second_jev_tick_differing_only_in_probabilities_and_latency_is_deduped`;
-  see section 11 for when it is not).
+  see section 12 for when it is not).
 - **`actions.jsonl`**: the sent-action record gains an `engine` field.
-- **`strategy.md`**: a narrated line for a jev action ends with `[engine=jev]`.
+- **`strategy.md`**: a narrated line for a jev action ends with `[engine=jev]`, or
+  `[engine=jev intent=agent]` when an agent override was in force. `vd engine intent set` and
+  `clear`, and the tick that removes an expired override, append their own lines (section 3).
 - **Report panel**, one line, only when jev is configured:
   `engine: jev (<model>, 140ms, confidence 0.71, agrees with ladder)` (or `differs from
   ladder`), `engine: jev -> ladder fallback (timeout)`, or `engine: jev pre-empted by
-  1b:game-paused`.
+  1b:game-paused`. When an agent override drove the tick, or a stored one was not used, one more
+  line follows it (section 3).
 - **A manual override** (`vd tick --action`) is never an engine decision, but the
   "planner would have proposed" comparison runs the configured engine, so under jev it costs
   one request. The `planner_would_have_proposed` record keeps the ladder's shape for both
@@ -375,7 +532,7 @@ ladder's action) and `test_vetoes_and_the_deadline_never_call_the_backend`.
   into the proposal's fingerprint-excluded `engine` field, and the panel line shows it; that line
   describes the comparison, not the operator's action.
 
-## 9. CLI
+## 10. CLI
 
 - `vd engine pool --snapshot F --policy F [--json]`: offline, no key. Prints the pool
   (band, group, family, planet, entity, score basis), the rejection counts, the exact `state`
@@ -385,6 +542,11 @@ ladder's action) and `test_vetoes_and_the_deadline_never_call_the_backend`.
   the same input (jev needs the key and the network for a real answer). Exit codes: `0` the
   picks agree (also when a veto or the deadline decided both), `1` they disagree, `3` jev fell
   back to the ladder, `4` a load error. Prints the confidence, margin and top judgments.
+  Both use the intent of the policy file you give them, never an override: the override lives in
+  `$VEYDRIFT_HOME`, not in the policy, and these commands are offline and reproducible. Use `vd
+  engine intent show` to see what a tick would judge against.
+- `vd engine intent set|show|clear`: the adaptive-intent override (section 3). Exit codes: `0`
+  done, `2` `set` refused, `4` policy load error.
 - `vd plan run --engine ladder|policy|jev`: default `ladder` (offline, unchanged). `policy`
   follows `policy.engine.kind`; `jev` forces it. The panel gains the engine line; `--json`
   prints the `Action` only (its `engine` field says who chose it). Any other value exits `2`.
@@ -396,7 +558,7 @@ read the `engine` blocks: the fallback rate, `agrees_with_ladder`, and whether t
 are ones you would have made yourself. `vd engine compare` on a saved snapshot answers "would
 jev have chosen differently here" without a tick.
 
-## 10. Tuning
+## 11. Tuning
 
 - **Write the intent as priorities and exclusions**, in plain sentences: name the kinds of
   development you want ("research", "defense", "colony growth", "ships"), their order, and what
@@ -405,7 +567,7 @@ jev have chosen differently here" without a tick.
   storage, ships). Do not put numbers or thresholds in it (it cannot count); numbers belong in
   `reserves`, `limits` and `policy.strategy`.
 - **Weights** (each `0..100`, only ratios matter). Raise `fit` to follow the intent more; raise `economy` to favour fast payback
-  (this also favours already-developed planets, section 12); raise `urgency` to favour
+  (this also favours already-developed planets, section 13); raise `urgency` to favour
   work that prevents waste; `focus` is the group-level nudge; `threat` only ever lifts defense.
 - **Thresholds.** Raise `min_confidence`/`min_margin` to hand more ticks to the ladder; lower
   them to trust the model more. A high fallback rate under `low_margin` means two *groups* keep
@@ -419,7 +581,7 @@ jev have chosen differently here" without a tick.
 - **Declared targets still matter**: `ship_targets`, `defense_targets`, `research_priority` and
   `building_priority` shape which candidates exist and appear in the facts.
 
-## 11. Limits
+## 12. Limits
 
 - Jev is not a calculator. It cannot count, judge whether two numbers are close, or read dates;
   that is why every number is bucketed, why the economy term is computed in code, and why no
@@ -439,7 +601,7 @@ jev have chosen differently here" without a tick.
 - The ladder's diagnostics (`opportunities:` and the playbook's derivations) describe the
   ladder's bands; under jev they remain accurate as descriptions of what each band would pick.
 
-## 12. Why cross-planet scoring is acceptable here
+## 13. Why cross-planet scoring is acceptable here
 
 `strategy-playbook.md` §13 argues against scoring candidates across planets for the *ladder*:
 a colony's first upgrades are cheap and low in absolute value, so a payback ranking keeps
@@ -455,7 +617,7 @@ trade-off is real, though: with default weights the economy term still favours e
 planets, and nothing guarantees fair turns. If a colony starves under jev, say so in the
 intent, lower `weights.economy`, or return to the ladder with `planet_rotation` on.
 
-## 13. Safety
+## 14. Safety
 
 - `guard.py` and `walletctl` re-check everything independently. The engine chooses among
   candidates the guard would already accept on snapshot data; the guard still evaluates every
@@ -470,3 +632,7 @@ intent, lower `weights.economy`, or return to the ladder with `planet_rotation` 
   enter the pool when nothing else is legal. Like Colonize and Deploy, a winner of these also needs
   the higher confidence floor, ladder idleness and model endorsement, else the ladder decides.
 - A jev failure never fails a tick and never blocks one: it is a ladder decision with a reason.
+- An agent intent override is honoured only with `adaptive_intent` on, before its expiry and
+  after the same validation as the policy intent; anything else is the policy intent, never an
+  error. It changes no gate, flag or tier (section 3 covers what it can change: what the model
+  endorses).

@@ -192,6 +192,15 @@ runs the ladder instead, so the ladder is always the fallback. It needs `TYPESAF
 `guard.py` and `walletctl` re-check everything as before. Read `references/jev-engine.md` before
 turning it on.
 
+**Adapting the jev intent.** Only when the user has set `policy.engine.jev.adaptive_intent` to
+`true`, you may set a standing, expiring override of the jev intent when the account's situation
+changes (raids, a new colony, saving for a target): `vd engine intent set "<one sentence>"
+--reason "<what you observed>" --ttl 6h`, and `vd engine intent clear` when it passes. Without that
+flag the command is refused; do not edit `policy.json` to get around it. Follow the guidance in
+`references/jev-engine.md` ("Adaptive intent"): stay within the user's standing intent and
+`policy.actions`, give a concrete reason, prefer short TTLs, and never put addresses, coordinates
+or planet ids in the text (they are refused). An override never changes a guardrail.
+
 The economic band's actual choices — which mine, which energy source — are **derived from
 the planet's live traits** (temperature, multipliers, current levels), not hardcoded per
 planet. `references/strategy-playbook.md` is the full walkthrough of that derivation,
@@ -261,6 +270,7 @@ Defense enum order and the Deathstar/Dreadstar naming wrong (`references/entity-
 | How the incoming-attack/resolved-battle/debris radar works, `vd radar check`'s exit codes, and why `incoming_fleets` alone can miss a real attack | `references/radar.md` |
 | Why an attack/missile/colonize/foreign-harvest/transport opportunity can be invisible in the tick report even with the relevant flag on, and how `opportunities.py` surfaces it anyway | `references/opportunities.md` |
 | Enabling the jev engine (`policy.engine`), what it sends to TypeSafe and never sends, the candidate pool's filters, the question set and composite score, every `fallback_reason`, `vd engine pool`/`compare`, tuning | `references/jev-engine.md` |
+| Setting, showing or clearing an adaptive jev intent override (`vd engine intent`), its TTL and resolution rules, and how an agent should write one | `references/jev-engine.md` ("Adaptive intent") |
 | AcsDefend/Intercept/`launchDefenseHold`/`openDefenseIntent` mechanics, the `targetPlanetId`-means-`hostileMissionId` trap, and how `coordination.py` suggests them from radar findings | `references/coordination.md` |
 
 Every row above is a file bundled with this skill — it travels with the install and is all

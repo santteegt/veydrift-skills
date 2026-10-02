@@ -757,11 +757,28 @@ killswitch path stays ladder-only). Vocabulary and code map:
   `proposals.jsonl`'s `engine` block, excluded from the dedup fingerprint. On a `vd tick --action` override
   the `planner_would_have_proposed` record keeps the ladder's shape (no `engine`/`fallback_reason` key, and the jev selection sentence removed from `rationale`) and
   the comparison's trace goes into that same `engine` block.
-- **CLI**: `vd engine pool|compare`, `vd plan run --engine ladder|policy|jev`, `vd doctor` lines.
+- **Intent** (2026-10-02, correction 82): the strategy text the engine judges against is the *effective
+  intent*, resolved once per jev tick by `engine.resolve_effective_intent` (`EffectiveIntent`: text,
+  source `policy`/`default`/`agent`, the stored `IntentOverride` when found, a `note`, an `expired`
+  flag), carried in `EngineContext.intent`. With `policy.engine.jev.adaptive_intent` on, an agent may
+  store a standing, expiring override (`state.IntentOverride`, `$VEYDRIFT_HOME/intent-override.json`,
+  atomic write, timezone-aware timestamps only) that *replaces* the policy intent while live: at most
+  72 hours (`models.ADAPTIVE_INTENT_MAX_HOURS`), default `adaptive_intent_default_hours` (6). The resolver
+  never raises: a flag off, an expired, an unreadable or a rejected override yields the policy intent (or
+  the default rubric) with the reason in `note`, and the tick deletes an expired file once with one
+  `strategy.md` line. The intent is the one free-text field sent to TypeSafe, so
+  `models.intent_text_problems` (no address, coordinates, wallet or signer, raw planet id) is applied to the
+  policy intent at load (`Policy` fails to load), to an override at `set`, and to the stored override again
+  at every tick. High-stakes gates are identical under either intent. Every `EngineTrace` carries `intent`,
+  `intent_source` and, as applicable, `intent_reason`, `intent_set_at`, `intent_expires_at` and
+  `intent_note`.
+- **CLI**: `vd engine pool|compare` (the given policy's intent, never an override), `vd engine intent
+  set|show|clear` (exit 0 ok, 2 `set` refused, 4 policy load error), `vd plan run --engine
+  ladder|policy|jev`, `vd doctor` lines. `vd tick --readiness` counts agent-intent proposals.
 
 `planet_rotation` is a ladder-only device (correction 75): it has no meaning when candidates are
 compared rather than walked. Full operator reference: `skills/veydrift-agent/references/jev-engine.md`;
-correction 81 and criteria 81.1-81.6 in §9.
+correction 81 and criteria 81.1-81.9, and correction 82 and criteria 82.1-82.8, in §9.
 
 ### 5.5 `vd guard` — guardrail evaluation
 
@@ -924,7 +941,11 @@ rung `8b`.
 (`"jev-latest"`), `intent` (plain-language strategy, at most 1000 characters; empty uses a built-in
 rubric), `weights` (`fit`/`urgency`/`focus`/`economy`/`threat`), `min_confidence`,
 `min_confidence_high_stakes`, `min_margin`, `timeout_s`, `max_candidates`, `payback_reference_hours`,
-`proactive_storage_hours` (`(0, 720]`), `high_stakes_only_when_idle` and `allow_hold`, all read only when `kind` is `"jev"`. Every class is
+`proactive_storage_hours` (`(0, 720]`), `high_stakes_only_when_idle`, `allow_hold`, `adaptive_intent`
+(default `false`; correction 82) and `adaptive_intent_default_hours` (default 6, `(0, 72]`), all read only when `kind` is `"jev"`.
+`intent` is validated at `Policy` load (`models.intent_text_problems`): an address, coordinates, the
+policy's `wallet`/`signer` or a standalone `policy.planets` id in it makes the policy fail to load
+(criterion 82.2). Every class is
 `extra="forbid"` (like every policy section) and rejects `Infinity`/`NaN`; each weight is `0..100`,
 `payback_reference_hours` is in `(0, 10000]`, and at least one of `fit`/`urgency`/`focus` must be `> 0`
 (criterion 81.8). The API key is never a policy field: it comes from the
@@ -2491,7 +2512,7 @@ dates, multi-hop reasoning), and cross-planet payback scoring *for the ladder* (
 stands for that engine). Under the jev engine the same concern is handled differently: the pool is a fixed
 set of legal candidates ranked against an explicit intent with planet roles in the state, payback is one
 weighted term among five, and the ladder is the fallback. The residual risk is real and documented in
-`references/jev-engine.md` §12: with default weights the economy term still favours established planets.
+`references/jev-engine.md` §13: with default weights the economy term still favours established planets.
 
 Two things follow from the design and are pinned by tests. First, a fixed-order fallback contract: every
 failure mode (each `JevError` reason, `empty_pool`, `low_confidence`, `low_confidence_high_stakes`,
@@ -2627,6 +2648,128 @@ Acceptance criteria (numbering follows the corrections above):
 Verification beyond the unit suites is opt-in: `VEYDRIFT_JEV_LIVE_TESTS=1` (with a real
 `TYPESAFE_API_KEY`) runs the scenario fixtures under `tests/fixtures/jev_scenarios/` and a tiny live
 round trip against the real API, checking both the pick and the fallback rate.
+
+**Correction 82 (2026-10-02): adaptive intent for the jev engine.** Additive; off by default. The jev
+intent (`policy.engine.jev.intent`) was static, so a change in the account's situation (a raid, a new
+colony, saving for a target) needed a `policy.json` edit. With `policy.engine.jev.adaptive_intent` on, an
+agent can instead store a standing, expiring *override* (`vd engine intent set`) that replaces the policy
+intent for every tick until it expires or is cleared; the user's standing intent returns afterwards. Two
+gaps closed on the way: the intent a decision was judged against was not recorded anywhere (it is now on
+every engine trace), and nothing checked intent text for identifying data although it is sent to
+TypeSafe verbatim (a validator now guards the policy intent and every override). Design in §5.4
+(engine subsection, "Intent") and §5.6 (`engine`); operator reference `references/jev-engine.md`
+("Adaptive intent").
+
+Decisions: while live the override *replaces* the policy intent (it does not append); the lifetime default
+is 6 hours and the maximum 72; the validator applies to the policy intent as well as to overrides, which
+makes the change **potentially breaking** (a policy whose intent contains an address, coordinates, the
+wallet or signer, or a standalone planet id no longer loads; recorded in the CHANGELOG, 1.29.0); and the
+high-stakes gates (81.7) are unchanged under an agent intent, so an intent that favours offence can lead
+the model to endorse a combat pick that every gate allows when `allow_combat` is on. That is accepted and
+audited through `EngineTrace.intent_source` rather than blocked; the allow flags, tier, guard and wallet
+allowlist still decide what is legal.
+
+What did not change: `plan.py`, `candidates.py` and `guard.py` (which never read the intent or
+`Action.engine`), the wallet, the pool's filters, every gate threshold, and the ladder.
+
+Acceptance criteria:
+
+82.1. **An override is honoured only while `adaptive_intent` is on, unexpired and validated; every other
+      case yields the policy (or default) intent with a note and never raises.**
+      `engine.resolve_effective_intent` returns the agent intent only when `engine.kind == "jev"`, the file
+      reads, the flag is on, `now < expires_at` (the boundary is exclusive) and the text passes
+      `intent_text_problems` and is not blank. The other cases return the policy intent, or the default
+      rubric when that is empty, with `note` `override file unreadable` (bad JSON or shape, over-long text or
+      reason, a timestamp without a timezone), `override ignored: adaptive_intent is off`,
+      `override expired` or `override rejected: <problems>`; under the ladder the file is not read.
+      Pinned by `test_intent.py::test_ladder_configured_uses_the_policy_intent_even_with_a_live_override`,
+      `test_an_unreadable_file_is_ignored_with_a_note`,
+      `test_an_override_is_ignored_when_the_flag_is_off`,
+      `test_an_expired_override_falls_back_and_is_marked_expired`,
+      `test_the_expiry_boundary_is_exclusive`,
+      `test_a_hand_edited_override_with_identifying_text_is_rejected`,
+      `test_an_override_naming_the_signer_is_rejected`,
+      `test_a_whitespace_only_override_is_rejected`,
+      `test_a_live_override_is_the_agent_intent_and_is_stripped`,
+      `test_a_hand_edited_override_with_naive_datetimes_does_not_raise`;
+      `test_state.py::test_corrupt_json_raises_intent_override_error` and
+      `test_invalid_shape_raises_intent_override_error`;
+      `test_tick.py::test_with_the_flag_off_a_stored_override_is_ignored_noted_and_kept`,
+      `test_an_unreadable_override_file_is_noted_and_never_fails_the_tick` and
+      `test_a_ladder_policy_never_resolves_or_touches_an_override`.
+82.2. **Every intent sent to TypeSafe passes `models.intent_text_problems`.** It flags an address
+      (`0x` plus 40 or more hex digits), coordinates (`n:n:n`), the wallet or signer address
+      (case-insensitive) and a planet id as a standalone number (not inside a longer number). The policy
+      intent is checked at `Policy` load (the policy fails to load), an override at `vd engine intent set`
+      (refused, exit 2) and again at every tick (82.1), and the request payload carries nothing identifying
+      under an agent intent.
+      Pinned by `test_models_engine.py::test_an_address_is_flagged`, `test_coordinates_are_flagged`,
+      `test_the_wallet_and_signer_are_flagged_case_insensitively`,
+      `test_a_planet_id_is_flagged_as_a_standalone_number`,
+      `test_a_planet_id_inside_a_larger_number_is_not_flagged`,
+      `test_a_policy_whose_intent_identifies_the_account_fails_to_load`,
+      `test_a_policy_whose_intent_names_the_signer_fails_to_load`,
+      `test_a_policy_with_an_ordinary_intent_loads`;
+      `test_intent.py::test_set_is_refused_for_bad_text`, `test_set_checks_the_signer_and_planets_of_the_loaded_policy`
+      and `test_set_exits_4_for_a_policy_whose_own_intent_is_identifying`;
+      `test_jev_engine.py::test_the_payload_stays_clean_with_an_agent_intent` and
+      `test_the_agent_intent_is_what_the_backend_receives`.
+82.3. **The effective intent and its source are on every engine trace**, including every fallback, a hold,
+      a veto or deadline pre-emption and an `engine_error`: `intent`, `intent_source`
+      (`policy`/`default`/`agent`) and, when an override is attached, `intent_reason`, `intent_set_at` and
+      `intent_expires_at`; `intent_note` when a stored override was not used.
+      Pinned by `test_jev_engine.py::test_build_request_uses_the_agent_intent_text_and_source`,
+      `test_every_trace_carries_the_policy_or_default_intent_when_no_context_intent_is_given`,
+      `test_a_note_with_no_override_reaches_the_trace`, `test_a_pre_empted_trace_carries_the_intent`,
+      `test_every_jev_error_fallback_carries_the_intent`,
+      `test_the_backend_construction_failure_fallback_carries_the_intent`,
+      `test_an_empty_pool_fallback_carries_the_intent`, `test_a_malformed_answer_fallback_carries_the_intent`,
+      `test_low_confidence_and_low_margin_fallbacks_carry_the_intent`,
+      `test_a_high_stakes_fallback_carries_the_intent`, `test_a_hold_trace_carries_the_intent`,
+      `test_a_success_trace_carries_the_intent`;
+      `test_engine.py::test_an_engine_error_fallback_still_records_the_effective_intent`;
+      `test_tick.py::test_a_live_override_reaches_the_engine_the_record_and_the_panel`.
+82.4. **An expired override is removed once, with one `strategy.md` line.** The tick (under a configured
+      jev engine only, after the killswitch halt) deletes the file the resolver reported expired and appends
+      `intent override expired: "<text>" -- back to the policy intent` (`default` when the policy has no
+      intent); the next tick finds no file. The resolver and `vd engine intent show` never delete.
+      Pinned by `test_tick.py::test_an_expired_override_is_deleted_and_logged_exactly_once`,
+      `test_an_expired_override_falls_back_to_the_default_when_the_policy_has_no_intent`,
+      `test_the_killswitch_path_never_resolves_the_intent`;
+      `test_intent.py::test_an_expired_override_is_not_deleted_by_the_resolver` and
+      `test_show_an_expired_override_reports_it_and_does_not_delete_it`.
+82.5. **Dedup is unaffected.** The `engine` block, intent fields included, stays outside the fingerprint:
+      two ticks that differ only in override text with the same pick are one proposal.
+      Pinned by `test_tick.py::test_two_ticks_differing_only_in_override_text_with_the_same_pick_are_deduped`
+      and `test_the_intent_fields_are_outside_the_dedup_fingerprint`.
+82.6. **A default ladder policy is byte-identical to before.** `engine.kind == "ladder"` (and an absent
+      `engine`) records `engine: null`, prints no intent line, never resolves or touches an override, and the
+      example policy loads with `adaptive_intent` off. Under jev, the report gains an intent line only for an
+      agent intent or a note, and the narration tag becomes `[engine=jev intent=agent]` only for an agent
+      intent. Pinned by criterion 81.1's tests and
+      `test_tick.py::test_a_default_ladder_tick_prints_no_intent_line`,
+      `test_a_policy_or_default_intent_prints_no_intent_line_and_no_override_fields`,
+      `test_the_strategy_narration_tag_names_an_agent_intent`,
+      `test_the_strategy_narration_tag_is_unchanged_for_a_policy_intent`,
+      `test_intent_line_formats`, `test_readiness_counts_agent_intent_proposals`,
+      `test_readiness_shows_no_agent_intent_line_without_any_engine_block`;
+      `test_models_engine.py::test_the_example_policy_still_loads_with_adaptive_intent_off`.
+82.7. **`vd engine intent set` refuses without writing when `adaptive_intent` is off**, and equally for an
+      empty or over-long text or reason, identifying text, or a TTL that does not parse, is zero or exceeds
+      72 hours: exit 2, every problem listed, no file and no `strategy.md` line. A valid `set` writes the
+      stripped override atomically (replacing any existing one) and one `strategy.md` line; `clear` always
+      exits 0.
+      Pinned by `test_intent.py::test_set_is_refused_when_the_flag_is_off`,
+      `test_set_is_refused_for_bad_text`, `test_set_is_refused_for_a_bad_reason`,
+      `test_set_requires_a_reason_option`, `test_set_is_refused_for_a_bad_ttl`,
+      `test_set_accepts_the_maximum_ttl`, `test_set_reports_every_problem_at_once`,
+      `test_set_default_ttl_is_six_hours`, `test_set_writes_a_stripped_override_and_a_strategy_line`,
+      `test_set_replaces_an_existing_override`, `test_parse_ttl`, `test_parse_ttl_rejects_junk`,
+      `test_clear_with_nothing_stored_exits_0_and_logs_nothing`; `test_state.py::test_save_intent_override_is_atomic_and_valid_json`.
+82.8. **High-stakes gates are identical under an agent intent.** An endorsed high-stakes pick is decided the
+      same way under a policy and an agent intent, and the trace shows the source; no gate reads
+      `intent_source`.
+      Pinned by `test_jev_engine.py::test_an_endorsed_high_stakes_pick_is_decided_identically_under_a_policy_and_an_agent_intent`.
 
 ---
 

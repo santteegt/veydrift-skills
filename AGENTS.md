@@ -80,7 +80,7 @@ npm --prefix skills/veydrift-wallet run typecheck
 ```
 
 `uv run` creates and caches its own venv on first use — no separate install step. Current
-baseline: **1621 Python tests** (1619 passed + 2 skipped: the opt-in `VEYDRIFT_JEV_LIVE_TESTS=1`
+baseline: **1798 Python tests** (1796 passed + 2 skipped: the opt-in `VEYDRIFT_JEV_LIVE_TESTS=1`
 live TypeSafe tests, which also need `TYPESAFE_API_KEY`), **399 TypeScript tests** (396 passed + 3
 intentionally skipped: two need a local Anvil fork, one is the opt-in `VEYDRIFT_LIVE_TESTS=1` chain
 check), both suites green. Run both before calling any change done; they are independent
@@ -248,6 +248,17 @@ touching related code, re-run the check named alongside each one.
   (planets are "planet A/B/..."); game numbers are bucketed by code. The base URL is a code
   constant in `jev.py`, never a policy field or an environment override; the key is
   `TYPESAFE_API_KEY` only, and is a default scrubbed secret.
+- **An intent override (`$VEYDRIFT_HOME/intent-override.json`, `vd engine intent`) is honoured only with
+  `policy.engine.jev.adaptive_intent` on at tick time and before its `expires_at`.** Off, expired, unreadable
+  (including a timestamp without a timezone) or rejected, the policy intent applies with an `intent_note`; the
+  resolver (`engine.resolve_effective_intent`) never raises, so an override never fails a tick. `set` refuses
+  (exit 2, nothing written) when the flag is off. The lifetime is at most `ADAPTIVE_INTENT_MAX_HOURS` (72).
+- **Every intent sent to TypeSafe passes `models.intent_text_problems`:** the policy intent at `Policy` load
+  (a failing policy does not load), an override at `set` and again at every tick. Keep it on every path that
+  can put text in `strategy_intent`.
+- **The effective intent is on every engine trace** (`intent`, `intent_source`, and the override's reason and
+  times or `intent_note`), including pre-empts and fallbacks (`jev_engine.intent_trace_fields`). It is inside
+  the dedup-excluded `engine` block, and no gate reads it.
 - **The `engine` proposal field is excluded from the dedup fingerprint, and rationale/alternatives
   carry no probabilities.** Alternatives are in band order, never composite order. This makes dedup
   stable only while the pick is stable: a result near a gate threshold can flip between the jev pick
@@ -678,7 +689,8 @@ enough to call out here specifically, not a duplicate of that ledger.
   an override and from the planner, signed by a delegate key.
 - `skills/veydrift-agent/references/jev-engine.md` — the jev decision engine: enabling it, the
   candidate pool and its filters, exactly what is (and is never) sent to TypeSafe, the questions
-  and composite score, every `fallback_reason`, `vd engine pool|compare`, tuning, and why
+  and composite score, every `fallback_reason`, `vd engine pool|compare`, the adaptive-intent
+  override (`vd engine intent`) and its guidance for agents, tuning, and why
   cross-planet scoring is acceptable here despite `strategy-playbook.md` §13.
 - `skills/veydrift-agent/references/radar.md` — the attack/resolved-battle/debris radar
   (new module, `radar.py`, read-only, no `veydrift-wallet` involvement): why
@@ -723,7 +735,7 @@ enough to call out here specifically, not a duplicate of that ledger.
   `skills/veydrift-agent/tests/test_coverage_doc.py`.
 - `docs/JEV-ENGINE.html` — the published overview of the jev decision engine: how it decides,
   how to enable and tune it, the implementation map, and how it was built and verified. A
-  synthesis of `skills/veydrift-agent/references/jev-engine.md` and SPEC correction 81.
+  synthesis of `skills/veydrift-agent/references/jev-engine.md` and SPEC corrections 81 and 82.
 
 **Maintenance note — read this before changing `docs/SPEC.md`.** `docs/JEV-ENGINE.html` has the
 same property for the jev engine: grep it too whenever the engine's gates, pool filters,
