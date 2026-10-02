@@ -75,7 +75,37 @@ def resolve_effective_intent(policy: Policy, *, now: datetime) -> EffectiveInten
     `policy.engine.jev.adaptive_intent` is true, unexpired, and free of identifying text), else
     the policy intent, else the built-in default. Never raises: an unreadable override file is
     reported in `note` and ignored."""
-    raise NotImplementedError
+    from veydrift_agent.jev_engine import DEFAULT_INTENT
+    from veydrift_agent.models import intent_text_problems
+    from veydrift_agent.state import IntentOverrideError, load_intent_override
+
+    cfg = policy.engine.jev
+    policy_text = cfg.intent.strip()
+    fallback_text = policy_text or DEFAULT_INTENT
+    fallback_source: Literal["policy", "default"] = "policy" if policy_text else "default"
+
+    def standing(note: str | None = None, override: IntentOverride | None = None, expired: bool = False) -> EffectiveIntent:
+        return EffectiveIntent(fallback_text, fallback_source, override=override, note=note, expired=expired)
+
+    if policy.engine.kind != "jev":
+        return standing()
+    try:
+        override = load_intent_override()
+    except IntentOverrideError:
+        return standing("override file unreadable")
+    if override is None:
+        return standing()
+    if not cfg.adaptive_intent:
+        return standing("override ignored: adaptive_intent is off", override)
+    if now >= override.expires_at:
+        return standing("override expired", override, expired=True)
+    problems = intent_text_problems(override.intent, wallet=policy.wallet, signer=policy.signer, planet_ids=policy.planets)
+    if problems:
+        return standing("override rejected: " + "; ".join(problems), override)
+    text = override.intent.strip()
+    if not text:
+        return standing("override rejected: empty", override)
+    return EffectiveIntent(text, "agent", override=override)
 
 def decide(
     snapshot: Snapshot,
