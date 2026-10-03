@@ -522,6 +522,13 @@ def intent_set(
     )
 
 
+#: What `show` cannot see: the check a tick makes against the account's planets and targets.
+SEND_TIME_CHECK_NOTE = (
+    "ticks re-check this text against the account's planets and targets right before sending "
+    "and may still substitute it"
+)
+
+
 @intent_app.command("show")
 def intent_show(
     policy: Path = typer.Option(None, "--policy", help="Path to policy.json (default: $VEYDRIFT_HOME/policy.json)."),  # noqa: B008
@@ -553,6 +560,7 @@ def intent_show(
                     "note": effective.note,
                     "expired": effective.expired,
                     "override": _override_json(override) if override is not None else None,
+                    "send_time_check": SEND_TIME_CHECK_NOTE,
                 },
                 indent=2,
             )
@@ -571,6 +579,7 @@ def intent_show(
             typer.echo(f"override text (not in use): {override.intent}")
     if effective.note:
         typer.echo(f"note: {effective.note}")
+    typer.echo(f"send-time check: {SEND_TIME_CHECK_NOTE}")
 
 
 @intent_app.command("clear")

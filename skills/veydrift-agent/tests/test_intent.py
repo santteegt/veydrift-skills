@@ -590,7 +590,23 @@ def test_show_json_with_no_override():
         "note": None,
         "expired": False,
         "override": None,
+        "send_time_check": SEND_TIME_NOTE,
     }
+
+
+SEND_TIME_NOTE = (
+    "ticks re-check this text against the account's planets and targets right before sending "
+    "and may still substitute it"
+)
+
+
+def test_show_says_a_tick_still_re_checks_the_text_at_send_time():
+    write_policy(intent="Grow the economy.")
+    assert f"send-time check: {SEND_TIME_NOTE}" in invoke_show().output
+    assert json.loads(invoke_show("--json").stdout)["send_time_check"] == SEND_TIME_NOTE
+    assert invoke_set(GOOD, "--reason", "r", "--ttl", "2h").exit_code == 0
+    assert f"send-time check: {SEND_TIME_NOTE}" in invoke_show().output
+    assert json.loads(invoke_show("--json").stdout)["send_time_check"] == SEND_TIME_NOTE
 
 
 def test_show_a_live_override():

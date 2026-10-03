@@ -28,7 +28,6 @@ import json
 import os
 import sys
 import tempfile
-import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -470,9 +469,13 @@ def clear_intent_override(expected: IntentOverride | None = None) -> bool:
 
     With `expected`, only an override still equal to it (intent, `set_at`, `expires_at`) is
     removed -- the tick's expiry cleanup, which must not delete a fresh override a concurrent
-    `vd engine intent set` wrote after the tick read the expired one. The file is first moved
-    aside (an atomic claim), compared, and put back when it is not `expected` (unless a newer
-    file has meanwhile appeared, which wins)."""
+    `vd engine intent set` wrote after the tick read the expired one. The file is re-read and
+    compared, then unlinked; an unreadable file, a different override, a vanished file or any
+    `OSError` returns `False` and leaves the file alone. This is a compare-then-unlink, not an
+    atomic claim: an override written in the instant between the compare and the unlink is
+    removed too. The worst case is that the agent finds none stored and sets it again, which is
+    cheaper than the failure modes an aside-and-restore scheme has (a user's `clear` undone, a
+    concurrent tick missing the file, a failed restore losing the override)."""
     path = intent_override_path()
     if expected is None:
         try:
@@ -480,28 +483,17 @@ def clear_intent_override(expected: IntentOverride | None = None) -> bool:
         except FileNotFoundError:
             return False
         return True
-    claim = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.claim")
     try:
-        os.rename(path, claim)
-    except FileNotFoundError:
+        current = IntentOverride.model_validate(json.loads(path.read_text()))
+    except Exception:  # noqa: BLE001 -- unreadable or missing is not `expected`; never raise
+        return False
+    if not _same_override(current, expected):
         return False
     try:
-        try:
-            current: IntentOverride | None = IntentOverride.model_validate(json.loads(claim.read_text()))
-        except Exception:  # noqa: BLE001 -- an unreadable file is not `expected`
-            current = None
-        if current is not None and _same_override(current, expected):
-            return True
-        try:
-            os.link(claim, path)
-        except FileExistsError:
-            pass  # a newer override landed meanwhile: it stays, ours is dropped
-        except OSError:
-            if not path.exists():
-                os.replace(claim, path)
+        path.unlink(missing_ok=True)
+    except OSError:
         return False
-    finally:
-        claim.unlink(missing_ok=True)
+    return True
 
 
 # --------------------------------------------------------------------------------------

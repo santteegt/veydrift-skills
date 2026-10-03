@@ -279,13 +279,129 @@ def test_each_problem_quotes_what_matched():
     assert _raw_problems("defend 7:181:14", **KNOWN) == ['contains coordinates ("7:181:14")']
     assert _raw_problems("go p664 first", **KNOWN) == ['contains planet id 664 ("p664")']
     assert _raw_problems("ending 30553aa1", **KNOWN) == ['contains part of the wallet address ("30553aa1")']
+    # A long hex run is never quoted (it may be a key), so an address is reported without its digits.
     (problem,) = _raw_problems("to 0x" + "ab" * 20)
-    assert problem == 'contains an address ("0x' + "ab" * 20 + '")'
+    assert problem == 'contains an address ("0x<hex value>")'
 
 
 def test_a_long_snippet_is_truncated_in_the_message():
-    (problem,) = _raw_problems("ref " + "ab" * 60)
-    assert len(problem) < 100 and problem.endswith('\u2026")')
+    from veydrift_agent.models import _quoted
+
+    quoted = _quoted("word " * 30)
+    assert quoted.endswith('\u2026")') and len(quoted) < 60
+
+
+def test_a_hex_run_of_32_or_more_characters_is_never_quoted_even_partly():
+    key = "0x" + "4c0883a69102937d6231471b5dbb6204fe512961708279f2e3e8a5d4b8e3e2d1"
+    for text in (key, "send " + key[2:], "k=" + key[2:] + "!"):
+        problems = _raw_problems(text)
+        assert problems
+        assert all("4c0883a6" not in p and "e3e2d1" not in p for p in problems), problems
+        assert any("<hex value>" in p for p in problems)
+
+
+# ---- own vs foreign planet ids, abbreviated wallets ---------------------------------------
+
+#: Live highscore ids are small: they are other players' planets, never the account's.
+FOREIGN = [1, 10, 13, 24, 30, 40, 666, 671]
+EVERYDAY_PROSE = [
+    "Boom the economy: level 10 mines before anything else.",
+    "Keep 30% of resources in reserve.",
+    "Research one tech at a time; finish Phase 1 first.",
+    "Hold 1,000 deuterium for fuel.",
+    "Prefer 2 cheap upgrades over 1 expensive one.",
+    "Build 6 solar plants, 9 mines, 1 lab.",
+    "Raid only targets with under 40 defenses.",
+    "Turtle until 2026-10-05, then expand.",
+    "Grow toward version 1.29.0 goals.",
+    "Keep 666 deuterium spare.",  # a foreign 3-digit id is not matched bare
+]
+
+
+@pytest.mark.parametrize("text", EVERYDAY_PROSE)
+def test_everyday_numbers_are_not_rejected_for_a_foreign_target_id(text):
+    assert _raw_problems(text, wallet=W, signer=S, planet_ids=[664], foreign_planet_ids=FOREIGN) == []
+
+
+@pytest.mark.parametrize("text", ["Hit planet 10 first.", "Hit p10 first.", "Hit #10 first.", "Hit planet-10", "Hit id: 10", "Hit PLANET 10"])
+def test_a_foreign_target_id_is_matched_with_a_planet_introducer(text):
+    assert _problems(text, foreign_planet_ids=FOREIGN) == ["contains planet id 10"]
+
+
+def test_a_three_digit_foreign_id_needs_the_introducer_too():
+    assert _problems("Raid planet 666.", foreign_planet_ids=FOREIGN) == ["contains planet id 666"]
+    assert _problems("Raid 666 now.", foreign_planet_ids=FOREIGN) == []
+
+
+@pytest.mark.parametrize("text", ["Hit step 10 first", "Hit map10 first", "Hit rapid 10", "keep 10 spare"])
+def test_an_introducer_must_not_be_the_tail_of_a_longer_word(text):
+    assert _raw_problems(text, foreign_planet_ids=[10], planet_ids=[10]) == []
+
+
+@pytest.mark.parametrize("text", ["p664 first", "planet 664", "664 first", "defend 664", "planet6,64"])
+def test_an_own_three_digit_id_is_matched_bare(text):
+    assert _problems(text, planet_ids=[664]) == ["contains planet id 664"]
+
+
+def test_an_own_two_digit_id_is_matched_only_with_the_introducer():
+    assert _raw_problems("level 10 mines, 30% reserve", planet_ids=[10, 30]) == []
+    assert _problems("Defend planet 10 first", planet_ids=[10, 30]) == ["contains planet id 10"]
+    assert _problems("Defend p30 first", planet_ids=[10, 30]) == ["contains planet id 30"]
+    assert _problems("Defend #10 first", planet_ids=[10, 30]) == ["contains planet id 10"]
+
+
+def test_an_id_that_is_both_own_and_foreign_is_treated_as_own_and_reported_once():
+    assert _problems("planet 664", planet_ids=[664], foreign_planet_ids=[664]) == ["contains planet id 664"]
+
+
+def test_foreign_coordinates_are_never_matched_apart_from_colons():
+    # (6:9:1 as a foreign target must not reject this; there is no parameter for it on purpose)
+    assert _raw_problems("Build 6 solar plants, 9 mines, 1 lab.", wallet=W, planet_ids=[664]) == []
+    # ...but an own coordinate still is, in any spelling, and the colon form is rejected regardless.
+    assert _problems("Defend 7-181-14", coordinates=["7:181:14"]) == ["contains coordinates"]
+    assert _problems("Hit 6:9:1", planet_ids=[664]) == ["contains coordinates"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "0x4e15\u20263aa1",
+        "0x4e15...3aa1",
+        "0x4e15...53aa1",
+        "0x4e15e66...",
+        "my wallet is 4e15...",
+        "...0553aa1",
+        "ends in 0553aa1",
+        "ending in 0x3aa1",
+        "ending 53aa1",
+        "wallet ends with 3aa1",
+        "short form 0553aa1",
+        "short form 53aa1",
+        "0x111111\u20261111",  # the signer
+        "signer ends in 1111",
+    ],
+)
+def test_an_abbreviated_wallet_is_caught(text):
+    problems = _problems(text, wallet=W, signer=S)
+    assert problems and all(p.startswith("contains part of the") for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Keep it simple...",
+        "Level 5000... then more.",
+        "ends in december",
+        "ending in 2026",
+        "ends in 3aa2",
+        "0x4e16...3aa2",
+        "Hold 12345 deuterium.",
+        "a deface decade accede",
+        "0x1234 is a number",
+    ],
+)
+def test_ordinary_words_and_numbers_are_not_an_abbreviated_wallet(text):
+    assert _raw_problems(text, wallet=W, signer=S) == []
 
 
 def test_matching_is_fast_on_a_maximal_intent():

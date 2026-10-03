@@ -21,30 +21,39 @@ skills are not versioned in lockstep.
   jev tick by `engine.resolve_effective_intent`, which never raises: a flag off, expired, unreadable or
   rejected override yields the policy intent with a note. An override with an unsupported `version`, or a
   lifetime over 72 hours (hand-edited file), is rejected. The tick deletes an expired override once, even with
-  the flag off, deleting only the one it read, and logs it to `strategy.md`. See `references/jev-engine.md`
-  ("Adaptive intent").
+  the flag off, deleting only the one it read (a re-read, compare and unlink), and logs it to `strategy.md`.
+  See `references/jev-engine.md` ("Adaptive intent").
 - `vd engine intent set TEXT --reason R [--ttl 90m|6h|2d]`, `show [--json]` and `clear [--reason R]` (exit
   0 ok, 2 `set` refused, 4 policy load error). `set` is refused, with nothing written, when the flag is off,
   the text or reason is empty or too long, the text identifies the account, or the TTL is out of range. With
   `--policy` naming a file other than the home policy, `set` warns that ticks read the home policy.
 - **Send-time intent check.** Right before every TypeSafe request, `jev_engine.sendable_context` re-checks the
-  effective intent against the wallet/signer and every planet id and coordinate in the snapshot and the targets.
-  A failing override is replaced by the policy intent (else the default rubric), a failing policy intent by the
-  default; the trace's `intent`/`intent_source` show the text sent and `intent_note` says why.
+  effective intent against the wallet/signer, every planet the account owns (ids and coordinates, from
+  `Snapshot.owned_planet_ids`/`owned_planet_coordinates`, so a planet outside `policy.planets` counts) and the
+  ids of the attack/missile/debris targets. Other players' planet ids and coordinates only match with a planet
+  introducer (`planet 10`) or in `g:s:p` colon form, so "level 10 mines" or "Keep 30%" are never rejected for a
+  target. A failing override is replaced by the policy intent (else the default rubric), a failing policy intent
+  by the default; the trace's `intent`/`intent_source` show the text sent and `intent_note` says why. An
+  unexpected error after the substitution is an `engine_error:<Class>` fallback whose trace still shows the text
+  sent. `vd engine intent show` says the check will run (`send_time_check`).
 - `EngineTrace` gains `intent`, `intent_source` (`policy`/`default`/`agent`), `intent_reason`,
   `intent_set_at`, `intent_expires_at` and `intent_note`, recorded on every engine trace (pre-empts and
   fallbacks included); the strategy.md narration tag is `[engine=jev intent=agent]` for an agent intent; the
   report shows one intent line for an agent intent or an unused override; `vd tick --readiness` counts
   agent-intent proposals.
 - `models.intent_text_problems` (normalised matching: NFKC, invisible characters, Unicode digits; `0X` and
-  unprefixed addresses, wallet fragments, any spelling of a known coordinate, embedded planet ids such as
-  `p664`; each problem quotes the match) and `ADAPTIVE_INTENT_MAX_HOURS`; `adaptive_intent` and
+  unprefixed addresses, wallet fragments and abbreviations such as `0x4e15...3aa1` or "ends in 0553aa1", any
+  spelling of the account's own coordinates, planet ids: three or more digits as a bare number, one or two
+  digits only as `planet 10`/`p10`/`id 10`/`#10`; each problem quotes the match, never a hex run of 32 or
+  more characters) and `ADAPTIVE_INTENT_MAX_HOURS`; `Snapshot.owned_planet_ids` and `owned_planet_coordinates`
+  (additive, default empty); `adaptive_intent` and
   `adaptive_intent_default_hours` in `assets/policy.example.json` and the policy schema.
 
 ### Changed
 - **Potentially breaking, jev policies only:** under `policy.engine.kind = "jev"`, `policy.engine.jev.intent`
   is now validated at load. A policy whose intent contains an address, three numbers joined by colons (also a
-  ratio like `3:2:1`), the wallet or signer, or a number equal to one of `policy.planets` no longer loads; the
+  ratio like `3:2:1`), the wallet or signer, or a planet id from `policy.planets` (three or more digits as a
+  number, fewer only introduced as `planet 10`/`p10`/`#10`) no longer loads; the
   message quotes the match. Rewrite the intent without identifiers, using words for counts and ratios ("3 to 2
   to 1"). A `"ladder"` policy loads whatever its intent says.
 

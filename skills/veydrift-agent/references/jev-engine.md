@@ -85,9 +85,12 @@ ladder; switch the kind and write an intent:
   command that reads the policy then reports the problems, each quoting the matched text, for example
   `contains planet id 664 ("p664")`): an address (`0x`/`0X` plus 40 hex digits, or a bare run of 40),
   the policy's `wallet` or `signer` address (also split by spaces or invisible characters, or any
-  token of 8 or more hex characters that is part of it, such as "ending 30553aa1"), three numbers
+  token of 8 or more hex characters that is part of it, such as "ending 30553aa1", or a shortened form
+  such as `0x4e15...3aa1` or "ends in 0553aa1"), three numbers
   joined by colons (`7:291:1`, and so also `3:2:1` or `14:00:00`), or a planet id from
-  `policy.planets` as a number token (`664`, `p664`, `planet664`, `#664`, `6,64`; `16640` is fine).
+  `policy.planets`: with three or more digits as a number token (`664`, `p664`, `planet664`, `#664`,
+  `6,64`; `16640` is fine), with one or two digits only when introduced as a planet (`planet 10`, `p10`,
+  `id 10`, `#10`), so "level 10 mines" loads.
   Matching runs on a normalised copy (Unicode NFKC, invisible format characters dropped, every Unicode
   digit read as ASCII, case-folded), so fullwidth digits or a zero-width space do not hide anything.
   Write counts as words ("two planets") and ratios as "3 to 2 to 1". Describe the strategy without
@@ -148,8 +151,11 @@ vd engine intent clear [--reason "raids stopped"]
 - **`show [--json]`** is read-only: the intent a tick would judge against now (`intent`),
   `source` (`policy`, `default` or `agent`), the override's reason, set time and expiry, and a
   `note` when a stored override is not in use. It reports an expired override and never deletes it
-  (the tick does). Under the ladder it prints the stored override marked unused. `--json` keys:
-  `engine_kind`, `adaptive_intent`, `intent`, `source`, `note`, `expired`, `override`.
+  (the tick does). Under the ladder it prints the stored override marked unused. It always adds a
+  `send-time check:` line (json `send_time_check`): ticks re-check this text against the account's
+  planets and targets right before sending and may still substitute it, which `show` cannot predict.
+  `--json` keys: `engine_kind`, `adaptive_intent`, `intent`, `source`, `note`, `expired`, `override`,
+  `send_time_check`.
 - **`clear [--reason R]`** removes the file (an unreadable one too) and appends `intent override
   cleared -- <reason>`. It never reads the policy, works with the flag off, and exits 0 whether or
   not an override existed.
@@ -195,8 +201,11 @@ configured jev engine:
   the expiry is logged exactly once, because the file is then gone
   (`tests/test_tick.py::test_an_expired_override_is_deleted_and_logged_exactly_once`). This happens
   with `adaptive_intent` off too (`test_an_expired_override_is_cleaned_up_even_when_adaptive_intent_is_off`).
-  Only the override the tick read is deleted: one a concurrent `vd engine intent set` wrote since
-  stays, and a file that has already vanished is neither an error nor logged
+  Only the override the tick read is deleted: the file is re-read and compared (intent, `set_at`,
+  `expires_at`) and unlinked only if it still matches, so one a concurrent `vd engine intent set` wrote
+  since stays. This is a compare-then-unlink, not an atomic claim: an override written in the instant
+  between the compare and the unlink is removed too, and the agent re-sets it. A
+  file that has already vanished is neither an error nor logged
   (`test_expiry_cleanup_leaves_an_override_set_after_the_tick_read_the_old_one`,
   `test_expiry_cleanup_survives_the_file_vanishing_and_logs_nothing`). An unreadable file, a
   pathological one included, is ignored with a note and never fails the tick
@@ -234,10 +243,11 @@ user's goals through a change of situation, never to change them.
 - **Write one clear sentence naming kinds of development** ("defense", "research", "colony growth",
   "ships", "mines", "storage") in priority order, with what to avoid, as the policy intent does
   (section 11). No numbers or thresholds.
-- **Never include identifiers.** No address, coordinates, wallet or signer, planet id, and no
-  standalone digits equal to a planet id, and no three-number ratio or time like `3:2:1` or `14:00:00`
+- **Never include identifiers.** No address, coordinates, wallet or signer, planet id (write "the
+  colonies", not `planet 665`), and no three-number ratio or time like `3:2:1` or `14:00:00`
   (write "3 to 2 to 1"): `set` refuses them, a tick rejects them again from a hand-edited file, and
   the send-time check replaces the text with the policy or default intent if one still gets through.
+  Ordinary numbers ("level 10", "30%") are fine.
   Say "the colonies" or "the home planet".
 - **Clear it when the situation passes**, with a reason (`vd engine intent clear --reason ...`),
   rather than leaving a stale override to run out.
@@ -367,8 +377,16 @@ means the policy does not load, `set` refuses, or the tick uses the policy inten
 may be empty or stale, and the targets are known only once the pool exists. So
 `jev_engine.sendable_context` re-checks the effective intent immediately before every TypeSafe request
 (it runs once a pool exists, so a veto, the deadline or an empty pool, which send nothing, never reach it) against the
-wallet and signer, **every planet id and coordinate in the snapshot**, and every target id and
-coordinate the pool was built from (attack, missile, foreign debris, own debris, colonize). A text that
+wallet and signer, **every planet the account owns** (the snapshot's `owned_planet_ids` and
+`owned_planet_coordinates`, taken from `/wallet/{addr}/planets`, so a planet outside `policy.planets`
+counts, plus `policy.planets` and the own-debris targets) and **the ids of the targets** the pool was
+built from (attack, missile, foreign debris). Own and foreign ids are held to different rules, because
+live targets are other players' planets with small ids (1, 10, 13, 24, 30...) that are everyday numbers
+in prose: an own id of three or more digits matches as a bare number, an own id of one or two digits
+only introduced as a planet (`planet 10`, `p10`, `id 10`, `#10`), and a foreign id only introduced that
+way, at any length. The account's own coordinates match in any spelling; a foreign target's coordinates
+(attack, missile, debris, colonize) match only as `g:s:p` with colons, which the generic rule catches, so
+"Build 6 solar plants, 9 mines, 1 lab" is never rejected because a target sits at 6:9:1. A text that
 fails is replaced and the request carries the replacement:
 
 - a failing agent override gives way to the policy intent when that passes the same check, else to
@@ -378,13 +396,18 @@ fails is replaced and the request carries the replacement:
   example `override rejected at send time: contains planet id 664 ("664")` (or `policy intent
   rejected at send time: ...`; an earlier resolution note is kept after it);
 - if the check itself cannot run, the default rubric is sent with the note `intent check failed:
-  built-in default used`, never the unchecked text. Nothing here raises or fails a tick.
+  built-in default used`, never the unchecked text. Nothing here raises or fails a tick;
+- an unexpected exception after the substitution (building the request, the backend call, scoring)
+  is an `engine_error:<Class>` ladder fallback whose trace still describes the text that was sent, not
+  the text that was rejected (`test_an_unexpected_error_after_substitution_records_what_was_sent`).
 
 `vd engine pool` prints the request *before* this substitution, so it shows what the policy intent
 alone would send. `tests/test_jev_engine.py` pins the check
 (`test_an_agent_override_that_names_the_account_is_replaced_before_the_backend_call`,
 `test_a_policy_intent_naming_a_snapshot_planet_is_replaced_by_the_default`,
 `test_target_planet_ids_and_coordinates_are_checked_too`,
+`test_everyday_numbers_are_not_rejected_because_of_realistic_foreign_targets`,
+`test_a_planet_the_account_owns_outside_policy_planets_is_known_to_the_check`,
 `test_a_failing_check_sends_the_default_and_never_raises`,
 `test_build_request_alone_does_not_substitute`), and `tests/test_tick.py` runs the real engine from an
 override file to the backend (`test_e2e_a_planet_id_not_listed_in_the_policy_never_reaches_the_backend`,
@@ -392,18 +415,25 @@ override file to the backend (`test_e2e_a_planet_id_not_listed_in_the_policy_nev
 
 **What the matching catches** (`models.intent_text_problems`, on a normalised copy: NFKC, invisible
 format characters dropped, every Unicode digit read as ASCII, case-folded). Each problem quotes the
-matched snippet (at most 48 characters).
+matched snippet (at most 48 characters; a hex run of 32 or more characters is shown as `<hex value>`,
+never quoted even in part).
 
 - **Addresses:** `0x` or `0X` plus 40 hex digits, or a bare run of 40.
 - **Wallet and signer:** their hex found in the text with all non-hex characters removed (so spaces and
-  zero-width characters do not split it), or any token of 8 or more hex characters that is part of them.
+  zero-width characters do not split it), any token of 8 or more hex characters that is part of them, and
+  abbreviations: the first or last 4-7 hex characters beside an ellipsis (`0x4e15...3aa1`, `...0553aa1`),
+  the last 4-7 after "ends in", "ending" or "ending in", or a standalone token of 5-7 hex characters
+  equal to their last characters.
 - **Coordinates:** any `n:n:n` (spaces around the colons allowed), which also flags a ratio or a clock
-  time; and, for the coordinates the account actually has, any spelling: `7/181/14`, `7-181-14`,
+  time; and, for the coordinates of the planets the account owns, any spelling: `7/181/14`, `7-181-14`,
   `galaxy 7 system 181 position 14`, `G7 S181 P14`, or the three numbers with at most 15 non-digit
   characters between them. That last rule can flag a coincidence ("7 mines, then 181 energy, then 14
   ships"); the cost is one tick on a substituted intent.
-- **Planet ids:** number tokens, including letters or `#` glued to the front (`p664`, `planet664`,
-  `#664`), digit groups (`6,64`, `6_64`) and leading zeros. A longer number (`16640`) does not match.
+- **Planet ids:** an own id of three or more digits matches as a number token, including letters or `#`
+  glued to the front (`p664`, `planet664`, `#664`), digit groups (`6,64`, `6_64`) and leading zeros. An
+  own id of one or two digits, and any foreign (target) id, matches only right after an introducer:
+  `planet`, `p`, `id` or `#`, then optional space, `-` or `:` (`planet 10`, `p10`, `id: 10`, `#10`; not
+  `step 10`). A longer number (`16640`) does not match.
 
 **Deliberately not caught:** spelled-out numbers ("six hundred sixty-four"), two-part coordinates
 (`7:181`), ids with digits spaced apart, and a wallet that is both split by spaces and shortened below
@@ -554,7 +584,7 @@ configured):
 | `request_too_large` | estimated request over 48,000 tokens |
 | `empty_pool` | nothing legal to choose from |
 | `low_confidence`, `low_confidence_high_stakes`, `high_stakes_not_idle`, `high_stakes_hold`, `high_stakes_not_endorsed`, `low_margin` | the gates above |
-| `engine_error:<Class>` | an unexpected exception inside the engine; the ladder ran instead, the tick did not fail |
+| `engine_error:<Class>` | an unexpected exception inside the engine (after a send-time substitution the trace still shows the text that was sent); the ladder ran instead, the tick did not fail |
 
 A veto or the deadline is not a fallback: it is recorded as `pre_empted_by`, holding the rule
 that decided (for example `4:incoming-hostile-fleet` or `5:storage-overflow-spend`), and no
@@ -717,6 +747,7 @@ intent, lower `weights.economy`, or return to the ladder with `planet_rotation` 
   intent; anything else is the policy intent, never an error. It changes no gate, flag or tier
   (section 3 covers what it can change: what the model endorses).
 - The intent text is checked once more against the account's real planet ids, coordinates, wallet and
-  signer immediately before each TypeSafe request, and replaced by the policy or default intent if it
+  signer immediately before each TypeSafe request (every planet the account owns, and other players'
+  target ids only with a planet introducer), and replaced by the policy or default intent if it
   fails (section 6). That check, not the load-time one, is what a stale or empty `policy.planets`
   cannot defeat.

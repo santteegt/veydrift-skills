@@ -777,7 +777,9 @@ killswitch path stays ladder-only). Vocabulary and code map:
   `intent_source` and, as applicable, `intent_reason`, `intent_set_at`, `intent_expires_at` and
   `intent_note`.
 - **CLI**: `vd engine pool|compare` (the given policy's intent, never an override), `vd engine intent
-  set|show|clear` (exit 0 ok, 2 `set` refused, 4 policy load error), `vd plan run --engine
+  set|show|clear` (exit 0 ok, 2 `set` refused, 4 policy load error; `show` adds a `send-time check:` line,
+  json `send_time_check`, saying a tick re-checks the text against the account and may still substitute it),
+  `vd plan run --engine
   ladder|policy|jev`, `vd doctor` lines. `vd tick --readiness` counts agent-intent proposals.
 
 `planet_rotation` is a ladder-only device (correction 75): it has no meaning when candidates are
@@ -2715,10 +2717,18 @@ Acceptance criteria:
 82.2. **Every intent sent to TypeSafe passes `models.intent_text_problems`.** Matching runs on a normalised
       copy (NFKC, format characters dropped, every Unicode digit as ASCII, case-folded). It flags an address
       (`0x`/`0X` plus 40 hex digits, or a bare run of 40), the wallet or signer address (their hex with
-      non-hex characters removed, or any token of 8 or more hex characters that is part of it), coordinates
-      (any `n:n:n`, and each known coordinate in any spelling: `7/181/14`, `galaxy 7 system 181 position 14`,
-      `G7 S181 P14`) and a planet id as a number token (`p664`, `planet664`, `#664`, `6,64` match; a longer
-      number such as `16640` does not). Each problem quotes the matched snippet (at most 48 characters).
+      non-hex characters removed, any token of 8 or more hex characters that is part of it, or an
+      abbreviation: its first or last 4-7 hex characters beside an ellipsis (`0x4e15...3aa1`), its last 4-7
+      after "ends in"/"ending", or a standalone token of 5-7 hex characters equal to its last characters),
+      coordinates (any `n:n:n`, and each coordinate of a planet the account owns in any spelling: `7/181/14`,
+      `galaxy 7 system 181 position 14`, `G7 S181 P14`) and planet ids, in two kinds. An *own* planet id of
+      three or more digits matches as a number token (`p664`, `planet664`, `#664`, `6,64` match; a longer
+      number such as `16640` does not); an own id of one or two digits, and every *foreign* id (an
+      attack/missile/debris target, another player's planet), matches only right after a planet introducer
+      (`planet`, `p`, `id` or `#`, then optional space, `-` or `:`: `planet 10`, `p10`), so "level 10 mines" and
+      "Keep 30% in reserve" pass whatever the targets are. A foreign coordinate is matched only in `g:s:p`
+      colon form (the generic rule). Each problem quotes the matched snippet (at most 48 characters; a hex
+      run of 32 or more characters is shown as `<hex value>`).
       Deliberately not caught: spelled-out numbers, two-part coordinates, digit-spaced ids, a wallet both
       split by spaces and shortened below 8 hex characters. The policy intent is checked at `Policy` load
       under jev (82.11), an override at `vd engine intent set` (refused, exit 2), again at every tick (82.1)
@@ -2728,6 +2738,10 @@ Acceptance criteria:
       `test_the_wallet_and_signer_are_flagged_case_insensitively`,
       `test_a_planet_id_is_flagged_as_a_standalone_number`,
       `test_a_planet_id_inside_a_larger_number_is_not_flagged`,
+      `test_an_own_two_digit_id_is_matched_only_with_the_introducer`,
+      `test_a_foreign_target_id_is_matched_with_a_planet_introducer`,
+      `test_an_abbreviated_wallet_is_caught`,
+      `test_a_hex_run_of_32_or_more_characters_is_never_quoted_even_partly`,
       `test_every_realistic_bypass_is_caught`, `test_a_short_partial_wallet_is_not_a_wallet_match`,
       `test_two_part_coordinates_are_not_a_leak`, `test_deliberately_not_caught`,
       `test_a_generic_three_part_number_is_flagged_as_coordinates`,
@@ -2810,14 +2824,19 @@ Acceptance criteria:
       Pinned by `test_jev_engine.py::test_an_endorsed_high_stakes_pick_is_decided_identically_under_a_policy_and_an_agent_intent`.
 82.9. **The intent is re-checked right before every TypeSafe request, against the real account.**
       `jev_engine.sendable_context` (called by `decide` once a pool exists, before the backend is built)
-      holds the effective intent against `policy.wallet`/`signer`, every planet id and coordinate in the
-      snapshot (whatever `policy.planets` lists) and every target id and coordinate (attack, missile,
-      foreign debris, own debris, colonize). A failing agent override is replaced by the policy intent when
+      holds the effective intent against `policy.wallet`/`signer`, every planet the account owns (ids and
+      coordinates from `Snapshot.owned_planet_ids`/`owned_planet_coordinates`, i.e. the full
+      `/wallet/{addr}/planets` list, whatever `policy.planets` lists), `policy.planets` and the own-debris
+      targets as *own* ids, and the ids of the attack, missile and foreign-debris targets as *foreign* ids
+      (82.2). Colonize coordinates, like other foreign coordinates, are caught only in `g:s:p` colon form.
+      A failing agent override is replaced by the policy intent when
       that passes the same check, else by the built-in default; a failing policy intent by the default. The
       trace's `intent` and `intent_source` show the text actually sent, and `intent_note` says why (for
       example `override rejected at send time: contains planet id 664 ("664")`), keeping any earlier note
       after it. A check that cannot run sends the default with the note `intent check failed: built-in
-      default used` and never raises. The rejected text reaches nothing but the local trace; `build_request`
+      default used` and never raises. An unexpected exception after the substitution (request building, the
+      backend call, scoring) is an `engine_error:<Class>` fallback whose trace shows the text that was sent,
+      not the rejected text. The rejected text reaches nothing but the local trace; `build_request`
       alone does not substitute (so `vd engine pool` prints the unsubstituted request).
       Pinned by `test_jev_engine.py::test_an_agent_override_that_names_the_account_is_replaced_before_the_backend_call`,
       `test_a_rejected_override_falls_back_to_the_default_when_the_policy_has_no_intent`,
@@ -2825,6 +2844,9 @@ Acceptance criteria:
       `test_a_policy_intent_naming_a_snapshot_planet_is_replaced_by_the_default`,
       `test_an_earlier_note_is_kept_after_the_send_time_note`, `test_clean_text_passes_through_untouched`,
       `test_target_planet_ids_and_coordinates_are_checked_too`,
+      `test_everyday_numbers_are_not_rejected_because_of_realistic_foreign_targets`,
+      `test_a_planet_the_account_owns_outside_policy_planets_is_known_to_the_check`,
+      `test_an_unexpected_error_after_substitution_records_what_was_sent`,
       `test_the_rejection_text_reaches_nothing_but_the_local_trace`,
       `test_a_failing_check_sends_the_default_and_never_raises`,
       `test_a_pre_empted_trace_keeps_its_intent_fields_and_sends_nothing` and
@@ -2855,17 +2877,19 @@ Acceptance criteria:
       and `test_the_same_intent_under_jev_fails_to_load_naming_the_snippet`;
       `test_intent.py::test_a_ladder_policy_with_a_three_part_ratio_in_its_intent_is_usable_by_the_cli`.
 82.12. **Expiry cleanup removes only the override the tick read and never crashes.** `clear_intent_override`
-      with `expected` claims the file by an atomic rename, deletes it only when it still equals `expected`
-      (intent, `set_at`, `expires_at`), otherwise puts it back (a newer file that appeared meanwhile wins),
-      keeps an unreadable file, and returns quietly for a missing one; the tick logs the expiry only when
-      it removed something. Any unreadable file, a pathologically nested one included, is ignored with the
+      with `expected` re-reads the file and unlinks it only when it still equals `expected` (intent,
+      `set_at`, `expires_at`); a different, unreadable or missing file is left alone and an `OSError`
+      returns `False`, never raising. It is a compare-then-unlink, not an atomic claim: an override written
+      in the instant between the compare and the unlink is removed too, and the agent re-sets it. The tick
+      logs the expiry only when it removed something. Any unreadable file, a pathologically nested one included, is ignored with the
       `override file unreadable` note and never fails a tick. A save writes a unique temp file in the same
       directory, so concurrent writers never share one.
       Pinned by `test_state.py::test_clear_with_expected_removes_only_that_override`,
       `test_clear_with_expected_keeps_an_override_that_differs_in_any_compared_field`,
       `test_clear_with_expected_never_raises_for_a_missing_file`,
       `test_clear_with_expected_keeps_an_unreadable_file`,
-      `test_clear_with_expected_does_not_clobber_a_newer_file_that_appears_during_the_claim`;
+      `test_clear_with_expected_never_raises_when_the_unlink_fails` and
+      `test_clear_with_expected_tolerates_the_file_vanishing_before_the_unlink`;
       `test_tick.py::test_expiry_cleanup_leaves_an_override_set_after_the_tick_read_the_old_one`,
       `test_expiry_cleanup_survives_the_file_vanishing_and_logs_nothing` and
       `test_e2e_a_pathological_override_file_does_not_fail_the_tick`.

@@ -536,20 +536,30 @@ def test_clear_with_expected_keeps_an_unreadable_file(isolated_home):
     assert state.intent_override_path().read_text() == "{not json"
 
 
-def test_clear_with_expected_does_not_clobber_a_newer_file_that_appears_during_the_claim(isolated_home, monkeypatch):
-    # A newer override lands while the claimed (different) file is being put back: the newer one wins.
-    old, newer = _override(intent="Old."), _override(intent="Newer.")
+def test_clear_with_expected_never_raises_when_the_unlink_fails(isolated_home, monkeypatch):
+    old = _override()
     state.save_intent_override(old)
-    real_link = state.os.link
 
-    def racing_link(src, dst):
-        state.save_intent_override(newer)
-        return real_link(src, dst)  # now raises FileExistsError
+    def boom(self, missing_ok=False):
+        raise PermissionError("no")
 
-    monkeypatch.setattr(state.os, "link", racing_link)
-    assert state.clear_intent_override(_override(intent="Not the stored one.")) is False
-    monkeypatch.setattr(state.os, "link", real_link)
-    assert state.load_intent_override() == newer
+    with monkeypatch.context() as patched:
+        patched.setattr(state.Path, "unlink", boom)
+        assert state.clear_intent_override(old) is False
+    assert state.load_intent_override() == old
+
+
+def test_clear_with_expected_tolerates_the_file_vanishing_before_the_unlink(isolated_home, monkeypatch):
+    old = _override()
+    state.save_intent_override(old)
+    real_unlink = state.Path.unlink
+
+    def vanish_then_unlink(self, missing_ok=False):
+        real_unlink(self)  # a concurrent `clear` got there first
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(state.Path, "unlink", vanish_then_unlink)
+    assert state.clear_intent_override(old) is True
 
 
 # --------------------------------------------------------------------------------------

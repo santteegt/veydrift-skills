@@ -117,7 +117,7 @@ skills/
 │   ├── schemas/                policy.schema.json, action.schema.json — GENERATED, don't hand-edit
 │   ├── references/             12 files, ~4,700 lines, loaded on demand — see §11
 │   ├── assets/                 policy.example.json, launchd plist template
-│   └── tests/                  1906 tests (1904 passed + 2 skipped: the opt-in live TypeSafe tests)
+│   └── tests/                  1984 tests (1982 passed + 2 skipped: the opt-in live TypeSafe tests)
 └── veydrift-wallet/            TypeScript (npm). Signs. Nothing else does.
     ├── SKILL.md
     ├── package.json, tsconfig.json
@@ -557,7 +557,7 @@ disagreeing `kind` at load.
 
 Precision matters here more than a clean "it's tested" claim would suggest.
 
-- **1906 Python + 399 TypeScript = 2305 tests, all currently passing** (the Python figure
+- **1984 Python + 399 TypeScript = 2383 tests, all currently passing** (the Python figure
   includes 2 skipped opt-in tests, `VEYDRIFT_JEV_LIVE_TESTS=1` against the real TypeSafe API; the
   TypeScript figure includes 3 skipped: 2 fork-only tests that need a live Anvil fork, and 1 opt-in
   `VEYDRIFT_LIVE_TESTS=1` chain check). Run both before

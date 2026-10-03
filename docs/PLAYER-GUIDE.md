@@ -500,7 +500,7 @@ guess — don't read it as "should be positive" or "should be sane." Only `versi
 | --- | --- | --- | --- |
 | `kind` | string enum | exactly `"ladder"` or `"jev"` | `"ladder"` |
 | `jev.model` | string | the TypeSafe model id | `"jev-latest"` |
-| `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric. It is sent to TypeSafe, so under `kind: "jev"` it must not contain an address, coordinates (any three numbers joined by colons, so write "3 to 2 to 1", not `3:2:1`), your wallet or signer, or a planet id as a number (write counts as words): a jev policy that does **fails to load**, and the message quotes the offending text. A `"ladder"` policy loads whatever it says | `""` |
+| `jev.intent` | string | your strategy in plain language, at most 1000 characters; empty uses a built-in balanced-growth rubric. It is sent to TypeSafe, so under `kind: "jev"` it must not contain an address, coordinates (any three numbers joined by colons, so write "3 to 2 to 1", not `3:2:1`), your wallet or signer, or a planet id from `planets` (three or more digits as a number, a one- or two-digit id only introduced as `planet 10` or `p10`; ordinary counts like "level 10" are fine): a jev policy that does **fails to load**, and the message quotes the offending text. A `"ladder"` policy loads whatever it says | `""` |
 | `jev.weights` | object | `fit`, `urgency`, `focus`, `economy`, `threat`, each `0`-`100`, at least one of `fit`/`urgency`/`focus` `> 0`; only the ratios matter | `0.30 / 0.25 / 0.15 / 0.25 / 0.05` |
 | `jev.min_confidence` / `min_confidence_high_stakes` / `min_margin` | float | `0`-`1`; below them the ladder decides instead | `0.5` / `0.75` / `0.03` |
 | `jev.timeout_s` | float | `0.5`-`30`; time budget for the request (one attempt may take up to this long per network phase; a timeout is not retried, a fast failure may retry once): not a hard deadline | `5.0` |
@@ -648,8 +648,8 @@ resources, build time 2-8 hours)". Never your wallet, signer, any address, coord
 planet ids (planets are "planet A", "planet B"), and every quantity is a coarse bucket. The
 intent is the one free-text field, so it is checked: your `intent` (under jev) and any override
 (below) is rejected if it contains an address, coordinates, your wallet or signer, or a planet id,
-and the message quotes what matched. The text is checked once more, against your real planet ids and
-coordinates, right before each request, and replaced by your policy intent or the built-in rubric if
+and the message quotes what matched. The text is checked once more, against every planet you own (not just the ones in
+`planets`) and the targets' planet ids, right before each request, and replaced by your policy intent or the built-in rubric if
 it fails (`intent_note` in the trace says why). Spelled-out numbers ("six hundred sixty-four") are not
 caught, so do not write them either.
 `vd engine pool --snapshot S.json --policy P.json` prints the request offline, with no key (before

@@ -362,6 +362,11 @@ class Snapshot(Base):
     #: same fail-closed convention as every other optional field here (AGENTS.md §5): a
     #: colony-cap check must BLOCK on `None`, never assume "not yet at the cap."
     owned_planet_count: int | None = None
+    #: Every planet id and `"g:s:p"` coordinate of the account, from the same
+    #: `/wallet/{addr}/planets` response, whichever planets `planets` details. Used only by the jev
+    #: engine's send-time check of the free-text intent (`intent_text_problems`); empty when unknown.
+    owned_planet_ids: list[int] = Field(default_factory=list)
+    owned_planet_coordinates: list[str] = Field(default_factory=list)
     incoming_fleets: list[IncomingFleet] = Field(default_factory=list)
 
     def planet(self, planet_id: int) -> PlanetSnapshot | None:
@@ -901,6 +906,25 @@ _INTENT_HEX_TOKEN_RE = re.compile(r"[0-9a-f]{8,}", re.IGNORECASE)
 _INTENT_COORDINATES_RE = re.compile(r"(?<!\d)\d+\s*:\s*\d+\s*:\s*\d+(?!\d)")
 #: A number with the letters/`#` stuck to its front (`p664`, `#664`) and `6,64` / `6_64` digit groups.
 _INTENT_NUMBER_RE = re.compile(r"(?P<pre>[^\W\d_]*#?)(?P<num>\d+(?:[,_]\d+)*)")
+#: A number introduced as a planet reference: `planet 10`, `planet-10`, `p10`, `id: 10`, `#10`. The
+#: introducer must not be the tail of a longer word (`step 10`, `map 10`).
+_INTENT_PLANET_REF_RE = re.compile(
+    r"(?<![^\W\d_])(?:planet|p|id|#)[\s\-:#]*(?P<num>\d+(?:[,_]\d+)*)", re.IGNORECASE
+)
+#: Planet ids with fewer digits than this are everyday numbers ("level 10", "30%"); they are only
+#: matched with a planet introducer (`_INTENT_PLANET_REF_RE`).
+_INTENT_BARE_ID_MIN_DIGITS = 3
+_INTENT_ELLIPSIS = r"(?:\u2026|\.{2,})"
+#: An abbreviated address: "0x4e15...", "...3aa1", "ends in 0553aa1", "ending 0x3aa1".
+_INTENT_ABBREV_HEAD_RE = re.compile(
+    rf"(?<![0-9a-z])(?:0x)?(?P<hex>[0-9a-f]{{4,7}})(?![0-9a-z])\s*{_INTENT_ELLIPSIS}", re.IGNORECASE
+)
+_INTENT_ABBREV_TAIL_RE = re.compile(
+    rf"(?:{_INTENT_ELLIPSIS}|\bend(?:s|ing)\b(?:\s+(?:in|with))?)\s*:?\s*(?:0x)?(?P<hex>[0-9a-f]{{4,7}})(?![0-9a-z])",
+    re.IGNORECASE,
+)
+_INTENT_SHORT_HEX_RE = re.compile(r"(?<![0-9a-z])[0-9a-f]{5,7}(?![0-9a-z])", re.IGNORECASE)
+_INTENT_LONG_HEX_RE = re.compile(r"[0-9a-fA-F]{32,}")
 _SNIPPET_MAX = 48
 
 
@@ -918,6 +942,8 @@ def _normalise_intent_text(text: str) -> str:
 
 
 def _quoted(snippet: str) -> str:
+    # A long hex run is never quoted, not even in part: it may be a key.
+    snippet = _INTENT_LONG_HEX_RE.sub("<hex value>", snippet)
     snippet = " ".join(snippet.split())
     if len(snippet) > _SNIPPET_MAX:
         snippet = snippet[: _SNIPPET_MAX - 1] + "\u2026"
@@ -930,6 +956,7 @@ def intent_text_problems(
     wallet: str | None = None,
     signer: str | None = None,
     planet_ids: Iterable[int] = (),
+    foreign_planet_ids: Iterable[int] = (),
     coordinates: Iterable[str] = (),
 ) -> list[str]:
     """Why `text` must not be sent to TypeSafe as a strategy intent; empty when it is fine. The
@@ -939,10 +966,20 @@ def intent_text_problems(
     every agent override, and -- with the live planet ids and `"g:s:p"` coordinates -- to the
     text actually sent, at send time.
 
+    Planet ids come in two kinds, because small numbers are everyday prose ("level 10 mines"):
+    `planet_ids` are the account's own planets (an id of three or more digits matches as a bare
+    number; a one- or two-digit id only when introduced as a planet: `planet 10`, `p10`, `id 10`,
+    `#10`), `foreign_planet_ids` are other players' planets (attack/missile/debris targets), which
+    match only with that introducer, at any length. `coordinates` are the account's own `"g:s:p"`
+    coordinates and match in any spelling; any three colon-separated numbers are rejected
+    regardless, which is all that is checked for foreign targets (matching their numbers apart
+    from colons would reject "Build 6 solar plants, 9 mines, 1 lab").
+
     Matching is on a normalised copy (NFKC, invisible characters dropped, every Unicode digit as
     ASCII, case-folded). It is a filter for realistic leaks, not a proof: spelled-out numbers
     ("six hundred sixty-four"), a wallet split by spaces *and* shortened, or coordinates in
-    prose without all three numbers are not caught. Each problem quotes what matched."""
+    prose without all three numbers are not caught. Each problem quotes what matched (a long hex
+    run is never quoted)."""
     problems: list[str] = []
     norm = _normalise_intent_text(text)
 
@@ -963,6 +1000,8 @@ def intent_text_problems(
             problems.append(f"contains the {label} address")
             continue
         part = next((t for t in tokens if t in digits), None)
+        if part is None:
+            part = _abbreviated_address(norm, digits)
         if part is not None:
             problems.append(f"contains part of the {label} address" + _quoted(part))
 
@@ -993,10 +1032,41 @@ def intent_text_problems(
                 problems.append("contains coordinates" + _quoted(known.group(0)))
                 break
 
-    for planet_id in dict.fromkeys(planet_ids):
-        if planet_id in numbers:
-            problems.append(f"contains planet id {planet_id}" + _quoted(numbers[planet_id]))
+    referenced: dict[int, str] = {}
+    for found in _INTENT_PLANET_REF_RE.finditer(norm):
+        whole = found.group("num")
+        parts = re.split(r"[,_]", whole)
+        for value in (*parts, "".join(parts)):
+            if len(value) <= 30:
+                referenced.setdefault(int(value), found.group(0))
+
+    own = list(dict.fromkeys(planet_ids))
+    foreign = [i for i in dict.fromkeys(foreign_planet_ids) if i not in own]
+    for planet_id in own:
+        long_enough = len(str(abs(planet_id))) >= _INTENT_BARE_ID_MIN_DIGITS
+        snippet = numbers.get(planet_id) if long_enough else None
+        snippet = snippet or referenced.get(planet_id)
+        if snippet is not None:
+            problems.append(f"contains planet id {planet_id}" + _quoted(snippet))
+    for planet_id in foreign:
+        if planet_id in referenced:
+            problems.append(f"contains planet id {planet_id}" + _quoted(referenced[planet_id]))
     return problems
+
+
+def _abbreviated_address(norm: str, digits: str) -> str | None:
+    """The matching fragment when `norm` quotes a shortened form of the address `digits` (its hex
+    digits, no `0x`): its first or last 4-7 digits beside an ellipsis, its last 4-7 digits after
+    "ends in"/"ending", or its last 5-7 digits standing alone."""
+    for pattern, is_head in ((_INTENT_ABBREV_HEAD_RE, True), (_INTENT_ABBREV_TAIL_RE, False)):
+        for found in pattern.finditer(norm):
+            fragment = found.group("hex").lower()
+            if (digits.startswith(fragment) if is_head else digits.endswith(fragment)):
+                return found.group(0)
+    for found in _INTENT_SHORT_HEX_RE.finditer(norm):
+        if digits.endswith(found.group(0).lower()):
+            return found.group(0)
+    return None
 
 
 class JevCfg(PolicyBase):

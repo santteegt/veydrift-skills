@@ -539,6 +539,31 @@ def test_snapshot_discovers_planets_when_planet_id_omitted():
 
 
 @respx.mock
+def test_snapshot_keeps_every_owned_planet_id_and_coordinate_even_when_narrowed_to_one_planet():
+    # `--planet-id` details one planet; the full list from `/planets` still lands on the snapshot
+    # (the jev engine's send-time intent check needs the account's other planets too).
+    _mock_snapshot_routes()
+    planets = load("wallet_planets.json")
+    base = planets["planets"][0]
+    planets["planets"] = [
+        base,
+        {**base, "planetId": "665", "galaxy": 7, "system": 182, "position": 3, "coordinates": None},
+        {**base, "planetId": "666", "coordinates": "7:183:9"},
+        {**base, "planetId": "667", "coordinates": None, "galaxy": None},
+    ]
+    respx.get(f"{BASE}/wallet/{WALLET}/planets").mock(return_value=httpx.Response(200, json=planets))
+
+    result = runner.invoke(app, ["snapshot", "--wallet", WALLET, "--planet-id", str(PLANET), "--json"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert [p["planet_id"] for p in data["planets"]] == [PLANET]
+    assert data["owned_planet_count"] == 4
+    assert data["owned_planet_ids"] == [664, 665, 666, 667]
+    assert data["owned_planet_coordinates"] == ["7:181:14", "7:182:3", "7:183:9"]
+
+
+@respx.mock
 def test_snapshot_parses_a_populated_building_queue():
     _mock_snapshot_routes()
     respx.get(f"{BASE}/wallet/{WALLET}/infrastructure", params={"planetId": str(PLANET)}).mock(

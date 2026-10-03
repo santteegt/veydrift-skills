@@ -1751,10 +1751,97 @@ def test_target_planet_ids_and_coordinates_are_checked_too():
         "foreign_debris_targets": {4242: ("2:9:9", Resources(metal=1))},
         "colonize_targets": [("5:6:7", 10_000)],
     }
-    for text in ("Raid planet 90210.", "Harvest planet 4242.", "Hit 3/44/5 hard.", "Settle at 5 6 7 soon.", "Take 2-9-9."):
+    # A foreign target's id needs a planet introducer; its coordinates only the `g:s:p` colon form.
+    for text in ("Raid planet 90210.", "Harvest p4242.", "Hit 3:44:5 hard.", "Settle at 5:6:7 soon.", "Take 2 : 9 : 9."):
         state, trace = sent_to_backend(one_planet(), jev_policy(intent="Boom the economy."), agent_context(text), **kwargs)
         assert state["intent_source"] == "policy", text
         assert "send time" in trace.intent_note, text
+
+
+#: live /highscores economy rows: small ids, coordinates whose digits recur in ordinary prose.
+LIVE_FOREIGN_IDS = [1, 10, 13, 24, 25, 26, 29, 30, 34, 35, 36, 40, 41, 54, 74, 84, 85, 124, 158, 164, 182, 666, 671, 684]
+LIVE_FOREIGN_COORDS = [
+    "8:442:12", "5:314:5", "9:400:1", "4:291:11", "6:9:1", "6:3:5", "8:490:11", "1:14:2", "2:26:12", "5:98:3", "3:83:1",
+    "9:329:2", "5:152:3", "2:106:9", "2:419:10", "1:425:6", "5:407:4", "2:393:12", "7:487:10", "2:421:7", "3:36:4",
+    "4:30:14", "8:166:8", "2:20:7",
+]
+EVERYDAY_INTENTS = [
+    "Boom the economy: level 10 mines before anything else.",
+    "Keep 30% of resources in reserve.",
+    "Research one tech at a time; finish Phase 1 first.",
+    "Hold 1,000 deuterium for fuel.",
+    "Prefer 2 cheap upgrades over 1 expensive one.",
+    "Build 6 solar plants, 9 mines, 1 lab.",
+    "Raid only targets with under 40 defenses.",
+    "Turtle until 2026-10-05, then expand.",
+    "Grow toward version 1.29.0 goals.",
+]
+
+
+@pytest.mark.parametrize("text", EVERYDAY_INTENTS)
+@pytest.mark.parametrize("source", ["policy", "agent"])
+def test_everyday_numbers_are_not_rejected_because_of_realistic_foreign_targets(text, source):
+    from veydrift_agent.models import Resources
+
+    attack = {i: (c, Resources(metal=1), True) for i, c in zip(LIVE_FOREIGN_IDS, LIVE_FOREIGN_COORDS, strict=True)}
+    if source == "policy":
+        state, trace = sent_to_backend(one_planet(), jev_policy(intent=text), None, attack_targets=attack)
+    else:
+        state, trace = sent_to_backend(one_planet(), jev_policy(intent="Boom."), agent_context(text), attack_targets=attack)
+    assert (state["strategy_intent"], state["intent_source"]) == (text, source)
+    assert trace.intent_note is None
+
+
+def test_a_planet_introduced_foreign_id_is_still_caught_among_realistic_targets():
+    from veydrift_agent.models import Resources
+
+    attack = {i: (c, Resources(metal=1), True) for i, c in zip(LIVE_FOREIGN_IDS, LIVE_FOREIGN_COORDS, strict=True)}
+    for text in ("Raid planet 10 first.", "Raid p10 first.", "Raid #30 first."):
+        state, trace = sent_to_backend(one_planet(), jev_policy(intent="Boom."), agent_context(text), attack_targets=attack)
+        assert state["intent_source"] == "policy", text
+        assert "contains planet id" in trace.intent_note
+
+
+def test_a_planet_the_account_owns_outside_policy_planets_is_known_to_the_check():
+    # policy.planets == [664] narrows the snapshot to one planet; the account's other planets are
+    # still known from `/wallet/{addr}/planets`.
+    snapshot = one_planet().model_copy(
+        update={"owned_planet_ids": [664, 665], "owned_planet_coordinates": ["7:181:14", "7:182:3"]}
+    )
+    policy = jev_policy(intent="Boom the economy.").model_copy(update={"planets": [664]})
+    assert [p.planet_id for p in snapshot.planets] == [664]
+    for text in ("Defend planet 665 first.", "Hold the second colony at 7 : 182 : 3."):
+        state, trace = sent_to_backend(snapshot, policy, agent_context(text))
+        assert (state["strategy_intent"], state["intent_source"]) == ("Boom the economy.", "policy"), text
+        assert trace.intent_note.startswith("override rejected at send time: contains ")
+    # without the full list, 665 is unknown (the gap this closes)
+    state, _ = sent_to_backend(one_planet(), policy, agent_context("Defend planet 665 first."))
+    assert state["intent_source"] == "agent"
+
+
+def test_an_unexpected_error_after_substitution_records_what_was_sent():
+    class Exploding:
+        def ask(self, *a, **kw):
+            raise ValueError("boom")
+
+    policy = jev_policy(intent="Boom the economy.")
+    action, trace = jev_engine.decide(
+        one_planet(), policy, backend=Exploding(), context=agent_context("Defend planet 664 first.")
+    )
+    assert trace.engine == "ladder" and trace.fallback_reason == "engine_error:ValueError"
+    assert (trace.intent, trace.intent_source) == ("Boom the economy.", "policy")
+    assert trace.intent_note.startswith("override rejected at send time")
+    assert action == ladder(one_planet(), policy)
+
+
+def test_an_unexpected_error_while_scoring_is_also_a_fallback(monkeypatch):
+    def broken(*a, **kw):
+        raise KeyError("x")
+
+    monkeypatch.setattr(jev_engine, "_compose", broken)
+    _, trace = run(one_planet(), jev_policy(intent="Boom the economy."), FakeBackend(scripted()), context=agent_context())
+    assert trace.fallback_reason == "engine_error:KeyError"
+    assert (trace.intent, trace.intent_source) == (AGENT_TEXT, "agent")
 
 
 def test_the_rejection_text_reaches_nothing_but_the_local_trace():

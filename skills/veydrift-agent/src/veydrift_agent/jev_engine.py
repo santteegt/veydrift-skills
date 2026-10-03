@@ -861,22 +861,27 @@ def intent_trace_fields(policy: Policy, context: EngineContext | None) -> dict[s
     return fields
 
 
-def _known_identifiers(snapshot: Snapshot, target_kwargs: dict[str, Any]) -> tuple[list[int], list[str]]:
-    """Every planet id and `"g:s:p"` coordinate this tick knows of: the account's planets (whatever
-    `policy.planets` says) and every target the planner was handed. The send-time intent check
-    holds the intent text against all of them."""
-    planet_ids: list[int] = [p.planet_id for p in snapshot.planets]
+def _known_identifiers(
+    snapshot: Snapshot, target_kwargs: dict[str, Any], policy: Policy | None = None
+) -> tuple[list[int], list[int], list[str]]:
+    """`(own_planet_ids, foreign_planet_ids, own_coordinates)` this tick knows of. Own: every
+    planet the account owns (the snapshot's detailed planets and the full list from
+    `/wallet/{addr}/planets`, so a planet outside `policy.planets` counts too), `policy.planets`,
+    and the own-planet debris targets. Foreign: the ids of the attack, missile and foreign-debris
+    targets, which are other players' planets, so only a planet-introduced mention of them
+    (`planet 10`) is a leak. Coordinates are the account's own: a foreign target's coordinates
+    are only ever caught in `g:s:p` colon form, by the generic rule."""
+    own_ids: list[int] = [p.planet_id for p in snapshot.planets]
+    own_ids.extend(snapshot.owned_planet_ids)
+    if policy is not None:
+        own_ids.extend(policy.planets)
+    own_ids.extend(target_kwargs.get("own_planet_debris") or {})
     coordinates: list[str] = [p.coordinates for p in snapshot.planets if p.coordinates]
-    for key in ("own_planet_debris", "foreign_debris_targets", "attack_targets", "missile_targets"):
-        targets = target_kwargs.get(key) or {}
-        planet_ids.extend(targets)
-        for value in targets.values():
-            if isinstance(value, tuple) and value and isinstance(value[0], str):
-                coordinates.append(value[0])
-    for entry in target_kwargs.get("colonize_targets") or ():
-        if entry and isinstance(entry[0], str):
-            coordinates.append(entry[0])
-    return planet_ids, coordinates
+    coordinates.extend(snapshot.owned_planet_coordinates)
+    foreign_ids: list[int] = []
+    for key in ("foreign_debris_targets", "attack_targets", "missile_targets"):
+        foreign_ids.extend(target_kwargs.get(key) or {})
+    return list(dict.fromkeys(own_ids)), list(dict.fromkeys(foreign_ids)), list(dict.fromkeys(coordinates))
 
 
 def sendable_context(
@@ -886,8 +891,8 @@ def sendable_context(
     target_kwargs: dict[str, Any],
 ) -> tuple[EngineContext | None, dict[str, Any]]:
     """The single choke point before any request leaves the machine: re-check the effective
-    intent text against the real account (`policy.wallet`/`signer`, every planet id and
-    coordinate in the snapshot and the targets), which the tick-time resolver could not see.
+    intent text against the real account (`policy.wallet`/`signer`, every owned planet id and
+    coordinate, and the ids of the targets), which the tick-time resolver could not see.
 
     Returns `(context, trace_fields)`. When the text is clean that is `context` itself and no
     fields. Otherwise the text is replaced -- an agent override by the policy intent (when that
@@ -903,11 +908,16 @@ def sendable_context(
         effective = EffectiveIntent(policy_text or DEFAULT_INTENT, "policy" if policy_text else "default")
     if effective.source == "default":
         return context, {}
-    planet_ids, coordinates = _known_identifiers(snapshot, target_kwargs)
+    own_ids, foreign_ids, coordinates = _known_identifiers(snapshot, target_kwargs, policy)
 
     def check(text: str) -> list[str]:
         return intent_text_problems(
-            text, wallet=policy.wallet, signer=policy.signer, planet_ids=planet_ids, coordinates=coordinates
+            text,
+            wallet=policy.wallet,
+            signer=policy.signer,
+            planet_ids=own_ids,
+            foreign_planet_ids=foreign_ids,
+            coordinates=coordinates,
         )
 
     problems = check(effective.text)
@@ -1017,97 +1027,103 @@ def decide(
         intent_override_fields = intent_trace_fields(policy, context)
     fields.update(intent_override_fields)
 
+    # The intent text sent is now fixed and recorded in `fields`. Anything unexpected from here on
+    # (the backend, scoring, finalising) is a ladder fallback whose trace describes what was sent,
+    # not the text that was rejected; `engine.decide` stays the last resort.
     try:
-        backend = backend or jev_mod.default_backend(cfg)
-        state, questions = build_request(snapshot, policy, pool, context)
-        answers = backend.ask(state, questions, model=cfg.model, timeout_s=cfg.timeout_s)
-    except JevError as err:
-        return fall_back(err.reason)
-    fields.update(model=answers.model, request_id=answers.request_id, latency_ms=answers.latency_ms, input_tokens=answers.input_tokens)
+        try:
+            backend = backend or jev_mod.default_backend(cfg)
+            state, questions = build_request(snapshot, policy, pool, context)
+            answers = backend.ask(state, questions, model=cfg.model, timeout_s=cfg.timeout_s)
+        except JevError as err:
+            return fall_back(err.reason)
+        fields.update(model=answers.model, request_id=answers.request_id, latency_ms=answers.latency_ms, input_tokens=answers.input_tokens)
 
-    try:
-        scored = _compose(pool, answers, policy)
-    except JevError as err:
-        return fall_back(err.reason)
-    focus_answer = answers.choices["tick_focus"]
-    threat = answers.nouls["threat"]
-    if not all(math.isfinite(s.composite) for s in scored):
-        return fall_back("malformed")
-    # Two stages. The group stage is the real judgment -- which kind of development this tick
-    # serves -- and is gated on the group-deciding judgments and the lead over other groups.
-    # The item stage picks among same-group near-ties in the ladder's own order, ungated: several
-    # equally rated legal options are a harmless preference, not uncertainty worth a fallback.
-    best = scored[0]
-    winner = _item_pick(scored, cfg.min_margin)
-    high_stakes = winner.entry.candidate.family in candidates.HIGH_STAKES_FAMILIES
-    try:
-        conf = (
-            _confidence(winner, focus_answer.confidence, policy)
-            if high_stakes
-            else _group_confidence(best, focus_answer.confidence, policy)
-        )
-    except JevError as err:
-        return fall_back(err.reason)
-    group_margin = _group_margin(scored)
-    kind_margin = _margin(scored, winner) if high_stakes else None
-    for value in (group_margin, kind_margin):
-        if value is not None and not math.isfinite(value):
+        try:
+            scored = _compose(pool, answers, policy)
+        except JevError as err:
+            return fall_back(err.reason)
+        focus_answer = answers.choices["tick_focus"]
+        threat = answers.nouls["threat"]
+        if not all(math.isfinite(s.composite) for s in scored):
             return fall_back("malformed")
-    diagnostics: dict[str, Any] = {
-        "winner_confidence": _r(conf),
-        "margin": None if group_margin is None else _r(group_margin),
-        "focus_probabilities": {k: round(v, 4) for k, v in focus_answer.probabilities.items()},
-        "threat": _r(threat),
-        "top": [_judgment(s) for s in scored[:5]],
-    }
-    winner_action = winner.entry.candidate.action
-    agrees = candidates.pool_key(winner_action) == candidates.pool_key(ladder_action) if ladder_action.is_onchain() else False
-    fields.update(diagnostics)
-
-    if (
-        cfg.allow_hold
-        and focus_answer.choice == "hold"
-        and focus_answer.probabilities.get("hold", 0.0) >= 0.5
-        and focus_answer.confidence >= cfg.min_confidence
-    ):
-        hold = Action(
-            kind=ActionKind.NOOP,
-            rule=HOLD_RULE,
-            rationale="The jev engine judged that waiting fits the strategy better than any available action.",
-            engine="jev",
-        )
-        return hold, EngineTrace(engine="jev", agrees_with_ladder=False, **fields)
-
-    fields["agrees_with_ladder"] = agrees
-    if conf < cfg.min_confidence:
-        return fall_back("low_confidence")
-    if group_margin is not None and group_margin < cfg.min_margin:
-        return fall_back("low_margin")
-    if high_stakes:
-        # The strict path: every weighted judgment's confidence (urgency included), a lead over
-        # every other kind of move, then ladder idleness and model endorsement.
-        if conf < cfg.min_confidence_high_stakes:
-            return fall_back("low_confidence_high_stakes")
-        if kind_margin is not None and kind_margin < cfg.min_margin:
-            return fall_back("low_margin")
-        reason = _high_stakes_reason(winner, ladder_action, focus_answer, cfg)
-        if reason is not None:
-            return fall_back(reason)
-
-    # Alternatives in pool order (band, then generation index), never composite order, so the
-    # action -- and its dedup fingerprint -- does not move when probabilities jitter.
-    alternatives = [e.candidate for e in pool if e is not winner.entry]
-    action = plan_mod.finalize_candidate(
-        winner.entry.candidate,
-        alternatives,
-        plan_mod.RULE_BY_FAMILY[winner.entry.candidate.family],
-        policy,
-        snapshot,
-    )
-    action = action.model_copy(
-        update={
-            "engine": "jev",
-            "rationale": _with_selection_sentence(action.rationale, len(pool), winner.entry.group),
+        # Two stages. The group stage is the real judgment -- which kind of development this tick
+        # serves -- and is gated on the group-deciding judgments and the lead over other groups.
+        # The item stage picks among same-group near-ties in the ladder's own order, ungated: several
+        # equally rated legal options are a harmless preference, not uncertainty worth a fallback.
+        best = scored[0]
+        winner = _item_pick(scored, cfg.min_margin)
+        high_stakes = winner.entry.candidate.family in candidates.HIGH_STAKES_FAMILIES
+        try:
+            conf = (
+                _confidence(winner, focus_answer.confidence, policy)
+                if high_stakes
+                else _group_confidence(best, focus_answer.confidence, policy)
+            )
+        except JevError as err:
+            return fall_back(err.reason)
+        group_margin = _group_margin(scored)
+        kind_margin = _margin(scored, winner) if high_stakes else None
+        for value in (group_margin, kind_margin):
+            if value is not None and not math.isfinite(value):
+                return fall_back("malformed")
+        diagnostics: dict[str, Any] = {
+            "winner_confidence": _r(conf),
+            "margin": None if group_margin is None else _r(group_margin),
+            "focus_probabilities": {k: round(v, 4) for k, v in focus_answer.probabilities.items()},
+            "threat": _r(threat),
+            "top": [_judgment(s) for s in scored[:5]],
         }
-    )
-    return action, EngineTrace(engine="jev", **fields)
+        winner_action = winner.entry.candidate.action
+        agrees = candidates.pool_key(winner_action) == candidates.pool_key(ladder_action) if ladder_action.is_onchain() else False
+        fields.update(diagnostics)
+
+        if (
+            cfg.allow_hold
+            and focus_answer.choice == "hold"
+            and focus_answer.probabilities.get("hold", 0.0) >= 0.5
+            and focus_answer.confidence >= cfg.min_confidence
+        ):
+            hold = Action(
+                kind=ActionKind.NOOP,
+                rule=HOLD_RULE,
+                rationale="The jev engine judged that waiting fits the strategy better than any available action.",
+                engine="jev",
+            )
+            return hold, EngineTrace(engine="jev", agrees_with_ladder=False, **fields)
+
+        fields["agrees_with_ladder"] = agrees
+        if conf < cfg.min_confidence:
+            return fall_back("low_confidence")
+        if group_margin is not None and group_margin < cfg.min_margin:
+            return fall_back("low_margin")
+        if high_stakes:
+            # The strict path: every weighted judgment's confidence (urgency included), a lead over
+            # every other kind of move, then ladder idleness and model endorsement.
+            if conf < cfg.min_confidence_high_stakes:
+                return fall_back("low_confidence_high_stakes")
+            if kind_margin is not None and kind_margin < cfg.min_margin:
+                return fall_back("low_margin")
+            reason = _high_stakes_reason(winner, ladder_action, focus_answer, cfg)
+            if reason is not None:
+                return fall_back(reason)
+
+        # Alternatives in pool order (band, then generation index), never composite order, so the
+        # action -- and its dedup fingerprint -- does not move when probabilities jitter.
+        alternatives = [e.candidate for e in pool if e is not winner.entry]
+        action = plan_mod.finalize_candidate(
+            winner.entry.candidate,
+            alternatives,
+            plan_mod.RULE_BY_FAMILY[winner.entry.candidate.family],
+            policy,
+            snapshot,
+        )
+        action = action.model_copy(
+            update={
+                "engine": "jev",
+                "rationale": _with_selection_sentence(action.rationale, len(pool), winner.entry.group),
+            }
+        )
+        return action, EngineTrace(engine="jev", **fields)
+    except Exception as exc:  # noqa: BLE001 -- an engine problem never fails a tick
+        return fall_back(f"engine_error:{type(exc).__name__}")

@@ -998,6 +998,16 @@ def _planet_snapshot(
     )
 
 
+def _owned_planet_coordinates(row: dict[str, Any]) -> str | None:
+    """A `/wallet/{addr}/planets` row's `"g:s:p"`: the pre-formatted `coordinates` string, else
+    built from `galaxy`/`system`/`position`; `None` when neither is there."""
+    text = row.get("coordinates")
+    if isinstance(text, str) and text:
+        return text
+    parts = [_maybe_int(row.get(k)) for k in ("galaxy", "system", "position")]
+    return ":".join(str(x) for x in parts) if all(x is not None for x in parts) else None
+
+
 @app.command()
 def snapshot(
     wallet: str | None = WalletOption,
@@ -1044,6 +1054,7 @@ def snapshot(
     planets_raw = _fetch_or_exit(f"/wallet/{w}/planets", max_age=max_age)
     all_planet_ids = [int(p["planetId"]) for p in planets_raw.get("planets", [])]
     owned_planet_count = len(all_planet_ids)
+    owned_planet_coordinates = [c for c in (_owned_planet_coordinates(p) for p in planets_raw.get("planets", [])) if c]
 
     if planet_id is not None:
         planet_ids = [planet_id]
@@ -1128,6 +1139,8 @@ def snapshot(
         fleet_slots_limit=fleet_slots_limit,
         planets=planet_snapshots,
         owned_planet_count=owned_planet_count,
+        owned_planet_ids=all_planet_ids,
+        owned_planet_coordinates=owned_planet_coordinates,
         incoming_fleets=incoming_fleets,
     )
 
